@@ -870,7 +870,7 @@ describe.skipIf(isWin32)('createBashHandler — cwd parameter', () => {
 // produce a large elapsed time). A handler that sends SIGKILL terminates it
 // promptly regardless of signal disposition.
 // ---------------------------------------------------------------------------
-// Windows: genuinely POSIX-only — uses `trap '' TERM`, `kill -0`, `sleep 9999 & echo $!; wait` (#703)
+// Windows: genuinely POSIX-only — uses `trap '' TERM`, `kill -0`, `sleep 9999 & echo GRANDCHILD_PID=$!; wait` (#703)
 describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
   function createSignal(): AbortSignal {
     return new AbortController().signal;
@@ -945,7 +945,10 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
       // macos-latest, run 43282873760, where kill -0 300 succeeded for the
       // whole 2 s poll).
       const pidMatch = (result.content as string).match(/GRANDCHILD_PID=(\d+)/);
-      expect(pidMatch).not.toBeNull();
+      expect(
+        pidMatch,
+        'GRANDCHILD_PID marker missing from the interrupted output: echo did not flush before the 300 ms kill',
+      ).not.toBeNull();
       const grandchildPid = pidMatch![1]!;
 
       // Poll until the grandchild is gone, up to 2 s.
