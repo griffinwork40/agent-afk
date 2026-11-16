@@ -214,6 +214,51 @@ describe('scrapeToMarkdown — content-type handling', () => {
       }),
     ).rejects.toThrow(/binary content/i);
   });
+
+  it('recommends extract_document for PDF binary content', async () => {
+    const fetchFn = vi.fn(async () =>
+      makeResponse({ contentType: 'application/pdf', body: '%PDF-1.7…' }),
+    );
+
+    await expect(
+      scrapeToMarkdown('https://example.com/doc.pdf', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        timeoutMs: 5000,
+        signal: freshSignal(),
+        lookupFn: publicLookup,
+      }),
+    ).rejects.toThrow(/extract_document/);
+  });
+
+  it('recommends view_image for image binary content', async () => {
+    const fetchFn = vi.fn(async () =>
+      makeResponse({ contentType: 'image/png', body: '\x89PNG…' }),
+    );
+
+    await expect(
+      scrapeToMarkdown('https://example.com/photo.png', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        timeoutMs: 5000,
+        signal: freshSignal(),
+        lookupFn: publicLookup,
+      }),
+    ).rejects.toThrow(/view_image/);
+  });
+
+  it('recommends bash download for audio binary content', async () => {
+    const fetchFn = vi.fn(async () =>
+      makeResponse({ contentType: 'audio/mpeg', body: 'ID3…' }),
+    );
+
+    await expect(
+      scrapeToMarkdown('https://example.com/track.mp3', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        timeoutMs: 5000,
+        signal: freshSignal(),
+        lookupFn: publicLookup,
+      }),
+    ).rejects.toThrow(/bash/);
+  });
 });
 
 describe('scrapeToMarkdown — cancellation', () => {

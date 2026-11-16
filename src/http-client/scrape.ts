@@ -173,9 +173,16 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
 
     if (res.ok) {
       if (BINARY_RE.test(contentType)) {
+        const ct = (contentType.split(';')[0] ?? contentType).trim();
+        const isExtractable = /application\/(pdf|zip)|\.docx|\.xlsx|\.pptx/i.test(ct);
+        const isImage = /^image\//i.test(ct);
+        const hint = isExtractable
+          ? `Download the file with bash and read it with extract_document instead.`
+          : isImage
+            ? `Download the file with bash and use view_image to inspect it instead.`
+            : `Download the file with bash instead. For .pdf, .docx, .xlsx, .pptx, or .zip files you can then read it with extract_document; for images use view_image.`;
         throw new Error(
-          `web_scrape markdown mode received binary content (${contentType.split(';')[0]}). ` +
-            `Download the file with bash and read it with extract_document instead.`,
+          `web_scrape markdown mode received binary content (${ct}). ${hint}`,
         );
       }
       const body = await res.text();
