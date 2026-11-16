@@ -1,25 +1,24 @@
-/**
- * Working-tree-destructive git classifier.
- *
- * Extracted from `readonly-bash.tokenizer.ts` to keep that file within the
- * 350-code-line ceiling. Owns `DESTRUCTIVE_GIT_SUBCMDS`,
- * `destructiveGitSegmentReason`, and `classifyDestructiveGit`. Payload
- * extraction for nested commands (interpreter `-c` strings, `eval`, command
- * substitution as the command name) lives in
- * `readonly-bash.destructive-git.nested.ts`; recursion stays here.
- *
- * Limit of this gate: it classifies a COMMAND STRING. It follows the shell
- * forms it can read (wrappers, variables, compound commands, pipes into a
- * shell, `sh -c` / `bash -lc` strings, `eval`, substitutions, inline git
- * aliases), but it cannot see inside another language's string:
- * `python3 -c "os.system('git checkout main')"`, `node -e "execSync(…)"`,
- * a script file, or a here-doc fed to an interpreter all pass. The gate stops
- * a child from wiping a working tree by habit; it does not contain a child
- * that is trying to get around it.
- *
- * @module agent/tools/readonly-bash.destructive-git
- */
+// Invariant: Working-tree-destructive git classifier.
+//
+// Extracted from `readonly-bash.tokenizer.ts` to keep that file within the
+// 350-code-line ceiling. Owns `DESTRUCTIVE_GIT_SUBCMDS`,
+// `destructiveGitSegmentReason`, and `classifyDestructiveGit`. Payload
+// extraction for nested commands (interpreter `-c` strings, `eval`, command
+// substitution as the command name) lives in
+// `readonly-bash.destructive-git.nested.ts`; recursion stays here.
+//
+// Limit of this gate: it classifies a COMMAND STRING. It follows the shell
+// forms it can read (wrappers, variables, compound commands, pipes into a
+// shell, `sh -c` / `bash -lc` strings, `eval`, substitutions, inline git
+// aliases), but it cannot see inside another language's string:
+// `python3 -c "os.system('git checkout main')"`, `node -e "execSync(…)"`,
+// or a script file. Shell heredocs are classified; known data-consumer bodies
+// are skipped, but their unquoted command substitutions are still checked.
+// Ambiguous heredoc boundaries fail closed. The gate stops
+// a child from wiping a working tree by habit; it does not contain a child
+// that is trying to get around it.
 
+import { destructiveGitHeredocView } from './readonly-bash.destructive-git.heredoc.js';
 import {
   baseName,
   gitSubcommand,
@@ -246,6 +245,15 @@ export function classifyDestructiveGit(command: string, depth = 0): Verdict {
       ? { destructive: true, reason: 'git inside a deeply nested command (fail-closed)' }
       : { destructive: false };
   }
+  const heredocs = destructiveGitHeredocView(command);
+  if (heredocs.uncertain !== undefined) {
+    return { destructive: true, reason: `${heredocs.uncertain} (fail-closed)` };
+  }
+  for (const script of heredocs.scripts) {
+    const inner = classifyDestructiveGit(script, depth + 1);
+    if (inner.destructive) return inner;
+  }
+  command = heredocs.command;
   const vars = new Map<string, string>();
   for (const rawTokens of tokenizeSegments(command)) {
     const verdict = classifySegment(rawTokens, vars, depth);
