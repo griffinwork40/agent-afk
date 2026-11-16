@@ -90,7 +90,7 @@ Dispatch one sub-agent per site in this layer, all in parallel, each in a worktr
   - `test_output`: truncated stdout of the targeted test run (last 20 lines)
   - `failure_reason`: populated only if `status == "red"` — the first failing assertion + the file:line where it fired
 - non_goals: Do not change any file other than the one in your site descriptor. Do not run the full test suite.
-- IMPORTANT: this sub-agent MAY call `edit_file` and run bash commands; `isolation: "worktree"` is required.
+- IMPORTANT: this sub-agent MAY call `edit_file` and run bash commands; `isolation: "worktree"` is required. Set `task_slug` to a short kebab name for the site (e.g. `refactor-l2-auth-client`) so the worktree branch is readable.
 
 **Layer gate — hard stop before proceeding to the next layer:**
 - All sites in this layer `status == "green"` → proceed to the next layer.

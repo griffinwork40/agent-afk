@@ -50,6 +50,8 @@ export interface ComposeNodeInput {
    * Mutually exclusive with cwd — the worktree path IS the node's cwd.
    */
   isolation?: 'none' | 'worktree';
+  /** Worktree branch name summary for isolation:"worktree" nodes; see agent `task_slug`. */
+  task_slug?: string;
 }
 
 export interface ComposeInput {
@@ -242,6 +244,11 @@ function parseComposeNode(node: unknown, seenIds: Set<string>): ComposeNodeInput
     if (nodeIsolation === 'none') nodeIsolation = undefined;
   }
 
+  const nodeTaskSlug = n['task_slug'];
+  if (nodeTaskSlug !== undefined && typeof nodeTaskSlug !== 'string') {
+    throw new Error(`Node "${id}" task_slug must be a string`);
+  }
+
   return {
     id,
     prompt,
@@ -254,6 +261,7 @@ function parseComposeNode(node: unknown, seenIds: Set<string>): ComposeNodeInput
     ...(nodeAgentType !== undefined ? { agent_type: nodeAgentType } : {}),
     ...(nodeAttachments !== undefined ? { attachments: nodeAttachments } : {}),
     ...(nodeIsolation !== undefined ? { isolation: nodeIsolation } : {}),
+    ...(nodeTaskSlug !== undefined && nodeTaskSlug.trim().length > 0 ? { task_slug: nodeTaskSlug } : {}),
   };
 }
 

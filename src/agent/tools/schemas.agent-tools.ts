@@ -159,6 +159,16 @@ export const agentTool: AnthropicToolDef = {
           "child's cwd when isolating) — to isolate, omit `cwd` rather than " +
           'blanking it. Ignored for read-only agents — they have nothing to isolate.',
       },
+      task_slug: {
+        type: 'string',
+        description:
+          'Optional, used only with isolation:"worktree": a 2-5 word kebab-case summary of the work, e.g. ' +
+          '`issue-4112-telegram-retry`. Becomes the worktree branch name `afk/iso-<task_slug>-<suffix>` ' +
+          '(cleaned to lowercase a-z0-9 and hyphens, truncated to 48 chars, plus a random suffix), so PR head ' +
+          'branches and merge commits say what the work was. Ignored without isolation, and ignored on ' +
+          'continuation (the chain keeps its original worktree). Never put secrets here: branch names are public ' +
+          'once pushed. Distinct from id_prefix, which stays a TUI/telemetry label.',
+      },
       progress_events: { type: 'boolean', description: 'Opt-in: grants the child the `emit_progress` tool so it can push structured progress updates to the parent at each turn boundary. Excluded when not set.' },
       host: {
         type: 'string',
@@ -266,6 +276,7 @@ export const composeTool: AnthropicToolDef = {
             agent_type: { type: 'string', description: 'Named agent type for this node (e.g. "research-agent"). The compose executor resolves the agent definition from the registry and applies its system prompt, tool allowlist, and model defaults — identical to the `agent` tool\'s agent_type resolution. Fails with a clear error naming available types when the type is unknown.' },
             attachments: { type: 'array', items: { type: 'string' }, maxItems: 8, description: 'Optional inbound image ids shown as [image img_xxxxxx · …] or absolute image paths. Bytes are resolved by the runtime — NEVER paste base64 into the tool call.' },
             isolation: { type: 'string', enum: ['none', 'worktree'], description: 'Filesystem isolation for this node. "none" (default) runs the node in the shared parent tree. "worktree" creates a fresh managed git worktree for this node so its writes/tests never collide with sibling nodes. Mutually exclusive with cwd — a node cannot pin a cwd and also request an isolated worktree (the worktree path IS the cwd).' },
+            task_slug: { type: 'string', description: 'Optional, used only with isolation:"worktree": a 2-5 word kebab-case summary of this node\'s work, e.g. `issue-4112-telegram-retry`. Becomes the node\'s worktree branch name `afk/iso-<task_slug>-<suffix>` (cleaned to lowercase a-z0-9 and hyphens, truncated to 48 chars, plus a random suffix). Ignored without isolation. Never put secrets here: branch names are public once pushed.' },
             // host: not supported on compose nodes (use the agent tool with host for remote dispatch)
           }, required: ['id', 'prompt'], additionalProperties: false,
         },

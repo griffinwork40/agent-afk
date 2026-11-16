@@ -31,6 +31,7 @@ An `agent_type` chooses a [named agent](/guides/named-agents) with a supplied sy
 | `readRoots` | Extra absolute file or directory read grants alongside inherited scope. Re-grant for grandchildren. |
 | `writeRoots` | Extra absolute write grants alongside the child cwd in confined sessions; not compatible with worktree isolation. |
 | `isolation` | `worktree` creates a managed checkout for a write-capable child; cannot be combined with `cwd` or `writeRoots`. |
+| `task_slug` | With `isolation: "worktree"`, a short kebab summary that names the branch (`afk/iso-<task_slug>-<suffix>`). Ignored otherwise. |
 | `attachments` | Up to eight inbound image IDs or absolute image paths; let the runtime resolve bytes, not pasted base64. |
 | `progress_events` | Grants an opted-in child `emit_progress` for structured progress delivered to the parent. |
 
@@ -52,7 +53,7 @@ Each node can override the following, without changing sibling nodes:
 | `max_turns`, `max_tool_rounds` | Cap turns or tool-use rounds for this node; `max_tool_rounds` overrides the compose-level `max_tool_rounds_per_node` (default 50). |
 | `cwd`, `readRoots`, `writeRoots` | Pin a directory or add absolute read/write grants for this node. |
 | `attachments` | Forward up to eight named images or absolute image paths. |
-| `isolation: "worktree"` | Give a write-capable node its own managed checkout; incompatible with `cwd` and `writeRoots`. |
+| `isolation: "worktree"`, `task_slug` | Give a write-capable node its own managed checkout, optionally with a readable branch name; incompatible with `cwd` and `writeRoots`. |
 
 `node_timeout_ms` bounds each node's runtime. A timed-out node can surface partial findings; siblings continue unless failure policy cancels them. See [Worktrees](/guides/worktrees) for setup and preservation of isolated checkouts.
 

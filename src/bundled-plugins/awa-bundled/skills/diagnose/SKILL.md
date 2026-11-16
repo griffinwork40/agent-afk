@@ -14,6 +14,6 @@ Gather context: read the failing test or bug description, relevant error output,
 - Git history agent: `id_prefix: "git history"`
 - Each hypothesis-testing agent: `id_prefix: "hypothesis: <one-phrase cause>"` (e.g. `"hypothesis: null deref in parser"`)
 
-For each hypothesis, dispatch a sub-agent with `isolation: "worktree"` to apply a minimal speculative fix, run the test or verification command, and then run the broader related test suite to check for regressions. Run all hypothesis-testing agents in parallel. Collect results: which fixes passed, which didn't, and any regressions surfaced by the broader suite.
+For each hypothesis, dispatch a sub-agent with `isolation: "worktree"` (and a `task_slug` naming the hypothesis, e.g. `hyp-null-deref-parser`, so its branch is readable) to apply a minimal speculative fix, run the test or verification command, and then run the broader related test suite to check for regressions. Run all hypothesis-testing agents in parallel. Collect results: which fixes passed, which didn't, and any regressions surfaced by the broader suite.
 
 Report the validated root cause (the hypothesis whose fix passed), the speculative fix diff, and regression status from the broader test run. If no hypothesis passes, synthesize what was learned and form a second round of hypotheses. If the user approves the fix, apply it to the main worktree.

@@ -203,6 +203,16 @@ describe('SubagentExecutor — isolation:"worktree" wiring', () => {
       });
     });
 
+    it('names the branch from task_slug when supplied (iso-<clean>-<suffix>)', async () => {
+      createIsolatedWorktree.mockResolvedValue(ISO_RESULT);
+      const executor = makeExecutor();
+      await executor.execute(makeCall({
+        input: { prompt: 'fix it', isolation: 'worktree', task_slug: 'Issue 4112: Telegram retry', id_prefix: 'lane-1' },
+      }));
+      const slug = (createIsolatedWorktree.mock.calls[0]![0] as { slugHint: string }).slugHint;
+      expect(slug).toMatch(/^iso-issue-4112-telegram-retry-[a-z0-9]{6}$/);
+    });
+
     it('gives concurrent dispatches distinct slug hints (monotonic counter)', async () => {
       createIsolatedWorktree.mockResolvedValue(ISO_RESULT);
       const executor = makeExecutor();

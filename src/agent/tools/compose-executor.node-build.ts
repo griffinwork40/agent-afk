@@ -232,6 +232,7 @@ export async function buildComposeDagNode(args: BuildComposeDagNodeArgs): Promis
     // forwarded when present and not "none" — "none" is the default and
     // forwarding it would be a no-op at the cost of a property on every node.
     ...(n.isolation === 'worktree' ? { isolation: 'worktree' as const } : {}),
+    ...(n.isolation === 'worktree' && n.task_slug !== undefined ? { taskSlug: n.task_slug } : {}),
     // Node provider carries workspace + named-agent gates (compose-node-provider.ts).
     ...resolveComposeNodeProvider(nodeModel, ctx.workspaceStore, ctx.openaiBaseUrl, resolvedAgent),
     ...(nodeFallback !== undefined
