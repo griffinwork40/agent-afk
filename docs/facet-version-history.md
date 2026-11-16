@@ -3,6 +3,15 @@
 Full per-version change log for `FACET_VERSION` in `src/agent/facets/schema.ts`.
 Consumers should filter on `facet_version >= N` to guard against older cached facets.
 
+## v16 (#4912)
+
+Derivation only; no field added or removed.
+`token_breakdown.subagent_cost_usd` no longer counts closed root REPL cycles as
+subagent spend when the process crashed (backstop seal with `incomplete: true`):
+unstamped closures in split cases 1 and 2 are now attributed to `rootCostUsd`.
+`total_cost_usd` no longer counts the last root cycle twice when a child closure
+lands after the root's final closure (the Ctrl+B detach teardown race).
+
 ## v15 (#4896)
 
 Derivation only; no field added or removed. A REPL session that runs `/clear`
