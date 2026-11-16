@@ -5,8 +5,13 @@ import type { KnownRefs } from './docs-refs-known.js';
 export type { RefFinding } from './docs-refs-command.js';
 export interface LineFinding extends RefFinding { line: number }
 
-/** Fences whose every line is a command. Any other fence (including unlabeled)
- * is checked only on lines whose leading command is `afk`. */
+/**
+ * Canonical set of fence languages whose every line is treated as a shell
+ * command. Any other fence (including unlabeled) is checked only on lines
+ * whose leading command is `afk`. Exported so consumers (e.g. the docs-lint
+ * runner) reference a single authoritative definition rather than duplicating
+ * the pattern (#4849).
+ */
 export const SHELL_FENCES = /^(?:bash|sh|shell|zsh|fish|ksh|powershell|ps1|pwsh|console|terminal|shellsession|shell-session|cmd|bat|batch|text)$/i;
 /** HTTP path segments that read like slash commands (`/v1`, `GET .../models`). */
 const HTTP_PATH = /^\/(?:v\d+|models|completions|health)$/;

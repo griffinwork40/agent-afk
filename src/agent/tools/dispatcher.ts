@@ -35,7 +35,7 @@ import { defaultConcurrencyClassifier } from './dispatch-batching.js';
 
 import type { SuspectedLoopWindow } from './suspected-loop-detector.js';
 import { RepeatFailureGuard } from './repeat-failure-guard.js';
-import { ToolCallLedgerWiring, noteSettledOutcome } from './dispatcher.ledger.js';
+import { ToolCallLedgerWiring, type ToolCallLedgerReader, noteSettledOutcome } from './dispatcher.ledger.js';
 import { ToolHealthMonitor, applyToolHealth } from './tool-health-monitor.js';
 import { StrategyNudger, applyStrategyNudge } from './strategy-nudge.js';
 import { executeBatchImpl } from './dispatcher.execute-batch.js';
@@ -234,10 +234,10 @@ export class SessionToolDispatcher implements ToolDispatcher {
 
   /**
    * Narrowed read accessor for the session-scoped tool-call ledger.
-   * Returns the {@link ToolCallLedgerWiring} for lookup and diagnostics;
-   * does not expose the raw `record` / `beginRound` mutation surface.
+   * Returns {@link ToolCallLedgerReader} (`lookup` / `ledger` / `currentRound`)
+   * and does not expose the `record` / `beginRound` mutation surface.
    */
-  get toolCallLedger(): ToolCallLedgerWiring {
+  get toolCallLedger(): ToolCallLedgerReader {
     return this._toolCallLedger;
   }
   private readonly _getMcpServerStates: GetMcpServerStates;
@@ -645,13 +645,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
       return { content: 'Tool call aborted', isError: true, failureClass: abortFailureClass(call.signal) };
     }
 
-    // One provider-loop entry = one tool round for the ledger (#4476).
-    // Note: beginRound() advances the round counter before the gate check, so
-    // round indices are per entry-point call, not per recorded observation.
-    // A gate refusal (permission denial, circuit breaker) will produce a round
-    // with zero entries — this is intentional and documented rather than moving
-    // beginRound() after the gate, which would break the session-scope monotonic
-    // guarantee when both execute() and executeBatch() share the same wiring.
+    // One provider-loop entry = one tool round (#4476). beginRound() fires
+    // before the gate check so round indices are per entry-point call; a gate
+    // refusal produces a round with zero entries (intentional — see #4821).
     this._toolCallLedger.beginRound();
     const gateResult = await this.runPreDispatchGates(call);
     if (gateResult) return this.preToolContext.deliver(call, gateResult, this.traceWriter);
