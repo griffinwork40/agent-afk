@@ -77,15 +77,16 @@ describe('Windows CI sharding contract', () => {
     },
   );
 
-  it('skips only the gate step, not the job, when the whole run is cancelled (#4962)', () => {
+  it('skips only the gate step, and only for a cancelled shard result (#4962)', () => {
     const gate = job('test-windows');
-    // The job keeps always(); only the step that fails on a non-success result is
-    // guarded, by the run-level cancelled() rather than by the shard result.
+    // The job keeps always(); a superseded run leaves shards `cancelled`, so only
+    // the failing step is skipped, keyed on the shard result rather than on the
+    // step-level cancelled(), which reflects this job and not the run.
     expect(gate).toMatch(/^    if: \$\{\{ always\(\) \}\}$/m);
     const step = gate.match(/      - name: Require every Windows shard to pass\n([\s\S]*?)        run: \|/)?.[1];
     expect(step).toBeDefined();
-    expect(step).toMatch(/^        if: \$\{\{ !cancelled\(\) \}\}$/m);
-    expect(step).not.toMatch(/^        if:.*needs\./m);
+    const conditions = [...step!.matchAll(/^        if: (.*)$/gm)].map((match) => match[1]);
+    expect(conditions).toEqual(["${{ !cancelled() && needs.test-windows-shards.result != 'cancelled' }}"]);
   });
 
   it('keeps both coverage platforms, commands, artifact names and floors', () => {

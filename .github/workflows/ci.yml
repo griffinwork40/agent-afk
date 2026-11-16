@@ -374,13 +374,14 @@ jobs:
     steps:
       - name: Require every Windows shard to pass
         # A skipped/cancelled dependency must fail, not silently green this gate.
-        # Exception: when the whole workflow run was cancelled (superseded by the
-        # concurrency group, e.g. dependabot's `labeled` events), this step is
-        # skipped so the superseded run leaves no false failed check (#4962).
-        # `cancelled()` is run-level, not the shard result: a shard `failure`, a
-        # `skipped` shard, or a cancelled shard in a run that was not itself
-        # cancelled still reaches the check below and fails it.
-        if: ${{ !cancelled() }}
+        # Exception (#4962): a run superseded by the concurrency group leaves the
+        # shards `cancelled`, and the job-level always() still starts this gate,
+        # so the check below would leave a false failed check on the PR. Skip the
+        # step for a `cancelled` shard result only; `failure`, `skipped` and any
+        # other result still reach the check and fail the gate. A step-level
+        # `cancelled()` cannot detect this: it reflects this job, which was never
+        # cancelled, not the run (observed live on run 43982827089).
+        if: ${{ !cancelled() && needs.test-windows-shards.result != 'cancelled' }}
         env:
           SHARD_RESULT: ${{ needs.test-windows-shards.result }}
         shell: bash
