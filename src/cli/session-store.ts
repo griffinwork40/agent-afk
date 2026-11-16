@@ -199,6 +199,13 @@ export function saveSession(
   const id = overrideId ?? stats.sessionId ?? `session-${now}`;
   const payload: StoredSession = {
     sessionId: stats.sessionId,
+    // Invariant: written directly after `sessionId`, ahead of every
+    // variable-length field (name, cwd, repoRoot, …). The REPL startup recall
+    // decides sealed-ness from the first 1024 bytes of the sidecar
+    // (interactive/startup-recall.ts). Placing `endedAt` here guarantees it
+    // is always inside that head window regardless of path lengths.
+    ...(opts?.closeTime ? { endedAt: now } : {}),
+    ...(opts?.closeTime && opts.exitReason ? { exitReason: opts.exitReason } : {}),
     ...(stats.name ? { name: stats.name } : {}),
     // Invariant: written right after `name` (before `turns`) so the web
     // session list's head-only sidecar read sees it (session-name-head.ts).
@@ -213,11 +220,6 @@ export function saveSession(
     model: stats.model,
     startedAt: stats.sessionStartTime,
     savedAt: now,
-    // Invariant: written before `turns`, like the name fields above. The REPL
-    // startup recall decides sealed-ness from a head-only sidecar read
-    // (interactive/startup-recall.ts), so `endedAt` must stay near the top.
-    ...(opts?.closeTime ? { endedAt: now } : {}),
-    ...(opts?.closeTime && opts.exitReason ? { exitReason: opts.exitReason } : {}),
     totalTurns: stats.totalTurns,
     totalCostUsd: stats.totalCostUsd,
     unpricedTurns: stats.unpricedTurns,
