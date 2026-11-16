@@ -14,6 +14,9 @@
  *   - makeMalformedSkipRecord (scheduler.runat-gate)
  *   - executeAgentTask (success/error baseRecord)
  *   - toScheduledTask (threads name from ScheduledTaskConfig)
+ *   - runShellTask (success/error records)
+ *   - runBuiltinTask (unknown-builtin record; worktree-prune and tool-health
+ *     delegate to their own runners which also carry name)
  *
  * @module agent/daemon/scheduler.name-field.test
  */
@@ -31,6 +34,8 @@ import {
 import { makeMalformedSkipRecord } from './scheduler.runat-gate.js';
 import { executeAgentTask } from './scheduler.execute-agent-task.js';
 import { toScheduledTask } from './schedule-store.js';
+import { runShellTask } from './shell-task.js';
+import { runBuiltinTask } from './builtin-task.js';
 import type { ScheduledTask } from './triggers.js';
 import type { GateDecision } from './gates.js';
 import type { AgentTaskContext } from './scheduler.execute-agent-task.js';
@@ -237,5 +242,88 @@ describe('toScheduledTask — name threaded from config', () => {
     // Empty string is falsy; toScheduledTask uses `config.name !== undefined`
     // so an empty string IS threaded through (it is defined).
     expect(task.name).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runShellTask — name on success and error records
+// ---------------------------------------------------------------------------
+
+describe('runShellTask — name field on telemetry records', () => {
+  it('includes name on a success record', async () => {
+    const written: TelemetryRecord[] = [];
+    const task = {
+      taskId: 'shell-1',
+      command: 'echo hello',
+      name: 'Nightly Backup',
+    };
+    await runShellTask(task, 'cron', {
+      now: () => NOW_MS,
+      writeTelemetry: (r) => { written.push(r); },
+    });
+    expect(written).toHaveLength(1);
+    expect(written[0]?.name).toBe('Nightly Backup');
+    expect(written[0]?.status).toBe('success');
+  });
+
+  it('includes name on an error record', async () => {
+    const written: TelemetryRecord[] = [];
+    const task = {
+      taskId: 'shell-2',
+      command: 'exit 1',
+      name: 'Failing Job',
+    };
+    await runShellTask(task, 'cron', {
+      now: () => NOW_MS,
+      writeTelemetry: (r) => { written.push(r); },
+    });
+    expect(written).toHaveLength(1);
+    expect(written[0]?.name).toBe('Failing Job');
+    expect(written[0]?.status).toBe('error');
+  });
+
+  it('omits name when task has no name', async () => {
+    const written: TelemetryRecord[] = [];
+    const task = { taskId: 'shell-3', command: 'echo hi' };
+    await runShellTask(task, 'cron', {
+      now: () => NOW_MS,
+      writeTelemetry: (r) => { written.push(r); },
+    });
+    expect(written[0]?.name).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runBuiltinTask — name on unknown-builtin error record
+// ---------------------------------------------------------------------------
+
+describe('runBuiltinTask — name field on unknown-builtin record', () => {
+  it('includes name on an unknown-builtin error record', async () => {
+    const written: TelemetryRecord[] = [];
+    const task = {
+      taskId: 'builtin-1',
+      command: 'not-a-real-builtin',
+      name: 'Mystery Task',
+    };
+    await runBuiltinTask(task, 'cron', {
+      now: () => NOW_MS,
+      telemetryPath: () => '/tmp/telemetry',
+      writeTelemetry: (r) => { written.push(r); },
+    });
+    expect(written).toHaveLength(1);
+    expect(written[0]?.name).toBe('Mystery Task');
+    expect(written[0]?.status).toBe('error');
+    expect(written[0]?.errorMessage).toMatch(/unknown builtin/);
+  });
+
+  it('omits name when task has no name', async () => {
+    const written: TelemetryRecord[] = [];
+    const task = { taskId: 'builtin-2', command: 'not-a-real-builtin' };
+    await runBuiltinTask(task, 'cron', {
+      now: () => NOW_MS,
+      telemetryPath: () => '/tmp/telemetry',
+      writeTelemetry: (r) => { written.push(r); },
+    });
+    expect(written[0]?.name).toBeUndefined();
   });
 });

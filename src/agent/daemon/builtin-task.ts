@@ -25,7 +25,7 @@ export interface BuiltinTaskOptions {
  * function is called -- no compat shim needed here.
  */
 export async function runBuiltinTask(
-  task: { taskId: string; command: string; cronExpression?: string },
+  task: { taskId: string; command: string; cronExpression?: string; name?: string },
   trigger: TelemetryTrigger,
   options: BuiltinTaskOptions,
 ): Promise<TelemetryRecord> {
@@ -46,6 +46,7 @@ export async function runBuiltinTask(
     durationMs: 0,
     status: 'error',
     errorMessage: `unknown builtin: ${task.command}`,
+    ...(task.name !== undefined ? { name: task.name } : {}),
   };
   options.writeTelemetry(record);
   return record;
