@@ -54,6 +54,9 @@ const ownership: Record<string, Ownership> = {
 describe('wireExecutors continuation registry ownership', () => {
   it('accounts for every production call, excluding comments and tests', () => {
     const callers = sourceFiles(src).flatMap((file) => {
+      // Parse only files that mention the identifier: an AST pass over every
+      // source file took longer than the test timeout under CI coverage.
+      if (!readFileSync(file, 'utf8').includes('wireExecutors')) return [];
       const relative = path.relative(src, file).split(path.sep).join('/');
       return calls(parse(relative), 'wireExecutors').map(() => relative);
     });
