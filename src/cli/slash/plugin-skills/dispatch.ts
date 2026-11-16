@@ -12,6 +12,7 @@ import type { ProviderCommandInfo } from '../../../agent/provider.js';
 import { listSkills, getSkill, isSkillVisible, type SkillMetadata } from '../../../skills/skill-registry.js';
 import { palette } from '../../palette.js';
 import { registerPluginAgents } from '../plugin-agents.js';
+import { makeImmediateHandler } from '../builtin-skills.js';
 import { registerOrReplace } from '../registry.js';
 import { runSkillDispatchTurn } from '../_lib/run-skill-dispatch-turn.js';
 import { bareSkillName, invokeSkillPreflight } from '../_lib/run-skill-preflight.js';
@@ -26,6 +27,7 @@ import {
   state,
   setState,
   bareName,
+  isRegistrySource,
   type DiscoveredSkill,
   type PluginCollision,
 } from './state.js';
@@ -167,12 +169,39 @@ export function makeForwardHandler(skill: DiscoveredSkill, flags?: readonly stri
 }
 
 /**
- * Query the current session for loaded plugin skills and register each as a
- * passthrough slash command. Vendored and user skills already in the global
- * skill registry win bare-name collisions — colliding plugin skills are still
- * reachable via their namespaced form, and surface as alt rows in `/skills`.
+ * Give one of the registry's own skills the slash command boot gives it.
  *
- * Safe to call repeatedly — re-registration replaces prior plugin entries.
+ * Contract: a reload must produce what boot produces for the same files on
+ * disk. Discovery has already rescanned disk into the registry, so the handler
+ * is rebuilt from the live registry entry (picking up an edited SKILL.md) with
+ * the same factory `registerBuiltinSkillCommands` uses. A skill added
+ * mid-session gets its bare `/name` here.
+ */
+function registerRegistrySkillCommand(name: string, internalUnlocked: boolean): void {
+  let meta: SkillMetadata;
+  try {
+    meta = getSkill(name);
+  } catch {
+    // Evicted between discovery and registration (another session rescanned
+    // project skills). Nothing to register; the next reload picks it up.
+    return;
+  }
+  if (!isSkillVisible(meta, internalUnlocked)) return;
+  registerOrReplace(makeImmediateHandler(meta));
+}
+
+/**
+ * Query the current session for loaded skills and register a slash command for
+ * each. The list holds the registry's own skills (built-in, user, project,
+ * imported) as well as plugin skills, and the two are handled differently:
+ *
+ *   - a registry skill gets the same command boot gives it, and is never a
+ *     collision candidate (it would only ever collide with itself);
+ *   - a plugin skill is registered as a passthrough. Registry skills win
+ *     bare-name collisions, so a colliding plugin skill stays reachable via
+ *     its namespaced form and surfaces as an alt row in `/skills`.
+ *
+ * Safe to call repeatedly: re-registration replaces prior entries.
  *
  * @returns the discovered skill count, or null if the query failed.
  */
@@ -229,6 +258,14 @@ export async function registerPluginSkills(
   for (const skill of discovered) {
     const slashName = `/${skill.name}`;
     if (CORE_COMMANDS.has(slashName)) continue;
+
+    // The registry's own skills arrive in this list too. Treated as plugin
+    // candidates, each finds its own bare name reserved and is recorded as
+    // shadowing itself under a made-up `plugin:<name>`.
+    if (isRegistrySource(skill.source)) {
+      registerRegistrySkillCommand(skill.name, internalUnlocked);
+      continue;
+    }
 
     const bare = bareName(skill.name);
     const flags = skill.flags;
