@@ -23,7 +23,7 @@ import { addressedToBot } from './message.addressed-to-bot.js';
 import { reactionMap } from '../reaction-map.js';
 import { handlePhotoImpl } from './message.photo-handler.js';
 import type { SlashRunnerDeps } from './slash.js';
-import { dispatchTelegramUserPromptSubmit } from './message.ups-dispatch.js';
+import { dispatchTelegramUserPromptSubmit, queueTelegramFrameworkContext } from './message.ups-dispatch.js';
 
 export { addressedToBot };
 
@@ -539,6 +539,7 @@ export class MessageHandler {
     // `return` inside the catch path still executes `finally`, which calls drainQueue,
     // which shifts the item we just pushed and calls processOne again -> cascade.
     let reEnqueued = false;
+    let withdrawContext: (() => void) | undefined;
     try {
       const session = await this.sessionManager.getSession(route);
       // Pre-turn UserPromptSubmit hook — mirrors REPL's dispatchUserPromptSubmit.
@@ -547,7 +548,7 @@ export class MessageHandler {
       if (ups.shouldSkip) { if (ups.blockNotice) await ctx.reply(ups.blockNotice).catch(() => {}); return; }
       content = ups.content;
       // Hook text rides this turn inside the framework envelope, never as typed text.
-      if (ups.injectContext) session.getInputStreamRef().queueFrameworkContext?.(ups.injectContext);
+      if (ups.injectContext) withdrawContext = queueTelegramFrameworkContext(session.getInputStreamRef(), ups.injectContext);
       // Keep the "typing..." indicator alive for the whole (often multi-minute)
       // streamed turn; a one-shot chat action would expire after ~5s.
       await withTypingIndicator(ctx, () =>
@@ -566,6 +567,7 @@ export class MessageHandler {
       this.log('Message handling error:', error);
       const busyMsg = (error as Error)?.message ?? '';
       if (busyMsg.includes('session is busy')) {
+        withdrawContext?.();
         // Session became busy between the caller's idle-check and our getSession call.
         // Re-enqueue the item so it isn't silently dropped.
         const depth = typeof content === 'string'

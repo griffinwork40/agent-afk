@@ -34,4 +34,6 @@ export interface PermissionBubbler {
 export interface InputStreamRef {
   pushUserMessage(content: string): void;
   queueFrameworkContext?(text: string): void;
+  /** Remove the last matching pending entry; already drained context is untouched. */
+  withdrawFrameworkContext?(text: string): void;
 }

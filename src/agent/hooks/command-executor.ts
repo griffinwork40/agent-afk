@@ -1,3 +1,4 @@
+// Contract: shell hook output is mapped to event-specific hook decisions.
 /**
  * Shell-command executor for config-driven hooks.
  *
@@ -17,9 +18,10 @@
  *
  * This module is event-agnostic: it maps `additionalContext` into
  * `HookDecision.injectContext` regardless of which event triggered it. What
- * happens to that value next is caller-defined per event — see `../hooks.js`
- * for the full contract (notably `Stop`, where a config-driven shell hook's
- * `additionalContext` ends up prepended to the *next* turn's prompt).
+ * happens to that value next is caller-defined per event; see `../hooks.js`
+ * for the full contract. For `Stop`, a config-driven shell hook's context is
+ * queued inside the next outbound user turn's `<framework-context>` envelope,
+ * never added to the submitted `prompt`.
  *
  * @module agent/hooks/command-executor
  */

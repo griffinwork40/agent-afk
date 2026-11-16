@@ -1,3 +1,4 @@
+// Contract: harness-owned hook lifecycle and framework context delivery.
 /**
  * Harness-owned hook infrastructure.
  *
@@ -31,19 +32,15 @@
  * and returned as a single string — so no injection is silently dropped. A
  * blocking handler still short-circuits before any accumulation occurs.
  *
- * For `UserPromptSubmit`, `injectContext` works differently: the returned string
- * is prepended to the user's prompt text before `runTurn` is called — allowing
- * hook handlers to inject per-turn system notes or policy context inline with
- * the human's message. The injection is performed by the REPL loop immediately
- * after dispatch.
+ * For `UserPromptSubmit`, `injectContext` is queued on the session after
+ * dispatch and delivered inside the `<framework-context>` envelope on the
+ * submitted turn. It never changes the user's prompt text or the `prompt`
+ * passed to hook handlers.
  *
- * For `Stop` (main-session post-turn), `injectContext` is stashed by the REPL
- * loop and prepended to the NEXT turn's prompt text — the same next-turn
- * delivery contract as `UserPromptSubmit`, but fired from the turn-completion
- * boundary rather than the submission boundary. This is the "bounce the turn
- * back" primitive: a post-turn policy handler (e.g. the terminal-state gate)
- * can read the parsed verdict on {@link StopContext} and inject a correction
- * the next turn must address.
+ * For `Stop` (main-session post-turn), `injectContext` is queued for delivery
+ * inside the `<framework-context>` envelope on the next outbound user turn.
+ * A post-turn policy handler can read the parsed verdict on {@link StopContext}
+ * and queue a correction the next turn must address.
  *
  * For `SessionStart`, `injectContext` is delivered during session init:
  * `dispatchSessionStart` returns the merged string to `AgentSession`, which
@@ -95,6 +92,7 @@ export interface HookDecision {
    * compatibility with handlers that predate #3900.
    */
   riskCategory?: import('./risk-classifier.js').RiskCategory;
+  // Contract: context delivery depends on the hook event, never on user text mutation.
   /**
    * (PreToolUse, SessionStart, SubagentStop, UserPromptSubmit, Stop) Framework-generated context to inject. For **PreToolUse**: appended to the final tool_result, including non-blocking decisions and later gate denials. Non-blocking context is appended after output capping and counted in a separate delivery hook_decision event only then; abandoned calls are not counted.
    *
@@ -106,15 +104,13 @@ export interface HookDecision {
    * no injection is silently dropped. A blocking handler short-circuits before
    * any accumulation.
    *
-   * For **UserPromptSubmit**: prepended to the user's prompt text before
-   * `runTurn` is called. Allows per-turn system notes or policy context to be
-   * injected inline with the human's message. Same concatenation merge policy
-   * applies when multiple handlers return `injectContext`.
+   * For **UserPromptSubmit**: queued on the session for delivery inside the
+   * `<framework-context>` envelope on the submitted turn, never in the user's
+   * prompt text. Same concatenation merge policy across handlers.
    *
-   * For **Stop**: stashed by the REPL loop and prepended to the NEXT turn's
-   * prompt text (same next-turn delivery as UserPromptSubmit, fired from the
-   * post-turn boundary). Lets a post-turn policy handler bounce a correction
-   * into the next turn. Same concatenation merge policy across handlers.
+   * For **Stop**: queued for delivery inside the `<framework-context>` envelope
+   * on the next outbound user turn. Lets a post-turn policy handler queue a
+   * correction for that turn. Same concatenation merge policy across handlers.
    *
    * For **SessionStart**: returned by `dispatchSessionStart` during init and
    * queued via `queueFrameworkContext` so it prepends to the session's FIRST
@@ -468,10 +464,10 @@ export interface StopContext {
 export interface UserPromptSubmitContext {
   event: 'UserPromptSubmit';
   /**
-   * The full text of the user's prompt at the moment it is submitted to the
-   * REPL loop, after shell injection and forward-manifest stitching but before
-   * `runTurn`. Handlers may inspect it for policy enforcement; the
-   * `injectContext` return value prepends additional context to this text.
+   * The submitted user text after surface transformations such as shell
+   * injection and forward-manifest stitching. Handlers may inspect it for
+   * policy enforcement. It never contains hook context; `injectContext` is
+   * delivered separately inside the turn's `<framework-context>` envelope.
    */
   prompt: string;
   /**

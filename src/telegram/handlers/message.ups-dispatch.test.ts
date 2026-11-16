@@ -282,7 +282,7 @@ function makeCtx(chatId: number, text: string): Context {
   } as unknown as Context;
 }
 
-const inputRef = { pushUserMessage: vi.fn(), queueFrameworkContext: vi.fn() };
+const inputRef = { pushUserMessage: vi.fn(), queueFrameworkContext: vi.fn(), withdrawFrameworkContext: vi.fn() };
 
 function makeSession(hookRegistry?: ReturnType<typeof createHookRegistry>): IAgentSession {
   return {
@@ -308,7 +308,8 @@ describe('MessageHandler – UserPromptSubmit wiring', () => {
   beforeEach(() => {
     mockStreamResponse.mockClear();
     mockStreamResponse.mockResolvedValue(undefined);
-    inputRef.queueFrameworkContext.mockClear();
+    inputRef.queueFrameworkContext.mockReset();
+    inputRef.withdrawFrameworkContext.mockReset();
   });
 
   it('dispatches UserPromptSubmit before streamResponse', async () => {
@@ -365,6 +366,43 @@ describe('MessageHandler – UserPromptSubmit wiring', () => {
     expect(replyText).toContain('blocked by hook');
     expect(replyText).toContain('test block');
     expect(inputRef.queueFrameworkContext).not.toHaveBeenCalled();
+  });
+
+  it('withdraws busy context so another message cannot receive it and retry receives it once', async () => {
+    const registry = createHookRegistry();
+    registry.register('UserPromptSubmit', async (ctx) => ({
+      injectContext: ctx.event === 'UserPromptSubmit' && ctx.prompt === 'retry me' ? '[retry context]' : '',
+    }));
+    const session = makeSession(registry);
+    const sm = makeSessionManager(session);
+    const handler = new MessageHandler(
+      { telegram: { sendChatAction: vi.fn(async () => {}) } } as unknown as import('telegraf').Telegraf,
+      sm as unknown as import('../session-manager.js').SessionManager,
+      new Set(), vi.fn(),
+    );
+    const pending: string[] = [];
+    const delivered: Array<{ content: unknown; context: string[] }> = [];
+    inputRef.queueFrameworkContext.mockImplementation((text: string) => { pending.push(text); });
+    inputRef.withdrawFrameworkContext.mockImplementation((text: string) => {
+      const index = pending.lastIndexOf(text.trim());
+      if (index >= 0) pending.splice(index, 1);
+    });
+    mockStreamResponse.mockRejectedValueOnce(new Error('Cannot send message: session is busy'));
+    mockStreamResponse.mockImplementation(async (_ctx: unknown, _session: unknown, content: unknown) => {
+      delivered.push({ content, context: pending.splice(0) });
+    });
+
+    await handler.handle(makeCtx(1001, 'retry me'));
+    expect(inputRef.withdrawFrameworkContext).toHaveBeenCalledExactlyOnceWith('[retry context]');
+    expect(pending).toEqual([]);
+    await handler.handle(makeCtx(1001, 'other message'));
+    await vi.waitFor(() => expect(delivered).toHaveLength(2));
+    expect(delivered).toEqual([
+      { content: 'other message', context: [] },
+      { content: 'retry me', context: ['[retry context]'] },
+    ]);
+    expect(inputRef.queueFrameworkContext).toHaveBeenCalledTimes(2);
+    expect(pending).toEqual([]);
   });
 
   it('queues injectContext for the envelope instead of prepending it', async () => {

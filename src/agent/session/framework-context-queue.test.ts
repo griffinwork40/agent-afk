@@ -73,6 +73,37 @@ describe('AgentSession framework-context queue', () => {
     await session.close();
   });
 
+  it('withdraws pending context through the input reference using trimmed text', async () => {
+    const session = new AgentSession(config);
+    const ref = session.getInputStreamRef();
+    ref.queueFrameworkContext!(`  ${NUDGE}  `);
+    ref.withdrawFrameworkContext!(`\n${NUDGE}\n`);
+    await drain(session.sendMessageStream('plain'));
+    expect(capturedTurns[0]!.content).toBe('plain');
+    await session.close();
+  });
+
+  it('withdrawal after a drain is a no-op', async () => {
+    const session = new AgentSession(config);
+    session.queueFrameworkContext(NUDGE);
+    await drain(session.sendMessageStream('first'));
+    session.withdrawFrameworkContext(NUDGE);
+    await drain(session.sendMessageStream('second'));
+    expect(capturedTurns.map((turn) => turn.content)).toEqual([`${env(NUDGE)}\n\nfirst`, 'second']);
+    await session.close();
+  });
+
+  it('withdraws only the last matching entry and preserves FIFO order', async () => {
+    const session = new AgentSession(config);
+    session.queueFrameworkContext(NUDGE);
+    session.queueFrameworkContext('other note');
+    session.queueFrameworkContext(NUDGE);
+    session.withdrawFrameworkContext(NUDGE);
+    await drain(session.sendMessageStream('go'));
+    expect(capturedTurns[0]!.content).toBe(`${env(`${NUDGE}\n\nother note`)}\n\ngo`);
+    await session.close();
+  });
+
   it('joins multiple queued contexts FIFO with blank-line separators', async () => {
     const session = new AgentSession(config);
     session.queueFrameworkContext('note one');

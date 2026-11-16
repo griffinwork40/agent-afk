@@ -466,7 +466,7 @@ export interface IAgentSession {
    * `injectContext`) to be prepended to the next real user message so it can
    * never displace one. See `InputStreamRef` for the full contract.
    */
-  getInputStreamRef(): Pick<InputStreamRef, 'pushUserMessage' | 'queueFrameworkContext'>;
+  getInputStreamRef(): Pick<InputStreamRef, 'pushUserMessage' | 'queueFrameworkContext' | 'withdrawFrameworkContext'>;
 
   supportedCommands(): Promise<ProviderCommandInfo[]>;
   supportedModels(): Promise<ModelInfo[]>;

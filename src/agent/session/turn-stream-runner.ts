@@ -26,6 +26,7 @@ import type { OutputBroadcast } from './output-broadcast.js';
 import type { SessionStateManager } from './session-state.js';
 import type {
   AgentConfig,
+  InputStreamRef,
   OutputEvent,
   ResponseMetadata,
   SessionState,
@@ -350,10 +351,23 @@ export class TurnStreamRunner {
     }
   }
 
-  /**
-   * Queue hook-generated framework context for delivery with the next real
-   * outbound user message. See the displacement-bug rationale in AgentSession.
-   */
+  /** Withdraw only the last matching entry that has not yet been drained. */
+  withdrawFrameworkContext(text: string): void {
+    const pending = this.deps.getPendingFrameworkContext();
+    const index = pending.lastIndexOf(text.trim());
+    if (index >= 0) this.deps.setPendingFrameworkContext(pending.filter((_, i) => i !== index));
+  }
+
+  /** Expose input channels without giving callers access to the runner. */
+  createInputStreamRef(pushUserMessage: InputStreamRef['pushUserMessage']): InputStreamRef {
+    return {
+      pushUserMessage,
+      queueFrameworkContext: (text) => this.queueFrameworkContext(text),
+      withdrawFrameworkContext: (text) => this.withdrawFrameworkContext(text),
+    };
+  }
+
+  /** Queue framework context for delivery with the next real outbound user message. */
   queueFrameworkContext(text: string): void {
     const trimmed = text.trim();
     if (trimmed.length === 0) return;

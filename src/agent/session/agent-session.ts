@@ -491,11 +491,10 @@ export class AgentSession implements IAgentSession {
    */
   queueFrameworkContext(text: string): void { this.runner.queueFrameworkContext(text); }
 
-  getInputStreamRef(): Pick<InputStreamRef, 'pushUserMessage' | 'queueFrameworkContext'> {
-    return {
-      pushUserMessage: (content: string) => this.inputStream.pushUserMessage(content),
-      queueFrameworkContext: (text: string) => this.queueFrameworkContext(text),
-    };
+  withdrawFrameworkContext(text: string): void { this.runner.withdrawFrameworkContext(text); }
+
+  getInputStreamRef(): InputStreamRef {
+    return this.runner.createInputStreamRef((content) => this.inputStream.pushUserMessage(content));
   }
 
   getHistory(): readonly Message[] { return [...this.conversationHistory]; }

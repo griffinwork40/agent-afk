@@ -19,6 +19,7 @@
 
 import type { ContentBlockParam, DocumentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { HookRegistry, UserPromptSubmitContext } from '../../agent/hooks.js';
+import type { InputStreamRef } from '../../agent/types.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import { HookHandlerTimeoutError } from '../../agent/hook-registry.js';
 
@@ -39,6 +40,12 @@ export interface TelegramUpsResult {
   injectContext?: string;
   blockNotice?: string;
   userText: string;
+}
+
+/** Queue this attempt's hook context and return its busy-refusal cleanup. */
+export function queueTelegramFrameworkContext(ref: InputStreamRef, text?: string): () => void {
+  if (text) ref.queueFrameworkContext?.(text);
+  return () => { if (text) ref.withdrawFrameworkContext?.(text); };
 }
 
 /**
