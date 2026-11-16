@@ -151,7 +151,9 @@ describe('afk status --format json provider credential mapping', () => {
     await program.parseAsync(['node', 'afk', 'status']);
 
     // describeCredentialSource must be called with the loader's own source output,
-    // not via a second credentialSourceId() call (#4817).
+    // not via a second credentialSourceId() call (#4817). The exact-once check
+    // catches a double-call regression (#4864).
+    expect(describeCredentialSource).toHaveBeenCalledTimes(1);
     expect(describeCredentialSource).toHaveBeenCalledWith('ANTHROPIC_API_KEY');
 
     consoleSpy.mockRestore();
