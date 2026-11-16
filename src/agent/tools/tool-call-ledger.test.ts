@@ -409,8 +409,11 @@ describe('per-key entry trimming — hot keys stay bounded', () => {
     for (let turn = 0; turn < 10; turn++) {
       ledger.record('bash', 'hot-hash', ok(`turn-${turn}`), turn);
     }
-    // Raw entry count must not exceed turnWindow + 1 (the boundary can include
-    // the cutoff entry itself, but anything older is trimmed in-flight)
+    // Raw entry count must not exceed turnWindow + 1: trimming removes entries
+    // with turnIndex < (latestTurn - turnWindow), so the entry AT the cutoff
+    // boundary survives, giving at most turnWindow + 1 live entries (#4864:
+    // the +1 is intentional — entries strictly below the cutoff are pruned,
+    // not entries at or above it).
     expect(ledger.rawEntryCountFor('bash', 'hot-hash')).toBeLessThanOrEqual(turnWindow + 1);
     // Lookup at current turn still returns the most recent entries in order
     const history = ledger.lookup('bash', 'hot-hash', 9);

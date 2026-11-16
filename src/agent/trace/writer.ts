@@ -46,11 +46,9 @@ import type { FileHandle } from 'fs/promises';
 import { join } from 'path';
 
 import { TraceEventInputSchema } from './events.js';
+import type { CompactionPayloadInput, CompactionPayloadPersisted, CompactionSidecarRef } from './types.compaction.js';
 import { awaitPendingWritesBounded, SEAL_PENDING_WRITES_TIMEOUT_MS } from './pending-writes.js';
 import type {
-  CompactionPayloadInput,
-  CompactionPayloadPersisted,
-  CompactionSidecarRef,
   SessionSealedPayload,
   TraceEvent,
   TraceEventInput,
@@ -457,6 +455,9 @@ export class NdjsonTraceWriter implements TraceWriter {
       ...(payload.tokensSavedEstimate !== undefined
         ? { tokensSavedEstimate: payload.tokensSavedEstimate }
         : {}),
+      ...(payload.summarizerInputCharsDropped !== undefined
+        ? { summarizerInputCharsDropped: payload.summarizerInputCharsDropped }
+        : {}),
       ...(payload.summarizationTokens !== undefined
         ? { summarizationTokens: payload.summarizationTokens }
         : {}),
@@ -518,6 +519,9 @@ export class InMemoryTraceWriter implements TraceWriter {
         messagesAfter: event.payload.messagesAfter,
         ...(event.payload.tokensSavedEstimate !== undefined
           ? { tokensSavedEstimate: event.payload.tokensSavedEstimate }
+          : {}),
+        ...(event.payload.summarizerInputCharsDropped !== undefined
+          ? { summarizerInputCharsDropped: event.payload.summarizerInputCharsDropped }
           : {}),
         ...(event.payload.summarizationTokens !== undefined
           ? { summarizationTokens: event.payload.summarizationTokens }

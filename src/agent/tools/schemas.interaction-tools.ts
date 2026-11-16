@@ -37,7 +37,7 @@ export const askQuestionTool: AnthropicToolDef = {
     'Treat this tool as best-effort: `decline` or `cancel` means "no answer is coming," not a\n' +
     'reason to abort. When unsure a human will answer, instead of asking:\n' +
     '1. Proceed on a stated assumption — pick the most reasonable interpretation, act, and record\n' +
-    '   it in your Done/Blocked terminal state.\n' +
+    '   it in your Done/Blocked terminal state for async review.\n' +
     '2. If no safe assumption exists and proceeding is irreversible, end with a **Blocked** terminal\n' +
     '   state naming exactly what the operator must supply.\n' +
     '\n' +

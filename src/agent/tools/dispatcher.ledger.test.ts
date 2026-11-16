@@ -138,7 +138,11 @@ describe('SessionToolDispatcher — ToolCallLedger wiring (#4476)', () => {
     expect(result.isError).toBe(true);
     // The round counter advanced (beginRound fired before the gate check).
     // Round indices are per entry-point call, not per recorded observation.
+    // A second call must advance to 1, proving the counter moves rather than
+    // sitting at the initial 0 value (#4864).
     expect(denying.toolCallLedger.currentRound).toBe(0);
+    await denying.execute(c);
+    expect(denying.toolCallLedger.currentRound).toBe(1);
     // But no entry was recorded — noteSettledOutcome is never reached for
     // gate-refused calls (documenting the behaviour chosen in item 2 of #4821).
     expect(denying.toolCallLedger.ledger.entryCount).toBe(0);

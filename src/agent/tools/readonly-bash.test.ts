@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classifyBashCommand, PIPE_TO_SHELL_REASON } from './readonly-bash.js';
+import { classifyDestructiveGit } from './readonly-bash.tokenizer.js';
 
 describe('classifyBashCommand', () => {
   describe('blocks mutating commands', () => {
@@ -833,6 +834,97 @@ describe('classifyBashCommand', () => {
       it(`blocks: ${label} (${cmd})`, () => {
         const result = classifyBashCommand(cmd);
         expect(result.mutating, `expected "${cmd}" to be mutating`).toBe(true);
+      });
+    }
+  });
+});
+
+describe('classifyDestructiveGit', () => {
+  const destructive: Array<[string, string]> = [
+    ['git checkout main', 'git checkout (branch)'],
+    ['git switch main', 'git switch'],
+    ['git reset --hard', 'git reset --hard'],
+    ['git clean -fd', 'git clean'],
+    ['git restore .', 'git restore'],
+    ['git stash drop', 'git stash drop'],
+    ['git stash clear', 'git stash clear'],
+    ['git stash pop', 'git stash pop'],
+    ['git stash apply', 'git stash apply'],
+  ];
+  for (const [cmd, label] of destructive) {
+    it(`classifies as destructive: ${label}`, () => {
+      const result = classifyDestructiveGit(cmd);
+      expect(result.destructive, `expected "${cmd}" to be destructive`).toBe(true);
+      expect(result.reason).toBeTruthy();
+    });
+  }
+
+  const safe: Array<[string, string]> = [
+    ['git reset --soft', 'git reset --soft'],
+    ['git reset', 'git reset (bare — defaults to --mixed, non-destructive)'],
+    ['git reset --mixed', 'git reset --mixed'],
+    ['git stash list', 'git stash list'],
+    ['git stash show', 'git stash show'],
+    ['git stash push', 'git stash push (saves state, non-destructive)'],
+    ['git stash push -m "wip"', 'git stash push -m (saves state, non-destructive)'],
+    ['git stash save', 'git stash save (legacy alias for push, non-destructive)'],
+    ['git stash', 'bare git stash (implicit push, non-destructive)'],
+    ['git commit -m "x"', 'git commit'],
+    ['git push', 'git push'],
+    ['git status', 'git status'],
+    ['git log', 'git log'],
+    ['git checkout -b feature', 'git checkout -b (branch creation — allowed)'],
+    ['git checkout -B feature', 'git checkout -B (branch creation — allowed)'],
+    ['git switch -c feature', 'git switch -c (branch creation — allowed)'],
+    ['git switch -C feature', 'git switch -C (branch creation — allowed)'],
+  ];
+  for (const [cmd, label] of safe) {
+    it(`classifies as NOT destructive: ${label}`, () => {
+      const result = classifyDestructiveGit(cmd);
+      expect(result.destructive, `expected "${cmd}" to be non-destructive`).toBe(false);
+    });
+  }
+
+  describe('compound-command bypass (must NOT be bypassable)', () => {
+    const compoundDestructive: Array<[string, string]> = [
+      ['{ git checkout main; }', 'brace-group git checkout'],
+      ['{ git reset --hard; }', 'brace-group git reset --hard'],
+      ['if true; then git checkout main; fi', 'if/then git checkout'],
+      ['if true; then git clean -fd; fi', 'if/then git clean'],
+      ['{ git switch main; }', 'brace-group git switch'],
+      ['{ git restore .; }', 'brace-group git restore'],
+      ['if true; then git switch main; fi', 'if/then git switch'],
+      ['if true; then git restore .; fi', 'if/then git restore'],
+      ['{ git stash pop; }', 'brace-group git stash pop'],
+      ['{ git stash drop; }', 'brace-group git stash drop'],
+      ['{ git stash clear; }', 'brace-group git stash clear'],
+      ['if true; then git stash pop; fi', 'if/then git stash pop'],
+    ];
+    for (const [cmd, label] of compoundDestructive) {
+      it(`blocks compound: ${label}`, () => {
+        const result = classifyDestructiveGit(cmd);
+        expect(result.destructive, `expected "${cmd}" to be destructive`).toBe(true);
+        expect(result.reason).toBeTruthy();
+      });
+    }
+  });
+
+  describe('pipe-to-shell bypass (must NOT be bypassable)', () => {
+    const pipeToShell: Array<[string, string]> = [
+      ["printf 'git checkout main' | bash", 'printf pipe to bash'],
+      ["echo 'git reset --hard' | sh", 'echo pipe to sh'],
+      ["printf 'git switch main' | /bin/bash", 'printf pipe to /bin/bash'],
+      ["echo 'git stash pop' | /bin/sh", 'echo pipe to /bin/sh'],
+      ["printf 'git checkout main' | zsh", 'printf pipe to zsh'],
+      ["printf 'git checkout main' | ksh", 'printf pipe to ksh'],
+      ["printf 'git checkout main' | sudo bash", 'printf pipe to sudo bash'],
+      ["printf 'git checkout main' | env bash", 'printf pipe to env bash'],
+    ];
+    for (const [cmd, label] of pipeToShell) {
+      it(`blocks pipe-to-shell: ${label}`, () => {
+        const result = classifyDestructiveGit(cmd);
+        expect(result.destructive, `expected "${cmd}" to be destructive`).toBe(true);
+        expect(result.reason).toBeTruthy();
       });
     }
   });

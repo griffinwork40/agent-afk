@@ -52,7 +52,7 @@ import {
   summarizerInputCharBudget,
   wrapTranscriptForSummary,
 } from '../../shared/compaction.js';
-import type { CompactionTrigger } from '../../../trace/types.js';
+import type { CompactionTrigger } from '../../../trace/types.compaction.js';
 import {
   resolveCrossProviderSummarize,
   resolveSummarizerWindow,
@@ -224,6 +224,7 @@ export async function compactHistory(
           messagesBefore: info.messagesBefore,
           messagesAfter: info.messagesAfter,
           tokensSavedEstimate: info.tokensSavedEstimate,
+          summarizerInputCharsDropped: info.summarizerInputCharsDropped,
         });
       },
       onRetry: traceTransientRetry(traceWriter, 'compaction', DEFAULT_TRANSIENT_MAX_RETRIES),

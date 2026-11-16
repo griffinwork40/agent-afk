@@ -9,6 +9,10 @@ on:
   # Manual runs from the Actions tab.
   workflow_dispatch:
 
+# Build/test jobs only need repository read access, not the repository default scope.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # Never cancel in-progress runs on the default branch — a cancelled main run
@@ -31,6 +35,8 @@ jobs:
     # self-hosted (trusted tag/main-push triggers).
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      BASE_REF: ${{ github.base_ref || 'main' }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -151,8 +157,6 @@ jobs:
         # currently inert — only the full-scan checks enforce. Activating
         # TOUCHED needs a deeper fetch — a separate policy call.
         # See docs/file-size-ceiling.md.
-        env:
-          BASE_REF: ${{ github.base_ref || 'main' }}
         run: pnpm audit:filesize:check --changed-vs "origin/$BASE_REF"
 
       - name: Audit the 200-line function ceiling (CI-blocking)
@@ -164,8 +168,6 @@ jobs:
         run: pnpm audit:funcsize:check
 
       - name: Audit the 200-line function ceiling on functions this PR touches
-        env:
-          BASE_REF: ${{ github.base_ref || 'main' }}
         run: pnpm audit:funcsize:check --changed-vs "origin/$BASE_REF"
 
       - name: Audit --no-optional-locks discipline (git read commands must not take index.lock)
@@ -218,8 +220,6 @@ jobs:
         # Intentional duplication: wrap it in `// jscpd:ignore-start` /
         # `// jscpd:ignore-end` with a reason comment. List all clones with
         # `pnpm audit:clones`.
-        env:
-          BASE_REF: ${{ github.base_ref || 'main' }}
         run: |
           git fetch --no-tags --depth=1 origin "+$BASE_REF:refs/remotes/origin/$BASE_REF"
           CLONE_GATE_BASE_REF="origin/$BASE_REF" pnpm audit:clones:check
@@ -616,6 +616,8 @@ jobs:
     name: Docs Site (typecheck + build)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      BASE_REF: ${{ github.base_ref || 'main' }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -641,8 +643,6 @@ jobs:
       - name: Docs impact summary (advisory)
         if: github.event_name == 'pull_request'
         continue-on-error: true
-        env:
-          BASE_REF: ${{ github.base_ref || 'main' }}
         run: pnpm docs:impact --base "origin/$BASE_REF"
 
       - name: Install dependencies

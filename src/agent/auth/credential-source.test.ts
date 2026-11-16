@@ -144,4 +144,35 @@ describe('credentialSourceForModel', () => {
   it('no usable credential yields undefined, not a guess', () => {
     expect(tryCredentialSourceForModel('grok-4')).toBeUndefined();
   });
+
+  // #4903 finding 1: a slot apiKey that is an OAuth token must not be reported
+  // as 'anthropic:config' (metered). The sk-ant-oat prefix identifies a
+  // subscription token regardless of which field carries it.
+  it('Anthropic slot with an OAuth token in apiKey records undefined, not anthropic:config', () => {
+    const s = slots({ large: { id: 'claude-opus-5-5', provider: 'anthropic', apiKey: 'sk-ant-oat01-fake-slot-token' } });
+    expect(credentialSourceForModel('large', { slots: s })).toBeUndefined();
+  });
+
+  it('Anthropic slot with a metered (non-oat) key still records anthropic:config', () => {
+    const s = slots({ large: { id: 'claude-opus-5-5', provider: 'anthropic', apiKey: 'sk-ant-api03-metered-key' } });
+    expect(credentialSourceForModel('large', { slots: s })).toBe('anthropic:config');
+  });
+
+  // #4903 finding 6: previously untested negative paths in anthropicSource.
+  // configApiKey with a non-subscription source (ANTHROPIC_API_KEY tier):
+  // a different api key with the api-key tier active records nothing.
+  it('configApiKey with a metered env key active and a different key records nothing', () => {
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-api03-env-key');
+    // A different metered key (not the env key, not an oat token) → undefined.
+    expect(credentialSourceForModel('claude-sonnet-4-6', undefined, { configApiKey: 'sk-ant-api03-other' })).toBeUndefined();
+    // The exact env key is accepted.
+    expect(credentialSourceForModel('claude-sonnet-4-6', undefined, { configApiKey: 'sk-ant-api03-env-key' })).toBe('ANTHROPIC_API_KEY');
+  });
+
+  // A key without the sk-ant-oat prefix when the ambient tier IS a subscription
+  // also records nothing (not an oat token so the subscription guard fails).
+  it('a non-oat configApiKey when the ambient tier is a subscription records nothing', () => {
+    // keychain is set to sk-ant-oat01-keychain (subscription) in beforeEach.
+    expect(credentialSourceForModel('claude-sonnet-4-6', undefined, { configApiKey: 'sk-ant-api03-unrelated' })).toBeUndefined();
+  });
 });

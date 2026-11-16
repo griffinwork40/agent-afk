@@ -45,7 +45,7 @@ import { QueryInputStream } from './input-iterable.js';
 import type { AccountingAccumulator } from './accounting-accumulator.js';
 import type { SessionShutdown } from './session-shutdown.js';
 import type { AgentConfig } from '../types.js';
-import type { ProviderQuery, ProviderEvent, ProviderUserTurn } from '../provider.js';
+import type { ModelProvider, ProviderQuery, ProviderEvent, ProviderUserTurn } from '../provider.js';
 import type { HookRegistry } from '../hooks.js';
 import type { TransformDeps } from './stream-consumer.js';
 
@@ -98,18 +98,7 @@ function buildProviderQuery(
   const factory = config.providerFactory;
   const resolveProviderFn = factory
     ? (injected ? injectedFirstFactory(injected, factory) : factory)
-    : (m: string | undefined) =>
-        resolveProvider(m, undefined, {
-          customTools: config.customTools,
-          canUseTool: config.canUseTool,
-          // #3442: opt-in executors ride along on every provider the router
-          // builds, including ones rebuilt by a cross-family model swap.
-          ...(config.executors !== undefined ? { executors: config.executors } : {}),
-          // #4063: forward the resolved MCP manager (caller-supplied or
-          // SDK-built from config.mcpServers) so MCP tools are bridged and
-          // mcpServerStatus() returns the live server states.
-          ...(config.mcpManager !== undefined ? { mcpManager: config.mcpManager } : {}),
-        });
+    : bareProviderResolver(config);
   return new ProviderRouter(
     { prompt: promptIterable, config },
     {
@@ -121,6 +110,32 @@ function buildProviderQuery(
       getFallbackModel: getConfiguredFallbackModel,
     },
   );
+}
+
+/**
+ * @internal The bare `resolveProvider` fallback used when a session has
+ * neither an injected provider nor a `providerFactory` (one-shot, test, and
+ * fork paths such as a compose node with the workspace store disabled).
+ *
+ * Invariant: a forked child (`isSubagentFork`) built here carries the
+ * destructive-git gate, the same as every child built by
+ * `createChildProviderFactory` / `buildComposeNodeProvider`; a top-level
+ * session never does.
+ */
+export function bareProviderResolver(config: AgentConfig): (m: string | undefined) => ModelProvider {
+  return (m) =>
+    resolveProvider(m, undefined, {
+      customTools: config.customTools,
+      canUseTool: config.canUseTool,
+      // #3442: opt-in executors ride along on every provider the router
+      // builds, including ones rebuilt by a cross-family model swap.
+      ...(config.executors !== undefined ? { executors: config.executors } : {}),
+      // #4063: forward the resolved MCP manager (caller-supplied or
+      // SDK-built from config.mcpServers) so MCP tools are bridged and
+      // mcpServerStatus() returns the live server states.
+      ...(config.mcpManager !== undefined ? { mcpManager: config.mcpManager } : {}),
+      ...(config.isSubagentFork === true ? { blockDestructiveGit: true } : {}),
+    });
 }
 
 /**

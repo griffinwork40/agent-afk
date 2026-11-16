@@ -236,5 +236,8 @@ describe('buildEpisodeFromFacet', () => {
     const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
     const ep = buildEpisodeFromFacet('test-session-abc');
     expect(ep?.source).not.toBe('unknown');
+    // Positive assertion: the guard must map 'unknown' to the facet's real
+    // source field ('cli' in this fixture), not to undefined (#4864).
+    expect(ep?.source).toBe('cli');
   });
 });

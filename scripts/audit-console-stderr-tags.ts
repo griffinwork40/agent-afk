@@ -38,13 +38,36 @@ export function inStderrTagScope(relPath: string): boolean {
  * True when `line` opens a `process.stderr.write(` call whose first argument is
  * a string or template literal that starts with a bracket tag.
  *
- * `nextLine` covers the wrapped form, where the call line ends at the opening
- * parenthesis and the argument starts on the following line.
+ * `followingLines`, starting at `nextLineIndex`, cover wrapped arguments. Skip
+ * leading whitespace and comments only, never comment markers inside a literal.
  */
-export function isBracketTagStderrWrite(line: string, nextLine: string | undefined): boolean {
+export function isBracketTagStderrWrite(
+  line: string,
+  followingLines: readonly string[] = [],
+  nextLineIndex = 0,
+): boolean {
   const call = STDERR_WRITE_RE.exec(line);
   if (!call) return false;
-  const rest = line.slice(call.index + call[0].length);
-  const firstArg = rest.trim() === '' ? (nextLine ?? '') : rest;
-  return BRACKET_TAG_LITERAL_RE.test(firstArg);
+  let rest = line.slice(call.index + call[0].length);
+  let inBlockComment = false;
+  for (let i = nextLineIndex; ; i++) {
+    rest = rest.trimStart();
+    while (rest || inBlockComment) {
+      if (inBlockComment) {
+        const end = rest.indexOf('*/');
+        if (end === -1) break;
+        rest = rest.slice(end + 2).trimStart();
+        inBlockComment = false;
+      } else if (rest.startsWith('/*')) {
+        rest = rest.slice(2);
+        inBlockComment = true;
+      } else if (rest.startsWith('//')) {
+        break;
+      } else {
+        return BRACKET_TAG_LITERAL_RE.test(rest);
+      }
+    }
+    if (i >= followingLines.length) return false;
+    rest = followingLines[i]!;
+  }
 }

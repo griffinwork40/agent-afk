@@ -35,6 +35,7 @@ export const CompactionPayloadInputSchema = z.object({
   messagesBefore: z.number().int().nonnegative(),
   messagesAfter: z.number().int().nonnegative(),
   tokensSavedEstimate: z.number().nonnegative().optional(),
+  summarizerInputCharsDropped: z.number().int().nonnegative().optional(),
   summarizationTokens: z
     .object({
       input: z.number().int().nonnegative(),
@@ -53,6 +54,7 @@ export const CompactionPayloadPersistedSchema = z.object({
   messagesBefore: z.number().int().nonnegative(),
   messagesAfter: z.number().int().nonnegative(),
   tokensSavedEstimate: z.number().nonnegative().optional(),
+  summarizerInputCharsDropped: z.number().int().nonnegative().optional(),
   summarizationTokens: z
     .object({
       input: z.number().int().nonnegative(),

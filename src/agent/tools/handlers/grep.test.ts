@@ -905,6 +905,37 @@ describe('grepHandler cwd containment', () => {
       expect(result.content).toContain('include');
     });
 
+    it('multiple unknown keys: error names all of them in one message', async () => {
+      const handler = createGrepHandler(tempDir);
+      const result = await handler(
+        { pattern: 'needle', path: tempDir, recursive: true, limit: 5 },
+        createSignal(),
+      );
+
+      expect(result.isError).toBe(true);
+      // Both unknown keys must appear in a single error message so the model
+      // can correct the call without a second round trip.
+      expect(result.content).toContain('recursive');
+      expect(result.content).toContain('limit');
+      expect(result.content).toContain('pattern');
+      expect(result.content).toContain('path');
+      expect(result.content).toContain('include');
+    });
+
+    it('glob among multiple unknown keys: error names all keys and keeps include hint', async () => {
+      const handler = createGrepHandler(tempDir);
+      const result = await handler(
+        { pattern: 'needle', path: tempDir, glob: '*.ts', recursive: true },
+        createSignal(),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('glob');
+      expect(result.content).toContain('recursive');
+      // The include hint must still appear even when glob is not the only bad key.
+      expect(result.content).toContain('include');
+    });
+
     it('all three known keys together: normal search', async () => {
       writeFileSync(join(tempDir, 'match.ts'), 'needle');
       writeFileSync(join(tempDir, 'skip.txt'), 'needle');

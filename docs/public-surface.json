@@ -1503,6 +1503,16 @@
     },
     {
       "kind": "env",
+      "name": "AFK_PROMPT_EXPERIMENT",
+      "source": "src/config/env.prompt-experiment.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_PROMPT_EXPERIMENT_ARM",
+      "source": "src/config/env.prompt-experiment.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_PROSE_MEASURE",
       "source": "src/config/env.display.ts"
     },

@@ -135,6 +135,13 @@ export interface AnthropicDirectProviderOptions {
    */
   readOnlyBash?: boolean;
   /**
+   * When true, the per-query {@link SessionToolDispatcher} blocks bash commands
+   * that would destroy working-tree state (git checkout, switch, restore, clean,
+   * reset --hard, stash drop/clear/pop). Set for ALL child sessions via
+   * `createChildProviderFactory`. Independent of `readOnlyBash`. Defaults to false.
+   */
+  blockDestructiveGit?: boolean;
+  /**
    * Optional MCP manager. When provided, every tool exposed by a
    * `connected` MCP server is merged into the provider's tool schema list
    * and the per-query dispatcher's handler map. Pre/PostToolUse hooks

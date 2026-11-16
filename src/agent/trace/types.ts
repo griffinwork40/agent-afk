@@ -591,48 +591,10 @@ export interface AbortPayload {
 // compaction — two forms (see module JSDoc)
 // ---------------------------------------------------------------------------
 
-export type CompactionTrigger = 'manual' | 'token_threshold' | 'turn_count';
-
-/** Input form — what emission sites construct. Carries the full
- *  pre-compaction slice inline. The writer transforms this into the
- *  persisted form by writing the slice to a sidecar. */
-export interface CompactionPayloadInput {
-  trigger: CompactionTrigger;
-  /** Full-fidelity message slice that compaction is about to discard
-   *  from working memory. Typed `unknown[]` to keep the trace module
-   *  provider-agnostic; emitters serialize whatever shape they hold. */
-  preCompactionMessages: unknown[];
-  summary: string;
-  keptTailCount: number;
-  keepLastNConfig: number;
-  messagesBefore: number;
-  messagesAfter: number;
-  tokensSavedEstimate?: number;
-  summarizationTokens?: { input: number; output: number };
-}
-
-/** Reference to a sidecar file holding the full-fidelity pre-compaction
- *  slice. The path is absolute. */
-export interface CompactionSidecarRef {
-  /** Absolute path to the sidecar JSON file. */
-  path: string;
-  sizeBytes: number;
-  /** SHA-256 hex digest of the sidecar contents, for integrity. */
-  sha256: string;
-}
-
-/** Persisted form — what ends up on the JSONL line. */
-export interface CompactionPayloadPersisted {
-  trigger: CompactionTrigger;
-  preCompactionMessagesRef: CompactionSidecarRef;
-  summary: string;
-  keptTailCount: number;
-  keepLastNConfig: number;
-  messagesBefore: number;
-  messagesAfter: number;
-  tokensSavedEstimate?: number;
-  summarizationTokens?: { input: number; output: number };
-}
+import type { CompactionPayloadInput, CompactionPayloadPersisted } from './types.compaction.js';
+export type {
+  CompactionTrigger, CompactionPayloadInput, CompactionPayloadPersisted, CompactionSidecarRef,
+} from './types.compaction.js';
 
 // ---------------------------------------------------------------------------
 // closure — terminal record for the session loop

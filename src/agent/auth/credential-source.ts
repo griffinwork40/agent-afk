@@ -44,7 +44,8 @@ import { resolveBinding } from '../session/model-slots.js';
 import { resolveOpenAIAuth } from '../providers/openai-compatible/auth.js';
 import { resolveXaiAuth } from '../providers/xai/auth.js';
 import {
-  lastResolvedAnthropicCredential,
+  lastResolvedAnthropicSource,
+  lastResolvedAnthropicMatchesToken,
   resolveAnthropicCredential,
   resolveAnthropicCredentialFromEnv,
   type AnthropicCredential,
@@ -157,17 +158,39 @@ function anthropicSource(
 ): string | undefined {
   const override = endpointOverrideId(binding.baseUrl ?? opts?.configBaseUrl ?? env.AFK_LOCAL_BASE_URL, 'anthropic');
   if (override !== undefined) return override;
-  if (nonEmpty(binding.apiKey)) return 'anthropic:config';
-  const cred: AnthropicCredential | undefined = opts?.noStoreRead === true
-    ? resolveAnthropicCredentialFromEnv() ?? lastResolvedAnthropicCredential()
-    : resolveAnthropicCredential();
-  if (cred === undefined) return undefined;
+  // #4903: an OAuth token in a slot apiKey must not be recorded as
+  // 'anthropic:config' (metered). Apply the same sk-ant-oat prefix check here
+  // that the configApiKey branch applies a few lines below.
+  if (nonEmpty(binding.apiKey)) {
+    return binding.apiKey.startsWith('sk-ant-oat') ? undefined : 'anthropic:config';
+  }
+  // #4903: use the narrow accessor API so the token never leaves
+  // credential-resolver. noStoreRead path falls back to the last-resolved
+  // source id + token-equality predicate rather than the full credential.
+  let credSource: string | undefined;
+  let tokenEquals: (k: string) => boolean;
+  if (opts?.noStoreRead === true) {
+    const envCred = resolveAnthropicCredentialFromEnv();
+    if (envCred !== undefined) {
+      credSource = envCred.source;
+      tokenEquals = (k) => k === envCred.token;
+    } else {
+      credSource = lastResolvedAnthropicSource();
+      tokenEquals = (k) => lastResolvedAnthropicMatchesToken(k);
+    }
+  } else {
+    const cred: AnthropicCredential | undefined = resolveAnthropicCredential();
+    if (cred === undefined) return undefined;
+    credSource = cred.source;
+    tokenEquals = (k) => k === cred.token;
+  }
+  if (credSource === undefined) return undefined;
   const key = opts?.configApiKey;
-  if (!nonEmpty(key) || key === cred.token) return cred.source;
+  if (!nonEmpty(key) || tokenEquals(key)) return credSource;
   // A different subscription token (the parent's bootstrap token after a
   // refresh) is still billed as a subscription; any other key has unknown
   // origin and records nothing.
-  return key.startsWith('sk-ant-oat') && SUBSCRIPTION_TIERS.has(cred.source) ? cred.source : undefined;
+  return key.startsWith('sk-ant-oat') && SUBSCRIPTION_TIERS.has(credSource) ? credSource : undefined;
 }
 
 /**

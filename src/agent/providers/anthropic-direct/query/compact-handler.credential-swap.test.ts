@@ -153,6 +153,7 @@ function wireRunCompactionCore() {
       messagesBefore: opts.messages.length,
       messagesAfter: 2,
       tokensSavedEstimate: 100,
+      summarizerInputCharsDropped: 901,
     });
     return {
       compacted: true,
@@ -184,13 +185,13 @@ describe('compactHistory: compaction trace trigger', () => {
       state: makeState(), abort: new AbortCoordinator(), retry: makeRetry(null),
       initSessionId: 's1', trigger: 'token_threshold',
     });
-    expect(emitCompactionMock).toHaveBeenCalledWith(undefined, expect.objectContaining({ trigger: 'token_threshold' }));
+    expect(emitCompactionMock).toHaveBeenCalledWith(undefined, expect.objectContaining({ trigger: 'token_threshold', summarizerInputCharsDropped: 901 }));
   });
 
   it('defaults to manual when no trigger is passed', async () => {
     wireRunCompactionCore();
     await compactHistory({ state: makeState(), abort: new AbortCoordinator(), retry: makeRetry(null), initSessionId: 's1' });
-    expect(emitCompactionMock).toHaveBeenCalledWith(undefined, expect.objectContaining({ trigger: 'manual' }));
+    expect(emitCompactionMock).toHaveBeenCalledWith(undefined, expect.objectContaining({ trigger: 'manual', summarizerInputCharsDropped: 901 }));
   });
 
   it('caps the summarizer transcript by the resolved summarizer model budget', async () => {

@@ -347,6 +347,12 @@ describe('abortableStream', () => {
     expect(resumeTimerSpy).toHaveBeenCalledTimes(1);
     expect(await pull1).toEqual({ value: 1, done: false });
 
+    // Advance timers to prove the watchdog does not fire spuriously while the
+    // session remains paused between pulls (#4864).
+    await vi.advanceTimersByTimeAsync(25 * 60 * 1_000);
+    expect(suspendSpy).toHaveBeenCalledTimes(1);
+    expect(resumeTimerSpy).toHaveBeenCalledTimes(1);
+
     // ── Pull #2 ──────────────────────────────────────────────────────────────
     const pull2 = gen.next();
     await drainMicrotasks();
@@ -374,10 +380,6 @@ describe('abortableStream', () => {
 
     expect(resumeTimerSpy).toHaveBeenCalledTimes(3);
     expect(await pull3).toEqual({ value: 3, done: false });
-
-    // Counts must equal the number of paused pulls — not 1 (single-fire bug).
-    expect(suspendSpy).toHaveBeenCalledTimes(3);
-    expect(resumeTimerSpy).toHaveBeenCalledTimes(3);
 
     ac.abort();
   });

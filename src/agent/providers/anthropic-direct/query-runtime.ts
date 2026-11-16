@@ -52,7 +52,7 @@ import { type SessionState, createSessionState } from './query/session-state.js'
 import { AbortCoordinator } from '../shared/abort-coordinator.js';
 import { RetryLayer } from './query/retry-layer.js';
 import type { HookRegistry } from '../../hooks.js';
-import type { CompactionTrigger } from '../../trace/types.js';
+import type { CompactionTrigger } from '../../trace/types.compaction.js';
 import type { AnthropicDirectQueryOptions } from './query-options.js';
 import { starterModels } from './query-options.js';
 import { driveTurns, type TurnDriverContext } from './query-turn-driver.js';

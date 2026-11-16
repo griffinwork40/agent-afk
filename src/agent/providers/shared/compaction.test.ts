@@ -165,6 +165,7 @@ describe('runCompactionCore', () => {
     expect(deps.messages[1]?.text).toBe(COMPACT_ACK_TEXT);
     expect(deps.messages).toHaveLength(5);
     expect(onSuccess).toHaveBeenCalledTimes(1);
+    expect(onSuccess.mock.calls[0]?.[0].summarizerInputCharsDropped).toBe(0);
   });
 
   it('caps the summarizer transcript but hands onSuccess the full older slice', async () => {
@@ -189,15 +190,20 @@ describe('runCompactionCore', () => {
     expect(seen).toContain('a1');
     expect(seen.length).toBeLessThan(2_000);
     expect(onSuccess.mock.calls[0]?.[0].olderSlice).toEqual(olderBefore);
+    expect(onSuccess.mock.calls[0]?.[0].summarizerInputCharsDropped).toBe(
+      renderTranscript(olderBefore, fakeOps).length - 200,
+    );
   });
 
   it('sends the transcript unchanged when it is under the cap', async () => {
     let seen = '';
+    const onSuccess = vi.fn();
     await runCompactionCore({
-      ...baseDeps(), summarizerInputMaxChars: 10_000,
+      ...baseDeps(), summarizerInputMaxChars: 10_000, onSuccess,
       summarize: async (t) => { seen = t; return 'S'; },
     });
     expect(seen).toBe(renderTranscript(history().slice(0, 2), fakeOps));
+    expect(onSuccess.mock.calls[0]?.[0].summarizerInputCharsDropped).toBe(0);
   });
 
   it('refuses an empty summary and leaves history untouched', async () => {

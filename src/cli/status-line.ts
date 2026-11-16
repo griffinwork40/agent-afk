@@ -81,11 +81,19 @@ export class StatusLine {
     this.started = true;
     this.lastRepaint = 0;
     const rows = this.currentRows();
-    // Preserve the current cursor so startup/resize arming does not clobber
-    // already-rendered output above the reserved status row.
-    this.stream.write('\x1b[s');
-    this.writeScrollRegion(rows);
-    this.stream.write('\x1b[u');
+    // External constraint (DEC 2026 / synchronized output): all writes in
+    // start() must land as one atomic update so a resize between writes cannot
+    // show a half-drawn footer. Wrap the same way setExtraRows() does.
+    const tx = CommitWriteTx.begin(this.stream);
+    try {
+      // Preserve the current cursor so startup/resize arming does not clobber
+      // already-rendered output above the reserved status row.
+      this.stream.write('\x1b[s');
+      this.writeScrollRegion(rows);
+      this.stream.write('\x1b[u');
+    } finally {
+      tx.end();
+    }
     if (this.resizeUnsub === null) {
       this.resizeUnsub = ResizeBus.subscribe(() => {
         this.onResize();
@@ -154,15 +162,24 @@ export class StatusLine {
     // new geometry — using it here would skip the necessary old-row clear.
     const rowToErase = this.preResizePaintedRow ?? this.lastPaintedRow;
     this.preResizePaintedRow = null;
-    this.stream.write('\x1b[s');
-    if (rowToErase !== null && rowToErase !== this.paintRow(rows)) {
-      this.stream.write(`\x1b[${rowToErase};1H`);
-      this.stream.write('\x1b[2K');
+    // External constraint (DEC 2026 / synchronized output): wrap the full
+    // resize sequence — old-row erase, scroll-region re-arm, band erase, and
+    // status-line repaint — in one transaction so a multiplexer or terminal
+    // that renders between writes cannot show a half-drawn footer.
+    const tx = CommitWriteTx.begin(this.stream);
+    try {
+      this.stream.write('\x1b[s');
+      if (rowToErase !== null && rowToErase !== this.paintRow(rows)) {
+        this.stream.write(`\x1b[${rowToErase};1H`);
+        this.stream.write('\x1b[2K');
+      }
+      this.writeScrollRegion(rows);
+      this.stream.write('\x1b[u');
+      this.eraseReservedBand(rows);
+      this.flush();
+    } finally {
+      tx.end();
     }
-    this.writeScrollRegion(rows);
-    this.stream.write('\x1b[u');
-    this.eraseReservedBand(rows);
-    this.flush();
   }
 
   /** Repaint the status line with the given fields. */

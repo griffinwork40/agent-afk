@@ -36,7 +36,6 @@ import type {
   BudgetPayload,
   ClaimPayload,
   ClosurePayload,
-  CompactionPayloadInput,
   HookDecisionPayload,
   HookSummaryPayload,
   PeerMessagePayload,
@@ -46,6 +45,7 @@ import type {
   ToolCallPayload,
   TraceEventInput,
 } from './types.js';
+import type { CompactionPayloadInput } from './types.compaction.js';
 import type { TraceSink } from './writer.js';
 import { isInformativeHookDecision, recordHookDecision } from './hook-tally.js';
 
