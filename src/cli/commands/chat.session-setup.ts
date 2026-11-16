@@ -11,6 +11,7 @@
 import { AgentSession } from '../../agent/session.js';
 import { palette } from '../palette.js';
 import { managerShutdownConfig } from '../../agent/session/manager-shutdown-config.js';
+import { withContinuationDispose } from '../../agent/subagent/continuation-dispose.js';
 import { wireExecutors } from '../../agent/session/wire-executors.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
@@ -152,7 +153,7 @@ export async function buildChatSession(
   // Invariant: ONE root manager per session, shared by all three executors.
   // The trace writer is opened by the caller so the manager and every executor
   // inherit it — without it, skill-forked subagents emit zero trace events.
-  const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
+  const { rootManager, subagentExecutor, skillExecutor, composeExecutor, continuationRegistry } = wireExecutors({
     surface: 'cli',
     parentSession: deferredParent,
     apiKey,
@@ -228,7 +229,7 @@ export async function buildChatSession(
     surface: 'cli',
     credentialSource: tryCredentialSourceForModel(String(sessionModel), providerHints),
     apiKey: getApiKeyForModel(sessionModel, providerHints),
-    ...managerShutdownConfig(rootManager, composeExecutor),
+    ...withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor), continuationRegistry),
     maxTurns,
     isNonInteractive: true,
     ...(dangerouslySkipPermissions

@@ -12,6 +12,7 @@ import type { SkillExecutor } from '../../../agent/tools/skill-executor.js';
 import type { ComposeExecutor } from '../../../agent/tools/compose-executor.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
+import type { ContinuationRegistry } from '../../../agent/subagent/continuation-registry.js';
 import { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import { DetachableToolRegistry } from '../../../agent/tools/detach-registry.js';
 import { ProcessJobRegistry } from '../../../agent/shell-jobs/process-jobs.js';
@@ -47,6 +48,12 @@ export interface BootstrapInfra {
   subagentExecutor: SubagentExecutor;
   skillExecutor: SkillExecutor;
   composeExecutor: ComposeExecutor;
+  /**
+   * The continuation registry for this REPL session. Call
+   * `continuationRegistry.dispose()` in the session-end path to release any
+   * worktrees kept for continuation chains.
+   */
+  continuationRegistry: ContinuationRegistry;
 }
 
 /**
@@ -170,7 +177,7 @@ export function createBootstrapInfra(a: {
   // executors that close over it; the SubagentManager constructor is pure —
   // it emits no trace events — so this placement does not reorder the
   // witness trace relative to `bootstrap_start` above.
-  const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
+  const { rootManager, subagentExecutor, skillExecutor, composeExecutor, continuationRegistry } = wireExecutors({
     // Origin attribution: the REPL is a `cli` entrypoint, so forked children
     // inherit origin 'cli' (not 'unknown'). See session-identity.ts.
     surface: 'cli',
@@ -245,5 +252,6 @@ export function createBootstrapInfra(a: {
     subagentExecutor,
     skillExecutor,
     composeExecutor,
+    continuationRegistry,
   };
 }
