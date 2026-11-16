@@ -141,10 +141,9 @@ function scanFile(absPath: string): Violation[] {
     // Bracket-tagged stderr write (REPL subtree only). Checked ahead of the
     // JSON/palette skips below: those describe styled console calls, and a tag
     // literal is unstyled whatever else the line mentions.
-    if (stderrTagScope && isBracketTagStderrWrite(line, lines[i + 1])) {
+    if (stderrTagScope && isBracketTagStderrWrite(line, lines, i + 1)) {
       const wrapped = line.trimEnd().endsWith('(') ? ` ${(lines[i + 1] ?? '').trim()}` : '';
       violations.push({ file: rel, line: i + 1, text: line.trim() + wrapped, method: STDERR_TAG_METHOD });
-      continue;
     }
 
     // Skip lines with JSON.stringify — machine-readable JSON output is legitimate.
