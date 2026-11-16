@@ -28,7 +28,7 @@
  */
 
 import { access, mkdir, open, stat, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { EffectStore } from '../effect-ledger/store.js';
 import {
   getLspInstalledBinPath,
@@ -92,6 +92,8 @@ export async function acquireInstallLock(
     nowMs?: () => number;
     pollMs?: number;
     corruptGraceMs?: number;
+    /** Injected for tests: replaces `open(path, 'wx')`. */
+    openFn?: (path: string, flags: string) => Promise<import('node:fs/promises').FileHandle>;
   },
 ): Promise<() => Promise<void>> {
   const lockFile = installLockPath(language, opts?.serversDir);
@@ -99,10 +101,11 @@ export async function acquireInstallLock(
   const now = opts?.nowMs ?? (() => Date.now());
   const pollMs = opts?.pollMs ?? LOCK_POLL_MS;
   const corruptGraceMs = opts?.corruptGraceMs ?? LOCK_CORRUPT_GRACE_MS;
+  const openFile = opts?.openFn ?? open;
   const sleep = (): Promise<void> => new Promise<void>((resolve) => setTimeout(resolve, pollMs));
 
   // Ensure the directory exists before writing the sentinel.
-  await mkdir(join(lockFile, '..'), { recursive: true });
+  await mkdir(dirname(lockFile), { recursive: true });
 
   while (true) {
     if (signal?.aborted) throw Object.assign(new Error('Install lock wait aborted'), { name: 'AbortError' });
@@ -110,7 +113,7 @@ export async function acquireInstallLock(
     // Atomically create the lock file (O_EXCL: fail if it already exists).
     const record: LockRecord = { pid: ownPid, expiresAt: now() + LOCK_EXPIRY_MS };
     try {
-      const fh = await open(lockFile, 'wx');
+      const fh = await openFile(lockFile, 'wx');
       try {
         await fh.writeFile(JSON.stringify(record), 'utf8');
         await fh.close();

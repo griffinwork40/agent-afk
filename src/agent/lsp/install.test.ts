@@ -816,19 +816,15 @@ describe('acquireInstallLock — non-EEXIST open errors', () => {
   });
 
   it('acquireInstallLock itself throws on non-EEXIST open error', async () => {
-    // Make the lock directory read-only so open('wx') gets EACCES.
-    const lockDir = path.join(tmpDir, 'readonly-dir');
-    fs.mkdirSync(lockDir, { recursive: true });
-    // Pre-create a sentinel so we can make the dir read-only and test
-    // that a real EACCES from the filesystem propagates.
-    fs.chmodSync(lockDir, 0o444);
+    // Inject an openFn that throws EACCES, exercising the non-EEXIST error
+    // propagation path on every platform (Windows does not enforce read-only
+    // permission bits on directories, so chmodSync is not portable).
+    const eacces = Object.assign(new Error('EACCES: permission denied, open'), { code: 'EACCES' });
+    const injectOpen = async (_path: string, _flags: string): Promise<never> => { throw eacces; };
 
     await expect(
-      acquireInstallLock('typescript', undefined, { serversDir: lockDir }),
-    ).rejects.toThrow();
-
-    // Restore permissions for cleanup.
-    fs.chmodSync(lockDir, 0o755);
+      acquireInstallLock('typescript', undefined, { serversDir: tmpDir, openFn: injectOpen }),
+    ).rejects.toThrow('EACCES');
   });
 });
 
