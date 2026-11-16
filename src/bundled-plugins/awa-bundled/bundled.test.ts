@@ -70,7 +70,7 @@ const PINNED_HASHES = {
   // subagent-executor.isolation.test.ts + input-parse.ts confirm it is honored
   // at any depth, incl. nested inside a forked skill). Behavior-preserving prose
   // correction; frontmatter (context: fork) unchanged.
-  diagnose: 'ef3290af824e5fde88d9d7c15406f64a97d9c6eb9076cb90a1aa23b1a647eba1',
+  diagnose: 'a816ec48c51f523225b59ba7f8f3a033227fc777c7fecae1066978258cf53650',
   // false-completion-gate, fix-pr, polish: high-usage user-scope skills bundled
   // in #943. No upstream counterpart — bundled-only.
   'false-completion-gate':
@@ -119,7 +119,7 @@ const PINNED_HASHES = {
   // (`pnpm test <file>` / `pnpm test -t "AuthService"`) plus a note to never emit
   // the `--` form. Bundled-only — mirror into the user-scope /refactor at
   // ~/.afk/skills/ if it drifts back.
-  refactor: '3823a970ce2fa7bdf0b2c40713de633e6ed3d450c0ad5665d342764fd51cee26',
+  refactor: '51c9a94a8f7626c78bbf60daba589a64912b2616a9ff5b6ac2235f3c686ff8e1',
   research: '052f8ec6f467f5b9200bea01286bebecf079c7135897a6a503c9cd74a019304b',
   // History: /review Wave 1 no longer mandates a `git show` re-read (#726,
   // #777); severity and disposition split into separate axes with an explicit

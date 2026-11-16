@@ -10,6 +10,7 @@ import { SubagentManager } from '../subagent.js';
 import type { AgentInput } from './subagent/input-parse.js';
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
 import { describeWorktreeSetupFailure } from '../worktree/worktree-setup.js';
+import { buildIsolatedSlug } from '../worktree/isolated-slug.js';
 import {
   lockWorktreeForBackground,
   teardownBackgroundWorktree,
@@ -54,7 +55,7 @@ export interface IsolationWorktreeResult {
 }
 
 export interface SetupIsolationWorktreeArgs {
-  parsed: Pick<AgentInput, 'prompt' | 'mode' | 'agent_type' | 'id_prefix'>;
+  parsed: Pick<AgentInput, 'prompt' | 'mode' | 'agent_type' | 'id_prefix' | 'task_slug'>;
   currentCwd: string | undefined;
   isolationCounterRef: { value: number };
   childConfig: Pick<AgentConfig, 'cwd'>;
@@ -103,9 +104,7 @@ export async function setupIsolationWorktree(
   try {
     const iso = await createIsolatedWorktree({
       cwd: anchorCwd,
-      slugHint: `iso-${parsed.id_prefix}-${++isolationCounterRef.value}-${Math.random()
-        .toString(36)
-        .slice(2, 8)}`,
+      slugHint: buildIsolatedSlug({ taskSlug: parsed.task_slug, idPrefix: parsed.id_prefix, counter: ++isolationCounterRef.value }),
       ...(args.signal !== undefined ? { signal: args.signal } : {}),
     });
     childConfig.cwd = iso.path;

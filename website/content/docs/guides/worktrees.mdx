@@ -44,10 +44,12 @@ Commands run in order from the new worktree and stop on first failure. The optio
 Ask AFK to use the `agent` tool with these parameters:
 
 ```json
-{"prompt":"Implement and test the parser fix. Report the branch and verification.","isolation":"worktree","mode":"background"}
+{"prompt":"Implement and test the parser fix. Report the branch and verification.","isolation":"worktree","task_slug":"parser-null-fix","mode":"background"}
 ```
 
 Isolation creates a managed branch under `.afk-worktrees/` from the dispatching session's HEAD, confines the child there, and tries to remove its checkout after completion. A dirty checkout, commits ahead of base, or non-rebuildable ignored files cause it to be preserved and locked instead. `mode: "background"` returns a job ID while the child works; the result arrives automatically when it finishes. You cannot combine worktree isolation with `cwd` or `writeRoots`; you can still grant `readRoots`. Read-only named agents do not need this isolation and are unaffected.
+
+Set `task_slug` to a short kebab summary of the work so the branch says what it holds: the example above creates a branch like `afk/iso-parser-null-fix-k3x9q2`. Without it, the branch is named from the dispatch label and a counter (for example `afk/iso-general-purpose-2-dliav9`). The slug is cleaned to lowercase letters, digits, and hyphens, and capped at 48 characters before the random suffix. A continuation keeps the chain's original worktree and ignores `task_slug`. Branch names are public once pushed, so keep secrets out of it. Compose nodes accept the same `task_slug` field.
 
 Alternatively, call the `worktree` tool's `create` action with `name` and optional `base`, then pass its returned absolute path as the child's `cwd`. Managed creation writes `.afk-worktree-meta.json`; raw `git worktree add` does not, and may be treated as an orphan by the sweeper.
 
