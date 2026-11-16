@@ -27,7 +27,11 @@ overrides:
   # GHSA-v2hh-gcrm-f6hx, GHSA-7p8r-x3mc-p8w7, GHSA-f65p-4m7j-42xc,
   # GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp, GHSA-qw65-cvwx-89v3,
   # GHSA-hrr3-gc8f-f4qj
-  fast-uri: ">=3.1.8"
+  # 4.x line: scheme spoofing, host confusion, path equivalence, scheme
+  # injection, all fixed in 4.2.3 (a >=3.1.8 floor let vulnerable 4.2.1 through)
+  # GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-xhq7-xmqj-769h,
+  # GHSA-333x-w4r6-6crp
+  fast-uri: ">=4.2.3"
 
   # ip-address: 6 SSRF/trust-boundary CVEs fixed across 10.2.1–10.7.1
   # GHSA-mwp4-54f8-5fhr, GHSA-4xrf-jv44-h6hh, GHSA-22jq-vg5j-6vgg,
@@ -43,19 +47,29 @@ overrides:
   # GHSA-f23p-vx2j-j53r, GHSA-54fx-42gc-7vw4, GHSA-gqvv-2mrq-wpjv,
   # GHSA-g6gw-c38x-mqfc, GHSA-crvj-82cr-hjcx, GHSA-hxh3-vqpv-xpqv,
   # GHSA-79qm-7rj5-m7r9
-  hono: ">=4.13.7"
+  # Then mount() middleware bypass, RegExpRouter wildcard skip, csrf() ping
+  # bypass, multipart form validator skip, css helper escape; fixed in 4.13.16
+  # GHSA-4m76-xfj5-7975, GHSA-h7mg-cq63-vhpq, GHSA-46wx-v44x-9hh2,
+  # GHSA-4h7h-rv7c-7m2v, GHSA-3gg2-335m-rxc6
+  hono: ">=4.13.16"
 
   # @hono/node-server: path traversal on Windows via encoded backslash
   # GHSA-frvp-7c67-39w9
-  "@hono/node-server": ">=1.19.15"
+  # 2.x line: unhandled ECONNRESET crash, backslash parsed as path separator;
+  # fixed in 2.1.6. GHSA-qv5m-9pm6-hqp3, GHSA-jpvv-r467-5p4w
+  "@hono/node-server": ">=2.1.6"
 
   # qs: array-limit bypass + DoS via attacker-controlled isBuffer
   # GHSA-x5fp-wj9c-mxmx, GHSA-4mjr-xmp4-gh2g
-  qs: ">=6.16.0"
+  # stringify arrayFormat 'comma' uncaught TypeError; fixed in 6.16.1
+  # GHSA-6pq8-jhm2-2vcw
+  qs: ">=6.16.1"
 
   # body-parser: invalid limit value silently disables size enforcement
   # GHSA-v422-hmwv-36x6
-  body-parser: ">=2.3.0"
+  # DoS via trailing bytes after a JSON body (high); fixed in 2.4.0
+  # GHSA-27r3-jxmh-p828
+  body-parser: ">=2.4.0"
 
   # proxy-addr: IP spoofing via IPv4-mapped IPv6 trust subnet (critical)
   # GHSA-jqcg-44mw-7w3h — via @modelcontextprotocol/sdk > express
