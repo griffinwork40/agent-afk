@@ -1,4 +1,5 @@
 import { SYNC_START, SYNC_END } from './cup-frame-renderer.escapes.js';
+import { env } from '../config/env.js';
 
 type WriteCallback = (error?: Error | null) => void;
 
@@ -35,6 +36,11 @@ function unwrapSync(chunks: Buffer[]): Buffer {
 
 function flush(stream: NodeJS.WriteStream, state: TransactionState): void {
   active.delete(stream);
+  if (env.AFK_DEBUG_COMPOSITOR) {
+    // Observability: record how many writes this transaction collapsed into one
+    // physical flush. Single-write commits pass through without sync framing.
+    process.stderr.write(`[CommitWriteTx] flush: ${state.chunks.length} chunk(s) → 1 write\n`);
+  }
   // Restore BEFORE calling any external code, including the physical write or
   // its callback. A throwing flush must never strand the interception layer.
   if (state.ownDescriptor) Object.defineProperty(stream, 'write', state.ownDescriptor);
