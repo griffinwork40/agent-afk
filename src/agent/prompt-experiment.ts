@@ -30,12 +30,19 @@
  * `AFK_PROMPT_EXPERIMENT_ARM=control` or `=treatment` explicitly so that arm
  * assignment is unambiguous and auditable in the whatif run log.
  *
- * Typical invocation pattern (run each 10 times):
+ * Typical invocation (put both vars in a spec file; a single `--verify` run
+ * is already an A/B comparison — baseline=control, candidate=treatment):
+ * ```json
+ * {
+ *   "title": "explore-rewrite treatment",
+ *   "changes": [
+ *     { "kind": "env", "key": "AFK_PROMPT_EXPERIMENT", "value": "explore-rewrite" },
+ *     { "kind": "env", "key": "AFK_PROMPT_EXPERIMENT_ARM", "value": "treatment" }
+ *   ]
+ * }
+ * ```
  * ```sh
- * afk whatif --env AFK_PROMPT_EXPERIMENT=explore-rewrite \
- *            --env AFK_PROMPT_EXPERIMENT_ARM=control   -- <task>
- * afk whatif --env AFK_PROMPT_EXPERIMENT=explore-rewrite \
- *            --env AFK_PROMPT_EXPERIMENT_ARM=treatment -- <task>
+ * afk whatif --spec explore-rewrite.json --verify --yes --samples 10
  * ```
  *
  * ## Hard veto list
