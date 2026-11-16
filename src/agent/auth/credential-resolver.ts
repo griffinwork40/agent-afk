@@ -109,14 +109,28 @@ export function resolveAnthropicCredentialFromEnv(): AnthropicCredential | undef
 }
 
 /**
- * The last credential {@link resolveAnthropicCredential} produced in this
- * process, or `undefined`. Never touches the credential store (#4882).
+ * The source id of the last credential {@link resolveAnthropicCredential}
+ * produced in this process, or `undefined`. Never touches the credential
+ * store (#4882). Narrowed from the full `AnthropicCredential` (#4903) so the
+ * token never leaves this module.
  */
-export function lastResolvedAnthropicCredential(): AnthropicCredential | undefined {
-  return lastResolvedAnthropic;
+export function lastResolvedAnthropicSource(): CredentialSourceId | undefined {
+  return lastResolvedAnthropic?.source;
 }
 
-/** Reset the last-resolved memo. Intended for isolated tests. */
+/**
+ * Returns `true` when `key` equals the token of the last credential
+ * {@link resolveAnthropicCredential} produced. Used by `credential-source.ts`
+ * to avoid re-exposing the token outside this module (#4903).
+ */
+export function lastResolvedAnthropicMatchesToken(key: string): boolean {
+  return lastResolvedAnthropic !== undefined && lastResolvedAnthropic.token === key;
+}
+
+/**
+ * @internal Test-only reset for the last-resolved memo.
+ * @deprecated Use only in isolated test files.
+ */
 export function _resetLastResolvedAnthropicCredential(): void {
   lastResolvedAnthropic = undefined;
 }
