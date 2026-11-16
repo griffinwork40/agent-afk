@@ -44,6 +44,10 @@ export class LedgerLifecycle {
   /** Set true once ledger creation has been attempted (success or not). */
   private initAttempted = false;
   private start: { cwd: string; gitHead: SessionStart } | undefined;
+  /** In-flight session-meta.json write; {@link seal} awaits it (#4959). */
+  private metaWrite: Promise<void> | null = null;
+  /** The most recent seal; a later seal waits for it. */
+  private sealing: Promise<void> | undefined;
 
   /** Capture before provider initialization or SessionStart hooks can change HEAD. */
   initialize(ctx: { depth?: number; parentSessionId?: string; cwd?: string }): void {
@@ -92,9 +96,11 @@ export class LedgerLifecycle {
       // disabled/unwired, so absence is explicit rather than silent.
       traceLabel,
     });
-    // Best-effort identity sidecar (#4429). Fire-and-forget: the await is
-    // intentionally dropped so session startup is never blocked by it.
-    void writeSessionMeta({
+    // Best-effort identity sidecar (#4429). Not awaited here so session startup
+    // is never blocked by it, but seal() awaits it: a close that resolved while
+    // this tmp+rename was still in flight let the session dir change after
+    // close (#4959). writeSessionMeta never rejects.
+    this.metaWrite = writeSessionMeta({
       v: 1,
       sessionId: id,
       model,
@@ -130,12 +136,22 @@ export class LedgerLifecycle {
    * internal writer + attempt latch so the instance is reusable after a
    * `reset()` cycle. Callers on the close/reset paths await the returned
    * promise; the abort path fire-and-forgets it.
+   *
+   * Invariant: resolves only after the session-meta.json sidecar write has
+   * settled, so nothing writes into `sessions/<id>/` after close (#4959).
    */
-  seal(reason: string): Promise<void> {
+  async seal(reason: string): Promise<void> {
     const writer = this.writer;
-    if (!writer) return Promise.resolve();
-    this.writer = null;
-    this.initAttempted = false;
-    return writer.close(reason);
+    const metaWrite = this.metaWrite;
+    this.metaWrite = null;
+    if (writer) {
+      this.writer = null;
+      this.initAttempted = false;
+    }
+    // Chain onto any earlier seal still in flight (the abort path does not
+    // await its seal), so a later close() still waits for those writes.
+    const settled = Promise.all([this.sealing, writer?.close(reason), metaWrite]).then(() => undefined);
+    this.sealing = settled;
+    await settled;
   }
 }
