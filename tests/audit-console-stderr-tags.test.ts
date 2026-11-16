@@ -26,7 +26,7 @@ describe('bracket-tag stderr audit: detection', () => {
     expect(
       isBracketTagStderrWrite(
         '        process.stderr.write(',
-        "          '[afk] warning: AFK_STEER_MODE=boundary is set but the compositor does not expose ' +",
+        ["          '[afk] warning: AFK_STEER_MODE=boundary is set but the compositor does not expose ' +"],
       ),
     ).toBe(true);
   });
@@ -54,13 +54,34 @@ describe('bracket-tag stderr audit: detection', () => {
     expect(isBracketTagStderrWrite(line, undefined)).toBe(false);
   });
 
-  it('does not flag a wrapped call whose next line is not a tagged literal', () => {
-    expect(isBracketTagStderrWrite('process.stderr.write(', '  palette.dim(text),')).toBe(false);
-    expect(isBracketTagStderrWrite('process.stderr.write(', undefined)).toBe(false);
+  it.each([
+    [' // diagnostic', ["  '[afk] warning\\n',"]],
+    [' /* diagnostic */', ["  '[afk] warning\\n',"]],
+    ['', ['', ' // note', ' /* note */', "  '[afk] warning\\n',"]],
+    [' /* multi-line', [' comment', ' */', "  '[afk] warning\\n',"]],
+    [" /* note */ '[afk] warning\\n',", []],
+    [" // '[not-the-argument]'", ["  '[afk] warning\\n',"]],
+  ])('skips leading comments and blank lines: %s', (rest, followingLines) => {
+    expect(isBracketTagStderrWrite(`process.stderr.write(${rest}`, followingLines)).toBe(true);
   });
 
-  it('ignores the next line when the argument starts on the call line', () => {
-    expect(isBracketTagStderrWrite('process.stderr.write(text,', "  '[afk] not the first argument',")).toBe(false);
+  it('does not strip comment markers from the tagged literal', () => {
+    expect(isBracketTagStderrWrite("process.stderr.write('[afk] https://example.com /* text */');")).toBe(true);
+  });
+
+  it('does not flag a wrapped call whose first argument is not a tagged literal', () => {
+    expect(isBracketTagStderrWrite('process.stderr.write(', [' // note', '  palette.dim(text),'])).toBe(false);
+    expect(isBracketTagStderrWrite('process.stderr.write(', [])).toBe(false);
+    expect(isBracketTagStderrWrite('process.stderr.write( /* unclosed', [" '[afk] comment only'"])).toBe(false);
+  });
+
+  it('ignores following lines when the argument starts on the call line', () => {
+    expect(isBracketTagStderrWrite('process.stderr.write(text,', ["  '[afk] not the first argument',"])).toBe(false);
+  });
+
+  it('can read ahead from an index in the source lines', () => {
+    const lines = ['unrelated', 'process.stderr.write( // diagnostic', '', "  '[afk] warning',"];
+    expect(isBracketTagStderrWrite(lines[1]!, lines, 2)).toBe(true);
   });
 });
 
