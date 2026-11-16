@@ -11,7 +11,7 @@ import { lspInstallContext } from './lsp-install-consent.js';
 import { getSymbolsTimeoutMs, lspFailureMessage } from './lsp-shared.js';
 import { applyWorkspaceEdit } from './lsp-workspace-edit.js';
 import { validateRefactorInput, type LspRefactorInput } from './lsp-refactor-input.js';
-import { codeActions, editOptions, type RefactorEnvironment } from './lsp-refactor-actions.js';
+import { codeActions, editOptions, requestSnapshot, type RefactorEnvironment } from './lsp-refactor-actions.js';
 import { record, symbolRows } from './lsp-refactor-symbols.js';
 export type { LspRefactorInput } from './lsp-refactor-input.js';
 
@@ -63,7 +63,7 @@ export async function handleLspRefactor(
     return await withPooledFile(resolved.spec, filePath, content, opts, async (ctx) => {
       const deadlineSignal = AbortSignal.timeout(ctx.remainingMs());
       const operationSignal = signal ? AbortSignal.any([signal, deadlineSignal]) : deadlineSignal;
-      const env = { context, cwd: sessionRoot, signal: operationSignal, expectedContents: ctx.client.documentContents() };
+      const env: RefactorEnvironment = { context, cwd: sessionRoot, signal: operationSignal, ...requestSnapshot(ctx.client) };
       if (input.subcommand === 'rename') return rename(input, ctx, env);
       if (input.subcommand === 'code_actions') return codeActions(input, ctx, env);
       const raw = await ctx.client.request('textDocument/documentSymbol', { textDocument: { uri: ctx.sync.uri } },

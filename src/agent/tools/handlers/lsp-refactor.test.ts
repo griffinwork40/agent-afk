@@ -130,6 +130,13 @@ describe('code actions', () => {
     expect(await readFile(source, 'utf8')).toContain('old');
     expect(readFakeLog(log).find((e) => e.msg?.id === 'apply-1')?.msg?.result).toMatchObject({ applied: false });
   });
+  it('rejects an out-of-range action_index with an explicit bounds message', async () => {
+    server({ codeActions: [{ title: 'Fix', edit: edit() }] });
+    const result = await run({ subcommand: 'code_actions', apply: true, action_index: 1 });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('action_index 1 is out of range: the server returned 1 code action(s)');
+    expect(await readFile(source, 'utf8')).toContain('old');
+  });
   it('rejects duplicate titles and disabled actions', async () => {
     server({ codeActions: [{ title: 'Fix', edit: edit() }, { title: 'Fix', disabled: { reason: 'not here' } }] });
     expect((await run({ subcommand: 'code_actions', apply: true, action_title: 'Fix' })).content).toContain('Ambiguous');

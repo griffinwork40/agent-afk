@@ -10,7 +10,12 @@ export interface RefactorEnvironment {
   context?: ToolHandlerContext;
   cwd: string;
   signal?: AbortSignal;
-  expectedContents?: ReadonlyMap<string, string>;
+  expectedContents: ReadonlyMap<string, string>;
+  requestStartedAt: number;
+}
+/** Capture the staleness snapshot; call immediately BEFORE sending the request. */
+export function requestSnapshot(client: QueryContext['client']): Pick<RefactorEnvironment, 'expectedContents' | 'requestStartedAt'> {
+  return { expectedContents: client.documentContents(), requestStartedAt: Date.now() };
 }
 export function editOptions(ctx: QueryContext, env: RefactorEnvironment) {
   return { ...env, client: ctx.client, documentVersion: (uri: string) => ctx.client.documentVersion(uri) };
@@ -42,6 +47,9 @@ export async function codeActions(input: LspRefactorInput, ctx: QueryContext, en
     return { content: JSON.stringify({ actions: actions.map((a, index) => ({ index, title: a['title'],
       kind: a['kind'], disabled: record(a['disabled'])?.['reason'], preferred: a['isPreferred'] === true })) }) };
   }
+  if (input.action_index !== undefined && input.action_index >= actions.length) {
+    return error(`action_index ${input.action_index} is out of range: the server returned ${actions.length} code action(s)`);
+  }
   const matches = input.action_index !== undefined ? [actions[input.action_index]].filter(Boolean)
     : actions.filter((a) => a['title'] === input.action_title);
   if (matches.length !== 1) return error(matches.length ? 'Ambiguous action title; use action_index' : 'Code action not found');
@@ -68,10 +76,13 @@ export async function codeActions(input: LspRefactorInput, ctx: QueryContext, en
   }
   if (!command) return editResult!;
   const applied: ToolResult[] = [];
+  // Server-initiated edits are computed after executeCommand is sent: non-open
+  // targets must be unmodified since then; open ones match current synced text.
+  const commandStartedAt = Date.now();
   try {
     await ctx.client.withWorkspaceEditHandler(async (edit) => {
       const result = await applyWorkspaceEdit(edit, editOptions(ctx, {
-        ...env, expectedContents: ctx.client.documentContents(),
+        ...env, expectedContents: ctx.client.documentContents(), requestStartedAt: commandStartedAt,
       }));
       applied.push(result);
       return { applied: !result.isError, ...(result.isError ? { failureReason: result.content } : {}) };

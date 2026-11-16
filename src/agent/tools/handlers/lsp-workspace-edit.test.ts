@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, writeFile, rm, symlink, lstat, unlink } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, symlink, lstat, unlink, utimes } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -21,13 +21,17 @@ const snapshots = () => listTurnSnapshots('test', 'turn', join(root, 'state'));
 async function file(name: string, content = 'old') {
   const path = join(root, name);
   await writeFile(path, content);
+  // The request is "sent" after test fixtures exist, as in production.
+  options.requestStartedAt = Date.now();
   return path;
 }
+const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
 beforeEach(async () => {
   root = realpathSafe(await mkdtemp(join(tmpdir(), 'afk-workspace-edit-')));
   options = { cwd: root, context: { resolveBase: root, writeRoots: [root],
-    fileCheckpoint: createFileCheckpointRegistry('test', 'turn', join(root, 'state')) } };
+    fileCheckpoint: createFileCheckpointRegistry('test', 'turn', join(root, 'state')) },
+    expectedContents: new Map(), requestStartedAt: Date.now() };
   _setRealScratchRootsForTests([]);
 });
 afterEach(async () => {
@@ -59,14 +63,55 @@ describe('WorkspaceEdit safe application', () => {
     expect(await readFile(paths[1]!, 'utf8')).toBe('new');
   });
 
-  it('names null-version edits to a previously synced document that no request-time text verifies', async () => {
-    const [synced, guarded, unknown] = await Promise.all(['a.ts', 'b.ts', 'c.ts'].map((name) => file(name)));
-    const result = await applyWorkspaceEdit({ documentChanges: [synced!, guarded!, unknown!].map((p) => ({
+  it('applies null-version edits to open, opened-then-closed and never-opened documents unchanged since the request', async () => {
+    const [open, closed, never] = await Promise.all(['a.ts', 'b.ts', 'c.ts'].map((name) => file(name)));
+    await tick();
+    const result = await applyWorkspaceEdit({ documentChanges: [open!, closed!, never!].map((p) => ({
       textDocument: { uri: uri(p), version: null }, edits: [edit(0, 3, 'new')],
-    })) }, { ...options, documentVersion: (u) => (u === uri(unknown!) ? undefined : 3),
-      expectedContents: new Map([[uri(guarded!), 'old']]) });
+    })) }, { ...options, documentVersion: (u) => (u === uri(never!) ? undefined : 3),
+      expectedContents: new Map([[uri(open!), 'old']]) });
     expect(result.isError).toBe(false);
-    expect(JSON.parse(result.content as string).unverified_versions).toEqual([uri(synced!)]);
+    expect(await Promise.all([open!, closed!, never!].map((p) => readFile(p, 'utf8')))).toEqual(['new', 'new', 'new']);
+    expect(JSON.parse(result.content)).not.toHaveProperty('unverified_versions');
+  });
+
+  it.each([['opened-then-closed', 3], ['never-opened', undefined]] as const)(
+    'rejects a %s target modified after the request was sent, atomically', async (_label, version) => {
+      const good = await file('a.ts');
+      const target = await file('b.ts');
+      const requestStartedAt = Date.now();
+      await tick();
+      await writeFile(target, 'old'); // external rewrite during the RPC (same text, new mtime)
+      const result = await applyWorkspaceEdit({ documentChanges: [good, target].map((p) => ({
+        textDocument: { uri: uri(p), version: null }, edits: [edit(0, 3, 'new')],
+      })) }, { ...options, requestStartedAt, documentVersion: (u) => (u === uri(target) ? version : 3),
+        expectedContents: new Map([[uri(good), 'old']]) });
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('modified after the request was sent');
+      expect(await readFile(good, 'utf8')).toBe('old');
+      expect(snapshots()).toEqual([]);
+    });
+
+  it('detects an mtime-preserving write through ctime', async () => {
+    const p = await file('a.ts');
+    const requestStartedAt = Date.now();
+    await tick();
+    const past = new Date(requestStartedAt - 60_000);
+    await writeFile(p, 'old');
+    await utimes(p, past, past);
+    const result = await applyWorkspaceEdit(changes(p), { ...options, requestStartedAt });
+    expect(result.content).toContain('modified after the request was sent');
+    expect(await readFile(p, 'utf8')).toBe('old');
+  });
+
+  it('does not treat a future-dated mtime set before the request as evidence', async () => {
+    const p = await file('a.ts');
+    const future = new Date(Date.now() + 3_600_000);
+    await utimes(p, future, future);
+    await tick();
+    const result = await applyWorkspaceEdit(changes(p), { ...options, requestStartedAt: Date.now() });
+    expect(result.isError).toBe(false);
+    expect(await readFile(p, 'utf8')).toBe('new');
   });
 
   it.each([undefined, () => 2])('rejects unverifiable or stale numeric versions atomically', async (documentVersion) => {
@@ -199,7 +244,7 @@ describe('WorkspaceEdit safe application', () => {
   it('fails closed before mutation when the normal checkpoint callback throws', async () => {
     const p = await file('a.ts');
     const apply = vi.spyOn(engine, 'applyPatch');
-    options.context!.fileCheckpoint = { turnId: 'turn', touchedPaths: () => [], snapshotFile: async () => { throw new Error('checkpoint unavailable'); } };
+    options.context!.fileCheckpoint = { turnId: 'turn', sessionId: 'test', recordPriorState: async () => {}, touchedPaths: () => [], snapshotFile: async () => { throw new Error('checkpoint unavailable'); } };
     const result = await applyWorkspaceEdit(changes(p), options);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('checkpoint unavailable');
@@ -211,7 +256,9 @@ describe('WorkspaceEdit safe application', () => {
     const p = await file('a.ts', '\uFEFFold');
     expect((await applyWorkspaceEdit(changes(p, [edit(1, 4, 'new')]), options)).isError).toBe(false);
     expect(await readFile(p, 'utf8')).toBe('\uFEFFnew');
-    expect((await applyWorkspaceEdit(changes(p, [edit(0, 4, '')]), options)).isError).toBe(false);
+    await tick();
+    // A second request takes its own snapshot after the first edit landed.
+    expect((await applyWorkspaceEdit(changes(p, [edit(0, 4, '')]), { ...options, requestStartedAt: Date.now() })).isError).toBe(false);
     expect(await readFile(p, 'utf8')).toBe('');
   });
 
@@ -223,7 +270,7 @@ describe('WorkspaceEdit safe application', () => {
       const secret = join(outside, 'secret.ts');
       await writeFile(secret, 'SECRET');
       await symlink(target, link);
-      options.context!.fileCheckpoint = { turnId: 'turn', touchedPaths: () => [], snapshotFile: async () => {
+      options.context!.fileCheckpoint = { turnId: 'turn', sessionId: 'test', recordPriorState: async () => {}, touchedPaths: () => [], snapshotFile: async () => {
         await unlink(link);
         await symlink(secret, link);
       } };

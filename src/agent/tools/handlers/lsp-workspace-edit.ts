@@ -1,5 +1,5 @@
 /** Safe LSP WorkspaceEdit adapter: all mutations use the normal patch_apply path. */
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { LspClient } from '../../lsp/client.js';
 import type { ToolHandlerContext, ToolResult } from '../types.js';
@@ -19,12 +19,18 @@ export interface WorkspaceEditOptions {
   client?: Pick<LspClient, 'syncFile'>;
   /** Numeric TextDocumentEdit versions fail closed without this lookup. */
   documentVersion?: (uri: string) => number | undefined;
-  /** Known request-time text, keyed by URI; guards external edits during RPC. */
-  expectedContents?: ReadonlyMap<string, string>;
+  /**
+   * Request-time snapshot (required: every target gets a staleness guard).
+   * Open documents are checked against their synchronized text; every other
+   * target (never opened, or opened then closed) is rejected when its mtime is
+   * later than `requestStartedAt`. Capture both before sending the request.
+   */
+  expectedContents: ReadonlyMap<string, string>;
+  /** Epoch ms when `expectedContents` was captured, before the LSP request. */
+  requestStartedAt: number;
 }
 
 interface PlannedDocument { change: PatchFileChange; sourcePath: string }
-interface WorkspaceEditPlan { planned: PlannedDocument[]; unverified: string[] }
 
 function checkAbort(signal?: AbortSignal): void {
   if (signal?.aborted) throw new Error('Aborted');
@@ -41,11 +47,33 @@ function localFile(uri: string): string {
   return path;
 }
 
-async function planWorkspaceEdit(edit: unknown, options: WorkspaceEditOptions): Promise<WorkspaceEditPlan> {
+/**
+ * Contract: reject a target with positive evidence of change after the request
+ * snapshot. Servers answer for non-open documents from disk, so `version: null`
+ * is normal there; staleness is decided by evidence, not by version knowledge.
+ * Evidence = mtime or ctime inside (requestStartedAt, now]: ctime catches
+ * mtime-preserving writes; a future-dated mtime alone is not evidence. Stat runs
+ * AFTER the read, and patch_apply's sha256 guard covers read-to-write.
+ * Residual: a server cache stale BEFORE the request is not detectable here.
+ */
+async function assertUnchangedSinceRequest(path: string, uri: string, before: string, options: WorkspaceEditOptions): Promise<void> {
+  const expected = options.expectedContents.get(uri);
+  if (expected !== undefined) {
+    if (before !== expected) throw new Error('WorkspaceEdit document changed during request');
+    return;
+  }
+  const { mtimeMs, ctimeMs } = await stat(path);
+  const now = Date.now();
+  const inWindow = (ms: number) => Math.floor(ms) > options.requestStartedAt && Math.floor(ms) <= now;
+  if (inWindow(mtimeMs) || inWindow(ctimeMs)) {
+    throw new Error(`WorkspaceEdit target modified after the request was sent: ${uri}`);
+  }
+}
+
+async function planWorkspaceEdit(edit: unknown, options: WorkspaceEditOptions): Promise<PlannedDocument[]> {
   checkAbort(options.signal);
   const documents = workspaceDocuments(edit);
   const paths = new Set<string>();
-  const unverified: string[] = [];
   // Resolve every destination through the SAME grants/denylist/canonicalization
   // as patch_apply, before reading any file or taking a checkpoint.
   const targets: Array<{ path: string; sourcePath: string; document: typeof documents[number] }> = [];
@@ -54,12 +82,6 @@ async function planWorkspaceEdit(edit: unknown, options: WorkspaceEditOptions): 
     if (document.version !== null && document.version !== undefined &&
         options.documentVersion?.(document.uri) !== document.version) {
       throw new Error(`WorkspaceEdit document version mismatch: ${document.uri}`);
-    }
-    if (document.version === null && options.documentVersion?.(document.uri) !== undefined &&
-        !options.expectedContents?.has(document.uri)) {
-      // Null is a legitimate server sentinel, so the edit proceeds, but neither
-      // a version nor request-time text can verify it: report it to the caller.
-      unverified.push(document.uri);
     }
     const sourcePath = localFile(document.uri);
     const path = await validatedWriteTarget(sourcePath, options.context, options.cwd);
@@ -79,20 +101,19 @@ async function planWorkspaceEdit(edit: unknown, options: WorkspaceEditOptions): 
     // replacement characters from corrupting binary / non-UTF-8 documents.
     const before = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(await readFile(path));
     if (before.includes('\0')) throw new Error('WorkspaceEdit cannot edit binary files');
-    const expected = options.expectedContents?.get(document.uri);
-    if (expected !== undefined && before !== expected) throw new Error('WorkspaceEdit document changed during request');
+    await assertUnchangedSinceRequest(path, document.uri, before, options);
     const content = applyTextEdits(before, document.edits);
     if (content !== before) {
       planned.push({ sourcePath, change: { path, content, expected_hash: `sha256:${sha256Hex(before)}` } });
     }
   }
   checkAbort(options.signal);
-  return { planned, unverified };
+  return planned;
 }
 
 /** Convert validated UTF-16 edits to hash-guarded full-content patch changes; no writes. */
 export async function convertWorkspaceEdit(edit: unknown, options: WorkspaceEditOptions): Promise<PatchFileChange[]> {
-  return (await planWorkspaceEdit(edit, options)).planned.map(({ change }) => change);
+  return (await planWorkspaceEdit(edit, options)).map(({ change }) => change);
 }
 
 /**
@@ -103,9 +124,8 @@ export async function convertWorkspaceEdit(edit: unknown, options: WorkspaceEdit
  */
 export async function applyWorkspaceEdit(edit: unknown, options: WorkspaceEditOptions): Promise<ToolResult> {
   let planned: PlannedDocument[];
-  let unverified: string[];
   try {
-    ({ planned, unverified } = await planWorkspaceEdit(edit, options));
+    planned = await planWorkspaceEdit(edit, options);
   } catch (err) {
     return { isError: true, content: JSON.stringify({ status: 'validation_failed', diff: '', files_changed: [],
       errors: [{ error: 'workspace_edit_invalid', detail: errorMessage(err) }] }) };
@@ -121,13 +141,7 @@ export async function applyWorkspaceEdit(edit: unknown, options: WorkspaceEditOp
     return { isError: true, content: JSON.stringify({ status: 'validation_failed', files_changed: [],
       errors: [{ error: 'workspace_edit_apply_failed', detail: errorMessage(err) }] }) };
   }
-  const payload = JSON.parse(result.content) as { status?: string; sync_warnings?: string[]; unverified_versions?: string[] };
-  if (unverified.length) {
-    // Contract: a null-version edit to a previously synced document has no
-    // staleness check; name it instead of applying it silently.
-    payload.unverified_versions = unverified;
-    result = { ...result, content: JSON.stringify(payload) };
-  }
+  const payload = JSON.parse(result.content) as { status?: string; sync_warnings?: string[] };
   if (options.client && (payload.status === 'applied' || payload.status === 'partial_failure') && !options.dryRun) {
     const warnings: string[] = [];
     // Read actual disk state, including after the engine's best-effort rollback.

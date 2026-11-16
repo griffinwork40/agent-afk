@@ -42,12 +42,13 @@ describe('LSP WorkspaceEdit integration', () => {
     writeFakeLspServer(script, { workspaceEdit, logFile });
     client = await LspClient.start({ definition: TYPESCRIPT_SERVER_DEFINITION, command: process.execPath, args: [script], source: 'override' }, root, { timeoutMs: 5000 });
     for (const p of paths) await client.syncFile(p);
+    const requestStartedAt = Date.now();
     const response = await client.request('textDocument/rename', { textDocument: { uri: uri(paths[0]!) }, position: { line: 0, character: 6 }, newName: 'longName' }, { timeoutMs: 5000 });
     const state = join(root, 'state');
     const context: ToolHandlerContext = { resolveBase: root, writeRoots: [root], fileCheckpoint: beginCheckpointTurn('session', 'turn', state) };
     const apply = vi.spyOn(engine, 'applyPatch');
     const result = await applyWorkspaceEdit(response, { cwd: root, context, client,
-      documentVersion: (u) => client!.documentVersion(u), expectedContents: new Map(paths.map((p, i) => [uri(p), contents[i]!])),
+      documentVersion: (u) => client!.documentVersion(u), expectedContents: new Map(paths.map((p, i) => [uri(p), contents[i]!])), requestStartedAt,
     });
     expect(result.isError).toBe(false);
     expect(apply).toHaveBeenCalledTimes(1);
@@ -71,11 +72,12 @@ describe('LSP WorkspaceEdit integration', () => {
     // Rewinding the rename turn must fold BOTH turns, retaining earliest snapshots.
     const laterPath = join(root, 'later.ts');
     await writeFile(laterPath, 'before\n');
+    const laterStartedAt = Date.now();
     const later = { ...context, fileCheckpoint: beginCheckpointTurn('session', 'later-turn', state) };
     const laterResult = await applyWorkspaceEdit({ changes: {
       [uri(paths[1]!)]: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 8 } }, newText: 'finalName' }],
       [uri(laterPath)]: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } }, newText: 'after' }],
-    } }, { cwd: root, context: later, client });
+    } }, { cwd: root, context: later, client, expectedContents: client.documentContents(), requestStartedAt: laterStartedAt });
     expect(laterResult.isError).toBe(false);
     endCheckpointTurn('session', later.fileCheckpoint, state);
     const deps = { sessionId: 'session', enableFileCheckpointing: true, _stateDir: state, writePolicy: context };
