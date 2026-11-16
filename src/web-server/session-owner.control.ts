@@ -76,6 +76,9 @@ export class WebSessionControl {
           if (!reported) { reported = true; onError(error); }
         }
       },
+      // Web sessions are sealed by session-owner.lifecycle.ts on close, not
+      // through this autosaver, so close() is a no-op here.
+      close: () => { /* sealed by lifecycle */ },
     };
   }
 

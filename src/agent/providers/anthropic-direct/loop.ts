@@ -57,6 +57,7 @@
 import type { ProviderEvent } from '../../provider.js';
 import type { RunTurnInput } from './types.js';
 import { toProviderUsage } from './types.js';
+import { overageUsageFields } from './overage-tracker.js';
 import { resolveTtfbTimeoutMs } from '../shared/first-byte-timeout.js';
 import { resolveStallTimeoutMs } from '../shared/stream-stall-timeout.js';
 import { resolveMaxToolIterations } from '../shared/tool-loop-cap.js';
@@ -312,9 +313,10 @@ export async function* runTurn(
     // null-result; reaching here means outcome.kind === 'streamed' and non-null.
     const result = turnResult!;
 
-    turn.addRoundUsage(
-      toProviderUsage(result.usage, result.stopReason, input.model, input.fastMode ? 'fast' : undefined),
-    );
+    const roundUsage = toProviderUsage(result.usage, result.stopReason, input.model, input.fastMode ? 'fast' : undefined);
+    // #4883: attribute the latest unified-header observation to THIS round's cost.
+    Object.assign(roundUsage, overageUsageFields(input.overageTracker?.takeForResponse(), roundUsage.totalCostUsd));
+    turn.addRoundUsage(roundUsage);
     // Surface per-round cumulative usage so getContextUsage() reflects mid-turn
     // growth on the status line. Fires on every round including the terminal
     // end_turn; the authoritative duration-stamped value is still set on

@@ -173,6 +173,11 @@
     },
     {
       "kind": "command",
+      "name": "afk events serve",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "command",
       "name": "afk farm",
       "source": "src/cli/commands/farm.ts"
     },
@@ -1083,6 +1088,21 @@
     },
     {
       "kind": "env",
+      "name": "AFK_EVENTS_WEBHOOK_ALLOW_EXTERNAL",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_EVENTS_WEBHOOK_PORT",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_EVENTS_WEBHOOK_SECRET",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_FILE_CHECKPOINT_BASH_DISABLE",
       "source": "src/config/env.file-checkpoint.ts"
     },
@@ -1805,6 +1825,11 @@
       "kind": "env",
       "name": "AFK_TRANSCRIBE_TIMEOUT_MS",
       "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TTY_TRACE",
+      "source": "src/config/env.tty-trace.ts"
     },
     {
       "kind": "env",
@@ -2753,6 +2778,36 @@
     },
     {
       "kind": "flag",
+      "name": "afk events serve --allow-external",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events serve --command",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events serve --help",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events serve --host",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events serve --port",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events serve --secret-env",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
       "name": "afk farm --base-ref",
       "source": "src/cli/commands/farm.ts"
     },
@@ -3549,6 +3604,11 @@
     {
       "kind": "flag",
       "name": "afk receipt regenerate --dry-run",
+      "source": "src/cli/commands/receipt.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk receipt regenerate --force",
       "source": "src/cli/commands/receipt.ts"
     },
     {

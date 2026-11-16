@@ -390,6 +390,32 @@
       "category": "daemon"
     },
     {
+      "name": "AFK_EVENTS_WEBHOOK_ALLOW_EXTERNAL",
+      "description": "Allow `afk events serve` to bind on a non-loopback address. By default the webhook receiver refuses to start on anything other than 127.0.0.1 / ::1 / localhost. Set to 1 to permit binding on 0.0.0.0 or a specific interface (needed when behind a tunnel such as ngrok or cloudflared). Part of #3896 (event-triggered runs).",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "daemon"
+    },
+    {
+      "name": "AFK_EVENTS_WEBHOOK_PORT",
+      "description": "TCP port for the `afk events serve` GitHub webhook receiver. Overrides the --port flag. Default 9876. Part of #3896 (event-triggered runs).",
+      "type": "number",
+      "required": false,
+      "default": "9876",
+      "example": "9000",
+      "category": "daemon"
+    },
+    {
+      "name": "AFK_EVENTS_WEBHOOK_SECRET",
+      "description": "HMAC-SHA256 secret for the `afk events serve` GitHub webhook receiver. Must match the secret configured in the GitHub webhook settings page. Every incoming request is rejected with 401 unless it carries a valid X-Hub-Signature-256 header signed with this value. Part of #3896 (event-triggered runs).",
+      "type": "string",
+      "required": false,
+      "secret": true,
+      "category": "daemon"
+    },
+    {
       "name": "AFK_FILE_CHECKPOINT_BASH_DISABLE",
       "description": "Disable best-effort git-backed capture of foreground bash file changes for /rewind.",
       "type": "boolean",
@@ -1593,6 +1619,14 @@
       "default": "60000",
       "example": "120000",
       "category": "telegram"
+    },
+    {
+      "name": "AFK_TTY_TRACE",
+      "description": "Absolute path for the asciinema v2 cast file the interactive REPL writes when stdout is a TTY. Every byte sent to stdout/stderr is tee-d to this file in real time using a sync fd so a crash loses nothing. Terminal resize events are recorded as resize (\"r\") events. Unset (the default) means off with zero overhead. Use to capture a reproducer for stale-row rendering bugs in tmux/multiplexer sessions. Replay with: pnpm exec tsx scripts/tty-replay.ts <cast>",
+      "type": "string",
+      "required": false,
+      "example": "~/afk-tty.cast",
+      "category": "debug"
     },
     {
       "name": "AFK_TURN_SEPARATOR",

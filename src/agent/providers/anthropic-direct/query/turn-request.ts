@@ -29,6 +29,7 @@ export interface TurnRequestInput {
   traceWriter?: RunTurnInput['traceWriter'];
   subagentId?: string;
   throttleQueue?: RunTurnInput['throttleQueue'];
+  overageTracker?: RunTurnInput['overageTracker'];
   onUsageProgress?: RunTurnInput['onUsageProgress'];
   beforeNextRound?: RunTurnInput['beforeNextRound'];
   beforeTurnEnd?: RunTurnInput['beforeTurnEnd'];
@@ -83,6 +84,7 @@ export function prepareTurnRequest(input: TurnRequestInput): {
       ...(input.traceWriter ? { traceWriter: input.traceWriter } : {}),
       ...(input.subagentId !== undefined ? { subagentId: input.subagentId } : {}),
       ...(input.throttleQueue ? { throttleQueue: input.throttleQueue } : {}),
+      ...(input.overageTracker ? { overageTracker: input.overageTracker } : {}),
       ...(input.onUsageProgress ? { onUsageProgress: input.onUsageProgress } : {}),
       ...(input.beforeNextRound ? { beforeNextRound: input.beforeNextRound } : {}),
       // Stop-hook seam (#2714): without this forward the seam is dead on

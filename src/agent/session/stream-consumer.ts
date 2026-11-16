@@ -126,6 +126,8 @@ export function usageToMetadata(usage: ProviderUsage, sessionId: string | undefi
     durationMs: usage.durationMs,
     durationApiMs: usage.durationApiMs,
     totalCostUsd: usage.totalCostUsd,
+    ...(usage.overageCostUsd !== undefined ? { overageCostUsd: usage.overageCostUsd } : {}),
+    ...(usage.overageRequests !== undefined ? { overageRequests: usage.overageRequests } : {}),
     isError: usage.isError,
     usage: Object.keys(usageObj).length > 0 ? usageObj : undefined,
     modelUsage: usage.modelUsage,

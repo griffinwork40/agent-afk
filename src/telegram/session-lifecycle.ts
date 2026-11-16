@@ -82,6 +82,7 @@ export function finalizeTelegramSession(
   providerConfig: ProviderSessionConfig,
   ctx: TelegramSessionBuildContext,
   wiring: TelegramExecutorWiring,
+  providerFactory?: (model: string | undefined) => ModelProvider,
 ): AgentSession {
   const {
     sessionConfig,
@@ -184,6 +185,7 @@ export function finalizeTelegramSession(
     // Forward the effective permission mode (plan downgraded to default above).
     permissionMode: effectivePermissionMode,
     provider,
+    ...(providerFactory !== undefined ? { providerFactory } : {}),
     hookRegistry: hookBundle.registry,
   }, { traceWriter }), mcpManager);
 

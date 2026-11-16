@@ -27,4 +27,12 @@ export interface BackgroundJob {
    * Undefined when no goal was set at dispatch time (no annotation added).
    */
   readonly goalTextAtDispatch?: string;
+  /**
+   * StateStore key for the project whose goal was snapshotted at dispatch.
+   * Derived via `projectKeyForCwd()` at the dispatch site and stored here so
+   * the delivery path can call `getGoal(projectKey)` for the same project
+   * rather than the global fallback key. Undefined for jobs dispatched without
+   * a known working directory (falls back to the global goal).
+   */
+  readonly projectKey?: string;
 }

@@ -73,7 +73,7 @@ export interface WorktreePruneTaskOptions {
 }
 
 export async function runBuiltinWorktreePruneTask(
-  task: { taskId: string; command: string; cronExpression?: string },
+  task: { taskId: string; command: string; cronExpression?: string; name?: string },
   trigger: TelemetryTrigger,
   options: WorktreePruneTaskOptions,
 ): Promise<TelemetryRecord> {
@@ -85,6 +85,7 @@ export async function runBuiltinWorktreePruneTask(
     trigger,
     ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
     triggeredAt: triggeredAt.toISOString(),
+    ...(task.name !== undefined ? { name: task.name } : {}),
   };
 
   try {

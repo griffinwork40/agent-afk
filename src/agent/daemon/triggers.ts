@@ -43,6 +43,13 @@ export interface ScheduledTask {
   /** Stable identifier; stops/restarts target this. */
   taskId: string;
   /**
+   * Human-readable label (from `ScheduledTaskConfig.name`). Threaded through
+   * so telemetry records — including skip records — can carry a recognisable
+   * name rather than just the opaque `taskId`. Absent for synthetic pull tasks
+   * and other tasks not created from a `ScheduledTaskConfig`.
+   */
+  name?: string;
+  /**
    * Meaning depends on `executor`:
    * - `'agent'` (default): prompt sent as a user message into the spawned session.
    * - `'shell'`: shell command run via `/bin/sh -c`.

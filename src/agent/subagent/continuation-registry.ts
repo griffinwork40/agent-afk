@@ -72,6 +72,28 @@ export interface ChainRecord {
   settling: Promise<void> | undefined;
   /** A continuation call holds the admission reservation (awaiting settling / drift). */
   admitting: boolean;
+  /**
+   * Absolute path of the isolated worktree kept alive for this chain between
+   * continuation links. Set by the foreground teardown hook when an
+   * isolation:"worktree" child ends and the chain is still continuable;
+   * cleared once the chain is no longer continuable (limits exhausted, evicted,
+   * or session end). The worktree is git-locked while this is set.
+   */
+  isolatedWorktreePath?: string;
+  /**
+   * True once a git worktree was actually created for this chain's initial
+   * dispatch (isolation:"worktree" on a write-capable agent). A read-only
+   * agent gets no worktree, so `inputs.isolation` alone cannot tell. While
+   * this is set and `isolatedWorktreePath` is not, the chain is neither
+   * advertised as continuable nor admitted (its tree was not kept).
+   */
+  worktreeIsolated?: true;
+  /**
+   * Set by `dispose()` (session end or reset): no worktree may be kept for
+   * this chain from now on. A teardown hook or lock still running when
+   * dispose fired sees it and tears the tree down instead of keeping it.
+   */
+  worktreeReleaseRequested?: true;
 }
 
 export type AdmissionResult =
@@ -106,6 +128,13 @@ export function resolveContinuationLimits(): ContinuationLimits {
 /** Max chains held per registry; beyond it the oldest non-in-flight chains are evicted (then refused as unknown). */
 export const MAX_CHAINS = 256;
 
+/**
+ * Called when a chain is removed from the registry (evicted for cap or
+ * disposed at session end). Used to release worktrees kept for continuation
+ * chains. Never throws — teardown runs fire-and-forget.
+ */
+export type ChainEvictCallback = (chain: ChainRecord) => void;
+
 export class ContinuationRegistry {
   /** Insertion-ordered: iteration yields the oldest chain first. */
   private readonly chains = new Map<string, ChainRecord>();
@@ -115,6 +144,14 @@ export class ContinuationRegistry {
    * keys off it: one registry exists per root session (wire-executors).
    */
   readonly rootActor = `root_${randomBytes(12).toString('hex')}`;
+  /** Optional callback fired when a chain is evicted or disposed. */
+  onEvict?: ChainEvictCallback;
+  /**
+   * Per chain: teardown of the latest link (its nested subagent manager, then
+   * the handle) still pending. Kept outside `chains` so an evicted chain's
+   * release still finds it. Entries drop once settled.
+   */
+  private readonly linkTeardowns = new Map<string, Promise<void>>();
 
   constructor(
     private readonly limits: ContinuationLimits = resolveContinuationLimits(),
@@ -135,8 +172,36 @@ export class ContinuationRegistry {
   private evictForInsert(): void {
     for (const [id, chain] of this.chains) {
       if (this.chains.size < this.maxChains) return;
-      if (!chain.inFlight && !chain.admitting) this.chains.delete(id);
+      if (!chain.inFlight && !chain.admitting) {
+        this.chains.delete(id);
+        this.onEvict?.(chain);
+      }
     }
+  }
+
+  /**
+   * Session end (or reset): request release of every kept worktree. Fires
+   * `onEvict` now if the child has ended, including while terminal bookkeeping
+   * is settling. A child still running after the bounded drain keeps its tree
+   * until terminal recording or admission rollback clears inFlight.
+   * Every chain present is marked `worktreeReleaseRequested`, so no teardown
+   * hook or pending lock keeps a new tree for it. Chains stay in the map and
+   * chains minted later are unaffected, because a REPL reset reuses the registry.
+   * Release is async and best effort. A process that exits or is killed while
+   * a child still runs or before release finishes leaves the git lock in place.
+   * Recover with `git worktree unlock <path>`. Never throws.
+   */
+  dispose(): void {
+    for (const chain of this.chains.values()) {
+      chain.worktreeReleaseRequested = true;
+      this.releaseDisposedWorktree(chain);
+    }
+  }
+
+  /** Release only once the child has ended; terminal bookkeeping may still be pending. */
+  private releaseDisposedWorktree(chain: ChainRecord): void {
+    if (chain.worktreeReleaseRequested !== true || (chain.inFlight && chain.settling === undefined) || chain.isolatedWorktreePath === undefined) return;
+    try { this.onEvict?.(chain); } catch { /* best-effort */ } finally { chain.isolatedWorktreePath = undefined; }
   }
 
   /** Mint a chain for an initial dispatch; `roundCap` 0 means uncapped. */
@@ -197,6 +262,7 @@ export class ContinuationRegistry {
       chain.roundsCharged -= allowance;
       chain.continuations -= 1;
       chain.inFlight = false;
+      this.releaseDisposedWorktree(chain);
     };
     return { ok: true, chain, allowance, index, rollback };
   }
@@ -228,12 +294,52 @@ export class ContinuationRegistry {
     chain.initialUncharged = false;
   }
 
+  /**
+   * Contract: `done` resolves (never rejects) once a link's nested subagents
+   * and its handle are torn down. Every worktree release awaits the pending
+   * entry first (releaseChainWorktree), so no release path unlocks or removes
+   * a kept tree while that link's nested subagents may still write to it.
+   * A later link's entry joins any still-pending earlier one.
+   */
+  trackLinkTeardown(chainId: string, done: Promise<void>): void {
+    const prev = this.linkTeardowns.get(chainId);
+    const entry = prev === undefined ? done : Promise.all([prev, done]).then(() => undefined);
+    this.linkTeardowns.set(chainId, entry);
+    void entry.finally(() => { if (this.linkTeardowns.get(chainId) === entry) this.linkTeardowns.delete(chainId); }).catch(() => undefined);
+  }
+
+  /** The chain's pending link teardown, or undefined when none is pending. */
+  pendingLinkTeardown(chainId: string): Promise<void> | undefined {
+    return this.linkTeardowns.get(chainId);
+  }
+
   /** Track the latest run's post-result bookkeeping; cleared once it settles. */
   setSettling(chainId: string, settling: Promise<void>): void {
     const chain = this.chains.get(chainId);
     if (chain === undefined) return;
     chain.settling = settling;
     void settling.finally(() => { if (chain.settling === settling) chain.settling = undefined; }).catch(() => undefined);
+  }
+
+  /**
+   * Store the isolated worktree path kept alive for continuation. Called by
+   * the foreground teardown hook when the chain is still continuable after an
+   * isolation:"worktree" child ends. The worktree is git-locked by the caller
+   * before this is called, so the sweep cannot race-reap it.
+   */
+  setIsolatedWorktreePath(chainId: string, worktreePath: string): void {
+    const chain = this.chains.get(chainId);
+    if (chain !== undefined) chain.isolatedWorktreePath = worktreePath;
+  }
+
+  /**
+   * Clear the stored worktree path (called when the chain is exhausted,
+   * evicted, or the session ends). The caller is responsible for releasing
+   * the git lock and handing the tree back to the sweep before calling this.
+   */
+  clearIsolatedWorktreePath(chainId: string): void {
+    const chain = this.chains.get(chainId);
+    if (chain !== undefined) chain.isolatedWorktreePath = undefined;
   }
 
   /** D9: called on every terminal outcome (foreground and background). */
@@ -248,6 +354,7 @@ export class ContinuationRegistry {
     }
     chain.checkpoint = update.checkpoint;
     chain.lastEndReason = update.endReason;
+    this.releaseDisposedWorktree(chain);
   }
 }
 
