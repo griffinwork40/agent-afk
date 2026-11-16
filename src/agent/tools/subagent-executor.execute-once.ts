@@ -235,7 +235,7 @@ export async function executeOnce(
     childParentSession.messageJournal = handle.session?.messageJournal;
   }
   updateCurrentWaveUnit(call.id, 'running', undefined, isolationTeardown !== undefined ? childConfig.cwd : undefined);
-  const chain = wireDispatchChain({ ctx, parsed, handle, childConfig, currentCwd, writeCapable: childWriteCapable, plan, isolated: isolationTeardown !== undefined }); // D2 mint (or reuse the continued chain) + D9 terminal hooks
+  const chain = wireDispatchChain({ ctx, parsed, handle, childConfig, currentCwd, writeCapable: childWriteCapable, plan, isolated: isolationTeardown !== undefined, childManager }); // D2 mint (or reuse the continued chain) + D9 terminal hooks
 
   if (parsed.mode === 'background') {
     return prependSetupNotice(setupNotice, await runBackgroundDispatch({

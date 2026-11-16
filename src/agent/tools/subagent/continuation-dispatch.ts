@@ -279,6 +279,8 @@ export function instrumentHandleForChain(
     rollbackIfNotStarted?: () => void;
     /** D6b: continuation results always carry the line. */
     alwaysLine?: boolean;
+    /** The link's depth-2+ manager; torn down before the handle (see wrapLinkTeardown). */
+    childManager?: { teardownAll(): Promise<void> } | undefined;
   },
 ): void {
   if (terminal.registry === undefined || terminal.chain === undefined) return;
@@ -323,6 +325,31 @@ export function instrumentHandleForChain(
     if (terminal.rollbackIfNotStarted !== undefined) { done = true; terminal.rollbackIfNotStarted(); return; }
     record(undefined, 'not_started');
   });
+  if (chain.inputs.isolation === 'worktree') wrapLinkTeardown(h, registry, chain.chainId, terminal.childManager);
+}
+
+/**
+ * Invariant: every run mode ends in `handle.teardown()` (foreground finally,
+ * or the background registry's markTerminal for background and promoted
+ * runs). Wrapped here, it tears the link's nested manager down first and then
+ * resolves the chain's pending link teardown, which every worktree release
+ * awaits. The run's terminal record (and so exhaustion release) fires before
+ * teardown, so the pending entry is registered now, before the run starts.
+ */
+function wrapLinkTeardown(h: Record<string, unknown>, registry: ContinuationRegistry, chainId: string, childManager: { teardownAll(): Promise<void> } | undefined): void {
+  const orig = h['teardown'];
+  if (typeof orig !== 'function') return;
+  const bound = (orig as (...a: unknown[]) => Promise<void>).bind(h);
+  let resolve!: () => void;
+  registry.trackLinkTeardown(chainId, new Promise<void>((r) => { resolve = r; }));
+  h['teardown'] = async (...a: unknown[]) => {
+    try {
+      await childManager?.teardownAll().catch(() => undefined);
+      return await bound(...a);
+    } finally {
+      resolve();
+    }
+  };
 }
 
 /**
@@ -461,6 +488,8 @@ export function wireDispatchChain(args: {
   plan?: ContinuationPlan | undefined;
   /** A git worktree was created for this (initial) dispatch. */
   isolated?: boolean;
+  /** The child's depth-2+ manager (undefined when the child cannot nest). */
+  childManager?: { teardownAll(): Promise<void> } | undefined;
 }): ChainRecord | undefined {
   const { ctx, parsed, handle, childConfig, plan } = args;
   const cwd = childConfig.cwd ?? args.currentCwd;
@@ -477,6 +506,7 @@ export function wireDispatchChain(args: {
     journalUsable: () => ((handle.session?.messageJournal as { length?: number } | undefined)?.length ?? 0) > 0,
     flushJournal: async () => { await (handle.session?.messageJournal as { flush?: () => Promise<void> } | undefined)?.flush?.(); },
     ...(plan !== undefined ? { rollbackIfNotStarted: plan.rollback, alwaysLine: true } : {}),
+    childManager: args.childManager,
   });
   if (plan !== undefined) plan.wired = true;
   if (args.isolated === true && chain !== undefined) chain.worktreeIsolated = true;

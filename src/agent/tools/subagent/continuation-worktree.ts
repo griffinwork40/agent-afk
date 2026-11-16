@@ -117,6 +117,9 @@ export async function releaseChainWorktree(args: {
 }): Promise<void> {
   const { repoRoot, worktreePath, chainId, registry } = args;
   registry.clearIsolatedWorktreePath(chainId);
+  // Invariant: the link's nested subagents finish teardown before the tree is unlocked or removed.
+  const nestedTeardown = registry.pendingLinkTeardown(chainId);
+  if (nestedTeardown !== undefined) await nestedTeardown;
   try {
     // Unlock first: teardownIsolatedWorktree refuses locked trees.
     await defaultExecFile('git', [

@@ -146,6 +146,12 @@ export class ContinuationRegistry {
   readonly rootActor = `root_${randomBytes(12).toString('hex')}`;
   /** Optional callback fired when a chain is evicted or disposed. */
   onEvict?: ChainEvictCallback;
+  /**
+   * Per chain: teardown of the latest link (its nested subagent manager, then
+   * the handle) still pending. Kept outside `chains` so an evicted chain's
+   * release still finds it. Entries drop once settled.
+   */
+  private readonly linkTeardowns = new Map<string, Promise<void>>();
 
   constructor(
     private readonly limits: ContinuationLimits = resolveContinuationLimits(),
@@ -286,6 +292,25 @@ export class ContinuationRegistry {
     if (chain === undefined || !chain.initialUncharged) return;
     chain.roundsCharged += Math.max(0, roundsUsed);
     chain.initialUncharged = false;
+  }
+
+  /**
+   * Contract: `done` resolves (never rejects) once a link's nested subagents
+   * and its handle are torn down. Every worktree release awaits the pending
+   * entry first (releaseChainWorktree), so no release path unlocks or removes
+   * a kept tree while that link's nested subagents may still write to it.
+   * A later link's entry joins any still-pending earlier one.
+   */
+  trackLinkTeardown(chainId: string, done: Promise<void>): void {
+    const prev = this.linkTeardowns.get(chainId);
+    const entry = prev === undefined ? done : Promise.all([prev, done]).then(() => undefined);
+    this.linkTeardowns.set(chainId, entry);
+    void entry.finally(() => { if (this.linkTeardowns.get(chainId) === entry) this.linkTeardowns.delete(chainId); }).catch(() => undefined);
+  }
+
+  /** The chain's pending link teardown, or undefined when none is pending. */
+  pendingLinkTeardown(chainId: string): Promise<void> | undefined {
+    return this.linkTeardowns.get(chainId);
   }
 
   /** Track the latest run's post-result bookkeeping; cleared once it settles. */
