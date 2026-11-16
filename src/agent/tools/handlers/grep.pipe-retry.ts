@@ -55,6 +55,12 @@ export function rewriteBackslashPipe(pattern: string): string {
 interface RetryOutcome {
   /** True when rg found at least one match (exit 0). */
   hadMatches: boolean;
+  /**
+   * True when the reinterpretation note has already been prepended to
+   * `result.content` (e.g. by the scan-cap path inside the Promise). When set,
+   * the outer reconciliation step must not prepend the note a second time.
+   */
+  notePrepended: boolean;
   result: GrepSettleResult;
 }
 
@@ -75,6 +81,10 @@ interface RetryOutcome {
  * {@link GrepSettleResult}. The caller may still attach `.catch` as a defence
  * against unexpected throws in this module's own code.
  *
+ * @param rewrittenPattern The pattern with every unescaped `\|` replaced by
+ *                    `|`, pre-computed by the caller (the same value that was
+ *                    used to build `rgArgs`). Passed in explicitly so there is
+ *                    one authoritative source for the rewritten form.
  * @param signal      Abort signal from the parent handler; if already aborted
  *                    the retry is not spawned. If aborted mid-flight the retry
  *                    process is killed and the promise resolves with the abort
@@ -86,6 +96,7 @@ interface RetryOutcome {
  */
 export async function runPipeRetry(
   originalPattern: string,
+  rewrittenPattern: string,
   rgPath: string,
   rgArgs: string[],
   spawnOptions: SpawnOptions,
@@ -98,7 +109,7 @@ export async function runPipeRetry(
     return { content: 'Search aborted', isError: true };
   }
 
-  const rewritten = rewriteBackslashPipe(originalPattern);
+  const rewritten = rewrittenPattern;
 
   const outcome = await new Promise<RetryOutcome>((res) => {
     const retryOut = createStreamingCap(MODEL_CAP_BYTES);
@@ -123,7 +134,7 @@ export async function runPipeRetry(
     const abortHandler = (): void => {
       retryProc.kill();
       settle(
-        { hadMatches: false, result: { content: 'Search aborted', isError: true } },
+        { hadMatches: false, notePrepended: false, result: { content: 'Search aborted', isError: true } },
         true,
       );
     };
@@ -146,6 +157,7 @@ export async function runPipeRetry(
       settle(
         {
           hadMatches: true,
+          notePrepended: true,
           result: {
             content: `${note}\n${stripEscapeSequences(body.trimEnd())}${scanCapKillNote(scanCapBytes)}`,
             truncated: true,
@@ -172,6 +184,7 @@ export async function runPipeRetry(
         const body = stripEscapeSequences(retryOut.render().trimEnd());
         settle({
           hadMatches: true,
+          notePrepended: false,
           result: { content: body, ...(retryOut.truncated() ? { truncated: true } : {}) },
         });
         return;
@@ -180,13 +193,14 @@ export async function runPipeRetry(
       if (rc === 1) {
         settle({
           hadMatches: false,
+          notePrepended: false,
           result: { content: `No matches found for '${rewritten}' in ${searchPath}` },
         });
         return;
       }
 
       if (rc === 2) {
-        settle({ hadMatches: false, result: classifyRgExit2(retryErr.render(), searchPath) });
+        settle({ hadMatches: false, notePrepended: false, result: classifyRgExit2(retryErr.render(), searchPath) });
         return;
       }
 
@@ -194,6 +208,7 @@ export async function runPipeRetry(
       // which already returned above). Treat as no matches rather than matches.
       settle({
         hadMatches: false,
+        notePrepended: false,
         result: { content: `No matches found for '${rewritten}' in ${searchPath}` },
       });
     });
@@ -201,6 +216,7 @@ export async function runPipeRetry(
     retryProc.on('error', () => {
       settle({
         hadMatches: false,
+        notePrepended: false,
         result: { content: `No matches found for '${originalPattern}' in ${searchPath}` },
       });
     });
@@ -218,8 +234,8 @@ export async function runPipeRetry(
   }
 
   if (outcome.hadMatches) {
-    // Scan-cap result already has the note prepended inside maybeScanCap.
-    if (outcome.result.truncated && outcome.result.content.includes('matched nothing')) {
+    // Scan-cap path already prepended the note inside maybeScanCap.
+    if (outcome.notePrepended) {
       return outcome.result;
     }
     const note =
@@ -259,6 +275,7 @@ export async function runPipeRetry(
  */
 export function handlePipeRetry(
   originalPattern: string,
+  rewrittenPattern: string,
   rgPath: string,
   rgArgs: string[],
   effectiveCwd: string | undefined,
@@ -268,7 +285,7 @@ export function handlePipeRetry(
   settle: (result: GrepSettleResult) => void,
 ): void {
   const spawnOptions: SpawnOptions = effectiveCwd !== undefined ? { cwd: effectiveCwd } : {};
-  runPipeRetry(originalPattern, rgPath, rgArgs, spawnOptions, searchPath, signal, scanCapBytes)
+  runPipeRetry(originalPattern, rewrittenPattern, rgPath, rgArgs, spawnOptions, searchPath, signal, scanCapBytes)
     .then((result) => settle(result))
     .catch(() => settle({ content: `No matches found for '${originalPattern}' in ${searchPath}` }));
 }

@@ -346,7 +346,8 @@ export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): T
         if (hasUnescapedBackslashPipe(pattern)) {
           // Pattern contains `\|` (literal pipe in ripgrep, not alternation).
           // Re-run once with `\|` → `|`. Never retries more than once.
-          handlePipeRetry(pattern, rgPath, buildRgArgs(rewriteBackslashPipe(pattern), path, include), effectiveCwd, path, signal, scanCap, settle);
+          const rewrittenPattern = rewriteBackslashPipe(pattern);
+          handlePipeRetry(pattern, rewrittenPattern, rgPath, buildRgArgs(rewrittenPattern, path, include), effectiveCwd, path, signal, scanCap, settle);
           return;
         }
         settle({ content: `No matches found for '${pattern}' in ${path}` });
