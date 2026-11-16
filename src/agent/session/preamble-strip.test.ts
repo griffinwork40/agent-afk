@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { extractUserContent, isPreamble, stripPreamble } from './preamble-strip.js';
+import {
+  extractPreDrainUserContent, extractUserContent, isPreDrainPreamble, isPreamble, stripPreDrainPreamble, stripPreamble,
+} from './preamble-strip.js';
 import { prependFrameworkContext, wrapFrameworkContext } from './framework-context-envelope.js';
 
 describe('preamble-strip', () => {
@@ -149,5 +151,40 @@ describe('extractUserContent — harness <framework-context> envelope', () => {
     // emits after the bridge marker is indistinguishable from the prompt.
     const legacy = `${hookContext}\n\nwhy no titles`;
     expect(extractUserContent(legacy)).toBe('Recent work in agent-afk (Q ledger, last 14d):\n- abc fix things\n\nwhy no titles');
+  });
+});
+
+describe('preamble-strip: exact tag (Rule A), pre-drain text (Rule B), remainder (Rule C)', () => {
+  const envelope = (body: string): string => `<framework-context>\n${body}\n</framework-context>`;
+
+  it.each(['<framework-context foo="x">a</framework-context> b', '<framework-context-notes> mine', '<framework-context/> mine'])(
+    'leaves a near-miss tag unchanged: %s', (typed) => {
+      expect(isPreamble(typed)).toBe(false);
+      expect(stripPreamble(typed)).toBe(typed);
+    },
+  );
+
+  it('never applies the envelope strategy to pre-drain text', () => {
+    const typed = '<framework-context>example</framework-context> actual request';
+    expect(isPreDrainPreamble(typed)).toBe(false);
+    expect(stripPreDrainPreamble(typed)).toBe(typed);
+    expect(extractPreDrainUserContent(typed)).toBeUndefined();
+    expect(stripPreDrainPreamble('[skill-routing: active]\nfix it')).toBe('fix it');
+  });
+
+  it('reads the remainder exactly like a message with no hook context', () => {
+    const notice = '[System context — not from the user. Your model was switched at the start of this turn: a → b.]';
+    for (const typed of [`${notice}\n\nhello`, 'plain prose', '<command-name>/review</command-name>\n<command-args>32</command-args>']) {
+      expect(stripPreamble(`${envelope('ctx')}\n\n${typed}`)).toBe(stripPreamble(typed));
+    }
+  });
+
+  it('never discards the remainder when the legacy strategies find nothing in it', () => {
+    // A Telegram reply is one bracket-led line. The legacy path alone returns
+    // undefined for it; after an envelope it is known to be the caller's text.
+    const reply = '[in reply to the assistant: "daemon task failed"] Why did this fail?';
+    expect(extractPreDrainUserContent(reply)).toBeUndefined();
+    expect(extractUserContent(`${envelope('ctx')}\n\n${reply}`)).toBe(reply);
+    expect(stripPreamble(`${envelope('ctx')}\n\n${reply}`)).toBe(reply);
   });
 });

@@ -20,7 +20,7 @@ import type { Dirent } from 'node:fs';
 import { getSessionLedgerPath, getSessionsDir, isSafeLedgerSessionId } from '../paths.js';
 import { readLedger } from '../agent/session-ledger.js';
 import { readLivePresenceFiles } from '../agent/awareness/presence.js';
-import { isPreamble, extractUserContent } from '../agent/session/preamble-strip.js';
+import { isPreamble, extractUserContent, extractPreDrainUserContent, isPreDrainPreamble } from '../agent/session/preamble-strip.js';
 import { readSidecarNameInfo } from './session-name-head.js';
 import { readSessionMeta } from '../agent/session/session-meta.js';
 
@@ -117,8 +117,11 @@ async function readLedgerHead(
         // and the real user message. Skipping the whole record (the
         // pre-2026-09 behavior) left every plugin session untitled; instead,
         // peel the preamble and extract whatever the user actually typed.
-        const source = rec.input ?? rec.text;
-        const content = isPreamble(source) ? extractUserContent(source) : source;
+        // `input` is recorded before the drain, so it can hold no harness
+        // envelope; only `text` gets the envelope strategy.
+        const content = rec.input !== undefined
+          ? (isPreDrainPreamble(rec.input) ? extractPreDrainUserContent(rec.input) : rec.input)
+          : (isPreamble(rec.text) ? extractUserContent(rec.text) : rec.text);
         if (content) out.title = truncateTitle(content);
         // If extraction returned nothing (pure-boilerplate record), fall
         // through and let a subsequent user record supply the title.

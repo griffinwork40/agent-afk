@@ -29,7 +29,8 @@ import { buildPrompt } from './repl-loop-shared.js';
 import { palette } from '../../palette.js';
 import { stripCommandTags } from '../../slash/_lib/command-tags.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
-import { extractUserContent, isPreamble } from '../../../agent/session/preamble-strip.js';
+import { extractPreDrainUserContent, extractUserContent, isPreamble } from '../../../agent/session/preamble-strip.js';
+import { textAfterFrameworkContext } from '../../../agent/session/framework-context-envelope.js';
 import { hasToolResultBlock } from '../../../agent/content/user-authored.js';
 import {
   hydrateMessages,
@@ -101,7 +102,11 @@ export function humanText(m: JournalMessage, hints: ReadonlySet<string> = new Se
   // A skill breadcrumb that survived preamble peeling (it sat AFTER the
   // bridge marker) collapses to `/name args`, not the dispatch instruction
   // that follows the tags.
-  if (hinted === undefined && text.includes('<command-name>')) text = extractUserContent(text) ?? text;
+  // Any envelope was peeled above, so this second pass is legacy only and
+  // never runs on a pure envelope left in place.
+  if (hinted === undefined && text.includes('<command-name>') && textAfterFrameworkContext(text) === undefined) {
+    text = extractPreDrainUserContent(text) ?? text;
+  }
   text = stripCommandTags(text).trim();
   const images = m.content.filter((b) => b.type === 'image').length;
   if (images > 0) {

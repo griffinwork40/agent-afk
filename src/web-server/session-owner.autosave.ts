@@ -12,7 +12,7 @@
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentSession } from '../agent/session/agent-session.js';
-import { extractUserContent, isPreamble } from '../agent/session/preamble-strip.js';
+import { extractPreDrainUserContent, isPreDrainPreamble } from '../agent/session/preamble-strip.js';
 import { createTurnCollector, type SessionAutosaver } from '../cli/session-autosave.js';
 import { onTurnDrained } from './session-owner.slash.js';
 import type { LiveSink } from './live-broker.js';
@@ -28,7 +28,8 @@ export function webTurnLabel(content: string | ContentBlockParam[]): string {
     .map((b) => (b.type === 'text' ? b.text : ''))
     .filter(Boolean)
     .join('\n');
-  return (isPreamble(text) ? extractUserContent(text) : undefined) ?? text;
+  // The caller's own content, before the drain: no envelope can lead it.
+  return (isPreDrainPreamble(text) ? extractPreDrainUserContent(text) : undefined) ?? text;
 }
 
 /** Live tap for one turn: every drained event is mirrored to the sink. */

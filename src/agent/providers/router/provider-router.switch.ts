@@ -10,6 +10,7 @@
  */
 
 import type { ProviderUserTurn } from '../../provider.js';
+import { splitFrameworkContext } from '../../session/framework-context-envelope.js';
 
 /**
  * Flatten a user-turn content value to plain text for the shadow history.
@@ -61,13 +62,28 @@ export function buildSwitchNotice(
   );
 }
 
-/** Prepend a synthetic notice as a leading text block (or line) to outbound turn content. */
+/**
+ * Prepend a synthetic notice as a leading text block (or line) to outbound turn
+ * content. A leading harness `<framework-context>` envelope stays first so
+ * readers can still cut it; the notice then leads what follows it.
+ */
 export function prependNotice(
   content: ProviderUserTurn['content'],
   notice: string,
 ): ProviderUserTurn['content'] {
   if (typeof content === 'string') {
+    const split = splitFrameworkContext(content);
+    if (split) {
+      const rest = split.rest.trimStart();
+      return `${split.envelope}\n\n${notice}${rest ? `\n\n${rest}` : ''}`;
+    }
     return content.length > 0 ? `${notice}\n\n${content}` : notice;
   }
-  return [{ type: 'text' as const, text: notice }, ...content];
+  const noticeBlock = { type: 'text' as const, text: notice };
+  const first = content.findIndex((block) => block.type === 'text');
+  const firstBlock = content[first];
+  if (firstBlock?.type === 'text' && splitFrameworkContext(firstBlock.text)) {
+    return [...content.slice(0, first + 1), noticeBlock, ...content.slice(first + 1)];
+  }
+  return [noticeBlock, ...content];
 }

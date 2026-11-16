@@ -2083,6 +2083,11 @@ describe('deriveSessionFacet — preamble stripping in firstPrompt (#4586)', () 
     };
   }
 
+  it('keeps a sidecar first turn that opens with the envelope tag verbatim (pre-drain)', () => {
+    const facet = deriveSessionFacet(makeSession([{ user: '<framework-context>example</framework-context> actual request', assistant: 'ok', timestamp: 1, toolEvents: [] }]));
+    expect(facet.first_prompt).toBe('<framework-context>example</framework-context> actual request');
+  });
+
   it('skips a pure-preamble first turn and uses the real user message as firstPrompt (#4586 F2)', () => {
     const preamble =
       '[placeholder-prevent] Prefer running commands yourself with your tools; ' +

@@ -53,6 +53,16 @@ describe('framework-context envelope', () => {
     ]);
   });
 
+  it('guards on the joined text of all blocks, not just the first', () => {
+    const blocks = [
+      { type: 'text' as const, text: ' ' },
+      { type: 'text' as const, text: '<framework-context>example</framework-context> actual request' },
+    ];
+    expect(prependFrameworkContext([], blocks)).toEqual([
+      { type: 'text', text: '<framework-context>\n\n</framework-context>' }, ...blocks,
+    ]);
+  });
+
   it('peels exactly one envelope and treats an unterminated harness envelope as all context', () => {
     const typed = `${wrapFrameworkContext('b')}\n\ntyped`;
     const two = `${wrapFrameworkContext('a')}\n\n${typed}`;

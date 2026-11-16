@@ -19,6 +19,7 @@ import {
 import type { JournalMessage, JournalRecord } from '../journal/types.js';
 import { createMessageJournal } from '../journal/writer.js';
 import { readJournalRecords } from '../journal/reader.js';
+import { resolveBlobPath } from '../journal/blobs.js';
 import { wrapFrameworkContext } from '../session/framework-context-envelope.js';
 import type { ClosureReason, ToolFailureClass, TraceEvent } from './types.js';
 import type { OutcomesV1 } from '../outcomes/outcomes-v1.schema.js';
@@ -475,6 +476,22 @@ describe('writeRunReceipt + runReceiptSessionEndHook (filesystem)', () => {
     const parsed = JSON.parse(await readFile(result!.jsonPath, 'utf8')) as RunReceipt;
     expect(parsed.journalSummary?.firstUserMessage).toBe('review the fix');
     expect(parsed.journalSummary?.messageCount).toBe(1);
+  });
+
+  it('falls back to the preview when the spilled blob is missing, never reporting hook text', async () => {
+    const sessionId = 'sess-spilled-missing';
+    const hook = `[placeholder-prevent] Prefer commands.\nRead any referenced file for deeper context before acting.\nRecent work in repo:\n${'- abc fix\n'.repeat(4000)}`;
+    const journal = createMessageJournal({ getSessionId: () => sessionId });
+    journal.append(0, { role: 'user', content: [{ type: 'text', text: `${wrapFrameworkContext(hook)}\n\nreview the fix` }] });
+    await journal.close();
+    const original = readJournalRecords(sessionId).find((record) => record.kind === 'append');
+    const block = original?.kind === 'append' ? original.message.content[0] : undefined;
+    if (block?.type !== 'text_ref') throw new Error('expected a spilled text block');
+    await rm(resolveBlobPath(block.ref)!);
+    const tracePath = await writeTrace('run-spilled-missing', [closure('model_end_turn'), sealed('succeeded')]);
+    const result = await writeRunReceipt({ tracePath, sessionId });
+    const parsed = JSON.parse(await readFile(result!.jsonPath, 'utf8')) as RunReceipt;
+    expect(parsed.journalSummary).not.toHaveProperty('firstUserMessage');
   });
 
   it('writes outcomes: null when the outcomes computation has no cwd', async () => {

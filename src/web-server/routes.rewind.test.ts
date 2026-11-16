@@ -48,6 +48,13 @@ describe('POST /api/sessions/:id/rewind', () => {
     expect(submitPrompt).toHaveBeenCalledWith('s1', 'hello there');
   });
 
+  it('retry resends reloaded text that opens with the envelope tag verbatim', async () => {
+    const { ctx, submitPrompt } = ctxWith({ kind: 'prefill', message: '<framework-context>example</framework-context> actual request' });
+    const r = fakeRes();
+    await handleRewind(ctx, r.res, 's1', { mode: 'retry' });
+    expect(submitPrompt).toHaveBeenCalledWith('s1', '<framework-context>example</framework-context> actual request');
+  });
+
   it('retry prefers the browser-displayed prompt text over the provider history text', async () => {
     const { ctx, submitPrompt } = ctxWith({ kind: 'prefill', message: '[placeholder-prevent] Prefer running commands yourself.\n\nhello there' });
     const r = fakeRes();

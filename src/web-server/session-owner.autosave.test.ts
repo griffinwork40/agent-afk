@@ -22,6 +22,11 @@ describe('webTurnLabel', () => {
     expect(webTurnLabel('hello')).toBe('hello');
   });
 
+  it('labels typed text that opens with the envelope tag verbatim (pre-drain)', () => {
+    expect(webTurnLabel('<framework-context>example</framework-context> actual request')).toBe('<framework-context>example</framework-context> actual request');
+    expect(webTurnLabel([{ type: 'text', text: '<framework-context>example</framework-context> actual request' }])).toBe('<framework-context>example</framework-context> actual request');
+  });
+
   it('renders a skill invocation payload as /<skill> <args>', () => {
     const blocks: ContentBlockParam[] = [
       { type: 'text', text: '<command-name>/review</command-name>\n<command-args>32</command-args>\nRun the skill.' },

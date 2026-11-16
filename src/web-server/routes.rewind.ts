@@ -37,7 +37,7 @@ import { BufferingWriter } from './writer.buffer.js';
 import { getStats } from './session-owner.slash.js';
 import { stripVTControlCharacters } from 'node:util';
 import { errorMessage } from '../utils/errors.js';
-import { isPreamble, extractUserContent } from '../agent/session/preamble-strip.js';
+import { stripPreDrainPreamble } from '../agent/session/preamble-strip.js';
 
 function requireOwned(ctx: RouteContext, res: ServerResponse, id: string): boolean {
   if (ctx.owned.has(id)) return true;
@@ -147,7 +147,9 @@ export async function handleRewind(
     // The provider history holds the text as sent, which can lead with
     // framework preamble ([placeholder-prevent], bridge context); resend only
     // what the user typed, as the transcript projection displays it.
-    const original = isPreamble(reloaded) ? (extractUserContent(reloaded) ?? reloaded) : reloaded;
+    // reloadText already had its one envelope peeled by stripPreamble in the
+    // provider rewind, so only the legacy strategies may run here.
+    const original = stripPreDrainPreamble(reloaded);
     const textToSend = mode === 'retry' ? (bodyText || original.trim()) : editText!;
     if (!textToSend) {
       sendJson(res, 409, { error: 'rewind_failed', message: 'Rewound, but the original prompt text could not be recovered.' });

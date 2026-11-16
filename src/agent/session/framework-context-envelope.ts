@@ -39,13 +39,29 @@ export function prependFrameworkContext(
   pending: readonly string[],
   content: string | ContentBlockParam[],
 ): string | ContentBlockParam[] {
-  const firstText = typeof content === 'string' ? content : content.find((block) => block.type === 'text')?.text;
+  // Readers join every text block, so the guard must judge the joined text.
+  const joined = typeof content === 'string'
+    ? content
+    : content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
   const prefix = wrapFrameworkContext(pending.join('\n\n'))
-    || (firstText?.trimStart().startsWith(FRAMEWORK_CONTEXT_OPEN)
+    || (joined.trimStart().startsWith(FRAMEWORK_CONTEXT_OPEN)
       ? `${FRAMEWORK_CONTEXT_OPEN}\n\n${FRAMEWORK_CONTEXT_CLOSE}` : '');
   if (!prefix) return content;
   if (typeof content === 'string') return `${prefix}\n\n${content}`;
   return [{ type: 'text', text: prefix }, ...content];
+}
+
+/**
+ * Split text that opens with one complete harness envelope into the envelope
+ * (through its closing tag) and the untrimmed rest; undefined otherwise.
+ */
+export function splitFrameworkContext(text: string): { envelope: string; rest: string } | undefined {
+  const rest = text.trimStart();
+  if (!rest.startsWith(FRAMEWORK_CONTEXT_OPEN)) return undefined;
+  const closeIdx = rest.indexOf(FRAMEWORK_CONTEXT_CLOSE);
+  if (closeIdx < 0) return undefined;
+  const end = closeIdx + FRAMEWORK_CONTEXT_CLOSE.length;
+  return { envelope: rest.slice(0, end), rest: rest.slice(end) };
 }
 
 /**

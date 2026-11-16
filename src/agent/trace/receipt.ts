@@ -34,6 +34,7 @@ import { SessionCostAccumulator, totalCostFields } from './cost.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
 import { loadJournalMessages, readJournalRecords } from '../journal/reader.js';
 import { hydrateMessage } from '../journal/hydrate.js';
+import { readBlob } from '../journal/blobs.js';
 import { extractJournalSummary } from './receipt.journal.js';
 import { getSessionOutcomes } from '../outcomes/session-outcomes.js';
 import {
@@ -396,7 +397,10 @@ export async function writeRunReceipt(
   const firstUser = rawRecords.filter((record) => record.kind === 'append')
     .filter((record) => record.message.role === 'user')
     .sort((a, b) => a.index - b.index)[0];
-  if (firstUser && !textDisabled) firstUser.message = hydrateMessage(firstUser.message);
+  // Hydrate only when every text blob is readable: a missing-blob stand-in
+  // would hide a leading envelope, so keep the previews instead.
+  const readable = firstUser?.message.content.every((b) => b.type !== 'text_ref' || readBlob(b.ref) !== null);
+  if (firstUser && readable && !textDisabled) firstUser.message = hydrateMessage(firstUser.message);
   const journalSummary = opts.sessionId !== undefined
     ? extractJournalSummary(loadJournalMessages(opts.sessionId), textDisabled, rawRecords)
     : undefined;

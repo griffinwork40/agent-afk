@@ -13,6 +13,15 @@ describe('projectJournalMessages (rewind projection)', () => {
     expect(user?.kind === 'user' && user.text.length).toBeLessThan(8_100);
   });
 
+  it('marks stripped user text as pre-drain input so a typed envelope is not peeled twice', () => {
+    const typed = '<framework-context>example</framework-context> actual request';
+    const records = projectJournalMessages([
+      { role: 'user', content: [{ type: 'text', text: `<framework-context>\nctx\n</framework-context>\n\n${typed}` }] },
+      { role: 'user', content: [{ type: 'text', text: 'plain' }] },
+    ] as never);
+    expect(records.filter((r) => r.kind === 'user')).toEqual([{ kind: 'user', text: typed, input: typed }, { kind: 'user', text: 'plain' }]);
+  });
+
   it('injects priorCost into the last done record when cost > 0', () => {
     const records = projectJournalMessages([
       { role: 'user', content: [{ type: 'text', text: 'hello' }] },

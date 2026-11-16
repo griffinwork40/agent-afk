@@ -31,7 +31,7 @@ import { parseTerminalState } from '../outcomes/terminal-state.js';
 import type { TraceSignals } from './derive.trace.js';
 import { checkDowngradeSignals } from './derive.downgrade.js';
 import { aggregateToolEvents, dedupeToolEvents } from './derive.aggregate.js';
-import { isPreamble, extractUserContent } from '../session/preamble-strip.js';
+import { isPreDrainPreamble, extractPreDrainUserContent } from '../session/preamble-strip.js';
 
 // Re-export dedupeToolEvents so external callers (parallel-dispatch, store) keep working.
 export { dedupeToolEvents } from './derive.aggregate.js';
@@ -190,15 +190,16 @@ function classifySessionType(firstPrompt: string, source: string): string {
 /**
  * Scan turns for the first real user message, skipping pure-boilerplate
  * records (e.g. `[placeholder-prevent]` harness directives). Uses
- * `isPreamble` / `extractUserContent` so pure-preamble records yield
- * `undefined` and the scan continues to the next turn rather than falling
+ * `isPreDrainPreamble` / `extractPreDrainUserContent` so pure-preamble
+ * records yield `undefined` and the scan continues to the next turn rather than falling
  * back to raw harness text (#4586).
  */
 function extractFirstPrompt(turns: StoredSessionInput['turns']): string {
   for (const t of turns ?? []) {
     const raw = t.user ?? '';
     if (!raw) continue;
-    const stripped = isPreamble(raw) ? extractUserContent(raw) : raw;
+    // Sidecar turns hold the caller's own text, recorded before the drain.
+    const stripped = isPreDrainPreamble(raw) ? extractPreDrainUserContent(raw) : raw;
     if (stripped) return stripped;
   }
   return '';

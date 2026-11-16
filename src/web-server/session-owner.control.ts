@@ -9,6 +9,7 @@ import { resolveModelId } from '../agent/session/model-resolution.js';
 import { SessionLedgerWriter, type LedgerPayload } from '../agent/session-ledger.js';
 import { projectJournalMessages, readLedgerCostTotals, readLedgerToolDurations, readProjectionMessages } from './session-owner.projection.js';
 import { archiveSessionLedger } from './ledger-archive.js';
+import { prependFrameworkContext } from '../agent/session/framework-context-envelope.js';
 import { getSessionLedgerDir, getSessionLedgerPath } from '../paths.js';
 import { recordTurn } from '../cli/slash/session-stats.js';
 import { saveSession } from '../cli/session-store.js';
@@ -198,7 +199,9 @@ export class WebSessionControl {
       const mirror = control.session.sessionId !== control.id;
       if (mirror) {
         const text = typeof content === 'string' ? content : content.map((b) => b.type === 'text' ? b.text : '').join('\n');
-        control.projection?.recordUser(text);
+        // The ledger `text` is post-drain form; `content` is pre-drain, so
+        // apply the drain's guard and keep the caller's text as `input`.
+        control.projection?.recordUser(prependFrameworkContext([], text) as string, text);
       }
       for await (const event of send(content)) {
         if (mirror) control.projection?.recordEvent(event);

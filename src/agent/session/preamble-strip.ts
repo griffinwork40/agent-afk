@@ -20,11 +20,16 @@
  * whatever the user actually typed, or `undefined` when the record is pure
  * boilerplate with no user content. Strategies, in order:
  *
- *   0. Harness envelope: a record that opens with `<framework-context>` is
- *      cut through the first `</framework-context>` (see
- *      framework-context-envelope.ts). Authoritative for records written
- *      since the envelope landed; the strategies below only serve older
- *      records and are kept byte-identical for them.
+ *   0. Harness envelope: a record that opens with the exact token
+ *      `<framework-context>` is cut through the first `</framework-context>`
+ *      (see framework-context-envelope.ts), and the remainder is read by the
+ *      strategies below as if no context had been drained. The strategies
+ *      below also serve older records and are kept byte-identical for them.
+ *
+ * Rule B: an envelope can exist only in text recorded after the drain
+ * (journal, provider history, ledger `text`). Text recorded before it (ledger
+ * `input`, session sidecar turns, the caller's own content) goes through the
+ * `PreDrain` variants, which never apply strategy 0.
  *   1. Bridge-tail marker: "Read any referenced file for deeper context before
  *      acting" — everything after that line is user text.
  *   2. XML-tagged skill dispatch (`<command-name>`/`<command-args>` tags).
@@ -35,21 +40,31 @@
 
 import { textAfterFrameworkContext } from './framework-context-envelope.js';
 
+/** Legacy opener shapes: bracketed or XML tags, never the harness envelope. */
+const LEGACY_PREAMBLE_RE = /^\s*(\[[\w-]+[:\s]|\[[a-z][a-z0-9]*(?:-[a-z0-9]+)+\]|<(preflight-context|command-name)\b)/;
+
 /**
  * Detect plugin/skill preamble text injected as a synthetic first user turn.
  * These start with a bracketed tag like `[agent-workflow-amplifiers: unlocked]`
  * or `[skill-routing: active]`, OR with an XML tag like
  * `<preflight-context ...>` or `<command-name>` from skill dispatch, or with
- * the harness `<framework-context>` envelope.
+ * the exact harness `<framework-context>` token. Use only on text recorded
+ * after the drain; see {@link isPreDrainPreamble}.
  */
 export function isPreamble(text: string): boolean {
+  return isPreDrainPreamble(text) || textAfterFrameworkContext(text) !== undefined;
+}
+
+/**
+ * {@link isPreamble} for text recorded BEFORE the drain (the caller's own
+ * message): no harness envelope can exist there, so a leading tag is typed.
+ */
+export function isPreDrainPreamble(text: string): boolean {
   // The kebab-case `[label]` arm covers bare tags with no colon or space,
   // e.g. `[placeholder-prevent]`, which leads every first turn since the
   // placeholder-prevent SessionStart hook landed. It requires a hyphen so a
   // human-typed `[note]` is not mistaken for a preamble.
-  return /^\s*(\[[\w-]+[:\s]|\[[a-z][a-z0-9]*(?:-[a-z0-9]+)+\]|<(preflight-context|command-name|framework-context)\b)/.test(
-    text,
-  );
+  return LEGACY_PREAMBLE_RE.test(text);
 }
 
 /**
@@ -99,15 +114,24 @@ function extractSkillTitle(text: string): string | undefined {
  * collecting lines after the last bracketed section header.
  */
 export function extractUserContent(text: string): string | undefined {
-  // Strategy 0: the harness envelope marks the boundary explicitly.
+  // Strategy 0: the harness envelope marks the boundary explicitly. Exactly
+  // one envelope is peeled; the remainder is read as a message that never had
+  // hook context (Rule C), so a later envelope stays user text. Everything
+  // after the envelope is the caller's side of the message, so the legacy
+  // strategies may shorten it (manifest to title, switch notice dropped) but
+  // never discard it: a Telegram `[in reply to ...] question` stays whole.
   const afterEnvelope = textAfterFrameworkContext(text);
-  if (afterEnvelope !== undefined) {
-    if (afterEnvelope.startsWith('<command-name>') || afterEnvelope.startsWith('<preflight-context')) {
-      return extractSkillTitle(afterEnvelope) ?? afterEnvelope;
-    }
-    return afterEnvelope || undefined;
-  }
+  if (afterEnvelope === undefined) return extractPreDrainUserContent(text);
+  if (!afterEnvelope) return undefined;
+  if (!isPreDrainPreamble(afterEnvelope)) return afterEnvelope;
+  return extractPreDrainUserContent(afterEnvelope) ?? afterEnvelope;
+}
 
+/**
+ * {@link extractUserContent} for text recorded BEFORE the drain: the legacy
+ * strategies 1 to 3 only, never the envelope cut.
+ */
+export function extractPreDrainUserContent(text: string): string | undefined {
   // Strategy 1: find the bridge-tail marker and take everything after it.
   // The user message is appended either on the same line (after "not full
   // content.") or on the lines that follow.
@@ -181,5 +205,12 @@ export function extractUserContent(text: string): string | undefined {
  * nothing user-authored survives the strip.
  */
 export function stripPreamble(text: string): string {
-  return isPreamble(text) ? (extractUserContent(text) ?? text) : text;
+  const afterEnvelope = textAfterFrameworkContext(text);
+  if (afterEnvelope === undefined) return stripPreDrainPreamble(text);
+  return afterEnvelope ? stripPreDrainPreamble(afterEnvelope) : text;
+}
+
+/** {@link stripPreamble} for text recorded BEFORE the drain. */
+export function stripPreDrainPreamble(text: string): string {
+  return isPreDrainPreamble(text) ? (extractPreDrainUserContent(text) ?? text) : text;
 }

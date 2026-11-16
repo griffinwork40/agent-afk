@@ -133,6 +133,16 @@ describe('WebSessionControl', () => {
     expect(records[2]).toMatchObject({ text: 'new answer' });
   });
 
+  it('mirrors typed text that opens with the envelope tag as pre-drain input', async () => {
+    const s = setup();
+    await s.control.execute(command('/clear'), s.ctx, '');
+    const typed = '<framework-context>example</framework-context> actual request';
+    for await (const _event of s.session.sendMessageStream(typed)) { /* drain */ }
+    await s.control.close();
+    const records = readFileSync(getSessionLedgerPath('stable-web'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(records[1]).toMatchObject({ text: `<framework-context>\n\n</framework-context>\n\n${typed}`, input: typed });
+  });
+
   it('repeated clear removes prior stable projection without double wrapping', async () => {
     const s = setup();
     await s.control.execute(command('/clear'), s.ctx, '');

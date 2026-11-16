@@ -33,6 +33,13 @@ describe('humanText', () => {
     expect(humanText(user('.'), new Set(['.'])).text).toBe('.');
   });
 
+  it('peels one envelope and never cuts a typed envelope that mentions a command tag', () => {
+    const typed = '<framework-context>see <command-name>/x</command-name></framework-context> ask';
+    const text = humanText(user(`<framework-context>\nctx\n</framework-context>\n\n${typed}`)).text;
+    expect(text.startsWith('<framework-context>see')).toBe(true);
+    expect(text.endsWith('</framework-context> ask')).toBe(true);
+  });
+
   it('peels bracket preambles without hints', () => {
     const m = user('[skill-routing: active]\n- route things\n\nactual question here');
     expect(humanText(m).text).toBe('actual question here');

@@ -118,6 +118,17 @@ describe('listWebSessions', () => {
     expect(entry!.title!.endsWith('…')).toBe(true);
   });
 
+  it('titles from pre-drain input verbatim even when it opens with the envelope tag', async () => {
+    const typed = '<framework-context>example</framework-context> actual request';
+    const sent = `<framework-context>\n\n</framework-context>\n\n${typed}`;
+    const line = JSON.stringify({ v: 1, ts: Date.now(), kind: 'user', text: sent, input: typed });
+    writeLedger('typed-tag-1', [metaLine('typed-tag-1'), line]);
+    writeLedger('typed-tag-2', [metaLine('typed-tag-2'), userLine(sent)]);
+    const results = await listWebSessions(new Set());
+    expect(results.find((r) => r.id === 'typed-tag-1')?.title).toBe(typed);
+    expect(results.find((r) => r.id === 'typed-tag-2')?.title).toBe(typed);
+  });
+
   it('leaves a short first user message untruncated', async () => {
     writeLedger('short-title-1', [metaLine('short-title-1'), userLine('hello there')]);
 

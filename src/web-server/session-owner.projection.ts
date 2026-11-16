@@ -119,7 +119,11 @@ export function projectJournalMessages(
       // projection so the /rewind picker and the transcript show only what the
       // user actually typed.
       const text = isPreamble(raw) ? (extractUserContent(raw) ?? raw) : raw;
-      records.push({ kind: 'user', text: clip(text, MAX_TEXT_LEN) });
+      // When stripping peeled context, `input` marks the result as the
+      // caller's own text so ledger readers never peel a second envelope.
+      records.push(text === raw
+        ? { kind: 'user', text: clip(text, MAX_TEXT_LEN) }
+        : { kind: 'user', text: clip(text, MAX_TEXT_LEN), input: clip(text, MAX_TEXT_LEN) });
       continue;
     }
     for (const block of message.content) {
