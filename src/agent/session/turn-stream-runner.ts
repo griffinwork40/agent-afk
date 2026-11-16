@@ -18,6 +18,7 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { AbortError } from '../../utils/errors.js';
 import { debugLog } from '../../utils/debug.js';
+import { buildFatalDone } from './turn-stream-runner.fatal-done.js';
 import { transformProviderEvent, type TransformDeps } from './stream-consumer.js';
 import type { AccountingAccumulator } from './accounting-accumulator.js';
 import type { LedgerLifecycle } from './ledger-lifecycle.js';
@@ -289,9 +290,10 @@ export class TurnStreamRunner {
     // yields `done` from `handleTurnCompleted`. Fatal paths (provider 4xx,
     // stream stall, connection error, budget ceiling) emit `error` and exit
     // without a `done`, leaving cost/duration/stopReason unrecorded. The
-    // `finally` block below emits a synthetic `done` on those paths. This flag
-    // tracks whether the normal `done` was already yielded so the finally block
-    // is a pure no-op on the success path and never emits a second `done`.
+    // `finally` block below records a synthetic `done` to the ledger ONLY on
+    // those paths. Contract: live stream consumers keep `error` as their single
+    // terminal (unchanged from main); the ledger gets exactly one `done` per
+    // turn so events.jsonl readers always record cost/duration/stopReason.
     let doneYielded = false;
 
     // Record the wall-clock start of this turn so the synthetic `done` can
@@ -361,34 +363,18 @@ export class TurnStreamRunner {
       if (this.deps.getState() === 'streaming') {
         this.deps.setState('idle');
       }
-      // Invariant (#4830): emit exactly one `done` per turn. When the loop
-      // exits via a fatal path (provider 4xx, stream stall, connection error,
-      // budget ceiling, or any unhandled throw) `doneYielded` is still false.
-      // Synthesize a terminal `done` carrying:
-      //   - `stopReason`: set to `'error'` for general provider failures or
-      //     `'budget_ceiling'` when the budget abort fired this turn. Consumers
-      //     that read `stopReason` to distinguish fatal from clean exits can act
-      //     on these values without breaking on unknown strings.
-      //   - `durationMs`: partial elapsed time so cost reports record *some*
-      //     wall-clock data even when the provider never reported it.
-      // The event flows through the same `ledger.recordEvent` + `outputBroadcast`
-      // path as a real `done` so every downstream reader (sidecar totals, cost
-      // reports, schedule telemetry, web projection) sees it.
+      // Invariant (#4830): ledger gets exactly one `done` per turn. When the
+      // loop exits via a fatal path (provider 4xx, stream stall, connection
+      // error, budget ceiling, or any unhandled throw) `doneYielded` is still
+      // false. Record a synthetic `done` to the ledger ONLY — no yield, no
+      // outputBroadcast push — so live stream consumers keep `error` as their
+      // single terminal while events.jsonl readers always see a `done` with
+      // stopReason / durationMs. See turn-stream-runner.fatal-done.ts for the
+      // stopReason mapping.
       if (!doneYielded) {
         const elapsed = Date.now() - turnStartMs;
-        // Distinguish budget-ceiling aborts from general provider errors.
-        // Check the abort reason's `.name` string rather than `instanceof` to
-        // avoid importing BudgetExceededError into this sdk-free layer.
         const signal = this.deps.getAbortController().signal;
-        const abortReasonName = (signal.reason as { name?: string } | undefined)?.name;
-        const stopReason = abortReasonName === 'BudgetExceededError' ? 'budget_ceiling' : 'error';
-        const fatalDone: OutputEvent = {
-          type: 'done',
-          metadata: { stopReason, durationMs: elapsed },
-        };
-        this.deps.ledger.recordEvent(fatalDone);
-        this.deps.outputBroadcast.push(fatalDone);
-        yield fatalDone;
+        this.deps.ledger.recordEvent(buildFatalDone(signal, elapsed));
       }
     }
   }
