@@ -334,6 +334,15 @@ jobs:
 
   test-windows-shards:
     name: Test (windows-2022, shard ${{ matrix.shard }}/2)
+    # Only run on push to main, workflow_dispatch, or PRs that have been opted in
+    # via the `windows-compat` label (see commit 9bc7ee445, PR #709).  Skipping on
+    # unrelated `labeled` events (e.g. Dependabot's `dependencies`/`javascript`
+    # labels) prevents the three-run / two-cancelled / false-failure pattern that
+    # triggered issue #4962.
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'windows-compat')
     # node-gyp <=10.3.1 cannot recognise VS 2025 on windows-latest; keep VS 2022.
     # Track https://github.com/nodejs/node-gyp/issues/2911 before changing images.
     runs-on: windows-2022
@@ -368,12 +377,23 @@ jobs:
     # Preserve the existing check name for consumers and branch protection.
     name: Test (windows-2022)
     needs: test-windows-shards
-    if: ${{ always() }}
+    # `always()` would run this aggregator even when the whole workflow run was
+    # cancelled (e.g. superseded by concurrency), causing it to exit 1 on a
+    # cancelled shard result and leave a false FAILURE check behind (issue #4962).
+    # Only run when shards actually executed (success or failure); skip when they
+    # were skipped (non-windows-compat PR) or cancelled (superseded run).  A
+    # genuinely failed shard still reaches this gate and exits 1.
+    if: >-
+      ${{
+        needs.test-windows-shards.result == 'success' ||
+        needs.test-windows-shards.result == 'failure'
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require every Windows shard to pass
-        # A skipped/cancelled dependency must fail, not silently green this gate.
+        # The job-level `if` above only admits result == 'success' | 'failure',
+        # so SHARD_RESULT can only be 'failure' here when this step runs and exits 1.
         env:
           SHARD_RESULT: ${{ needs.test-windows-shards.result }}
         shell: bash
