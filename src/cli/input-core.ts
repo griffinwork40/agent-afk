@@ -6,7 +6,7 @@
  * surrogate pairs and combining sequences stay intact.
  */
 
-import { nextGraphemeIndex, previousGraphemeIndex } from './display.js';
+import { nextGraphemeIndex, previousGraphemeIndex, splitGraphemes } from './display.js';
 import { buildVisualPositionMap } from './input/echo.js';
 
 // ---------------------------------------------------------------------------
@@ -25,6 +25,28 @@ export interface InputCoreState {
 export interface InputCoreRange {
   readonly start: number;
   readonly end: number;
+}
+
+/**
+ * Build the set of UTF-16 indices that are valid grapheme-cluster boundaries
+ * for `buffer`. Index 0 and `buffer.length` are always included. Any index
+ * strictly between the start and end of a multi-code-unit grapheme (e.g. the
+ * second code unit of a surrogate pair) is NOT included.
+ *
+ * Used by vertical navigation to skip mid-grapheme landing candidates — the
+ * landing-index search must never place the cursor inside a surrogate pair or
+ * combining sequence regardless of how `string-width` measures a partial slice
+ * of that grapheme.
+ */
+function graphemeBoundaries(buffer: string): Set<number> {
+  const boundaries = new Set<number>();
+  let offset = 0;
+  boundaries.add(0);
+  for (const grapheme of splitGraphemes(buffer)) {
+    offset += grapheme.length;
+    boundaries.add(offset);
+  }
+  return boundaries;
 }
 
 function clampIndex(index: number, length: number): number {
@@ -289,17 +311,27 @@ export const InputCore = {
   ): MoveLineResult {
     const cols = terminalWidth || 80;
     const { rowAt, colAt } = buildVisualPositionMap(state.buffer, promptVisibleLen, cols);
-    const row = rowAt[state.cursor]!;
+    const boundaries = graphemeBoundaries(state.buffer);
+    // Snap the source cursor to the nearest grapheme boundary at or before it.
+    // If the cursor somehow sits inside a surrogate pair or combining sequence,
+    // the partial-slice width measured by `colAt` is version-dependent (sw8 vs
+    // sw9 disagree on lone-surrogate width). Snapping to the boundary index
+    // guarantees a stable `targetCol` on both versions.
+    const snappedCursor = boundaries.has(state.cursor)
+      ? state.cursor
+      : previousGraphemeIndex(state.buffer, state.cursor);
+    const row = rowAt[snappedCursor]!;
     if (row === 0) {
       // Already on the first visual row — signal to caller for history recall.
       return { moved: false };
     }
     // Target: same visual column on the row above.
     const targetRow = row - 1;
-    const targetCol = colAt[state.cursor]!;
+    const targetCol = colAt[snappedCursor]!;
     let best = 0;
     let bestDist = Infinity;
     for (let i = 0; i <= state.buffer.length; i++) {
+      if (!boundaries.has(i)) continue;
       const r = rowAt[i]!;
       if (r === targetRow) {
         const dist = Math.abs(colAt[i]! - targetCol);
@@ -348,19 +380,24 @@ export const InputCore = {
       promptVisibleLen,
       cols,
     );
-    const row = rowAt[state.cursor]!;
+    const boundaries = graphemeBoundaries(state.buffer);
+    const snappedCursor = boundaries.has(state.cursor)
+      ? state.cursor
+      : previousGraphemeIndex(state.buffer, state.cursor);
+    const row = rowAt[snappedCursor]!;
     if (row >= totalRows) {
       // Already on the last visual row.
       return { moved: false };
     }
     const targetRow = row + 1;
-    const targetCol = colAt[state.cursor]!;
+    const targetCol = colAt[snappedCursor]!;
     let best = state.buffer.length;
     let bestDist = Infinity;
     // Interior indices first (0..length-1), then the buffer-end index below —
     // preserves the original's ordering, where `best` starts at buffer.length
     // and the end index is only overwritten by a strictly-closer interior hit.
     for (let i = 0; i < state.buffer.length; i++) {
+      if (!boundaries.has(i)) continue;
       const r = rowAt[i]!;
       if (r === targetRow) {
         const dist = Math.abs(colAt[i]! - targetCol);
