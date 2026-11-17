@@ -153,6 +153,11 @@ export interface BuildDispatcherOptions {
    * presence cannot tell the bash-restriction hook it is unattended.
    */
   isNonInteractive?: boolean;
+  /**
+   * Forwarded from `AgentConfig.lspInstallAllowed`. The dispatcher additionally
+   * denies it when `parentSessionId`/`subagentId`/`isNonInteractive` are set.
+   */
+  lspInstallAllowed?: boolean;
 }
 
 /**
@@ -195,23 +200,16 @@ export interface BuildDispatcherDeps {
 }
 
 /**
- * Build a per-query tool dispatcher with a bash handler closed over the
- * session's permission mode and working directory — eliminates the
- * process.env race when concurrent sessions run in the same process with
- * different modes, and the `process.cwd()` race when concurrent sessions
- * run in different worktrees (bash/grep would otherwise spawn against
- * the host's `process.cwd()` instead of the session's worktree).
- *
- * The shared read/write root arrays are passed by reference so that grant
- * mutations (via `/allow-dir`) survive across turns without requiring a new
- * dispatcher instance.
+ * Register the memory, workspace and state-store handlers onto `handlers`,
+ * applying each store's read-only / child-session gates. Runs immediately
+ * after the builtins so the registration-order ladder documented in the
+ * module header is preserved.
  */
-export function buildDispatcher(
+function registerStoreHandlers(
+  handlers: Map<string, ToolHandler>,
   deps: BuildDispatcherDeps,
-  permissionMode: string,
-  opts?: BuildDispatcherOptions,
-): SessionToolDispatcher {
-  const handlers = createBuiltinHandlers(permissionMode, opts?.cwd);
+  opts: BuildDispatcherOptions | undefined,
+): void {
   // Forked children (any fork signal) get memory_update with target:"hot" rejected
   // structurally by guardChildHotWrites — independent of any hook registry.
   const memoryHandlers = guardChildHotWrites(
@@ -252,6 +250,27 @@ export function buildDispatcher(
       handlers.set(name, handler);
     }
   }
+}
+
+/**
+ * Build a per-query tool dispatcher with a bash handler closed over the
+ * session's permission mode and working directory — eliminates the
+ * process.env race when concurrent sessions run in the same process with
+ * different modes, and the `process.cwd()` race when concurrent sessions
+ * run in different worktrees (bash/grep would otherwise spawn against
+ * the host's `process.cwd()` instead of the session's worktree).
+ *
+ * The shared read/write root arrays are passed by reference so that grant
+ * mutations (via `/allow-dir`) survive across turns without requiring a new
+ * dispatcher instance.
+ */
+export function buildDispatcher(
+  deps: BuildDispatcherDeps,
+  permissionMode: string,
+  opts?: BuildDispatcherOptions,
+): SessionToolDispatcher {
+  const handlers = createBuiltinHandlers(permissionMode, opts?.cwd);
+  registerStoreHandlers(handlers, deps, opts);
   if (opts?.runtimeStateSource) {
     handlers.set('get_runtime_state', createGetRuntimeStateHandler(opts.runtimeStateSource));
   }
@@ -316,6 +335,7 @@ export function buildDispatcher(
     // Explicit headless signal for the bash-restriction floor (#2302); the
     // grant manager above is wired on every surface, so it cannot carry this.
     ...(opts?.isNonInteractive === true ? { isNonInteractive: true } : {}),
+    ...(opts?.lspInstallAllowed === true ? { lspInstallAllowed: true } : {}),
     // Path-containment bypass: bypassPermissions (explicit) AND autonomous
     // (AFK) both carry allowAll:true so path containment + the path-approval
     // prompt are disabled per-call. In AFK the afk-mode-gate is the safety

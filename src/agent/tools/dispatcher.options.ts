@@ -135,6 +135,8 @@ export interface SessionToolDispatcherOptions {
    * though a grant manager is wired (#2302). Default false.
    */
   isNonInteractive?: boolean;
+  /** Set only by trusted REPL/Telegram session wiring, never tool input. */
+  lspInstallAllowed?: boolean;
   /** Witness-layer trace writer. When provided, every PreToolUse and
    *  PostToolUse dispatch records a `hook_decision` event. */
   traceWriter?: TraceSink;
