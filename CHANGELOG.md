@@ -12,6 +12,28 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- integrate closed-router for 429-triggered credential rotation (#5046) (437f48be2)
+- write unified rate-limit headers to usage-headers.json (42ceb5bc7)
+
+### Changed
+- omit skills manifest from system prompt when the skill tool is not granted (9b3ac7b85)
+
+### Fixed
+- stop attributing unrelated PR links and pulled commits to session (5536bd856)
+- prevent test-typecheck baseline from being lowered on feature branches (99b0de15f)
+- add facet v16 history entry, correct cost/turn comment, simplify closure counter (48a91dd12)
+- add no-thread wake-idle test and fix processOne stub signature (fa9f0d004)
+- align projectKey JSDoc and use static imports in bg-result-notifier tests (9750f4594)
+- adjust LSP exit cleanup test timeout and soften backoff comment (60ee68f54)
+- replace timer-based settling assertion with promise-controlled flush (1aa24fe7e)
+- cap fast-uri override to >=3.1.9 <4 inside ajv's range (dbb181643)
+- prevent crash-notifier timer from calling process.exit after test completion (6b0c5686d)
+- raise Test (ubuntu-latest) CI timeout (60c7fec4f)
+- diagnose and guard session mtime pre-screen (67bd878ac)
+- address review-followup nits and test improvements across #5017, #5018, #5035, #5039, #5040 (ccbcc11d7)
+- update vi.fn type parameter syntax in client-setup tests (b679232ee)
+
 ## [5.357.0] - 2026-11-17
 
 ### Added
