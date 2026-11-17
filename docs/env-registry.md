@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**276 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**277 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -329,6 +329,7 @@ Platform support: macOS uses sandbox-exec (deprecated API, still functional as o
 | `AFK_SESSION_PICKER` | boolean |  |  | `0` | Set to 0 to suppress the startup session picker (useful for CI/scripts). Default: enabled when more than one session exists and stdin is a TTY. |
 | `AFK_SHELL_PASSTHROUGH` | boolean |  | `1` | `0` | Enable the interactive REPL `!cmd` / `!&cmd` shell-passthrough feature. On by default. Set to 0, false, off, or no (case-insensitive) to disable, so inputs beginning with ! are sent to the model as literal text instead of being executed as shell commands. Equivalent to the --no-shell-passthrough flag. |
 | `AFK_SHOW_DIFFS` | boolean |  |  |  | Show inline diffs in the tool-lane output for edit/write tool calls. 1 = on, 0 = off. |
+| `AFK_SKILLS_MANIFEST_ALWAYS` | boolean |  |  | `1` | Always include the skills manifest in the system prompt whenever a skill executor is present, regardless of whether the session is granted the skill tool. Set to 1 to restore the pre-grant-gate behaviour. Default unset (manifest is omitted for sessions that are denied the skill tool). |
 | `AFK_SPINNER_TIPS` | boolean |  |  |  | Show rotating tips in the loading spinner during long calls. 1 = on, 0 = off. State-specific hints (e.g. the wait_for queue-to-stop hint) still show. |
 | `AFK_STEER_MODE` | string |  | `turn-end` | `boundary` | Controls when a typed-ahead REPL message is delivered to the model during a multi-round turn. "boundary" (opt-in): drain the compositor queue at every tool-round boundary, so a correction typed during tool execution reaches the model on the NEXT tool round rather than waiting for the whole turn to end. "turn-end" (default): existing behaviour — the message is delivered as its own turn once the current turn finishes. The "boundary" mode is gated behind this env var during soak (issue #3897). Note: the user-yield contract (wait_for / exit_plan_mode) relies on "turn-end" semantics; those tools tell the model "end your turn so the message is delivered first", which is only accurate in "turn-end" mode. In "boundary" mode the message arrives mid-turn and the yield notice is redundant but harmless — the tool still returns early, the model still sees the message. |
 | `AFK_STOP_HOOK_MAX_CONTINUATIONS` | number |  | `2` | `3` | Maximum number of same-turn continuation rounds a blocking Stop hook may trigger before the turn ends normally (issue #2714). Each continuation re-enters the model loop with the block reason as a framework user message, giving the agent another chance to address the hook. 0 disables continuation entirely (the turn ends on first block). Default: 2. |

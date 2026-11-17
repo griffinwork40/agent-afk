@@ -1285,6 +1285,14 @@
       "category": "debug"
     },
     {
+      "name": "AFK_SKILLS_MANIFEST_ALWAYS",
+      "description": "Always include the skills manifest in the system prompt whenever a skill executor is present, regardless of whether the session is granted the skill tool. Set to 1 to restore the pre-grant-gate behaviour. Default unset (manifest is omitted for sessions that are denied the skill tool).",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "misc"
+    },
+    {
       "name": "AFK_SMOKE_TEXT",
       "description": "When set to \"1\" (or true/yes/on), streamed assistant prose in the interactive REPL condenses out of faint smoke (speck, then haze, then a dim letter, then the real letter) instead of popping in. Needs a 256-color or truecolor terminal. It stays off for NO_COLOR, non-TTY output, AFK_PLAIN_OUTPUT, Telegram, the daemon, and AFK_REDUCED_MOTION=1, and it skips code fences and tables. Default off. Set AFK_SMOKE_TEXT=0 or unset it to disable.",
       "type": "boolean",

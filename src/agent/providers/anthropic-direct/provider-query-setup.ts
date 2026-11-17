@@ -24,7 +24,8 @@ import { dumpIfEnabled } from '../../session/prompt-dump.js';
 import { logStablePartsTokens } from '../shared/prompt-fragment-tokens.js';
 import type { ProviderQueryContext } from './provider-context.js';
 import { normalizeSystemPromptOverlay } from '../shared/system-prompt.js';
-import { grantsWorkspacePrompt, grantsToolStrict } from '../shared/tool-grant.js';
+import { grantsWorkspacePrompt, grantsToolStrict, skillManifestGranted } from '../shared/tool-grant.js';
+import { isSkillManifestAlways } from '../../../config/env.js';
 import { deriveCredentialFromStore } from './provider-query-setup.credential.js';
 import { loadClaudeCodeOauthToken } from '../../auth/keychain.js';
 
@@ -66,6 +67,15 @@ export interface QuerySetupResult {
  */
 export function resolveUserSystem(sp: AgentConfig['systemPrompt']): string | null {
   return normalizeSystemPromptOverlay(sp);
+}
+
+/** Compute the includeSkillManifest flag for assembleQueryPrompt. */
+function resolveIncludeSkillManifest(ctx: ProviderQueryContext): boolean {
+  return skillManifestGranted(
+    ctx.skillExecutor !== undefined && ctx.skillExecutor !== null,
+    ctx.grantsTool,
+    isSkillManifestAlways(),
+  );
 }
 
 /** Run the credential/model/dispatcher/prompt half of `query()`. */
@@ -197,6 +207,10 @@ export function setUpQuerySession(
     // preserved: manifest is built iff skillExecutor is truthy (same invariant
     // as the constructor's `if (opts.skillExecutor) schemas.push(skillTool)`).
     skillExecutor: ctx.skillExecutor ?? undefined,
+    // Gate: include iff executor present AND `skill` is not explicitly denied.
+    // Uses fail-open fallback for absent callbacks (pre-gate compat). See
+    // `skillManifestGranted` in tool-grant.ts for the full rule.
+    includeSkillManifest: resolveIncludeSkillManifest(ctx),
     runtimeStateSource,
     userSystem,
     // Dynamic agent-type listing injected into the volatile system-prompt tail
