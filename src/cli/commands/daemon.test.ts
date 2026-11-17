@@ -523,6 +523,8 @@ describe('resolveNotifyChatTarget', () => {
 // ---------------------------------------------------------------------------
 
 describe('registerDaemonCrashHandlers', () => {
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     // Remove any listeners left over from prior runDaemon() calls in this file,
     // then reset the guard so registerDaemonCrashHandlers can re-register fresh.
@@ -531,9 +533,19 @@ describe('registerDaemonCrashHandlers', () => {
     _resetDaemonCrashHandlersForTest();
     vi.clearAllMocks();
     mockPushIfConfigured.mockResolvedValue([{ ok: true, status: 200 }]);
+    // Use fake timers so the deferred process.exit(1) scheduled by
+    // installCrashNotifier (crash-notifier.ts:112) never fires for real.
+    // Without this, the 200 ms timer arms on every process.emit('uncaughtException')
+    // call and fires during vitest worker teardown, killing the worker with exit
+    // code 1 and failing the job (#5019).
+    vi.useFakeTimers();
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: number | string | null) => undefined as never);
   });
 
   afterEach(() => {
+    vi.clearAllTimers();
+    exitSpy.mockRestore();
+    vi.useRealTimers();
     // Remove listeners added by registerDaemonCrashHandlers to keep process clean.
     process.removeAllListeners('uncaughtException');
     process.removeAllListeners('unhandledRejection');
