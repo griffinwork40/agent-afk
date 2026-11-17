@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
-import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
@@ -115,6 +115,7 @@ function makeFakeReq(opts: {
       ? Buffer.from(opts.body, 'utf-8')
       : opts.body;
   ee.destroy = () => {};
+  ee.resume = () => ee;
   setImmediate(() => {
     ee.emit('data', bodyBuf);
     ee.emit('end');
@@ -803,5 +804,124 @@ describe('WebhookReceiver.listen — timeouts', () => {
     } finally {
       await receiver.close();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F1: readBody drains (req.resume) instead of destroy on oversized body
+// ---------------------------------------------------------------------------
+
+describe('readBody — oversized body drains instead of destroying socket (F1)', () => {
+  it('calls req.resume (not req.destroy) when body exceeds 1 MB and returns 413', async () => {
+    const receiver = makeReceiver();
+    const oversizedBody = Buffer.alloc(1_000_001, 'x');
+    let resumeCalled = false;
+    let destroyCalled = false;
+    const fakeRes = makeFakeRes();
+    // Build a req where we can observe resume vs destroy
+    const req = makeFakeReq({
+      headers: {
+        'x-hub-signature-256': sign(SECRET, oversizedBody),
+        'x-github-event': 'issues',
+        'x-github-delivery': 'del-drain-1',
+      },
+      body: oversizedBody,
+    });
+    req.resume = () => { resumeCalled = true; return req; };
+    (req as unknown as { destroy: () => void }).destroy = () => { destroyCalled = true; };
+    await receiver.handleRequest(req, fakeRes.res);
+    expect(fakeRes.status).toBe(413);
+    expect(resumeCalled).toBe(true);
+    expect(destroyCalled).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F3: loadSeenSet logs a warning on a corrupt dedup file
+// ---------------------------------------------------------------------------
+
+describe('loadSeenSet — warns on corrupt dedup file (F3)', () => {
+  it('emits a console.warn and resets the set when the JSON is malformed', () => {
+    const corruptPath = join(stateDir, 'webhook-delivery-seen.json');
+    // Use sync write directly (not atomic) to put corrupt content in place
+    writeFileSync(corruptPath, '{ not valid json !!!');
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Constructing a new receiver loads the dedup file via loadSeenSet
+    const r = makeReceiver({ stateDir });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('dedup file corrupt or unreadable'),
+    );
+    // The receiver is usable: in-memory seen set is empty after reset
+    expect((r as unknown as { seen: Set<string> }).seen.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F4: in-memory seen set is capped at DEDUP_MAX_ENTRIES
+// ---------------------------------------------------------------------------
+
+describe('markSeen — in-memory set is capped (F4)', () => {
+  it('never grows the in-memory seen set beyond DEDUP_MAX_ENTRIES', async () => {
+    // Directly test the cap by pre-filling the set to the ceiling via
+    // the public handleRequest path is impractical at 10 000 entries, so
+    // we access the private field and exercise the trim branch directly.
+    const receiver = makeReceiver();
+    const seen = (receiver as unknown as { seen: Set<string> }).seen;
+    const LIMIT = 10_000;
+    // Fill to exactly the limit
+    for (let i = 0; i < LIMIT; i++) seen.add(`pre-${i}`);
+    expect(seen.size).toBe(LIMIT);
+
+    // Trigger markSeen with a new id — should trim one entry then add one,
+    // keeping the set at LIMIT.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    atomicWriteFault.failDedupWrites = 1; // skip actual disk write for speed
+    await (receiver as unknown as { markSeen: (id: string) => Promise<void> }).markSeen('overflow-id');
+    expect(seen.size).toBe(LIMIT);
+    expect(seen.has('overflow-id')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F6: pre-auth gate rejects malformed hex before body is buffered
+// ---------------------------------------------------------------------------
+
+describe('handleRequest — pre-auth gate rejects malformed hex header (F6)', () => {
+  it('returns 401 for sha256= prefix with non-hex payload (not just startsWith check)', async () => {
+    const receiver = makeReceiver();
+    const body = makePayload();
+    const fakeRes = makeFakeRes();
+    const req = makeFakeReq({
+      headers: {
+        // has sha256= prefix but hex part is wrong length / non-hex
+        'x-hub-signature-256': 'sha256=zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz',
+        'x-github-event': 'issues',
+        'x-github-delivery': 'del-preauth-hex',
+      },
+      body,
+    });
+    let bodyDataEmitted = false;
+    req.on('data', () => { bodyDataEmitted = true; });
+    await receiver.handleRequest(req, fakeRes.res);
+    expect(fakeRes.status).toBe(401);
+    // Body should NOT have been read (rejected before readBody)
+    expect(bodyDataEmitted).toBe(false);
+    expect(readQueuedTasks()).toHaveLength(0);
+  });
+
+  it('returns 401 for sha256= with correct prefix but only 32 hex chars (too short)', async () => {
+    const receiver = makeReceiver();
+    const fakeRes = makeFakeRes();
+    const req = makeFakeReq({
+      headers: {
+        'x-hub-signature-256': 'sha256=' + 'a'.repeat(32),
+        'x-github-event': 'issues',
+        'x-github-delivery': 'del-preauth-short',
+      },
+      body: makePayload(),
+    });
+    await receiver.handleRequest(req, fakeRes.res);
+    expect(fakeRes.status).toBe(401);
   });
 });

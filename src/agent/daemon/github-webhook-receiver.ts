@@ -144,7 +144,9 @@ function loadSeenSet(dedupPath: string): Set<string> {
     if (!existsSync(dedupPath)) return new Set();
     const raw = JSON.parse(readFileSync(dedupPath, 'utf-8')) as string[];
     return new Set(raw);
-  } catch {
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`[github-webhook-receiver] dedup file corrupt or unreadable, resetting (${errorMessage(err)})`);
     return new Set();
   }
 }
@@ -186,6 +188,8 @@ export function verifySignature(
 }
 
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/i;
+/** Matches the full `sha256=<64 hex chars>` header value used for pre-auth gating. */
+const SHA256_SIG_RE = /^sha256=[0-9a-f]{64}$/i;
 
 // ---------------------------------------------------------------------------
 // Header / payload sanitisation — values interpolated into the task prompt
@@ -217,9 +221,15 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
     req.on('data', (chunk: Buffer) => {
       total += chunk.length;
       if (total > MAX_BODY_BYTES) {
-        settled = true;
-        req.destroy();
-        reject(new Error('request body exceeds 1 MB limit'));
+        if (!settled) {
+          settled = true;
+          // Drain remaining data so the socket stays open long enough for the
+          // 413 response to be written, then reject. req.destroy() would close
+          // the socket before the response is flushed, giving the client a
+          // connection reset instead of a 413 status.
+          req.resume();
+          reject(new Error('request body exceeds 1 MB limit'));
+        }
         return;
       }
       chunks.push(chunk);
@@ -241,7 +251,7 @@ interface GithubPayload {
   action?: string;
   repository?: { full_name?: string };
   comment?: { body?: string; html_url?: string };
-  check_run?: { name?: string; conclusion?: string; html_url?: string };
+  check_run?: { name?: string; conclusion?: string | null; html_url?: string };
   issue?: { number?: number; title?: string; html_url?: string };
 }
 
@@ -384,6 +394,13 @@ export class WebhookReceiver {
    */
   private markSeen(deliveryId: string): Promise<void> {
     this.seen.add(deliveryId);
+    // Trim the in-memory set to the same ceiling applied on disk so the
+    // process cannot grow it without bound over its lifetime.
+    if (this.seen.size > DEDUP_MAX_ENTRIES) {
+      const overflow = this.seen.size - DEDUP_MAX_ENTRIES;
+      const iter = this.seen.values();
+      for (let i = 0; i < overflow; i++) this.seen.delete(iter.next().value as string);
+    }
     const run = this.persistLock.then(() => {
       try {
         persistSeenSet(this.dedupPath, this.seen);
@@ -413,10 +430,11 @@ export class WebhookReceiver {
       // (missing or malformed signature header) before buffering any body.
       // This prevents unauthenticated callers from exhausting memory via the
       // 1 MB readBody buffer, especially when allowExternal:true is set.
-      // Note: this only checks header presence/prefix — full HMAC verification
-      // still requires the body and happens below.
+      // Validates the full sha256=<64 hex chars> format so a malformed header
+      // is rejected early rather than only after the body has been buffered.
+      // Full HMAC verification still requires the body and happens below.
       const sigHeaderEarly = req.headers['x-hub-signature-256'] as string | undefined;
-      if (!sigHeaderEarly || !sigHeaderEarly.startsWith('sha256=')) {
+      if (!sigHeaderEarly || !SHA256_SIG_RE.test(sigHeaderEarly)) {
         sendResponse(res, 401, 'Invalid or missing X-Hub-Signature-256');
         return;
       }
