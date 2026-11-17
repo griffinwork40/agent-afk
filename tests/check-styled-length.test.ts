@@ -125,6 +125,21 @@ describe('check-styled-length scanLine', () => {
     });
   });
 
+  describe('non-call palette references (finding #2: require whitespace-only before `(`)', () => {
+    it('does NOT flag palette.dim followed by semicolon (not a call)', () => {
+      // `palette.dim; foo().length` — the member is referenced, not called
+      expect(scanLine('const f = palette.dim; foo().length;')).toHaveLength(0);
+    });
+
+    it('does NOT flag palette.dim followed by comma (not a call)', () => {
+      expect(scanLine('const x = { a: palette.dim, b: s.length };')).toHaveLength(0);
+    });
+
+    it('still flags palette.dim(x).padEnd(n) when whitespace precedes `(`', () => {
+      expect(scanLine('palette.dim (x).padEnd(10)')).toHaveLength(1);
+    });
+  });
+
   describe('nested paren handling', () => {
     it('handles nested function calls inside the palette arg', () => {
       // palette.info(fmt(a, b)).padEnd(n) — the inner (a, b) must not close early
