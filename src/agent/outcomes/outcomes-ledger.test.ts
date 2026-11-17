@@ -6,6 +6,7 @@ import {
   ledgerCommits,
   ledgerPrs,
   ledgerServices,
+  isCompoundCommand,
   prActionFromCommand,
   addPr,
 } from './outcomes-ledger.js';
@@ -166,6 +167,11 @@ describe('prActionFromCommand', () => {
   ] as const)('%s → %s', (cmd, expected) => {
     expect(prActionFromCommand(cmd)).toBe(expected);
   });
+
+  it('returns create for gh pr create with a pipe inside a quoted title (regression #5040)', () => {
+    // The | is inside double quotes and must not trigger isCompoundCommand.
+    expect(prActionFromCommand('gh pr create --title "a | b"')).toBe('create');
+  });
 });
 
 describe('addPr', () => {
@@ -236,5 +242,144 @@ describe('ledgerServices', () => {
   it('defaults name to unknown when missing', () => {
     const effects = settledEffects([ledgerRow('afk service restart', 'ok')]);
     expect(ledgerServices(effects)).toEqual([{ name: 'unknown', action: 'restart' }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec item 3: isCompoundCommand — quote-aware (fix for issue #5040)
+// ---------------------------------------------------------------------------
+describe('isCompoundCommand — quote-aware', () => {
+  it('returns false for gh pr create with a title containing |', () => {
+    expect(isCompoundCommand('gh pr create --title "a | b"')).toBe(false);
+  });
+
+  it('returns false for gh pr create with a title containing ; in single quotes', () => {
+    expect(isCompoundCommand("gh pr create --title 'a; b'")).toBe(false);
+  });
+
+  it('returns false for gh pr create with && inside a double-quoted body', () => {
+    expect(isCompoundCommand('gh pr create --body "do this && that"')).toBe(false);
+  });
+
+  it('returns true for unquoted && between commands', () => {
+    expect(isCompoundCommand('git add . && git commit -m x')).toBe(true);
+  });
+
+  it('returns true for unquoted | pipe', () => {
+    expect(isCompoundCommand('gh pr create --fill | tee out.txt')).toBe(true);
+  });
+
+  it('returns true for unquoted ; separator', () => {
+    expect(isCompoundCommand('cd /tmp; gh pr merge 1 --merge')).toBe(true);
+  });
+
+  it('treats unbalanced quotes conservatively as compound', () => {
+    // Unbalanced quote → stripQuotedSegments returns original → operator detected
+    expect(isCompoundCommand('gh pr create --title "unclosed && stuff')).toBe(true);
+  });
+
+  it('treats command ending immediately after an opening double quote as compound', () => {
+    // Edge case: `gh pr create --title "` — the opening quote is the last char.
+    // i starts at s.length after i++ on the opening quote; inner while is
+    // immediately false; old `i > s.length` check was dead. Fixed to `>=`.
+    expect(isCompoundCommand('gh pr create --title "')).toBe(true);
+  });
+
+  it('returns false for a plain gh pr merge with no shell operators', () => {
+    expect(isCompoundCommand('gh pr merge 316 --merge')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec item 2: compound-merge stdout — MERGED_REF_RE decoupled from action
+// ---------------------------------------------------------------------------
+describe('ledgerPrs — compound-merge stdout recovery (fix for issue #5040)', () => {
+  it('recovers merged PR from compound command stdout via MERGED_REF_RE', () => {
+    // action=unknown (compound), but stdout contains explicit merge confirmation
+    const effects = settledEffects([
+      ledgerRow(
+        'git push && gh pr merge 316 --merge',
+        '✓ Merged pull request o/r#316 (title)',
+      ),
+    ]);
+    const out = ledgerPrs(effects);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toEqual({ url: 'https://github.com/o/r/pull/316', action: 'merge' });
+  });
+
+  it('merge action from MERGED_REF_RE upgrades unknown URL action from compound command', () => {
+    const prUrl = 'https://github.com/o/r/pull/316';
+    const effects = settledEffects([
+      ledgerRow(
+        'git push && gh pr merge 316 --merge',
+        `${prUrl}\n✓ Merged pull request o/r#316 (title)`,
+      ),
+    ]);
+    const out = ledgerPrs(effects);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toEqual({ url: prUrl, action: 'merge' });
+  });
+
+  it('plain gh pr merge still records merge via MERGED_REF_RE', () => {
+    const effects = settledEffects([
+      ledgerRow('gh pr merge 42 --merge', '✓ Merged pull request owner/repo#42 (fix: thing)'),
+    ]);
+    expect(ledgerPrs(effects)).toEqual([
+      { url: 'https://github.com/owner/repo/pull/42', action: 'merge' },
+    ]);
+  });
+
+  it('does NOT extract merged PR ref from unrelated stdout resembling gh merge output', () => {
+    // Regression: `echo` or any non-gh-pr-merge command whose stdout happens to
+    // match MERGED_REF_RE must not create a false attribution.
+    const effects = settledEffects([
+      ledgerRow("echo 'Merged pull request o/r#316'", '✓ Merged pull request o/r#316 (title)'),
+    ]);
+    expect(ledgerPrs(effects)).toEqual([]);
+  });
+
+  it('does NOT extract merged PR ref when "gh pr merge" appears only inside a quoted argument', () => {
+    // Regression: `echo "gh pr merge"` — the verb is inside double quotes and
+    // must not activate MERGED_REF_RE extraction. GH_PR_MERGE_CMD_RE is now
+    // tested against the stripped command, so the quoted verb is invisible.
+    const effects = settledEffects([
+      ledgerRow(
+        'echo "gh pr merge"',
+        '✓ Merged pull request o/r#99 (title)',
+      ),
+    ]);
+    expect(ledgerPrs(effects)).toEqual([]);
+  });
+
+  it('does NOT run MERGED_REF_RE when the command has unbalanced quotes (fail closed)', () => {
+    // Regression: unbalanced `echo "gh pr merge` — stripQuotedSegments returns
+    // null; the merge-ref branch must be skipped entirely so this spoof stdout
+    // does not create a false attribution.
+    const effects = settledEffects([
+      ledgerRow(
+        'echo "gh pr merge',
+        '✓ Merged pull request o/r#99 (title)',
+      ),
+    ]);
+    expect(ledgerPrs(effects)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// stripQuotedSegments — escape-aware (fix for issue #5040)
+// ---------------------------------------------------------------------------
+describe('isCompoundCommand — escaped-quote inside double-quoted arg', () => {
+  it('returns false when a compound operator follows an escaped quote inside a double-quoted arg', () => {
+    // The \" does NOT close the double-quoted string; the | is still inside the
+    // quote and must NOT be treated as a real pipe operator.
+    expect(isCompoundCommand('gh pr create --title "say \\"hello\\" | world"')).toBe(false);
+  });
+
+  it('returns false for double-quoted arg containing \\" before &&', () => {
+    expect(isCompoundCommand('gh pr create --body "a \\"quoted\\" && note"')).toBe(false);
+  });
+
+  it('returns true when the pipe is outside the double-quoted arg (after closing quote)', () => {
+    expect(isCompoundCommand('gh pr create --title "hello" | tee out.txt')).toBe(true);
   });
 });

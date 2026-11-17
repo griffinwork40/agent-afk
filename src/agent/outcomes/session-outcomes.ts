@@ -24,7 +24,7 @@ import { readOutcomesMeta, readOutcomesJournal, checkBudget, type InputBudget } 
 import { readEffectsForSession } from '../effect-ledger/store.js';
 import { computeOutcomes } from './compute-outcomes.js';
 import { gitLogRange } from './git-range.js';
-import { settledEffects, ledgerCommits } from './outcomes-ledger.js';
+import { settledEffects, ledgerCommits, journalBashCommitShas } from './outcomes-ledger.js';
 import { OutcomesV1Schema, type OutcomesV1 } from './outcomes-v1.schema.js';
 
 export interface SessionOutcomesContext {
@@ -83,9 +83,10 @@ async function compute(sessionId: string, ctx: SessionOutcomesContext, budget: I
     readOutcomesJournal(sessionId, budget),
   ]);
   checkBudget(budget);
-  const ledgerShas = new Set(
-    ledgerCommits(settledEffects(ledgerEntries), cwd).map((c) => c.sha.toLowerCase()),
-  );
+  const ledgerShas = new Set([
+    ...ledgerCommits(settledEffects(ledgerEntries), cwd).map((c) => c.sha.toLowerCase()),
+    ...journalBashCommitShas(journal.toolEvents, cwd),
+  ]);
   const gitLog = await gitLogRange(cwd, startHead, endHead, { signal: budget.signal, ledgerShas });
   checkBudget(budget);
   const outcomes = computeOutcomes({

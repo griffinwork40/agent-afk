@@ -22,6 +22,7 @@ import {
   prActionFromCommand,
   ledgerPrs,
   settledEffects,
+  journalBashCommitShas,
 } from './outcomes-ledger.js';
 import { gitLogRange } from './git-range.js';
 
@@ -222,5 +223,115 @@ describe('gitLogRange — sessionAuthored annotation (issue #4954)', () => {
     for (const e of entries) {
       expect(e.sessionAuthored).toBe(false);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec item 1: journal-only authored commit → sessionAuthored=true (fix #5040)
+// ---------------------------------------------------------------------------
+
+describe('journalBashCommitShas — journal-only commit authorship (fix for issue #5040)', () => {
+  const CWD = '/repo/proj';
+
+  it('extracts sha from successful journal bash git commit result', () => {
+    const events = [
+      {
+        toolName: 'bash',
+        isError: false,
+        input: '{"command":"git commit -m feat"}',
+        result: '[main abc1234] feat: journal commit',
+      },
+    ];
+    const shas = journalBashCommitShas(events, CWD);
+    expect(shas).toContain('abc1234');
+  });
+
+  it('ignores failed bash tool events', () => {
+    const events = [
+      {
+        toolName: 'bash',
+        isError: true,
+        input: '{"command":"git commit -m feat"}',
+        result: '[main abc1234] feat: should be ignored',
+      },
+    ];
+    expect(journalBashCommitShas(events, CWD)).toHaveLength(0);
+  });
+
+  it('ignores non-bash tool events', () => {
+    const events = [
+      {
+        toolName: 'write_file',
+        isError: false,
+        input: '{"command":"git commit -m feat"}',
+        result: '[main abc1234] feat: should be ignored',
+      },
+    ];
+    expect(journalBashCommitShas(events, CWD)).toHaveLength(0);
+  });
+
+  it('ignores events with no result', () => {
+    const events = [
+      {
+        toolName: 'bash',
+        isError: false,
+        input: '{"command":"git commit -m feat"}',
+        result: undefined,
+      },
+    ];
+    expect(journalBashCommitShas(events, CWD)).toHaveLength(0);
+  });
+});
+
+describe('gitLogRange — journal-only authored commit gets sessionAuthored=true (fix #5040)', () => {
+  let repo: string;
+  let base: string;
+  let journalSha: string;
+
+  beforeAll(() => {
+    repo = realpathSync(mkdtempSync(join(tmpdir(), 'afk-5040-journal-')));
+    git(repo, 'init', '-q');
+    git(repo, 'config', 'user.email', 't@example.com');
+    git(repo, 'config', 'user.name', 'T');
+    git(repo, 'config', 'commit.gpgsign', 'false');
+
+    writeFileSync(join(repo, 'base.txt'), 'base');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '-m', 'chore: base');
+    base = git(repo, 'rev-parse', 'HEAD');
+
+    writeFileSync(join(repo, 'journal.txt'), 'journal-only');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '-m', 'feat: journal-only commit');
+    journalSha = git(repo, 'rev-parse', 'HEAD');
+
+    repo = resolve(git(repo, 'rev-parse', '--show-toplevel'));
+  });
+
+  afterAll(() => {
+    rmSyncRetry(repo);
+  });
+
+  it('marks journal-only commit sessionAuthored=true when sha comes from journalBashCommitShas', async () => {
+    // Simulate: effect ledger has NO entry for this commit, but journal has a
+    // bash tool result with the commit summary line.
+    const journalEvents = [
+      {
+        toolName: 'bash',
+        isError: false,
+        input: JSON.stringify({ command: 'git commit -m "feat: journal-only commit"' }),
+        result: `[main ${journalSha.slice(0, 7)}] feat: journal-only commit`,
+      },
+    ];
+    // journalBashCommitShas extracts the short sha from the journal result.
+    const journalShas = journalBashCommitShas(journalEvents, repo);
+    // Build combined ledgerShas as session-outcomes.ts now does.
+    const ledgerShas = new Set([
+      // effect-ledger is empty for this commit — only journal contributed
+      ...journalShas,
+    ]);
+    const entries = await gitLogRange(repo, base, journalSha, { ledgerShas });
+    const entry = entries.find((e) => e.sha === journalSha);
+    expect(entry?.sessionAuthored).toBe(true);
   });
 });

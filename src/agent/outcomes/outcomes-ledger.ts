@@ -11,6 +11,8 @@
 
 import { isAbsolute, resolve } from 'node:path';
 import type { EffectRecord } from '../effect-ledger/types.js';
+import type { ToolEventInput } from '../facets/schema.js';
+import { asString, parseInput } from '../facets/derive.aggregate.js';
 import type { OutcomeCommit, OutcomePr, OutcomeService, PrAction } from './outcomes-v1.schema.js';
 
 // `(?![\w-])` rejects `git commit-tree` / `git commits` (mirrors derive.aggregate.ts).
@@ -126,12 +128,68 @@ export function ledgerCommits(effects: readonly LedgerEffect[], cwd: string): Ou
 }
 
 /**
+ * Strip quoted substrings (single or double) from `s` so that shell operators
+ * inside quoted arguments are not mistaken for real compound operators.
+ * Backslash escapes inside double-quoted strings are respected (e.g. `\"` does
+ * not close the quote). Single-quoted strings treat every character literally
+ * (backslash has no special meaning inside single quotes, matching POSIX sh).
+ * Returns `null` for any unbalanced-quote string (conservative: caller treats
+ * as compound). `null` is distinct from an empty stripped string so that
+ * `isCompoundCommand` can correctly classify operator-free unbalanced strings
+ * (e.g. `gh pr create --title "`) as compound without false-positiving on
+ * balanced commands that strip to `""`.
+ */
+function stripQuotedSegments(s: string): string | null {
+  let out = '';
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i]!;
+    if (ch === '"') {
+      // Double-quoted: advance past matching close, honoring backslash escapes.
+      i++;
+      let closed = false;
+      while (i < s.length) {
+        const c = s[i]!;
+        if (c === '\\') {
+          i += 2; // skip the escaped character
+          if (i >= s.length) return null; // unbalanced: backslash at end of string
+        } else if (c === '"') {
+          i++; // consume closing quote
+          closed = true;
+          break;
+        } else {
+          i++;
+        }
+      }
+      // `closed` is false when:
+      //   • the opening '"' was the last character (inner while never ran), or
+      //   • the inner while exhausted the string without finding a close quote.
+      // Both are unbalanced.
+      if (!closed) return null;
+    } else if (ch === "'") {
+      // Single-quoted: no escape sequences — scan for the literal close quote.
+      const close = s.indexOf("'", i + 1);
+      if (close < 0) return null; // unbalanced
+      i = close + 1;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out;
+}
+
+/**
  * True when the command string contains compound-operator characters that make
  * it unsafe to infer a single mutating action. Any PR URL found in the output
  * of such a command is recorded as `unknown` to avoid false attribution.
+ * Operators inside single/double quoted arguments are ignored.
+ * Unbalanced quotes are treated conservatively as compound.
  */
 export function isCompoundCommand(command: string): boolean {
-  return /&&|;|\||<</.test(command);
+  const stripped = stripQuotedSegments(command);
+  // null → unbalanced quotes → conservatively compound.
+  return stripped === null || /&&|;|\||<</.test(stripped);
 }
 
 /** Infer the PR action from the gh verb in the command. */
@@ -152,6 +210,13 @@ export function addPr(list: OutcomePr[], pr: OutcomePr): void {
   else if (PR_ACTION_RANK[pr.action] > PR_ACTION_RANK[existing.action]) existing.action = pr.action;
 }
 
+// Matches the `gh pr merge` verb outside any quoted argument.
+// We test the *stripped* command (null → unbalanced quotes) so that:
+//   • `echo "gh pr merge"` does not trigger merge-ref extraction (quoted verb).
+//   • An unbalanced-quote command (e.g. `echo "gh pr merge`) does NOT run
+//     MERGED_REF_RE — returning null and skipping avoids false attribution.
+const GH_PR_MERGE_CMD_RE = /\bgh\s+pr\s+merge\b/;
+
 /** PRs from ledger results naming a github.com PR URL (or a gh merge ref). */
 export function ledgerPrs(effects: readonly LedgerEffect[]): OutcomePr[] {
   const out: OutcomePr[] = [];
@@ -159,13 +224,37 @@ export function ledgerPrs(effects: readonly LedgerEffect[]): OutcomePr[] {
     if (result === '') continue;
     const action = prActionFromCommand(command);
     for (const m of result.matchAll(PR_URL_RE)) addPr(out, { url: m[0], action });
-    if (action === 'merge') {
+    // MERGED_REF_RE is gated on the command actually containing `gh pr merge`
+    // outside any quoted argument. stripQuotedSegments returns null for
+    // unbalanced quotes — the nullish branch is intentionally absent so that
+    // unbalanced commands silently skip merge-ref extraction (fail closed).
+    const stripped = stripQuotedSegments(command);
+    if (stripped !== null && GH_PR_MERGE_CMD_RE.test(stripped)) {
       for (const m of result.matchAll(MERGED_REF_RE)) {
-        addPr(out, { url: `https://github.com/${m[1]}/pull/${m[2]}`, action });
+        addPr(out, { url: `https://github.com/${m[1]}/pull/${m[2]}`, action: 'merge' });
       }
     }
   }
   return out;
+}
+
+/**
+ * SHAs of commits made via successful journal bash tool calls (not in the
+ * effect ledger). Used to supplement `ledgerShas` so that git-log entries for
+ * commits authored only via journal bash results are marked sessionAuthored=true.
+ */
+export function journalBashCommitShas(events: readonly ToolEventInput[], cwd: string): string[] {
+  const shas: string[] = [];
+  for (const ev of events) {
+    if (ev.toolName !== 'bash' || ev.isError === true || ev.result === undefined) continue;
+    const args = parseInput(ev.inputRaw ?? ev.input);
+    const command = asString(args?.['command']) ?? ev.input;
+    if (!command) continue;
+    for (const c of ledgerCommits([{ command, result: resultText(ev.result) }], cwd)) {
+      shas.push(c.sha.toLowerCase());
+    }
+  }
+  return shas;
 }
 
 /** Services from `afk service <action> <name>` ledger commands. */
