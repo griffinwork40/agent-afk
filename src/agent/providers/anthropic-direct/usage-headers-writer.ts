@@ -170,16 +170,53 @@ export function parseUnifiedHeaders(headers: Headers): Omit<UsageHeadersRecord, 
  *
  * Invariant: never throws — all entry points are guarded with try/catch so a
  * broken writer cannot disturb the request path.
+ *
+ * # Multi-turn usage
+ *
+ * Call `beginTurn()` at the start of each new user turn (before the first
+ * `observe()` of that turn) to reset the per-turn latch. Without this, the
+ * `flushed` flag set at the end of turn N makes every subsequent turn a no-op.
+ * `flush()` within a turn remains idempotent: only the first call writes.
  */
 export class UsageHeadersTurnWriter {
   private latest: ReturnType<typeof parseUnifiedHeaders> | undefined;
   private flushed = false;
 
   constructor(
-    private readonly accountId: string,
+    private accountId: string,
     /** Injectable for tests. */
     private readonly destPath: string = getUsageHeadersPath(),
   ) {}
+
+  /**
+   * Begin a new turn: clear the per-turn latch so this turn can write once.
+   * Also clears any stale snapshot from the previous turn so a turn that
+   * receives no unified headers does not re-flush the prior turn's data.
+   * Never throws.
+   */
+  beginTurn(): void {
+    this.flushed = false;
+    this.latest = undefined;
+  }
+
+  /**
+   * Rebind to a fresh account identity after a successful OAuth token refresh.
+   * Always clears the per-turn latch and any pending snapshot so headers
+   * accumulated before the refresh are never flushed under the new client.
+   * Identity assignment and state clearing are unconditional: old-client
+   * headers must never mix with the
+   * post-refresh client regardless of whether the account rotated.
+   * Never throws.
+   */
+  rebindAccount(freshAccountId: string): void {
+    try {
+      this.accountId = freshAccountId;
+      this.flushed = false;
+      this.latest = undefined;
+    } catch {
+      // Observability only.
+    }
+  }
 
   /**
    * Observe one response's headers. The last call before `flush()` wins.

@@ -33,7 +33,7 @@ import { h1ModelFetch } from '../../shared/h1-fetch.js';
 import { ThrottleQueue } from '../throttle-queue.js';
 import { OverageTracker } from '../overage-tracker.js';
 import { parseQuotaHeaders, recordQuotaSnapshot } from '../../../quota-cache.js';
-import { refreshClaudeCodeOauthToken } from '../../../auth/keychain.js';
+import { refreshClaudeCodeOauthToken, parseAccountIdentifier } from '../../../auth/keychain.js';
 import type { AnthropicClientFactory } from '../provider-options.js';
 import { getRateLimitBucket } from '../../shared/rate-limit-bucket.registry.js';
 import { parseAnthropicRateLimitHeaders } from '../../shared/rate-limit-headers.js';
@@ -208,7 +208,15 @@ export function setUpQueryClient(args: ClientSetupArgs): ClientSetup {
           admissionGate,
         ),
       );
-      return factory ? factory(opts) : args.createClient(opts);
+      const rebuilt = factory ? factory(opts) : args.createClient(opts);
+      // Rebind the usage-headers writer to the fresh token's account identity.
+      // The writer was constructed with the original token; after a successful
+      // refresh it must write under the new account, not the old one. Only
+      // rebind on a confirmed fresh token (this branch is only reached when
+      // `freshToken` is non-null above). Clears the per-turn latch and any
+      // stale snapshot so the next flush uses the correct identity.
+      usageHeadersWriter?.rebindAccount(parseAccountIdentifier(freshToken));
+      return rebuilt;
     };
   }
 

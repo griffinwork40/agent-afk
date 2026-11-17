@@ -181,3 +181,51 @@ describe('setUpQueryClient overage tracker (#4883)', () => {
     expect(setUpQueryClient(baseArgs({ localMode: true })).overageTracker).toBeUndefined();
   });
 });
+
+describe('setUpQueryClient usageHeadersWriter OAuth rebind (#5035 item 2)', () => {
+  // The mock wires parseAccountIdentifier as `acct:${token}` so we can
+  // observe which token the writer is bound to by reading the file it writes.
+  it('usageHeadersWriter is defined for oauth non-local sessions', () => {
+    const setup = setUpQueryClient(baseArgs());
+    expect(setup.usageHeadersWriter).toBeDefined();
+  });
+
+  it('usageHeadersWriter is absent in localMode', () => {
+    expect(setUpQueryClient(baseArgs({ localMode: true })).usageHeadersWriter).toBeUndefined();
+  });
+
+  it('usageHeadersWriter is absent for api-key authMode', () => {
+    expect(setUpQueryClient(baseArgs({ authMode: 'api-key' })).usageHeadersWriter).toBeUndefined();
+  });
+
+  it('tokenRefresher rebinds usageHeadersWriter to fresh token account on success', async () => {
+    // Arrange: fresh token maps to a different account via parseAccountIdentifier mock.
+    refreshMock.mockResolvedValue('sk-ant-oat01-fresh');
+    const setup = setUpQueryClient(baseArgs());
+
+    expect(setup.usageHeadersWriter).toBeDefined();
+    // Before refresh: writer is bound to original token account 'acct:sk-ant-oat01-test'.
+    const rebindSpy = vi.spyOn(setup.usageHeadersWriter!, 'rebindAccount');
+
+    await setup.tokenRefresher!();
+
+    // rebindAccount must have been called with the fresh account id derived
+    // from the fresh token via the mocked parseAccountIdentifier.
+    expect(rebindSpy).toHaveBeenCalledOnce();
+    expect(rebindSpy).toHaveBeenCalledWith('acct:sk-ant-oat01-fresh');
+  });
+
+  it('tokenRefresher does NOT rebind usageHeadersWriter when refresh returns null', async () => {
+    refreshMock.mockResolvedValue(null);
+    const setup = setUpQueryClient(baseArgs());
+
+    expect(setup.usageHeadersWriter).toBeDefined();
+    const rebindSpy = vi.spyOn(setup.usageHeadersWriter!, 'rebindAccount');
+
+    const result = await setup.tokenRefresher!();
+
+    expect(result).toBeNull();
+    // No rebind must occur on a failed/null refresh.
+    expect(rebindSpy).not.toHaveBeenCalled();
+  });
+});

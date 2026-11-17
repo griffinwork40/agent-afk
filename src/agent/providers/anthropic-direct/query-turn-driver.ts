@@ -189,6 +189,18 @@ function beginTurnCheckpoint(ctx: TurnDriverContext, userMessageId?: string): Fi
 }
 
 /**
+ * Reset the per-turn usage-headers writer at the start of each user turn
+ * (#5012). Called once before any responses arrive so the turn can flush
+ * exactly once and stale data from the previous turn is cleared.
+ * Undefined-safe: no-op when the writer is not wired (non-OAuth sessions).
+ */
+function beginTurnWriter(
+  writer: import('./usage-headers-writer.js').UsageHeadersTurnWriter | undefined,
+): void {
+  writer?.beginTurn();
+}
+
+/**
  * Tear down the per-turn checkpoint registry (called on completion and in the
  * turn finally block). Records post-turn hashes once (endCheckpointTurn is
  * idempotent per registry).
@@ -301,7 +313,7 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
 
       // File-checkpoint: wire a fresh registry for this turn (no-op when disabled).
       const checkpoint = beginTurnCheckpoint(ctx, turn.userMessageId);
-
+      beginTurnWriter(ctx.usageHeadersWriter);
       const system = ctx.composeSystem();
 
       // Snapshot preference + eligibility exactly once. The resulting headers
