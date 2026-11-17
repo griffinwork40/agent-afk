@@ -276,6 +276,13 @@ export interface AnthropicDirectQueryOptions {
   throttleQueue?: import('./throttle-queue.js').ThrottleQueue;
   /** Per-session subscription-overage observer wired to the client fetch (#4883). */
   overageTracker?: import('./overage-tracker.js').OverageTracker;
+  /**
+   * Per-turn writer for `~/.afk/state/usage-headers.json` (#5012). Defined
+   * only for OAuth sessions; `flush()` is called once per turn at
+   * `turn.completed` to atomically persist the last-seen unified header
+   * snapshot.
+   */
+  usageHeadersWriter?: import('./usage-headers-writer.js').UsageHeadersTurnWriter;
   fastModeController?: import('../../fast-mode.js').FastModeController;
   /**
    * Inter-round steering callback. Called after each tool-round returns

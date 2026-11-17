@@ -33,7 +33,7 @@ import { h1ModelFetch } from '../../shared/h1-fetch.js';
 import { ThrottleQueue } from '../throttle-queue.js';
 import { OverageTracker } from '../overage-tracker.js';
 import { parseQuotaHeaders, recordQuotaSnapshot } from '../../../quota-cache.js';
-import { refreshClaudeCodeOauthToken } from '../../../auth/keychain.js';
+import { refreshClaudeCodeOauthToken, parseAccountIdentifier } from '../../../auth/keychain.js';
 import type { AnthropicClientFactory } from '../provider-options.js';
 import { getRateLimitBucket } from '../../shared/rate-limit-bucket.registry.js';
 import { parseAnthropicRateLimitHeaders } from '../../shared/rate-limit-headers.js';
@@ -43,6 +43,8 @@ import {
   publishUsage,
   windowsFromQuotaSnapshot,
 } from '../../../usage/usage-ledger.js';
+import { setUpUsageHeadersTurnWriter } from '../usage-headers-writer.js';
+import type { UsageHeadersTurnWriter } from '../usage-headers-writer.js';
 
 export interface ClientSetupArgs {
   config: AgentConfig;
@@ -61,6 +63,13 @@ export interface ClientSetup {
   throttleQueue: ThrottleQueue | undefined;
   /** Per-session subscription-overage observer (#4883); undefined in localMode. */
   overageTracker: OverageTracker | undefined;
+  /**
+   * Per-turn writer for `~/.afk/state/usage-headers.json` (#5012).
+   * Defined only for OAuth sessions in non-local mode; undefined otherwise.
+   * Caller must call `.flush()` once at each turn boundary (after
+   * `turn.completed`) to atomically persist the last-seen header snapshot.
+   */
+  usageHeadersWriter: UsageHeadersTurnWriter | undefined;
   /** OAuth CLI-mimicry billing prefix, or null when suppressed. */
   systemPrefix: ContentBlockParam[] | null;
   /** Rebuilds the client against a freshly-refreshed OAuth token. */
@@ -96,10 +105,20 @@ export function setUpQueryClient(args: ClientSetupArgs): ClientSetup {
   // snapshot so the cache and status-line path below is byte-for-byte the
   // same as before; `observe()` never throws.
   const overageTracker = localMode ? undefined : new OverageTracker(config.traceWriter);
+  // Per-turn usage-headers writer (#5012): OAuth sessions only, non-local only.
+  // `token` carries the OAuth bearer; `parseAccountIdentifier` extracts the
+  // account id. API-key / Bedrock / Vertex sessions get `undefined` here (the
+  // factory returns undefined for non-oauth authMode).
+  const usageHeadersWriter = localMode
+    ? undefined
+    : setUpUsageHeadersTurnWriter(authMode, authMode === 'oauth' ? args.token : undefined);
   const quotaObserver = localMode
     ? undefined
     : (headers: Headers): void => {
         overageTracker?.observe(headers);
+        // Feed the per-turn writer so it accumulates the last header snapshot
+        // seen during this turn; flush() is called once at turn.completed.
+        usageHeadersWriter?.observe(headers);
         const snapshot = parseQuotaHeaders(headers);
         if (snapshot === undefined) return;
         recordQuotaSnapshot(snapshot);
@@ -189,7 +208,15 @@ export function setUpQueryClient(args: ClientSetupArgs): ClientSetup {
           admissionGate,
         ),
       );
-      return factory ? factory(opts) : args.createClient(opts);
+      const rebuilt = factory ? factory(opts) : args.createClient(opts);
+      // Rebind the usage-headers writer to the fresh token's account identity.
+      // The writer was constructed with the original token; after a successful
+      // refresh it must write under the new account, not the old one. Only
+      // rebind on a confirmed fresh token (this branch is only reached when
+      // `freshToken` is non-null above). Clears the per-turn latch and any
+      // stale snapshot so the next flush uses the correct identity.
+      usageHeadersWriter?.rebindAccount(parseAccountIdentifier(freshToken));
+      return rebuilt;
     };
   }
 
@@ -197,6 +224,7 @@ export function setUpQueryClient(args: ClientSetupArgs): ClientSetup {
     client,
     throttleQueue,
     overageTracker,
+    usageHeadersWriter,
     systemPrefix,
     ...(tokenRefresher !== undefined ? { tokenRefresher } : {}),
   };

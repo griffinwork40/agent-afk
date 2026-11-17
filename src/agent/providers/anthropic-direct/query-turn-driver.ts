@@ -62,6 +62,12 @@ export interface TurnDriverContext {
   readonly hookRegistry: HookRegistry | undefined;
   readonly throttleQueue: import('./throttle-queue.js').ThrottleQueue | undefined;
   readonly overageTracker: import('./overage-tracker.js').OverageTracker | undefined;
+  /**
+   * Per-turn writer for `~/.afk/state/usage-headers.json` (#5012). `flush()`
+   * is called once at `turn.completed` to atomically persist the last-seen
+   * unified header snapshot. Undefined for non-OAuth sessions.
+   */
+  readonly usageHeadersWriter: import('./usage-headers-writer.js').UsageHeadersTurnWriter | undefined;
   readonly fastModeController: import('../../fast-mode.js').FastModeController | undefined;
   /** Inter-round steering callback; undefined when not wired (top-level or non-background sessions). */
   readonly beforeNextRound: (() => string | undefined) | undefined;
@@ -183,6 +189,18 @@ function beginTurnCheckpoint(ctx: TurnDriverContext, userMessageId?: string): Fi
 }
 
 /**
+ * Reset the per-turn usage-headers writer at the start of each user turn
+ * (#5012). Called once before any responses arrive so the turn can flush
+ * exactly once and stale data from the previous turn is cleared.
+ * Undefined-safe: no-op when the writer is not wired (non-OAuth sessions).
+ */
+function beginTurnWriter(
+  writer: import('./usage-headers-writer.js').UsageHeadersTurnWriter | undefined,
+): void {
+  writer?.beginTurn();
+}
+
+/**
  * Tear down the per-turn checkpoint registry (called on completion and in the
  * turn finally block). Records post-turn hashes once (endCheckpointTurn is
  * idempotent per registry).
@@ -295,7 +313,7 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
 
       // File-checkpoint: wire a fresh registry for this turn (no-op when disabled).
       const checkpoint = beginTurnCheckpoint(ctx, turn.userMessageId);
-
+      beginTurnWriter(ctx.usageHeadersWriter);
       const system = ctx.composeSystem();
 
       // Snapshot preference + eligibility exactly once. The resulting headers
@@ -332,7 +350,7 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
             turnEmittedTerminal = true;
             // Invariant: release mutation wiring before publishing completion;
             // consumers may rewind without advancing this generator again.
-            endTurnCheckpoint(ctx, checkpoint);
+            endTurnCheckpoint(ctx, checkpoint); ctx.usageHeadersWriter?.flush(); // persist unified headers once per turn (#5012)
             yield { ...event, ...(checkpoint ? { userMessageId: checkpoint.turnId } : {}) };
             if (ctx.state.closed) return;
             continue;
