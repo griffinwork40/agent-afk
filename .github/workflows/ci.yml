@@ -280,7 +280,9 @@ jobs:
         test-cmd: [pnpm test:coverage]
     # macOS runners are ~1.5× slower than ubuntu; recent runs hit 9-13 min and
     # occasionally cancel at the 15-min wall. Raise to 25 min to give headroom.
-    timeout-minutes: ${{ matrix.os == 'macos-latest' && 25 || 15 }}
+    # ubuntu-latest hit 13m48s (#4976) leaving <1 min of headroom at 15 min;
+    # raised to 20 min to prevent spurious cancellations (issue #5020).
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 25 || 20 }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
