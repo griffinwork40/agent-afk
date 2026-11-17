@@ -21,6 +21,7 @@ import {
   RATE_LIMIT_TRANSIENT_MAX_RETRIES,
 } from './retry-constants.js';
 import { usageLimitNoTimestampPause, usageLimitResetPause } from './usage-limit-pause.js';
+import { env } from '../../../../config/env.js';
 import { anthropicCreditErrorEvent } from '../usage-limit.error.js';
 import { catchUpStaleCredential } from './usage-limit-catch-up.js';
 import { tryClosedRouterRotate } from './closed-router-rotate.js';
@@ -199,9 +200,13 @@ export async function* turnWithUsageLimitRetry(
   }
   noteTurnProgress(runInput);
 
+  // When closed-router is active, poll every 30 s instead of 60 s so
+  // cron-driven credential rotations are picked up twice as fast.
+  const pollIntervalMs = env.AFK_CLOSED_ROUTER === '1' ? 30_000 : undefined;
+
   // ── oauth-limit-no-ts path ─────────────────────────────────────────────
   if (noTimestamp) {
-    yield* usageLimitNoTimestampPause(ctx, runInput, isClosed, next, pendingErrorEvent);
+    yield* usageLimitNoTimestampPause(ctx, runInput, isClosed, next, pendingErrorEvent, pollIntervalMs);
     return;
   }
 
@@ -210,5 +215,5 @@ export async function* turnWithUsageLimitRetry(
     return;
   }
 
-  yield* usageLimitResetPause(ctx, runInput, isClosed, next, pendingErrorEvent, resetsAt);
+  yield* usageLimitResetPause(ctx, runInput, isClosed, next, pendingErrorEvent, resetsAt, pollIntervalMs);
 }
