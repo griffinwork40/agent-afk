@@ -191,7 +191,7 @@ export function buildDaemonSessionFactory(
       // so a wave still running when this session ends emits real `cancelled`
       // rows instead of vanishing (#733).
       // The continuation registry is disposed even when the drain rejects (#4266).
-      ...withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor), continuationRegistry),
+      ...withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor, undefined, continuationRegistry), continuationRegistry),
       // User-facing surface for trace `origin` attribution. Forced after
       // `...config` for the same reason as `isNonInteractive`: every daemon +
       // scheduler/cron session routes through here → 'daemon'.

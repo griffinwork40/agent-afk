@@ -214,7 +214,7 @@ describe('session end or reset releases kept worktrees (dispose)', () => {
   // stay in sync with wire-executors.ts without maintaining a hand-rolled copy
   // (#4957). Returns a vi.fn() spy wrapping the real callback.
   function wireRelease(registry: ContinuationRegistry): ReturnType<typeof vi.fn> {
-    const proto = buildContinuationRegistry();
+    const proto = buildContinuationRegistry(undefined);
     const realOnEvict = proto.onEvict!;
     const onEvict = vi.fn((chain: ChainRecord) => realOnEvict(chain));
     registry.onEvict = onEvict;

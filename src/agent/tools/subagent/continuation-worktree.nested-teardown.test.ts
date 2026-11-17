@@ -55,7 +55,7 @@ interface LinkHandle {
 function admittedLink(maxContinuations: number, events: string[]) {
   // Use the production factory so this test stays in sync with
   // wire-executors.ts without maintaining a hand-rolled onEvict copy (#4957).
-  const registry = buildContinuationRegistry({ maxRounds: 150, maxContinuations });
+  const registry = buildContinuationRegistry(undefined, { maxRounds: 150, maxContinuations });
   const realOnEvict = registry.onEvict!;
   const onEvict = vi.fn((chain: Parameters<typeof realOnEvict>[0]) => realOnEvict(chain));
   registry.onEvict = onEvict;
@@ -182,7 +182,7 @@ describe('kept worktree release waits for the link nested teardown', () => {
 describe('run-mode integration: wrapped teardown is reached by each run mode', () => {
   /** Build a link handle + chain wired through wireDispatchChain. */
   function setupLink(events: string[]) {
-    const registry = buildContinuationRegistry({ maxRounds: 150, maxContinuations: 1 });
+    const registry = buildContinuationRegistry(undefined, { maxRounds: 150, maxContinuations: 1 });
     const ctx = { depth: 0, continuationRegistry: registry, parentSession: { sessionId: 'root-1' } };
     const nested = deferred();
     const childManager = {

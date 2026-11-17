@@ -157,7 +157,7 @@ export async function bootstrapSession(
     // Cascade-abort and drain in-flight children before the writer seals,
     // so a wave still running when this session ends emits real `cancelled`
     // rows instead of vanishing (#733).
-    ...withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor), continuationRegistry),
+    ...withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor, undefined, continuationRegistry), continuationRegistry),
     ...(options.provider !== undefined ? { explicitProvider: options.provider } : {}),
     // Commander's --no-recall sets options.recall = false (negated boolean).
     ...(options.recall === false ? { noRecall: true } : {}),

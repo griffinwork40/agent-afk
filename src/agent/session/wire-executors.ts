@@ -303,7 +303,8 @@ export function buildContinuationRegistry(traceWriter: TraceSink | undefined, li
     // <repoRoot>/.afk-worktrees/<slug>, so parent of parent is the repo root.
     const repoRoot = repoRootFromWorktreePath(chain.isolatedWorktreePath);
     if (repoRoot === undefined) return;
-    void releaseChainWorktree({ repoRoot, worktreePath: chain.isolatedWorktreePath, chainId: chain.chainId, registry, traceWriter }).catch(() => { /* best-effort */ });
+    const p = releaseChainWorktree({ repoRoot, worktreePath: chain.isolatedWorktreePath, chainId: chain.chainId, registry, traceWriter }).catch(() => { /* best-effort */ });
+    registry.registerReleaseWrite(p);
   };
   return registry;
 }

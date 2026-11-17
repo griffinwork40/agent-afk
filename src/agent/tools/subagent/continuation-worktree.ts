@@ -133,7 +133,8 @@ export async function releaseChainWorktree(args: {
   const waitMs = Math.max(0, Date.now() - waitStarted);
   const waitMetadata = { waitMs, waitOutcome };
   // Emit before git teardown as well, so a timeout remains visible even if git stalls.
-  traceWorktree(args, 'release_wait', waitOutcome, waitMetadata);
+  // Skip when not_needed: no pending link means no wait occurred, so the row adds no signal.
+  if (waitOutcome !== 'not_needed') traceWorktree(args, 'release_wait', waitOutcome, waitMetadata);
   try {
     // Unlock first: teardownIsolatedWorktree refuses locked trees.
     await defaultExecFile('git', [
