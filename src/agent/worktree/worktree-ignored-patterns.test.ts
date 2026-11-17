@@ -290,3 +290,19 @@ describe('classifyIgnoredEntry — SwiftPM and optional toolchain directories', 
     expect(classifyIgnoredEntry('.build')).toBe('protected');
   });
 });
+
+describe('classifyIgnoredEntry — afk agent scratch dir', () => {
+  it('classifies the root .afk-scratch/ (collapsed or a leaf beneath it) as opaque', () => {
+    expect(classifyIgnoredEntry('.afk-scratch/')).toBe('opaque');
+    expect(classifyIgnoredEntry('.afk-scratch/commit-msg.txt')).toBe('opaque');
+  });
+
+  it('does not extend to a nested copy, which keeps the protected default', () => {
+    expect(classifyIgnoredEntry('sub/.afk-scratch/')).toBe('protected');
+    expect(classifyIgnoredEntry('sub/.afk-scratch/notes.txt')).toBe('protected');
+  });
+
+  it('a credential-format leaf, if ever reported individually beneath it, still outranks the dir', () => {
+    expect(classifyIgnoredEntry('.afk-scratch/prod.env')).toBe('protected');
+  });
+});

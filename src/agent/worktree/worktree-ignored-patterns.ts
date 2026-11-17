@@ -118,6 +118,11 @@ const OPAQUE_REBUILDABLE_DIRS: readonly RegExp[] = [
   /(?:^|\/)\.dart_tool\//,
   // Zig's build cache: pure compiled-output cache, no user-authored content.
   /(?:^|\/)\.zig-cache\//,
+  // The afk agent scratch dir (`worktree-scratch.ts`): disposable by contract,
+  // agents are told its files die with the worktree. Root-anchored on purpose,
+  // because only the root copy is the sanctioned one afk excludes; a nested
+  // `sub/.afk-scratch/` keeps today's classification.
+  /^\.afk-scratch\//,
 ];
 
 /**

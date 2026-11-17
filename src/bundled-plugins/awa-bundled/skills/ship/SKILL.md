@@ -62,13 +62,21 @@ Before committing, review the **file list** to stage — don't sweep in untracke
 Stage only the confirmed files, then write the commit message to a temp file with your file-writing tool — **NOT** a shell heredoc — and commit with `-F`:
 
 ```
-# 1. Write the subject + body to a temp file (e.g. .git/COMMIT_BODY.txt) using
-#    your file-writing tool. The content never passes through the shell.
-# 2. Commit from that file:
-git commit -F .git/COMMIT_BODY.txt
+# 1. Pick the scratch dir <SCRATCH>. It must not be the working tree itself:
+#    - Your cwd is under `.afk-worktrees/` (an afk-managed worktree):
+#        <worktree-root>/.afk-scratch
+#      git ignores it, you can always write there, and it is deleted with
+#      the worktree.
+#    - Any other checkout: the path printed by
+#        git rev-parse --absolute-git-dir
+#      Do NOT assume `.git/`: in a linked worktree `.git` is a FILE.
+# 2. Write the subject + body to <SCRATCH>/COMMIT_BODY.txt with your
+#    file-writing tool. The content never passes through the shell.
+# 3. Commit from that file:
+git commit -F <SCRATCH>/COMMIT_BODY.txt
 ```
 
-Going through a file keeps backticks, `$(...)`, and quotes in the message literal. **Never** assemble the message inline as `git commit -m "$(cat <<'EOF' … EOF)"` — a backtick or `$(` in the body is parsed by the shell *before* `git` runs, so the commit fails or records a mangled message. `.git/` is never staged, so the temp file can't sneak into the commit (in a linked worktree `.git` is a file, not a dir — write to the path printed by `git rev-parse --git-dir` instead).
+Going through a file keeps backticks, `$(...)`, and quotes in the message literal. **Never** assemble the message inline as `git commit -m "$(cat <<'EOF' … EOF)"` — a backtick or `$(` in the body is parsed by the shell *before* `git` runs, so the commit fails or records a mangled message. Neither location is tracked or shown by `git status`, so the temp file can't sneak into the commit or leave the tree dirty. Never drop it anywhere else in an afk-managed worktree (for example `pr-body.txt` at the root): an untracked file there stops the worktree from being cleaned up.
 
 Never `--amend` (creates a new commit each time). Never bypass hooks (`--no-verify`).
 
@@ -146,12 +154,13 @@ Structure:
 Write the PR body (from Phase 7) to a temp file with your file-writing tool — **NOT** a shell heredoc — then pass it with `--body-file`:
 
 ```
-# 1. Write the Phase 7 PR body to a temp file (e.g. .git/PR_BODY.md) using your
-#    file-writing tool. The body never passes through the shell.
+# 1. Write the Phase 7 PR body to <SCRATCH>/PR_BODY.md (the same <SCRATCH>
+#    you picked in Phase 4) with your file-writing tool.
+#    The body never passes through the shell.
 # 2. Open the PR from that file:
 gh pr create \
   --title "<subject line of the commit>" \
-  --body-file .git/PR_BODY.md \
+  --body-file <SCRATCH>/PR_BODY.md \
   --base <default-branch> \
   [--draft]
 ```
