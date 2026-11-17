@@ -23,6 +23,8 @@ import {
 import { usageLimitNoTimestampPause, usageLimitResetPause } from './usage-limit-pause.js';
 import { anthropicCreditErrorEvent } from '../usage-limit.error.js';
 import { catchUpStaleCredential } from './usage-limit-catch-up.js';
+import { tryClosedRouterRotate } from './closed-router-rotate.js';
+import { clearKeychainCache } from '../../../auth/keychain.js';
 import {
   modelFallbackRequest,
   modelRejectedFallbackRequest,
@@ -126,6 +128,22 @@ export async function* turnWithUsageLimitRetry(
       credentialCatchUpTried = true;
       if (isClosed() || runInput.signal.aborted) return;
       if (await catchUpStaleCredential(ctx, runInput)) {
+        pendingErrorEvent = null;
+        resetsAt = null;
+        noTimestamp = false;
+        continue;
+      }
+    }
+
+    // Closed-router rotation: when AFK_CLOSED_ROUTER=1, attempt to rotate to
+    // a fresh OAuth account before entering the multi-hour park loop. On
+    // success, invalidate the keychain read cache so the replay picks up the
+    // new token, then continue the generator loop to replay the turn.
+    if (pendingErrorEvent) {
+      if (isClosed() || runInput.signal.aborted) return;
+      const rotation = await tryClosedRouterRotate();
+      if (rotation.rotated) {
+        clearKeychainCache();
         pendingErrorEvent = null;
         resetsAt = null;
         noTimestamp = false;

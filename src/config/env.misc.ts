@@ -282,6 +282,21 @@ export const MISC_ENV_REGISTRY = [
     category: 'misc',
   },
 
+  // ── Closed-router credential rotation ────────────────────────────────────
+  {
+    name: 'AFK_CLOSED_ROUTER',
+    description:
+      'Set to 1 to enable closed-router credential rotation on subscription-limit 429s. ' +
+      'When set, afk shells out to `closed-router rotate --once --json` before entering ' +
+      'the multi-hour park loop. On a successful rotation the turn is replayed with the ' +
+      'new credential. When all accounts are exhausted (`all-hot`), the existing park ' +
+      'behavior applies. Requires `closed-router` to be on PATH. Default: unset (disabled).',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'auth',
+  },
+
   // ── Observability / OTLP export ───────────────────────────────────────────
   {
     name: 'AFK_OTLP_ENDPOINT',
