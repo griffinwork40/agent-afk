@@ -34,10 +34,10 @@ export function makeDaemonTurnPersister(model: AgentModelInput): (args: TaskTurn
       },
     });
     // saveTurn is best-effort and swallows its own errors (see SessionAutosaver
-    // contract). close() seals the sidecar with endedAt + exitReason regardless
-    // of whether the turn save succeeded — a sealed sidecar with no turns is
-    // recoverable, but an unsealed sidecar with turns would be excluded from
-    // startup-recall (which requires endedAt).
+    // contract). close() seals the sidecar with endedAt + exitReason even when
+    // the turn save failed — a sealed sidecar with no turns is recoverable, but
+    // an unsealed sidecar with turns is excluded from startup-recall (which
+    // reads endedAt to filter finished sessions).
     saver.saveTurn(userInput, response.content, response.metadata);
     saver.close('task-complete');
   };
