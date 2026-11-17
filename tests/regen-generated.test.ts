@@ -286,6 +286,34 @@ describe('regen-generated CLI', () => {
     ]);
   });
 
+  it('off-main: passes --no-shrink only to lint:tests:update, not to other regenerators', () => {
+    // Spec item 2: on a feature branch regen:generated must preserve the existing
+    // .test-typecheck-baseline.json (by passing --no-shrink) while continuing the
+    // other regenerators normally.
+    git('checkout', '-qb', 'feature-branch');
+    expect(run().status).toBe(0);
+    const calls = fs.readFileSync(path.join(root, 'calls.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string[]);
+    // Only the last call (lint:tests:update) should have --no-shrink.
+    const lintCall = calls[calls.length - 1];
+    expect(lintCall).toContain('--no-shrink');
+    expect(lintCall).toContain('--update');
+    // No other call should have --no-shrink.
+    for (const call of calls.slice(0, -1)) {
+      expect(call).not.toContain('--no-shrink');
+    }
+  });
+
+  it('on main: does NOT pass --no-shrink to any regenerator', () => {
+    // Spec item 2: the --no-shrink bypass is feature-branch-only; on main the
+    // baseline can be lowered normally, so --no-shrink must not appear.
+    // The beforeEach fixture already initialises on main.
+    expect(run().status).toBe(0);
+    const calls = fs.readFileSync(path.join(root, 'calls.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string[]);
+    for (const call of calls) {
+      expect(call).not.toContain('--no-shrink');
+    }
+  });
+
   it('fails on growth refusal and does not stage generated edits', () => {
     write('scripts/check-file-size.ts', 'process.exit(1);\n');
     write(baselineName, serializeBaseline(baseline(370)));

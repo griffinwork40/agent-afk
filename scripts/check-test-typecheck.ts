@@ -172,12 +172,13 @@ function measureErrors(): number {
  * Previously the local `parseArgs` did not guard this case, causing drift from
  * the contract enforced by `parseGrowthArgs` in the size-ceiling scripts.
  */
-const KNOWN_FLAGS = ['--check', '--update', '--allow-growth', '--reason'] as const;
+const KNOWN_FLAGS = ['--check', '--update', '--allow-growth', '--reason', '--no-shrink'] as const;
 
 interface ParsedArgs {
   mode: 'check' | 'update';
   allowGrowth: boolean;
   reason: string;
+  noShrink: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs | { error: string } {
@@ -193,7 +194,7 @@ function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   const growth = parseGrowthArgs(args, KNOWN_FLAGS);
   if ('error' in growth) return growth;
 
-  return { mode: isUpdate ? 'update' : 'check', allowGrowth: growth.allowGrowth, reason: growth.reason };
+  return { mode: isUpdate ? 'update' : 'check', allowGrowth: growth.allowGrowth, reason: growth.reason, noShrink: args.includes('--no-shrink') };
 }
 
 // ── Mode: check ───────────────────────────────────────────────────────────────
@@ -270,7 +271,7 @@ export function computeNewBaseline(
   return newBaseline;
 }
 
-function runUpdate(allowGrowth: boolean, reason: string): void {
+function runUpdate(allowGrowth: boolean, reason: string, noShrink = false): void {
   const previous = readBaseline();
   const current = measureErrors();
 
@@ -283,7 +284,14 @@ function runUpdate(allowGrowth: boolean, reason: string): void {
     process.exit(1);
   }
 
-  if (!allowGrowth && current < previous.errors && !isMainBranch()) {
+  if (current < previous.errors && !isMainBranch()) {
+    if (noShrink) {
+      process.stdout.write(
+        `✓ lint:tests:update — skipping baseline shrink off main (--no-shrink). Baseline unchanged at ${previous.errors}.
+`,
+      );
+      process.exit(0);
+    }
     process.stderr.write(
       `\u2717 lint:tests:update — refusing to lower the baseline off main.\n` +
         `  The error count shrank to ${current} (baseline is ${previous.errors}).\n` +
@@ -328,7 +336,7 @@ function main(): void {
   }
 
   if (parsed.mode === 'update') {
-    runUpdate(parsed.allowGrowth, parsed.reason);
+    runUpdate(parsed.allowGrowth, parsed.reason, parsed.noShrink);
   } else {
     runCheck();
   }

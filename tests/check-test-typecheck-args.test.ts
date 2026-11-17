@@ -23,7 +23,7 @@ import { parseGrowthArgs } from '../scripts/lib/growth-args.js';
 
 // ── Mirror of KNOWN_FLAGS from scripts/check-test-typecheck.ts ───────────────
 
-const KNOWN_FLAGS = ['--check', '--update', '--allow-growth', '--reason'] as const;
+const KNOWN_FLAGS = ['--check', '--update', '--allow-growth', '--reason', '--no-shrink'] as const;
 
 // ── Mirror of parseArgs from scripts/check-test-typecheck.ts ─────────────────
 
@@ -31,6 +31,7 @@ interface ParsedArgs {
   mode: 'check' | 'update';
   allowGrowth: boolean;
   reason: string;
+  noShrink: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs | { error: string } {
@@ -44,7 +45,7 @@ function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   const growth = parseGrowthArgs(args, KNOWN_FLAGS);
   if ('error' in growth) return growth;
 
-  return { mode: isUpdate ? 'update' : 'check', allowGrowth: growth.allowGrowth, reason: growth.reason };
+  return { mode: isUpdate ? 'update' : 'check', allowGrowth: growth.allowGrowth, reason: growth.reason, noShrink: args.includes('--no-shrink') };
 }
 
 // ── Error cases ───────────────────────────────────────────────────────────────
@@ -111,6 +112,16 @@ describe('check-test-typecheck parseArgs — happy path', () => {
   it('returns update mode with --allow-growth and valid --reason', () => {
     const result = parseArgs(['node', 'script.ts', '--update', '--allow-growth', '--reason', 'intentional growth']);
     expect(result).toMatchObject({ mode: 'update', allowGrowth: true, reason: 'intentional growth' });
+  });
+
+  it('returns noShrink:true when --no-shrink is passed with --update', () => {
+    const result = parseArgs(['node', 'script.ts', '--update', '--no-shrink']);
+    expect(result).toMatchObject({ mode: 'update', allowGrowth: false, noShrink: true });
+  });
+
+  it('returns noShrink:false when --no-shrink is absent', () => {
+    const result = parseArgs(['node', 'script.ts', '--update']);
+    expect(result).toMatchObject({ mode: 'update', noShrink: false });
   });
 });
 
