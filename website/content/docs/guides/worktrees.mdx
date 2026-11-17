@@ -55,6 +55,10 @@ Alternatively, call the `worktree` tool's `create` action with `name` and option
 
 `interactive.worktreeAutoname` controls automatic worktree naming; `interactive.worktreeBranchPrefix` sets the branch prefix and is human-controlled. In the REPL, `/worktree` exposes listing and pruning through the same sweep engine.
 
+## Scratch files: `.afk-scratch/`
+
+New AFK-managed worktrees opt into one disposable scratch directory, `.afk-scratch/` at the worktree root, for throwaway files such as commit message bodies, PR bodies, and issue comments. When AFK creates a worktree (isolated `agent`, the `worktree` tool's `create`, or `afk -w`), it records `scratchDisposable: true` in that worktree's `.afk-worktree-meta.json` and appends `/.afk-scratch/` to the repository's shared `.git/info/exclude`, preserving existing exclude lines. This changes no tracked file, so it works in any repository. Teardown retries the exclude write before checking for dirty files. Only worktrees with the creation-time opt-in treat root `.afk-scratch/` files as disposable: those files do not preserve or lock the checkout and are deleted with it. Older worktrees and worktrees created outside AFK do not inherit this opt-in, even though they share the exclude file; their scratch content remains protected. Missing, unreadable, or malformed metadata also leaves scratch protected. An untracked or non-rebuildable ignored file anywhere else still preserves and locks the checkout as before. If exclusion or metadata writing fails, creation still succeeds but scratch content can preserve the checkout. Isolated children and the `worktree` tool's `create` result are told about the directory.
+
 ## Inspect and clean up checkouts
 
 ```bash

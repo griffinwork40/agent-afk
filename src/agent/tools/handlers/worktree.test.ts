@@ -166,6 +166,9 @@ describe('worktree handler — create', () => {
     expect(typeof parsed.note).toBe('string');
     expect(parsed.note).toMatch(/not installed/i);
     expect(parsed.note).toContain(wtPath);
+    // The note also points the agent at the sanctioned scratch dir.
+    expect(parsed.note).toContain(`${join(wtPath, '.afk-scratch')}/`);
+    expect(parsed.note).toMatch(/deleted with the worktree/);
 
     // git worktree add argv shape. #760: an unspecified base is resolved to the
     // anchor's HEAD sha before the add, since the add itself runs `-C repoRoot`

@@ -303,7 +303,8 @@ function isSensitiveFormat(leaf: string): boolean {
  */
 export function classifyIgnoredEntry(relPath: string): IgnoredEntryClass {
   const normalized = normalizeIgnoredPath(relPath);
-  if (normalized === '') return 'protected';
+  // Path-only callers cannot prove creation-time opt-in, so scratch stays protected.
+  if (normalized === '' || normalized === '.afk-scratch' || normalized.startsWith('.afk-scratch/')) return 'protected';
   const leaf = leafOf(normalized).toLowerCase();
   if (isSensitiveFormat(leaf)) return 'protected';
   if (!isGeneratedArtifact(normalized, leaf) && SENSITIVE_NAME_HINTS.some((re) => re.test(leaf))) {

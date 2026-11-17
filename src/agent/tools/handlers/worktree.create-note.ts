@@ -13,6 +13,7 @@
 import { join } from 'node:path';
 import { promises as fs } from 'node:fs';
 import { describeWorktreeSetupFailure } from '../../worktree/worktree-setup.js';
+import { AFK_SCRATCH_DIR } from '../../worktree/worktree-scratch.js';
 import type { ManagedWorktreeInfo } from './worktree-managed.js';
 
 /**
@@ -36,8 +37,18 @@ export async function detectInstallCommand(worktreePath: string): Promise<string
   return 'pnpm install';
 }
 
+/** Scratch-dir sentence appended to every create note. Exported for tests. */
+export function scratchDirNote(worktreePath: string): string {
+  return `Put throwaway files (commit message bodies, PR bodies, issue comments) in ${join(worktreePath, AFK_SCRATCH_DIR)}/: git ignores it and it is deleted with the worktree.`;
+}
+
 /** Build the note string returned with a successful worktree create. */
 export async function buildCreateNote(info: ManagedWorktreeInfo): Promise<string> {
+  return `${await buildSetupNote(info)} ${scratchDirNote(info.path)}`;
+}
+
+/** The setup / dependency-install half of the create note. */
+async function buildSetupNote(info: ManagedWorktreeInfo): Promise<string> {
   if (info.setup?.status === 'ok') {
     const ran = (info.setup.completed ?? []).map((c) => `\`${c}\``).join(', ');
     return `Repo-declared worktree setup (.afk/worktree-setup.json) completed in ${info.path}${ran ? `: ${ran}` : ''}.`;

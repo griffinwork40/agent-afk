@@ -149,7 +149,7 @@ const PINNED_HASHES = {
   // git/gh ran, failing the call or recording a mangled/truncated body. The
   // file-based form matches the safe convention already used in src/agent/gh.ts.
   // BACK-PORT GAP: the same fix should still land in the upstream /ship skill.
-  ship: '6b8d1504f825c98c00e3c5b96c131e43113eeafd7cc5fe1b082fd6dd6160bfe2',
+  ship: '1f8c0601b750cf89b04a2c9974068acdd748693226ea380a8019be8b346e7103',
   // simplify is bundled-only (no upstream counterpart).
   simplify:
     'a984a507872949e17c87ab72979cb089524ba1da899f38af80fd0e725ebff667',

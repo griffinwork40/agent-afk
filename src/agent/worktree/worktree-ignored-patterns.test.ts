@@ -290,3 +290,21 @@ describe('classifyIgnoredEntry — SwiftPM and optional toolchain directories', 
     expect(classifyIgnoredEntry('.build')).toBe('protected');
   });
 });
+
+describe('classifyIgnoredEntry — afk agent scratch dir', () => {
+  it('protects root scratch paths when creation-time opt-in is unknown', () => {
+    expect(classifyIgnoredEntry('.afk-scratch/')).toBe('protected');
+    expect(classifyIgnoredEntry('.afk-scratch/commit-msg.txt')).toBe('protected');
+    expect(classifyIgnoredEntry('.afk-scratch/node_modules/')).toBe('protected');
+    expect(classifyIgnoredEntry('.afk-scratch/.DS_Store')).toBe('protected');
+  });
+
+  it('does not extend to a nested copy, which keeps the protected default', () => {
+    expect(classifyIgnoredEntry('sub/.afk-scratch/')).toBe('protected');
+    expect(classifyIgnoredEntry('sub/.afk-scratch/notes.txt')).toBe('protected');
+  });
+
+  it('protects credential-format leaves without creation-time opt-in', () => {
+    expect(classifyIgnoredEntry('.afk-scratch/prod.env')).toBe('protected');
+  });
+});
