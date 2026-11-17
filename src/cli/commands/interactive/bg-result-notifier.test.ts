@@ -13,6 +13,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
+import { closeStore, setGoal } from '../../../agent/goals/goal-store.js';
 import type { SubagentHandle, SubagentResult } from '../../../agent/subagent.js';
 import type { BackgroundJob } from '../../../agent/background-registry.types.js';
 import {
@@ -440,17 +441,15 @@ describe('isSuperseded — multi-project projectKey isolation', () => {
   let origAFKHome: string | undefined;
   let tmpHome: string;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     origAFKHome = process.env['AFK_HOME'];
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-notifier-goal-test-'));
     process.env['AFK_HOME'] = tmpHome;
     // Reset the goal-store singleton so it picks up the new AFK_HOME.
-    const { closeStore } = await import('../../../agent/goals/goal-store.js');
     closeStore();
   });
 
-  afterEach(async () => {
-    const { closeStore } = await import('../../../agent/goals/goal-store.js');
+  afterEach(() => {
     closeStore();
     if (origAFKHome !== undefined) {
       process.env['AFK_HOME'] = origAFKHome;
@@ -460,8 +459,7 @@ describe('isSuperseded — multi-project projectKey isolation', () => {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   });
 
-  it('a job under project A is not superseded when only project B goal changes', async () => {
-    const { setGoal } = await import('../../../agent/goals/goal-store.js');
+  it('a job under project A is not superseded when only project B goal changes', () => {
     const keyA = 'proj.repo-a-aabbccdd';
     const keyB = 'proj.repo-b-11223344';
 
@@ -503,8 +501,7 @@ describe('isSuperseded — multi-project projectKey isolation', () => {
     expect(injection).not.toContain('previous goal');
   });
 
-  it('a job under project A IS superseded when project A goal changes', async () => {
-    const { setGoal } = await import('../../../agent/goals/goal-store.js');
+  it('a job under project A IS superseded when project A goal changes', () => {
     const keyA = 'proj.repo-a-aabbccdd';
 
     setGoal('original goal for project A', undefined, keyA);

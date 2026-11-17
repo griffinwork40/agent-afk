@@ -110,7 +110,13 @@ interface InternalJob extends BackgroundJob {
   onCleanup?: () => Promise<void>;
   /** Post-settlement synchronous callback, forwarded from RegisterArgs. */
   onSettled?: () => void;
-  /** Project key forwarded from RegisterArgs; used to look up the right goal at delivery. */
+  /**
+   * StateStore key for the project whose goal was snapshotted at dispatch.
+   * Forwarded from `RegisterArgs.projectKey`; used by the delivery path to
+   * call `getGoal(projectKey)` for the same project rather than the global
+   * fallback key. Undefined for jobs dispatched without a known working
+   * directory (falls back to the global goal).
+   */
   projectKey?: string;
   /** Epoch-ms of the most recent observable activity. Updated on every progress event. */  lastActivityAt: number;
 }
