@@ -344,6 +344,10 @@ export type SessionPhaseName =
   // fallback record. In-flight still clears. `metadata`: `chainId`, `childId`,
   // `reason` ('flush_timeout' | 'checkpoint_unavailable' | 'error').
   | 'continuation_settle_degraded'
+  // Kept worktree lifecycle. metadata: chainId, worktreePath, operation
+  // (keep | release_wait | release), outcome, and release waitMs/waitOutcome;
+  // preserved releases also carry reason (dirty, commits-ahead, etc.).
+  | 'continuation_worktree'
   // Per-fragment token-count snapshot emitted once per session at prompt
   // assembly time (#4449). `metadata` carries one key per named fragment
   // (e.g. `toolBase`, `userSystem`, `memoryPrompt`, `workspacePrompt`,

@@ -403,6 +403,7 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     model_fallback: true,
     round_cap_notice_dropped: true,
     continuation_settle_degraded: true,
+    continuation_worktree: true,
     prompt_fragment_sizes: true,
     ratelimit_unified_state: true,
     auth_retry_outcome: true,

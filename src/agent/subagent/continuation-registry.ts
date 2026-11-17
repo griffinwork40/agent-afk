@@ -297,8 +297,8 @@ export class ContinuationRegistry {
   /**
    * Contract: `done` resolves (never rejects) once a link's nested subagents
    * and its handle are torn down. Every worktree release awaits the pending
-   * entry first (releaseChainWorktree), so no release path unlocks or removes
-   * a kept tree while that link's nested subagents may still write to it.
+   * entry first (releaseChainWorktree), up to the subagent drain deadline.
+   * After that deadline release proceeds even if nested teardown is hung.
    * A later link's entry joins any still-pending earlier one.
    */
   trackLinkTeardown(chainId: string, done: Promise<void>): void {

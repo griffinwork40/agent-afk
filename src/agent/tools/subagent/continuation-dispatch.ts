@@ -113,7 +113,7 @@ export interface ChainTerminalArgs {
   journalUsable: boolean;
   endReason: string;
   capture?: (cwd: string) => Promise<WorkspaceCheckpoint>;
-  /** Witness trace for `continuation_settle_degraded` (settling only). */
+  /** Witness trace for degraded settling and kept-worktree release outcomes. */
   traceWriter?: TraceSink | undefined;
 }
 
@@ -155,6 +155,7 @@ export async function recordChainTerminal(args: ChainTerminalArgs): Promise<Work
       worktreePath,
       chainId: chain.chainId,
       registry,
+      traceWriter: args.traceWriter,
     }).catch(() => { /* best-effort: never throw from terminal bookkeeping */ });
   }
   return checkpoint;
