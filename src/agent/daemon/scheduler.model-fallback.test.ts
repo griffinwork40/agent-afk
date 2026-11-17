@@ -10,7 +10,7 @@ const task: ScheduledTask = {
 };
 const note = 'Primary unavailable. Continuing on fallback.';
 
-function fakeSession(text: unknown = note, failure?: Error) {
+function fakeSession(text: unknown, failure?: Error) {
   return {
     sendMessage: failure
       ? vi.fn().mockRejectedValue(failure)
@@ -18,6 +18,11 @@ function fakeSession(text: unknown = note, failure?: Error) {
     getSessionMetadata: vi.fn().mockReturnValue({ modelFallback: { text } }),
     close: vi.fn().mockResolvedValue(undefined),
   };
+}
+
+/** Convenience wrapper for the common success case using the default note. */
+function fakeSessionWithNote(failure?: Error) {
+  return fakeSession(note, failure);
 }
 
 function makeContext(sessions: ReturnType<typeof fakeSession>[]) {
@@ -49,7 +54,7 @@ describe('scheduled task fallback diagnostics', () => {
 
   it('captures fallback metadata before teardown when the turn rejects', async () => {
     const failure = new Error('fallback failed');
-    const session = fakeSession(note, failure);
+    const session = fakeSessionWithNote(failure);
     session.close.mockImplementation(async () => {
       session.getSessionMetadata.mockReturnValue({ modelFallback: { text: undefined } });
     });
@@ -68,7 +73,7 @@ describe('scheduled task fallback diagnostics', () => {
   });
 
   it.each([undefined, '', 123])('omits absent/invalid fallback metadata (%s)', async (text) => {
-    const { ctx } = makeContext([fakeSession(text === undefined ? null : text)]);
+    const { ctx } = makeContext([fakeSession(text)]);
     const record = await executeAgentTask(ctx, task, 'cron');
     expect(record.status).toBe('success');
     expect(record).not.toHaveProperty('modelFallbackNote');
@@ -76,7 +81,7 @@ describe('scheduled task fallback diagnostics', () => {
   });
 
   it.each([false, true])('ignores a throwing metadata accessor (failed turn: %s)', async (fails) => {
-    const session = fakeSession(note, fails ? new Error('original failure') : undefined);
+    const session = fakeSessionWithNote(fails ? new Error('original failure') : undefined);
     session.getSessionMetadata.mockImplementation(() => { throw new Error('metadata failure'); });
     const { ctx } = makeContext([session]);
     const record = await executeAgentTask(ctx, task, 'cron');
@@ -116,7 +121,7 @@ describe('scheduled task fallback diagnostics', () => {
 
   it('retains a failed attempt switch when the retry succeeds without switching', async () => {
     const transient = Object.assign(new Error('temporary failure'), { status: 503 });
-    const { ctx } = makeContext([fakeSession(note, transient), fakeSession(null)]);
+    const { ctx } = makeContext([fakeSessionWithNote(transient), fakeSession(undefined)]);
     const record = await executeAgentTask(ctx, { ...task, maxAttempts: 2 }, 'cron');
     expect(record).toMatchObject({ status: 'success', attempts: 2, modelFallbackNote: note });
     expect(ctx.writeTelemetry).toHaveBeenCalledOnce();
@@ -124,7 +129,7 @@ describe('scheduled task fallback diagnostics', () => {
 
   it('uses the latest switch note when retries exhaust', async () => {
     const transient = Object.assign(new Error('temporary failure'), { status: 503 });
-    const { ctx } = makeContext([fakeSession(note, transient), fakeSession('Second switch.', transient)]);
+    const { ctx } = makeContext([fakeSessionWithNote(transient), fakeSession('Second switch.', transient)]);
     const record = await executeAgentTask(ctx, { ...task, maxAttempts: 2 }, 'cron');
     expect(record).toMatchObject({ status: 'error', attempts: 2, modelFallbackNote: 'Second switch.' });
     expect(ctx.writeTelemetry).toHaveBeenCalledOnce();
