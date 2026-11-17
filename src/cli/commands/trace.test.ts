@@ -349,6 +349,51 @@ describe('formatTrace — compaction_disabled is high-signal (shown by default)'
   });
 });
 
+describe('formatTrace — compaction event renders summarizerInputCharsDropped (#4973)', () => {
+  it('shows the dropped char count when non-zero', () => {
+    const events: EventObj[] = [
+      {
+        ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'compaction',
+        payload: {
+          trigger: 'token_threshold', messagesBefore: 20, messagesAfter: 5,
+          tokensSavedEstimate: 1200, summarizerInputCharsDropped: 450,
+        },
+      },
+      { ts: '2026-06-05T12:35:00.000Z', seq: 1, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).toContain('450');
+    expect(out).toContain('summarizer-input chars dropped');
+  });
+
+  it('omits the dropped field when zero', () => {
+    const events: EventObj[] = [
+      {
+        ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'compaction',
+        payload: {
+          trigger: 'manual', messagesBefore: 10, messagesAfter: 3,
+          summarizerInputCharsDropped: 0,
+        },
+      },
+      { ts: '2026-06-05T12:35:00.000Z', seq: 1, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).not.toContain('summarizer-input chars dropped');
+  });
+
+  it('omits the dropped field when absent', () => {
+    const events: EventObj[] = [
+      {
+        ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'compaction',
+        payload: { trigger: 'manual', messagesBefore: 10, messagesAfter: 3 },
+      },
+      { ts: '2026-06-05T12:35:00.000Z', seq: 1, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).not.toContain('summarizer-input chars dropped');
+  });
+});
+
 describe('formatTrace — boot_warning is high-signal (shown by default) (#754)', () => {
   // A boot_warning is a SAFETY signal, not a latency marker: the built-in
   // shadow warning (#739) means a user-owned ~/.afk/agents/*.md file silently

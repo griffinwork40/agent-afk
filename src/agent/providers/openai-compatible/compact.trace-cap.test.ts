@@ -5,7 +5,7 @@ import { renderTranscript } from '../shared/compaction.js';
 import { InMemoryTraceWriter } from '../../trace/writer.js';
 
 describe('OpenAI compaction trace input cap', () => {
-  it.each([100, 10_000, undefined])('records the exact cap drop for budget %s', async (budget) => {
+  it.each([100, 10_000, undefined])('records the exact cap drop for budget %s (undefined = uncapped)', async (budget) => {
     const priorTurns: OpenAIMessage[] = [
       { role: 'user', content: 'opening ' + 'x'.repeat(1_000) },
       { role: 'assistant', content: 'older reply' },

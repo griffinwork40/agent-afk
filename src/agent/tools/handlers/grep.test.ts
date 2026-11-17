@@ -888,7 +888,9 @@ describe('grepHandler cwd containment', () => {
 
       expect(result.isError).toBe(true);
       expect(result.content).toContain('glob');
-      expect(result.content).toContain('include');
+      // The hint must name the `include` parameter, not just mention it
+      // incidentally — the model needs to know which key to use instead.
+      expect(result.content).toContain('`include`');
     });
 
     it('arbitrary unknown key: returns error listing accepted parameters', async () => {

@@ -119,7 +119,11 @@ export function renderEvent(event: TraceEvent, ctx: RenderContext): string | nul
       const p = event.payload;
       const saved =
         p.tokensSavedEstimate !== undefined ? `  ~${p.tokensSavedEstimate} tokens saved` : '';
-      return line('compact', `${p.trigger}  ${p.messagesBefore}→${p.messagesAfter} msgs${saved}`);
+      const dropped =
+        p.summarizerInputCharsDropped !== undefined && p.summarizerInputCharsDropped > 0
+          ? `  ${p.summarizerInputCharsDropped} summarizer-input chars dropped`
+          : '';
+      return line('compact', `${p.trigger}  ${p.messagesBefore}→${p.messagesAfter} msgs${saved}${dropped}`);
     }
 
     case 'closure': {
