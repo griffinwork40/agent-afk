@@ -145,6 +145,67 @@ describe('code actions', () => {
   });
 });
 
+describe('code action command edits (staleness and reporting)', () => {
+  const txtEdit = (target: string, from: string, to: string) =>
+    ({ changes: { [pathToFileURL(target).href]: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: from.length } }, newText: to }] } });
+  const command = { title: 'Fix', command: 'do.fix' };
+  async function untilLogged(method: string) {
+    for (let i = 0; i < 400 && messagesWithMethod(log, method).length === 0; i++) await new Promise((r) => setTimeout(r, 5));
+    expect(messagesWithMethod(log, method)).not.toHaveLength(0);
+  }
+
+  it('rejects a delayed pushed edit when a concurrent query re-syncs the open document to new text', async () => {
+    server({ codeActions: [{ title: 'Fix', command }], commandEdit: edit(), commandDelayMs: 300 });
+    const pending = run({ subcommand: 'code_actions', apply: true, action_index: 0 });
+    await untilLogged('workspace/executeCommand');
+    await writeFile(source, 'const xyz = 1;\n');
+    // Re-syncs the open document to the new disk text while the command is outstanding.
+    expect((await run({ subcommand: 'document_symbols' })).isError).not.toBe(true);
+    const result = await pending;
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('changed during request');
+    expect(await readFile(source, 'utf8')).toBe('const xyz = 1;\n');
+    expect(readFakeLog(log).find((e) => e.msg?.id === 'apply-1')?.msg?.result).toMatchObject({ applied: false });
+  });
+  it('applies two pushed edits to the same file that has no languageId', async () => {
+    const notes = path.join(dir, 'notes.txt');
+    await writeFile(notes, 'old');
+    server({ codeActions: [{ title: 'Fix', command }], commandEdits: [txtEdit(notes, 'old', 'new'), txtEdit(notes, 'new', 'newer')] });
+    const result = await run({ subcommand: 'code_actions', apply: true, action_index: 0 });
+    expect(result.isError).not.toBe(true);
+    expect(await readFile(notes, 'utf8')).toBe('newer');
+    expect(readFakeLog(log).find((e) => e.msg?.id === 'apply-2')?.msg?.result).toMatchObject({ applied: true });
+  });
+  it("applies a pushed edit to a file the action's own edit just wrote", async () => {
+    const notes = path.join(dir, 'notes.txt');
+    await writeFile(notes, 'old');
+    server({ codeActions: [{ title: 'Fix', edit: txtEdit(notes, 'old', 'new'), command }], commandEdit: txtEdit(notes, 'new', 'newer') });
+    expect((await run({ subcommand: 'code_actions', apply: true, action_index: 0 })).isError).not.toBe(true);
+    expect(await readFile(notes, 'utf8')).toBe('newer');
+  });
+  it('says which files were already changed when a later pushed edit is refused', async () => {
+    const notes = path.join(dir, 'notes.txt');
+    await writeFile(notes, 'old');
+    server({ codeActions: [{ title: 'Fix', edit: txtEdit(notes, 'old', 'new'), command }],
+      commandEdits: [edit(), { documentChanges: [{ kind: 'delete', uri }] }] });
+    const result = await run({ subcommand: 'code_actions', apply: true, action_index: 0 });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('after edits were applied (not rolled back; files changed: ');
+    expect(result.content).toContain('notes.txt');
+    expect(result.content).toContain('main.ts');
+    expect(result.content).toContain('resource operations');
+    expect(await readFile(notes, 'utf8')).toBe('new');
+    expect(await readFile(source, 'utf8')).toContain('newName');
+  });
+  it('returns the bare failure when a refused pushed edit is the first write', async () => {
+    server({ codeActions: [{ title: 'Fix', command }], commandEdit: { documentChanges: [{ kind: 'delete', uri }] } });
+    const result = await run({ subcommand: 'code_actions', apply: true, action_index: 0 });
+    expect(result.isError).toBe(true);
+    expect(result.content).not.toContain('not rolled back');
+    expect(result.content).toContain('resource operations');
+  });
+});
+
 describe('failure and validation', () => {
   it('returns structured timeout and abort errors', async () => {
     vi.stubEnv('AFK_LSP_SYMBOLS_TIMEOUT_MS', '50');

@@ -11,7 +11,7 @@ import { listTurnSnapshots } from '../../file-checkpoint/file-checkpoint.js';
 import { beginCheckpointTurn, endCheckpointTurn } from '../../file-checkpoint/turn-lifecycle.js';
 import { rewindFiles } from '../../file-checkpoint/rewind-files.js';
 import { realpathSafe } from './_cwd-utils.js';
-import { applyWorkspaceEdit } from './lsp-workspace-edit.js';
+import { applyWorkspaceEdit, fileClockNow } from './lsp-workspace-edit.js';
 import type { ToolHandlerContext } from '../types.js';
 import * as engine from './patch-apply-engine.js';
 
@@ -45,7 +45,7 @@ describe('LSP WorkspaceEdit integration', () => {
     client = await LspClient.start({ definition: TYPESCRIPT_SERVER_DEFINITION, command: process.execPath, args: [script], source: 'override' }, root, { timeoutMs: 5000 });
     const opened: number[] = [];
     for (const p of paths) opened.push((await client.syncFile(p))!.version);
-    const requestStartedAt = Date.now();
+    const requestStartedAt = await fileClockNow();
     const response = await client.request('textDocument/rename', { textDocument: { uri: uri(paths[0]!) }, position: { line: 0, character: 6 }, newName: 'longName' }, { timeoutMs: 5000 });
     if (form === 'documentChanges') {
       // Numeric versions reach the version check: each matches what the client sent.
@@ -84,7 +84,7 @@ describe('LSP WorkspaceEdit integration', () => {
     // Rewinding the rename turn must fold BOTH turns, retaining earliest snapshots.
     const laterPath = join(root, 'later.ts');
     await writeFile(laterPath, 'before\n');
-    const laterStartedAt = Date.now();
+    const laterStartedAt = await fileClockNow();
     const later = { ...context, fileCheckpoint: beginCheckpointTurn('session', 'later-turn', state) };
     const laterResult = await applyWorkspaceEdit({ changes: {
       [uri(paths[1]!)]: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 8 } }, newText: 'finalName' }],

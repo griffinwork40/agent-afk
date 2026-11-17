@@ -4,7 +4,7 @@ import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { realpathSafe } from './_cwd-utils.js';
-import { applyWorkspaceEdit, convertWorkspaceEdit, type WorkspaceEditOptions } from './lsp-workspace-edit.js';
+import { applyWorkspaceEdit, convertWorkspaceEdit, fileClockNow, type WorkspaceEditOptions } from './lsp-workspace-edit.js';
 import { applyTextEdits } from './lsp-workspace-edit-parse.js';
 import { _setRealScratchRootsForTests, _resetScratchRootsCacheForTests } from './scratch-roots.js';
 import { createFileCheckpointRegistry, listTurnSnapshots } from '../../file-checkpoint/file-checkpoint.js';
@@ -21,17 +21,33 @@ const snapshots = () => listTurnSnapshots('test', 'turn', join(root, 'state'));
 async function file(name: string, content = 'old') {
   const path = join(root, name);
   await writeFile(path, content);
-  // The request is "sent" after test fixtures exist, as in production.
-  options.requestStartedAt = Date.now();
+  // The request is "sent" after test fixtures exist, as in production; zero
+  // delay between the write and the snapshot is deliberate.
+  options.requestStartedAt = await fileClockNow();
   return path;
 }
-const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+/**
+ * Take a snapshot, then wait until the FILE clock is strictly past it, so any
+ * later write is unambiguously "after the request". File timestamps tick
+ * coarsely (kernel tick on Linux, 1-2 s on some filesystems), so a fixed sleep
+ * would either be too short there or needlessly long elsewhere. Polling the
+ * production clock adapts: it usually exits after one tick, and its budget
+ * (600 polls of >= 5 ms, so >= 3 s) exceeds the coarsest 2 s resolution.
+ */
+async function snapshotThenAdvance(): Promise<number> {
+  const requestStartedAt = await fileClockNow();
+  for (let i = 0; i < 600 && (await fileClockNow()) <= requestStartedAt; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  expect(await fileClockNow()).toBeGreaterThan(requestStartedAt);
+  return requestStartedAt;
+}
 
 beforeEach(async () => {
   root = realpathSafe(await mkdtemp(join(tmpdir(), 'afk-workspace-edit-')));
   options = { cwd: root, context: { resolveBase: root, writeRoots: [root],
     fileCheckpoint: createFileCheckpointRegistry('test', 'turn', join(root, 'state')) },
-    expectedContents: new Map(), requestStartedAt: Date.now() };
+    expectedContents: new Map(), requestStartedAt: await fileClockNow() };
   _setRealScratchRootsForTests([]);
 });
 afterEach(async () => {
@@ -65,7 +81,6 @@ describe('WorkspaceEdit safe application', () => {
 
   it('applies null-version edits to open, opened-then-closed and never-opened documents unchanged since the request', async () => {
     const [open, closed, never] = await Promise.all(['a.ts', 'b.ts', 'c.ts'].map((name) => file(name)));
-    await tick();
     const result = await applyWorkspaceEdit({ documentChanges: [open!, closed!, never!].map((p) => ({
       textDocument: { uri: uri(p), version: null }, edits: [edit(0, 3, 'new')],
     })) }, { ...options, documentVersion: (u) => (u === uri(never!) ? undefined : 3),
@@ -79,8 +94,7 @@ describe('WorkspaceEdit safe application', () => {
     'rejects a %s target modified after the request was sent, atomically', async (_label, version) => {
       const good = await file('a.ts');
       const target = await file('b.ts');
-      const requestStartedAt = Date.now();
-      await tick();
+      const requestStartedAt = await snapshotThenAdvance();
       await writeFile(target, 'old'); // external rewrite during the RPC (same text, new mtime)
       const result = await applyWorkspaceEdit({ documentChanges: [good, target].map((p) => ({
         textDocument: { uri: uri(p), version: null }, edits: [edit(0, 3, 'new')],
@@ -94,8 +108,7 @@ describe('WorkspaceEdit safe application', () => {
 
   it('detects an mtime-preserving write through ctime', async () => {
     const p = await file('a.ts');
-    const requestStartedAt = Date.now();
-    await tick();
+    const requestStartedAt = await snapshotThenAdvance();
     const past = new Date(requestStartedAt - 60_000);
     await writeFile(p, 'old');
     await utimes(p, past, past);
@@ -106,10 +119,9 @@ describe('WorkspaceEdit safe application', () => {
 
   it('does not treat a future-dated mtime set before the request as evidence', async () => {
     const p = await file('a.ts');
-    const future = new Date(Date.now() + 3_600_000);
+    const future = new Date((await fileClockNow()) + 3_600_000);
     await utimes(p, future, future);
-    await tick();
-    const result = await applyWorkspaceEdit(changes(p), { ...options, requestStartedAt: Date.now() });
+    const result = await applyWorkspaceEdit(changes(p), { ...options, requestStartedAt: await fileClockNow() });
     expect(result.isError).toBe(false);
     expect(await readFile(p, 'utf8')).toBe('new');
   });
@@ -256,9 +268,9 @@ describe('WorkspaceEdit safe application', () => {
     const p = await file('a.ts', '\uFEFFold');
     expect((await applyWorkspaceEdit(changes(p, [edit(1, 4, 'new')]), options)).isError).toBe(false);
     expect(await readFile(p, 'utf8')).toBe('\uFEFFnew');
-    await tick();
-    // A second request takes its own snapshot after the first edit landed.
-    expect((await applyWorkspaceEdit(changes(p, [edit(0, 4, '')]), { ...options, requestStartedAt: Date.now() })).isError).toBe(false);
+    // A second request takes its own snapshot right after the first edit
+    // landed, with zero delay: a write before the snapshot is never evidence.
+    expect((await applyWorkspaceEdit(changes(p, [edit(0, 4, '')]), { ...options, requestStartedAt: await fileClockNow() })).isError).toBe(false);
     expect(await readFile(p, 'utf8')).toBe('');
   });
 
@@ -291,6 +303,54 @@ describe('WorkspaceEdit safe application', () => {
     expect(result.incomplete).toBe(true);
     expect(JSON.parse(result.content)).toMatchObject({ status: 'applied', sync_warnings: [expect.stringContaining('disconnected')] });
     expect(await readFile(p, 'utf8')).toBe('new');
+  });
+});
+
+describe('staleness clock', () => {
+  it('fileClockNow is on the file clock: a file written right after it is not older', async () => {
+    const before = await fileClockNow();
+    const p = join(root, 'probe.ts');
+    await writeFile(p, 'x');
+    expect((await lstat(p)).mtimeMs).toBeGreaterThanOrEqual(before);
+  });
+
+  // Windows CI failed because Date.now() and NTFS stamps disagree. Skewing the
+  // JavaScript clock both ways proves the guard reads only the file clock.
+  it.each([['lags', -3_600_000], ['runs ahead', 3_600_000]] as const)(
+    'is independent of Date.now() when the JavaScript clock %s', async (_label, offset) => {
+      const realNow = Date.now.bind(Date);
+      vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offset);
+      const fresh = await file('a.ts');
+      expect((await applyWorkspaceEdit(changes(fresh), options)).isError).toBe(false);
+      expect(await readFile(fresh, 'utf8')).toBe('new');
+      const stale = await file('b.ts');
+      const requestStartedAt = await snapshotThenAdvance();
+      await writeFile(stale, 'old');
+      const result = await applyWorkspaceEdit(changes(stale), { ...options, requestStartedAt });
+      expect(result.content).toContain('modified after the request was sent');
+      expect(await readFile(stale, 'utf8')).toBe('old');
+    });
+
+  it('checks targets this caller wrote against the written text, by canonical path', async () => {
+    const p = await file('a.ts');
+    const requestStartedAt = await snapshotThenAdvance();
+    await writeFile(p, 'mine');
+    const written = new Map([[p, 'mine']]);
+    const ok = await applyWorkspaceEdit(changes(p, [edit(0, 4, 'next')]), { ...options, requestStartedAt, writtenContents: written });
+    expect(ok.isError).toBe(false);
+    await writeFile(p, 'theirs');
+    const stale = await applyWorkspaceEdit(changes(p, [edit(0, 6, 'x')]), { ...options, requestStartedAt, writtenContents: written });
+    expect(stale.content).toContain('changed during request');
+    expect(await readFile(p, 'utf8')).toBe('theirs');
+  });
+
+  it('reports applied text through onApplied, keyed by canonical path, only on success', async () => {
+    const p = await file('a.ts');
+    const onApplied = vi.fn();
+    await applyWorkspaceEdit(changes(p), { ...options, onApplied });
+    expect(onApplied.mock.calls).toEqual([[new Map([[p, 'new']])]]);
+    await applyWorkspaceEdit(changes(p, [edit(0, 99, 'x')]), { ...options, onApplied, requestStartedAt: await fileClockNow() });
+    expect(onApplied).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -63,9 +63,12 @@ export async function handleLspRefactor(
     return await withPooledFile(resolved.spec, filePath, content, opts, async (ctx) => {
       const deadlineSignal = AbortSignal.timeout(ctx.remainingMs());
       const operationSignal = signal ? AbortSignal.any([signal, deadlineSignal]) : deadlineSignal;
-      const env: RefactorEnvironment = { context, cwd: sessionRoot, signal: operationSignal, ...requestSnapshot(ctx.client) };
-      if (input.subcommand === 'rename') return rename(input, ctx, env);
-      if (input.subcommand === 'code_actions') return codeActions(input, ctx, env);
+      if (input.subcommand === 'rename' || input.subcommand === 'code_actions') {
+        // Only the mutating subcommands take the staleness snapshot: it writes a
+        // sentinel file, which a read-only symbol query must not depend on.
+        const env: RefactorEnvironment = { context, cwd: sessionRoot, signal: operationSignal, ...await requestSnapshot(ctx.client) };
+        return input.subcommand === 'rename' ? rename(input, ctx, env) : codeActions(input, ctx, env);
+      }
       const raw = await ctx.client.request('textDocument/documentSymbol', { textDocument: { uri: ctx.sync.uri } },
         { timeoutMs: ctx.remainingMs(), signal });
       return { content: JSON.stringify({ symbols: symbolRows(raw, ctx.sync.uri, context, cwd), limit: 1000 }) };

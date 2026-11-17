@@ -52,6 +52,13 @@ export interface FakeServerConfig {
   resolvedCodeAction?: unknown;
   /** workspace/applyEdit sent during executeCommand; command completes after its reply. */
   commandEdit?: unknown;
+  /**
+   * Like `commandEdit` but several: sent one at a time as `apply-1`, `apply-2`,
+   * ..., each after the previous reply; the command answers after the last one.
+   */
+  commandEdits?: unknown[];
+  /** Delay (ms) between receiving executeCommand and pushing the first edit. */
+  commandDelayMs?: number;
 }
 
 /** Write the fake server script to `scriptPath`. */
@@ -78,11 +85,17 @@ const send = (o) => {
 };
 let buf = Buffer.alloc(0);
 let commandId;
+const commandEdits = cfg.commandEdits || (cfg.commandEdit === undefined ? undefined : [cfg.commandEdit]);
+const pushEdit = (n) => send({ id: 'apply-' + n, method: 'workspace/applyEdit', params: { edit: commandEdits[n - 1] } });
 const handle = (m) => {
   log({ msg: m });
   if (cfg.silent) return;
   if (m.method === 'initialize') return send({ id: m.id, result: { capabilities: cfg.capabilities || {} } });
-  if (m.id === 'apply-1' && !m.method) return send({ id: commandId, result: m.result });
+  const applied = !m.method && typeof m.id === 'string' && /^apply-(\\d+)$/.exec(m.id);
+  if (applied) {
+    const n = Number(applied[1]);
+    return n < commandEdits.length ? pushEdit(n + 1) : send({ id: commandId, result: m.result });
+  }
   const results = {
     'textDocument/prepareRename': cfg.prepareRename === undefined ? { defaultBehavior: true } : cfg.prepareRename,
     'textDocument/rename': cfg.workspaceEdit === undefined ? null : stamped(cfg.workspaceEdit),
@@ -95,9 +108,9 @@ const handle = (m) => {
     if (cfg.crashOnRequest) process.exit(1);
     if (cfg.hangRequests) return;
     if (cfg.requestError) return send({ id: m.id, error: { code: -32601, message: 'nope' } });
-    if (m.method === 'workspace/executeCommand' && cfg.commandEdit !== undefined) {
+    if (m.method === 'workspace/executeCommand' && commandEdits) {
       commandId = m.id;
-      return send({ id: 'apply-1', method: 'workspace/applyEdit', params: { edit: cfg.commandEdit } });
+      return cfg.commandDelayMs ? void setTimeout(() => pushEdit(1), cfg.commandDelayMs) : pushEdit(1);
     }
     return send({ id: m.id, result: results[m.method] === undefined ? null : results[m.method] });
   }

@@ -1,5 +1,8 @@
 /** Safe LSP WorkspaceEdit adapter: all mutations use the normal patch_apply path. */
-import { readFile, stat } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import nodePath from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { LspClient } from '../../lsp/client.js';
 import type { ToolHandlerContext, ToolResult } from '../types.js';
@@ -21,13 +24,38 @@ export interface WorkspaceEditOptions {
   documentVersion?: (uri: string) => number | undefined;
   /**
    * Request-time snapshot (required: every target gets a staleness guard).
-   * Open documents are checked against their synchronized text; every other
-   * target (never opened, or opened then closed) is rejected when its mtime is
-   * later than `requestStartedAt`. Capture both before sending the request.
+   * Open documents must equal the text synchronized at snapshot time; every
+   * other target is rejected when its mtime or ctime is later than
+   * `requestStartedAt`. Capture both before sending the request. Residuals
+   * (see assertUnchangedSinceRequest): stale server caches, same-tick writes,
+   * and a workspace on a different filesystem clock than os.tmpdir().
    */
   expectedContents: ReadonlyMap<string, string>;
-  /** Epoch ms when `expectedContents` was captured, before the LSP request. */
+  /** `fileClockNow()` (a FILE timestamp, never `Date.now()`) taken with `expectedContents`. */
   requestStartedAt: number;
+  /**
+   * Canonical target path -> text this caller itself wrote after the snapshot
+   * (e.g. earlier edits of one command). Takes precedence over both checks above.
+   */
+  writtenContents?: ReadonlyMap<string, string>;
+  /** Called with canonical path -> written text when every change was applied. */
+  onApplied?: (written: ReadonlyMap<string, string>) => void;
+}
+
+/**
+ * Current time on the filesystem clock: the mtime of a short-lived sentinel in
+ * os.tmpdir() (never the user's workspace). Staleness compares file timestamps
+ * only with other file timestamps; `Date.now()` is a different clock (coarse
+ * ticks on Windows) and is never used for that comparison.
+ */
+export async function fileClockNow(): Promise<number> {
+  const sentinel = nodePath.join(os.tmpdir(), `afk-lsp-clock-${randomUUID()}`);
+  await writeFile(sentinel, '', { flag: 'wx' });
+  try {
+    return (await stat(sentinel)).mtimeMs;
+  } finally {
+    await unlink(sentinel).catch(() => {});
+  }
 }
 
 interface PlannedDocument { change: PatchFileChange; sourcePath: string }
@@ -47,24 +75,34 @@ function localFile(uri: string): string {
   return path;
 }
 
-/**
- * Contract: reject a target with positive evidence of change after the request
- * snapshot. Servers answer for non-open documents from disk, so `version: null`
- * is normal there; staleness is decided by evidence, not by version knowledge.
- * Evidence = mtime or ctime inside (requestStartedAt, now]: ctime catches
- * mtime-preserving writes; a future-dated mtime alone is not evidence. Stat runs
- * AFTER the read, and patch_apply's sha256 guard covers read-to-write.
- * Residual: a server cache stale BEFORE the request is not detectable here.
- */
+// Contract: reject a target with positive evidence of change after the request
+// snapshot. Servers answer for non-open documents from disk, so `version: null`
+// is normal there; staleness is decided by evidence, not by version knowledge.
+// 1. Text this caller wrote itself (`writtenContents`, canonical path) must
+//    equal the current disk text exactly.
+// 2. A document open at snapshot time must equal its snapshot text exactly.
+// 3. Any other target: evidence = mtime or ctime inside (requestStartedAt, now],
+//    where BOTH bounds are sentinel-file timestamps (`fileClockNow`), so the
+//    comparison never mixes the file clock with the JavaScript clock. ctime
+//    catches mtime-preserving writes; a timestamp above `now` (future-dated) is
+//    not evidence. Stat runs AFTER the read; `now` is taken after the stat;
+//    patch_apply's sha256 guard covers read-to-write.
+// Residuals: a server cache already stale BEFORE the request is not detectable;
+// a write within the same timestamp tick as the snapshot ties and is accepted
+// (resolution: coarse kernel ticks on Linux, 1-2 s on FAT/HFS+/some mounts); a
+// workspace on a different filesystem or clock than os.tmpdir() (network mount,
+// other volume) is compared across clocks and resolutions; wall-clock
+// adjustments between snapshot and check move both bounds.
 async function assertUnchangedSinceRequest(path: string, uri: string, before: string, options: WorkspaceEditOptions): Promise<void> {
-  const expected = options.expectedContents.get(uri);
+  const written = options.writtenContents?.get(path);
+  const expected = written ?? options.expectedContents.get(uri);
   if (expected !== undefined) {
     if (before !== expected) throw new Error('WorkspaceEdit document changed during request');
     return;
   }
   const { mtimeMs, ctimeMs } = await stat(path);
-  const now = Date.now();
-  const inWindow = (ms: number) => Math.floor(ms) > options.requestStartedAt && Math.floor(ms) <= now;
+  const now = await fileClockNow();
+  const inWindow = (ms: number) => ms > options.requestStartedAt && ms <= now;
   if (inWindow(mtimeMs) || inWindow(ctimeMs)) {
     throw new Error(`WorkspaceEdit target modified after the request was sent: ${uri}`);
   }
@@ -142,6 +180,11 @@ export async function applyWorkspaceEdit(edit: unknown, options: WorkspaceEditOp
       errors: [{ error: 'workspace_edit_apply_failed', detail: errorMessage(err) }] }) };
   }
   const payload = JSON.parse(result.content) as { status?: string; sync_warnings?: string[] };
+  if (payload.status === 'applied' && !options.dryRun) {
+    const written = new Map<string, string>();
+    for (const { change } of planned) if (change.content !== undefined) written.set(change.path, change.content);
+    options.onApplied?.(written);
+  }
   if (options.client && (payload.status === 'applied' || payload.status === 'partial_failure') && !options.dryRun) {
     const warnings: string[] = [];
     // Read actual disk state, including after the engine's best-effort rollback.
