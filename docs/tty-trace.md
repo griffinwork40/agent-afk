@@ -23,6 +23,13 @@ that path. Every byte written to `stdout` **and** `stderr` is tee-d there in
 real time using a sync file descriptor, so a crash loses at most the chunk in
 progress — never the file. Terminal resize events are recorded as `"r"` events.
 
+The path is explicitly user-selected, like a shell redirect: **an existing file
+at that path is truncated**, even if it is not a cast file. Use a new filename
+for each capture; there is no home-directory restriction or overwrite prompt.
+
+Resize bursts are coalesced over 50 ms. Pending resizes are recorded before the
+next output or normal shutdown, preserving the size associated with that output.
+
 When `AFK_TTY_TRACE` is unset (the default), the recorder adds zero overhead —
 no wrappers are installed, no file is opened.
 
@@ -33,6 +40,11 @@ no wrappers are installed, no file is opened.
 > responses, and potentially credentials or secrets. The file is created with
 > `0600` permissions (owner-read/write only), but it is not encrypted and may be
 > captured by backup tools, synced to cloud storage, or accidentally shared.
+>
+> There is **no size cap, rotation, or file-growth reporting**. Long sessions
+> keep growing the file until recording stops or a write fails (for example,
+> when the disk is full). Enable tracing only for a short diagnostic capture
+> and monitor free disk space yourself.
 >
 > - Keep cast files in a directory excluded from cloud sync and backups.
 > - Delete them as soon as the diagnostic work is done.

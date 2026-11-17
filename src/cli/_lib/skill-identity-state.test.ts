@@ -13,37 +13,43 @@ afterEach(() => vi.restoreAllMocks());
 describe('committed skill identity', () => {
   describe.each(['writer', 'compositor'] as const)('%s sink', (sink) => {
     it.each([20, 40, 80])('one-line brand+dim form at width %i, no args line', async (width) => {
-      vi.spyOn(terminalSize, 'getTerminalWidth').mockReturnValue(width);
-      const input = {
-        name: '\x1b[31mreview\x1b[0m',
-        purpose: `Inspect\n changes 界 ${'carefully '.repeat(15)}`,
-        arguments: `src/${'long-path-'.repeat(15)}index.ts`,
-      };
-      const expected = sanitizeSkillIdentity(input);
-      const line = vi.fn();
-      const out = { line, raw: line, info: line, warn: line, error: line, success: line } satisfies Writer;
-      const commitAbove = vi.fn();
-      const compositor = sink === 'compositor' ? { commitAbove } as unknown as TerminalCompositor : null;
-      const state = new SkillIdentityState(input);
-      const coordinator = new CommitCoordinator();
-      await state.introduce(coordinator, compositor, out);
-      await state.introduce(coordinator, compositor, out);
-      await coordinator.flushAll();
+      const savedLevel = chalk.level;
+      try {
+        chalk.level = 0;
+        vi.spyOn(terminalSize, 'getTerminalWidth').mockReturnValue(width);
+        const input = {
+          name: '\x1b[31mreview\x1b[0m',
+          purpose: `Inspect\n changes 界 ${'carefully '.repeat(15)}`,
+          arguments: `src/${'long-path-'.repeat(15)}index.ts`,
+        };
+        const expected = sanitizeSkillIdentity(input);
+        const line = vi.fn();
+        const out = { line, raw: line, info: line, warn: line, error: line, success: line } satisfies Writer;
+        const commitAbove = vi.fn();
+        const compositor = sink === 'compositor' ? { commitAbove } as unknown as TerminalCompositor : null;
+        const state = new SkillIdentityState(input);
+        const coordinator = new CommitCoordinator();
+        await state.introduce(coordinator, compositor, out);
+        await state.introduce(coordinator, compositor, out);
+        await coordinator.flushAll();
 
-      const commits = sink === 'compositor' ? commitAbove : line;
-      expect(commits).toHaveBeenCalledTimes(1);
-      expect(sink === 'compositor' ? line : commitAbove).not.toHaveBeenCalled();
-      const text = String(commits.mock.calls[0]![0]);
-      // Must contain the name (stripped of ANSI) and the purpose text.
-      const plain = stripAnsi(text).replace(/\n/g, ' ');
-      expect(plain).toContain(`/${expected.name}`);
-      expect(plain).toContain(expected.purpose.replace(/\s+/gu, ' ').trim().slice(0, 20));
-      // No args: line.
-      expect(plain).not.toContain('args:');
-      // No ANSI at chalk level 0 (non-TTY / NO_COLOR).
-      expect(text).not.toContain('\x1b');
-      // Every row fits the terminal width.
-      for (const row of text.split('\n')) expect(displayWidth(row)).toBeLessThanOrEqual(width);
+        const commits = sink === 'compositor' ? commitAbove : line;
+        expect(commits).toHaveBeenCalledTimes(1);
+        expect(sink === 'compositor' ? line : commitAbove).not.toHaveBeenCalled();
+        const text = String(commits.mock.calls[0]![0]);
+        // Must contain the full name+purpose in compacted form (wrapping must not discard any budgeted field).
+        const compact = (value: string) => value.replace(/\s/gu, '');
+        expect(compact(stripAnsi(text))).toBe(compact(`/${expected.name} · ${expected.purpose}`));
+        // No args: line.
+        const plain = stripAnsi(text).replace(/\n/g, ' ');
+        expect(plain).not.toContain('args:');
+        // No ANSI at chalk level 0 (non-TTY / NO_COLOR).
+        expect(text).not.toContain('\x1b');
+        // Every row fits the terminal width.
+        for (const row of text.split('\n')) expect(displayWidth(row)).toBeLessThanOrEqual(width);
+      } finally {
+        chalk.level = savedLevel;
+      }
     });
 
     it('no-purpose renders name only (no separator)', async () => {

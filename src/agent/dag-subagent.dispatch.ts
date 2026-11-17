@@ -64,7 +64,7 @@ async function setupDagIsolation(
 ) {
   const childConfig: { cwd?: string } = {};
   const iso = await setupIsolationWorktree({
-    parsed: { prompt: '', mode: 'foreground', id_prefix: `compose-${spec.id}` },
+    parsed: { prompt: '', mode: 'foreground', id_prefix: `compose-${spec.id}`, task_slug: spec.taskSlug },
     currentCwd: anchorCwd, isolationCounterRef: { value: isolationCounter - 1 },
     childConfig, childWriteCapable: true, probe: undefined,
     budgetReceipt, signal: nodeSignal, dagNodeId: spec.id,

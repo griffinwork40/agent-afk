@@ -70,7 +70,7 @@ const PINNED_HASHES = {
   // subagent-executor.isolation.test.ts + input-parse.ts confirm it is honored
   // at any depth, incl. nested inside a forked skill). Behavior-preserving prose
   // correction; frontmatter (context: fork) unchanged.
-  diagnose: 'ef3290af824e5fde88d9d7c15406f64a97d9c6eb9076cb90a1aa23b1a647eba1',
+  diagnose: 'a816ec48c51f523225b59ba7f8f3a033227fc777c7fecae1066978258cf53650',
   // false-completion-gate, fix-pr, polish: high-usage user-scope skills bundled
   // in #943. No upstream counterpart — bundled-only.
   'false-completion-gate':
@@ -121,7 +121,7 @@ const PINNED_HASHES = {
   // ~/.afk/skills/ if it drifts back.
   // #4993: replace the child-blocked checkout discard advice with preservation
   // and an explicit single-file git-show alternative. Bundled-only child gate.
-  refactor: '8468765f11c448adf50bf5cf172e5e4c731c4510ece1449bbf543494b94e5427',
+  refactor: '66381a9023f9424e4bca97e273e951d7290188c7afb7aafb80959f1054068cad',
   research: '052f8ec6f467f5b9200bea01286bebecf079c7135897a6a503c9cd74a019304b',
   // History: /review Wave 1 no longer mandates a `git show` re-read (#726,
   // #777); severity and disposition split into separate axes with an explicit

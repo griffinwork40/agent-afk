@@ -118,10 +118,10 @@ export async function acquireInstallLock(
         await fh.writeFile(JSON.stringify(record), 'utf8');
         await fh.close();
       } catch (writeErr: unknown) {
-        // The sentinel exists but carries no valid record. Remove it so it
-        // cannot wedge later callers, then surface the original error.
+        // Do not unlink the pathname: a peer may have replaced our sentinel
+        // while this write/close failed. Close only our handle and leave any
+        // abandoned sentinel to corrupt-grace / expiry recovery below.
         try { await fh.close(); } catch { /* already closed */ }
-        try { await unlink(lockFile); } catch { /* already removed */ }
         throw writeErr;
       }
       // We hold the lock.

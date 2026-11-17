@@ -183,4 +183,37 @@ describe('registry skills in registerPluginSkills', () => {
     expect(lookup('/plugin:zzreg-gone')).toBeUndefined();
     expect(state.collisions).toEqual([]);
   });
+
+  it('keeps the boot handler for a namespaced user skill (user:mint) and records no collision', async () => {
+    // A user skill named `mint` collides with the built-in, so the skill
+    // registry holds it under the `user:mint` namespace. The discovery list
+    // carries `source: 'user'`, so `isRegistrySource` routes it through
+    // `registerRegistrySkillCommand` — NOT `makeForwardHandler`. That means
+    // the authored `when-to-use` hint is preserved (the forward handler would
+    // derive hint from the description instead). No collision is recorded
+    // because registry skills never compete with themselves for the bare slot.
+    writeUserSkill(
+      'mint',
+      skillMd('mint', 'User override of mint.', 'when-to-use: "Only when the user owns this."\n'),
+    );
+
+    await registerPluginSkills(realSession);
+
+    // The namespaced form is reachable and carries the authored hint.
+    expect(lookup('/user:mint')?.hint).toBe('Only when the user owns this.');
+    // The user skill is never recorded as shadowing itself.
+    expect(state.collisions.filter((c) => isRegistrySource(c.source))).toEqual([]);
+  });
+
+  it('classifies isRegistrySource correctly for all relevant source values', () => {
+    // Branches exercised by other tests: 'builtin', 'user', 'project'.
+    // This test closes the gap for 'imported' and the false cases.
+    expect(isRegistrySource('imported')).toBe(true);
+    // Falsy inputs — an entry with no source is a plugin candidate, not a
+    // registry skill, and must NOT be treated as a registry entry.
+    expect(isRegistrySource(undefined)).toBe(false);
+    // Plugin and command sources are not registry sources.
+    expect(isRegistrySource('plugin')).toBe(false);
+    expect(isRegistrySource('command')).toBe(false);
+  });
 });

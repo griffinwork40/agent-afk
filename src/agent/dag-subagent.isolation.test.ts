@@ -253,6 +253,22 @@ describe('runSubagentDAG — isolation:"worktree" wiring', () => {
       expect(forkArg.config.cwd).toBe(ISO_RESULT.path);
     });
 
+    it('names the branch from taskSlug when supplied (iso-<clean>-<suffix>)', async () => {
+      createIsolatedWorktree.mockResolvedValue(ISO_RESULT);
+      const manager: SubagentManager = {
+        forkSubagent: vi.fn(async () => makeFakeHandle('ok')),
+      } as unknown as SubagentManager;
+      await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [{ ...makeIsoNode('A'), taskSlug: 'docs-lane.v2' }],
+        edges: [],
+        anchorCwd: '/repo',
+      });
+      const slug = (createIsolatedWorktree.mock.calls[0]![0] as { slugHint: string }).slugHint;
+      expect(slug).toMatch(/^iso-docs-lane-v2-[a-z0-9]{6}$/);
+    });
+
     it('gives concurrent nodes distinct slug hints (monotonic dagIsolationCounter)', async () => {
       // Two sequential nodes in the same DAG invocation must not collide slugs.
       createIsolatedWorktree.mockResolvedValue(ISO_RESULT);

@@ -553,3 +553,18 @@ describe('prefix-cache stability: MCP sort (#4198)', () => {
     expect(tools.map((t) => t.name)).toEqual(originalOrder);
   });
 });
+
+describe('task_slug schema fields', () => {
+  it('agentTool declares task_slug as a string tied to isolation', () => {
+    const props = agentTool.input_schema.properties as Record<string, { type?: string; description?: string }>;
+    expect(props['task_slug']?.type).toBe('string');
+    expect(props['task_slug']?.description).toMatch(/isolation:"worktree"/);
+    expect(props['task_slug']?.description).toMatch(/continuation/);
+  });
+
+  it('composeTool node schema declares task_slug and still forbids unknown fields', () => {
+    const nodeItems = (composeTool.input_schema.properties as Record<string, { items?: { properties?: Record<string, { type?: string }>; additionalProperties?: boolean } }>)['nodes']?.items;
+    expect(nodeItems?.properties?.['task_slug']?.type).toBe('string');
+    expect(nodeItems?.additionalProperties).toBe(false);
+  });
+});

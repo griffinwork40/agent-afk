@@ -143,6 +143,12 @@ export interface AgentInput {
    */
   isolation?: 'worktree';
   /**
+   * Short kebab summary naming the isolated worktree branch
+   * (`afk/iso-<task_slug>-<suffix>`). Only used with `isolation:'worktree'`;
+   * ignored on continuation (the chain keeps its original worktree).
+   */
+  task_slug?: string;
+  /**
    * When true, the forked child's tool surface gains the `emit_progress` tool,
    * allowing the child to push structured progress events to the parent at the
    * parent's next user-turn boundary. Opt-in per dispatch — the tool is EXCLUDED
@@ -261,6 +267,8 @@ export function parseAgentInput(input: unknown): AgentInput {
   // asks the executor to fork the child inside a fresh managed git worktree.
   // Mutual-exclusion checks (cwd, writeRoots) are enforced inside parseIsolation.
   const isolation = parseIsolation(readOptional(agentInput, 'isolation'), cwd, writeRoots);
+  // task_slug: optional worktree-branch name; cleaned by buildIsolatedSlug.
+  const task_slug = readOptionalString(agentInput, 'task_slug');
 
   // progress_events: optional boolean. Truthy enables the emit_progress tool
   // on the child. Falsy (or absent) excludes it. readOptional returns
@@ -308,6 +316,7 @@ export function parseAgentInput(input: unknown): AgentInput {
     ...(writeRoots !== undefined ? { writeRoots } : {}),
     ...(readRoots !== undefined ? { readRoots } : {}),
     ...(isolation !== undefined ? { isolation } : {}),
+    ...(task_slug !== undefined ? { task_slug } : {}),
     ...(progress_events !== undefined ? { progress_events } : {}),
     ...(host !== undefined ? { host } : {}),
     ...(continuation_chain_id !== undefined ? { continuation_chain_id } : {}),

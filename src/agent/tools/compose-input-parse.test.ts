@@ -526,3 +526,19 @@ describe('parseComposeInput — compose-level fields still work', () => {
     expect(parsed.max_tool_rounds_per_node).toBe(100);
   });
 });
+
+describe('parseComposeInput — per-node task_slug', () => {
+  it('accepts task_slug alongside isolation:"worktree"', () => {
+    const { parsed } = parseComposeInput(minimal({ isolation: 'worktree', task_slug: 'issue-4112-telegram-retry' }));
+    expect(parsed.nodes[0]!.task_slug).toBe('issue-4112-telegram-retry');
+  });
+
+  it('omits a blank task_slug', () => {
+    const { parsed } = parseComposeInput(minimal({ isolation: 'worktree', task_slug: '   ' }));
+    expect(parsed.nodes[0]!.task_slug).toBeUndefined();
+  });
+
+  it('rejects a non-string task_slug', () => {
+    expect(() => parseComposeInput(minimal({ task_slug: 42 }))).toThrow(/task_slug must be a string/);
+  });
+});

@@ -33,7 +33,7 @@ import {
 import { loadAgentRegistry } from '../agents/index.js';
 import { discoverPluginAgents } from '../tools/skill-bridge.js';
 import { resolveDelegationBudgetConfig, DelegationBudget } from '../tools/delegation-budget.js';
-import { ContinuationRegistry } from '../subagent/continuation-registry.js';
+import { ContinuationRegistry, type ContinuationLimits } from '../subagent/continuation-registry.js';
 import { releaseChainWorktree, repoRootFromWorktreePath } from '../tools/subagent/continuation-worktree.js';
 import type { SubagentExecutorContext } from '../tools/subagent-executor.js';
 import type { BackgroundAgentRegistry } from '../background-registry.js';
@@ -288,9 +288,13 @@ function buildChildSkillFactory(
 /**
  * Build a ContinuationRegistry with its worktree-release evict callback wired.
  * Extracted from wireExecutors to stay within the 200-line ceiling.
+ * Exported so tests can use the same factory instead of maintaining hand-rolled
+ * copies of the onEvict callback (#4957). Optional `limits` let callers (e.g.
+ * tests) override per-chain round/continuation caps without touching the evict
+ * logic.
  */
-function buildContinuationRegistry(): ContinuationRegistry {
-  const registry = new ContinuationRegistry();
+export function buildContinuationRegistry(limits?: ContinuationLimits): ContinuationRegistry {
+  const registry = new ContinuationRegistry(limits);
   // Release any worktree kept for a chain when it is evicted from the 256-cap
   // or disposed at session end (#4266). Best-effort: the callback never throws.
   registry.onEvict = (chain) => {

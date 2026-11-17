@@ -8,6 +8,7 @@ description: "Reference convention for sub-agent I/O schemas. Loaded by orchestr
 For each sub-agent you plan to dispatch, define a schema before the call:
 
 - `id_prefix` — **required**: a short, descriptive task label set on the Agent dispatch so the live TUI shows the agent's job (e.g. `"security review"`, `"codebase search"`, `"hypothesis: null deref"`). Never use the default `"agent-tool"`.
+- `task_slug` — **required when dispatching with `isolation: "worktree"`**: a 2-5 word kebab summary of the work (e.g. `"issue-4112-telegram-retry"`). It names the worktree branch (`afk/iso-<task_slug>-<suffix>`), which becomes the PR head branch. `id_prefix` stays the TUI label. Never put secrets in it: branch names are public once pushed.
 - `goal` — one-sentence objective
 - `inputs` — data/context the sub-agent receives
 - `artifacts` — named structured fields expected back (not freeform prose)
