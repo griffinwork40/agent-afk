@@ -16,7 +16,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { AgentConfig } from '../../../types/config-types.js';
 import { setUpQueryClient } from './client-setup.js';
 
-const refreshMock = vi.fn<[], Promise<string | null>>();
+const refreshMock = vi.fn<() => Promise<string | null>>();
 
 vi.mock('../../../auth/keychain.js', () => ({
   refreshClaudeCodeOauthToken: () => refreshMock(),
