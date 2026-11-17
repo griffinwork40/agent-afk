@@ -21,6 +21,14 @@ const FIELD_SEP = '\x1f';
 export interface GitLogRangeOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
+  /**
+   * SHAs (full or abbreviated) the session is known to have authored, derived
+   * from the effect ledger / tool results. When provided, each returned entry
+   * is annotated with `sessionAuthored: true` when its SHA matches a ledger
+   * SHA, and `sessionAuthored: false` otherwise (e.g. commits that arrived via
+   * a `git pull` or rebase the session ran).
+   */
+  ledgerShas?: ReadonlySet<string>;
 }
 
 /** Callers pass `--no-optional-locks` first in `args` (audit:git-locks scans each call line). */
@@ -59,13 +67,22 @@ export async function gitLogRange(
       timeoutMs,
       opts.signal,
     );
+    const { ledgerShas } = opts;
     const entries: GitLogEntry[] = [];
     for (const line of out.split('\n')) {
       const sep = line.indexOf(FIELD_SEP);
       if (sep < 0) continue;
       const sha = line.slice(0, sep).trim().toLowerCase();
       if (!SHA_RE.test(sha)) continue;
-      entries.push({ sha, subject: line.slice(sep + 1).trim(), repo });
+      const entry: GitLogEntry = { sha, subject: line.slice(sep + 1).trim(), repo };
+      if (ledgerShas !== undefined) {
+        // Mark authored when any ledger SHA is a prefix of (or equal to) this
+        // full SHA, or this SHA is a prefix of a ledger SHA.
+        entry.sessionAuthored = [...ledgerShas].some(
+          (ls) => sha.startsWith(ls) || ls.startsWith(sha),
+        );
+      }
+      entries.push(entry);
     }
     return entries;
   } catch {
