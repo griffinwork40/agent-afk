@@ -17,7 +17,7 @@ import { detectShellFromEnv } from '../shell-init.js';
 import type { ExecFileFn } from './worktree.js';
 import type { WorktreeDisposition } from './worktree-disposition.js';
 import { isExecError } from './worktree.errors.js';
-import { ensureScratchExcluded } from '../../../agent/worktree/worktree-scratch.js';
+import { ensureAfkExcludes } from '../../../agent/worktree/worktree-scratch.js';
 
 // ---------------------------------------------------------------------------
 // Cleanup parameters
@@ -77,9 +77,9 @@ export async function runWorktreeCleanup(params: WorktreeCleanupParams): Promise
     return;
   }
 
-  // Re-ensure the `.afk-scratch/` exclude before the dirty check, so a tree
-  // created before it existed also treats scratch files as clean.
-  await ensureScratchExcluded(execFile, currentPath);
+  // Re-ensure the afk excludes (`.afk-scratch/`, the meta file) before the
+  // dirty check, so a tree created before they existed also reads as clean.
+  await ensureAfkExcludes(execFile, currentPath);
   let status: { stdout: string; stderr: string };
   let ignoredProbeEarly: Awaited<ReturnType<typeof probeNonRebuildableIgnoredFiles>> | undefined;
   try {

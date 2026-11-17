@@ -52,6 +52,13 @@ describe('afk -w session cleanup with .afk-scratch/', () => {
     expect(existsSync(wt)).toBe(false);
   });
 
+  it('removes a tree whose only extra content is the afk meta file', async () => {
+    const wt = await makeTree('i-meta');
+    await fs.writeFile(join(wt, '.afk-worktree-meta.json'), '{"owner":"interactive"}');
+    await runWorktreeCleanup({ worktreePath: wt, branch: 'i-meta', repoRoot: repo, execFile });
+    expect(existsSync(wt)).toBe(false);
+  });
+
   it('still preserves a tree with an untracked file outside .afk-scratch/', async () => {
     const wt = await makeTree('i-dirty');
     await fs.writeFile(join(wt, '.pr-body.md'), 'stray');

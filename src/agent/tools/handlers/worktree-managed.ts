@@ -28,7 +28,7 @@ import { env } from '../../../config/env.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { debugLog } from '../../../utils/debug.js';
 import { sleep } from '../../../utils/sleep.js';
-import { ensureScratchExcluded } from '../../worktree/worktree-scratch.js';
+import { ensureAfkExcludes } from '../../worktree/worktree-scratch.js';
 import { runWorktreeSetup, type SetupCommandRunner, type WorktreeSetupResult } from '../../worktree/worktree-setup.js';
 
 /** Default git runner. Exported so callers without their own can reuse it. */
@@ -226,10 +226,11 @@ export async function createManagedWorktree(
   // path must do the same. Awaited but non-throwing, so it orders before the
   // meta write without being able to fail the create.
   await registerWorktreeRoot(repoRoot);
-  // Agent scratch dir (`.afk-scratch/`) ignored via the shared info/exclude, so
-  // throwaway files there never make teardown preserve-and-lock the tree.
+  // Agent scratch dir (`.afk-scratch/`) and the meta file written below are
+  // ignored via the shared info/exclude, so neither makes teardown
+  // preserve-and-lock the tree in a repo that does not gitignore them.
   // Never throws; on failure the tree just behaves as before.
-  await ensureScratchExcluded(execFile, repoRoot);
+  await ensureAfkExcludes(execFile, repoRoot);
   // Meta write is what makes this tree a first-class citizen of the sweep
   // protocol (age from createdAt, PID liveness). Best-effort: never fail the
   // create over the rev-parse or the write.
@@ -339,9 +340,9 @@ export async function removeManagedWorktreeGuarded(
 ): Promise<GuardedRemoveOutcome> {
   const { execFile, repoRoot, worktreePath, force } = args;
   if (!force) {
-    // Re-ensure before the dirty check so trees created before the scratch
-    // exclude existed (or whose create-time write failed) also benefit.
-    await ensureScratchExcluded(execFile, worktreePath);
+    // Re-ensure before the dirty check so trees created before the afk
+    // excludes existed (or whose create-time write failed) also benefit.
+    await ensureAfkExcludes(execFile, worktreePath);
     if (await isManagedWorktreeDirty(execFile, worktreePath)) {
       return { removed: false, reason: 'dirty' };
     }

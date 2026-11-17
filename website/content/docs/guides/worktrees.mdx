@@ -59,6 +59,8 @@ Alternatively, call the `worktree` tool's `create` action with `name` and option
 
 Each managed worktree has one sanctioned scratch directory, `.afk-scratch/` at the worktree root, for throwaway files such as commit message bodies, PR bodies, and issue comments. When AFK creates a worktree (isolated `agent`, the `worktree` tool's `create`, or `afk -w`), it adds `/.afk-scratch/` to the repository's shared `.git/info/exclude`. This changes no tracked file, so it works in any repository. It adds the entry again just before the teardown dirty check, so older worktrees get it too. Files in `.afk-scratch/` never cause a checkout to be preserved or locked, and they are deleted with the worktree. An untracked or non-rebuildable ignored file anywhere else still preserves and locks the checkout as before. If the exclude file cannot be written, creation still succeeds, and scratch files make the checkout read as dirty as they did before. Isolated children and the `worktree` tool's `create` result are told about the directory.
 
+The same exclude file also gets `/.afk-worktree-meta.json`, the bookkeeping file AFK writes at each managed worktree root. Without it, a repository that does not gitignore that file sees every fresh worktree as dirty, so teardown preserves and locks checkouts that hold no work.
+
 ## Inspect and clean up checkouts
 
 ```bash
