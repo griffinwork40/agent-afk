@@ -27,19 +27,24 @@ export type ClosedRouterResult =
   | { rotated: true;  kind: 'rotated' | 'reset' }
   | { rotated: false; kind: Exclude<ClosedRouterKind, 'rotated' | 'reset'> };
 
-/** Cached PATH check: undefined = not yet resolved, null = not found. */
+/** Cached PATH check: undefined = not yet resolved. Only set true (positive). */
 let _closedRouterOnPath: boolean | undefined;
 
+/** Reset the PATH cache — for test isolation only. */
+export function _resetClosedRouterPathCache(): void {
+  _closedRouterOnPath = undefined;
+}
+
 function isClosedRouterOnPath(): boolean {
-  if (_closedRouterOnPath !== undefined) return _closedRouterOnPath;
+  if (_closedRouterOnPath === true) return true;
   // `which` is POSIX; closed-router targets macOS/Linux OAuth flows so this is fine.
   try {
     execFileSync('which', ['closed-router'], { stdio: 'ignore' });
     _closedRouterOnPath = true;
   } catch {
-    _closedRouterOnPath = false;
+    // Do NOT cache the negative result — leave undefined so the next call re-checks PATH.
   }
-  return _closedRouterOnPath;
+  return _closedRouterOnPath === true;
 }
 
 /**
@@ -70,7 +75,7 @@ export async function tryClosedRouterRotate(): Promise<ClosedRouterResult> {
     const { stdout } = await execFileAsync(
       'closed-router',
       ['rotate', '--once', '--json'],
-      { timeout: 10_000 },
+      { timeout: 10_000, maxBuffer: 64 * 1024 },
     );
 
     let parsed: unknown;

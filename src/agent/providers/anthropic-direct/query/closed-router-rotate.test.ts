@@ -28,7 +28,7 @@ vi.mock('child_process', async (importOriginal) => {
 });
 
 // Dynamic import AFTER mocks are registered.
-const { tryClosedRouterRotate } = await import('./closed-router-rotate.js');
+const { tryClosedRouterRotate, _resetClosedRouterPathCache } = await import('./closed-router-rotate.js');
 
 /** Make the promisified execFile resolve with the given stdout. */
 function mockRotateStdout(stdout: string): void {
@@ -119,6 +119,19 @@ describe('tryClosedRouterRotate', () => {
     const result = await tryClosedRouterRotate();
     expect(result).toEqual({ rotated: false, kind: 'error' });
     expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('Command timed out'));
+    stderrSpy.mockRestore();
+  });
+
+  it('returns error when binary is not on PATH', async () => {
+    // Reset positive-only cache so this test re-checks PATH.
+    _resetClosedRouterPathCache();
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    execFileSyncMock.mockImplementation(() => { throw new Error('not found'); });
+    const result = await tryClosedRouterRotate();
+    expect(result).toEqual({ rotated: false, kind: 'error' });
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('not found on PATH'));
+    // execFile (the async spawn) must NOT have been called — gate failed before subprocess.
+    expect(execFileCbMock).not.toHaveBeenCalled();
     stderrSpy.mockRestore();
   });
 });
