@@ -21,8 +21,12 @@ import {
   RATE_LIMIT_TRANSIENT_MAX_RETRIES,
 } from './retry-constants.js';
 import { usageLimitNoTimestampPause, usageLimitResetPause } from './usage-limit-pause.js';
+import { env } from '../../../../config/env.js';
 import { anthropicCreditErrorEvent } from '../usage-limit.error.js';
 import { catchUpStaleCredential } from './usage-limit-catch-up.js';
+import { tryClosedRouterRotate } from './closed-router-rotate.js';
+import { clearKeychainCache } from '../../../auth/keychain.js';
+import { adoptFreshClient } from './live-client.js';
 import {
   modelFallbackRequest,
   modelRejectedFallbackRequest,
@@ -67,6 +71,10 @@ export async function* turnWithUsageLimitRetry(
   // One stale-credential catch-up per turn (see usage-limit-catch-up.ts), so
   // a replay that re-limits falls through to the normal park, never loops.
   let credentialCatchUpTried = false;
+  // One closed-router rotation attempt per turn — prevents repeated subprocess
+  // calls on every loop iteration when the stale client issue (item 1) would
+  // otherwise cause the same 429 on replay and re-enter this block.
+  let closedRouterTried = false;
 
   for (;;) {
     let transientRetryAfterMs: number | undefined;
@@ -133,6 +141,34 @@ export async function* turnWithUsageLimitRetry(
       }
     }
 
+    // Closed-router rotation: when AFK_CLOSED_ROUTER=1, attempt to rotate to
+    // a fresh OAuth account before entering the multi-hour park loop. On
+    // success, rebuild the SDK client (the old client caches its bearer token
+    // at construction — clearing the keychain cache alone is insufficient) and
+    // replay the turn on the new credential. Guard with closedRouterTried so
+    // the subprocess fires at most once per turn regardless of replay outcome.
+    if (pendingErrorEvent && !closedRouterTried) {
+      if (isClosed() || runInput.signal.aborted) return;
+      closedRouterTried = true;
+      const rotation = await tryClosedRouterRotate();
+      if (rotation.rotated) {
+        clearKeychainCache();
+        const adopted = await adoptFreshClient(ctx, runInput);
+        if (adopted) {
+          void emitSessionPhase(runInput.traceWriter, {
+            phase: 'usage_limit_resume',
+            durationMs: 0,
+            metadata: { source: 'closed-router-rotate', hotSwapped: true, kind: rotation.kind },
+          });
+          pendingErrorEvent = null;
+          resetsAt = null;
+          noTimestamp = false;
+          continue;
+        }
+        // adoption failed — fall through to park loop
+      }
+    }
+
     if (!sawTransient) break;
 
     rateLimitRetries += 1;
@@ -181,9 +217,13 @@ export async function* turnWithUsageLimitRetry(
   }
   noteTurnProgress(runInput);
 
+  // When closed-router is active, poll every 30 s instead of 60 s so
+  // cron-driven credential rotations are picked up twice as fast.
+  const pollIntervalMs = env.AFK_CLOSED_ROUTER === '1' ? 30_000 : undefined;
+
   // ── oauth-limit-no-ts path ─────────────────────────────────────────────
   if (noTimestamp) {
-    yield* usageLimitNoTimestampPause(ctx, runInput, isClosed, next, pendingErrorEvent);
+    yield* usageLimitNoTimestampPause(ctx, runInput, isClosed, next, pendingErrorEvent, pollIntervalMs);
     return;
   }
 
@@ -192,5 +232,5 @@ export async function* turnWithUsageLimitRetry(
     return;
   }
 
-  yield* usageLimitResetPause(ctx, runInput, isClosed, next, pendingErrorEvent, resetsAt);
+  yield* usageLimitResetPause(ctx, runInput, isClosed, next, pendingErrorEvent, resetsAt, pollIntervalMs);
 }

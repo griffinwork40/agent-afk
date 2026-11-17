@@ -73,6 +73,18 @@ export function _resetKeychainReadCache(): void {
 }
 
 /**
+ * Invalidate the keychain read cache so the next `loadClaudeCodeOauthToken`
+ * call reads the live store rather than a stale cached value.
+ *
+ * Call this after an external process (e.g. `closed-router rotate`) writes a
+ * new credential to the keychain — otherwise the 5-second cache window would
+ * cause the replayed turn to send the old token.
+ */
+export function clearKeychainCache(): void {
+  _resetKeychainReadCache();
+}
+
+/**
  * Read the Claude Code OAuth access token from its native credential store.
  *
  * Sources, by platform:
