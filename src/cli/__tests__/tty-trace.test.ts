@@ -150,6 +150,8 @@ describe('tty-trace', () => {
     Object.defineProperty(process.stdout, 'columns', { value: 120, configurable: true });
     Object.defineProperty(process.stdout, 'rows', { value: 40, configurable: true });
     process.stdout.emit('resize');
+    // Output flushes the pending resize before recording its own event.
+    process.stdout.write('after resize');
 
     const newLines = fs.lines.slice(before);
     const resizeLines = newLines.filter((l) => {
@@ -159,6 +161,116 @@ describe('tty-trace', () => {
     const evt = JSON.parse(resizeLines[0]!.trim()) as [number, string, string];
     expect(evt[1]).toBe('r');
     expect(evt[2]).toMatch(/\d+x\d+/);
+  });
+
+  it('coalesces a resize burst to its final size', () => {
+    vi.useFakeTimers();
+    try {
+      const fs = makeFakeFsOps();
+      installTtyTrace(fs);
+      const before = fs.lines.length;
+      for (let cols = 81; cols <= 120; cols++) {
+        setTTYProps(true, cols, 40);
+        process.stdout.emit('resize');
+      }
+      expect(fs.lines.length).toBe(before);
+      vi.advanceTimersByTime(50);
+      expect(fs.lines.slice(before).map((line) => JSON.parse(line))).toEqual([
+        [expect.any(Number), 'r', '120x40'],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('flushes a pending resize before output and on uninstall without late writes', () => {
+    vi.useFakeTimers();
+    try {
+      const fs = makeFakeFsOps();
+      installTtyTrace(fs);
+      const before = fs.lines.length;
+      setTTYProps(true, 100, 30);
+      process.stdout.emit('resize');
+      process.stdout.write('after resize');
+      setTTYProps(true, 110, 35);
+      process.stdout.emit('resize');
+      uninstallTtyTrace();
+      const events = fs.lines.slice(before).map((line) => JSON.parse(line));
+      expect(events).toEqual([
+        [expect.any(Number), 'r', '100x30'],
+        [expect.any(Number), 'o', 'after resize'],
+        [expect.any(Number), 'r', '110x35'],
+      ]);
+      expect(fs.closed).toBe(true);
+      vi.runAllTimers();
+      expect(fs.lines.length).toBe(before + 3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('warns when reinstall is attempted after failure, without throwing or reopening', () => {
+    const stderrSpy = process.stderr.write as ReturnType<typeof vi.fn>;
+    const fs = makeFakeFsOps();
+    const openSpy = vi.spyOn(fs, 'openSync');
+    const writeSpy = vi.spyOn(fs, 'writeSync');
+    installTtyTrace(fs);
+    fs.throwOnWrite = true;
+    process.stdout.write('trigger failure');
+    stderrSpy.mockClear();
+    expect(() => installTtyTrace(fs)).not.toThrow();
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('uninstallTtyTrace'));
+    // The disable/reinstall warnings must not be recorded into the cast.
+    expect(fs.lines).toHaveLength(1);
+    expect(writeSpy).toHaveBeenCalledTimes(2); // header + failed output, no warnings
+  });
+
+  it('disables safely when a deferred resize write fails', () => {
+    vi.useFakeTimers();
+    try {
+      const fs = makeFakeFsOps();
+      const stderrSpy = process.stderr.write as ReturnType<typeof vi.fn>;
+      installTtyTrace(fs);
+      stderrSpy.mockClear();
+      process.stdout.emit('resize');
+      fs.throwOnWrite = true;
+      expect(() => vi.advanceTimersByTime(50)).not.toThrow();
+      expect(fs.closed).toBe(true);
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(fs.lines).toHaveLength(1);
+      // A failed resize flush must not swallow the original output either.
+      expect(() => process.stdout.write('still usable')).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('can reinstall after uninstalling a disabled recorder', () => {
+    const fs = makeFakeFsOps();
+    installTtyTrace(fs);
+    fs.throwOnWrite = true;
+    process.stdout.write('trigger failure');
+    uninstallTtyTrace();
+    const replacement = makeFakeFsOps();
+    installTtyTrace(replacement);
+    process.stdout.write('new recording');
+    expect(replacement.lines).toHaveLength(2);
+    expect(JSON.parse(replacement.lines[1]!)[2]).toBe('new recording');
+  });
+
+  it('serializes only the allowlisted TERM environment key', () => {
+    const fs = makeFakeFsOps();
+    vi.stubEnv('TERM', 'xterm-256color');
+    vi.stubEnv('TTY_TRACE_TEST_SECRET', 'must-not-be-recorded');
+    try {
+      installTtyTrace(fs);
+      expect(JSON.parse(fs.lines[0]!).env).toEqual({ TERM: 'xterm-256color' });
+      expect(fs.lines[0]).not.toContain('must-not-be-recorded');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   // 5. Handles Buffer chunks without throwing
