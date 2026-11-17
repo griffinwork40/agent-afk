@@ -1,6 +1,6 @@
 ---
 name: ground-state
-description: "Before starting any non-trivial implementation, run a pre-flight reconnaissance pass to triangulate git state, project infrastructure, and prior-session memory. Auto-assembles a verified grounding preamble — a session-scoped artifact the orchestrator pastes verbatim into every subsequent sub-agent brief — eliminating stale-worktree reads and silent wrong-path errors before the first edit."
+description: "Before starting any non-trivial implementation, run a pre-flight reconnaissance pass over one checkout: git state, project infrastructure, and prior-session memory. Returns a Brief Anchor (cwd, branch, HEAD and existence-checked paths, copied from command output) that the orchestrator pastes into the briefs of sub-agents working in that checkout, plus labelled unverified notes on infrastructure, memory and risks. Prevents stale-worktree reads and silent wrong-path errors before the first edit."
 read-only: true
 context: fork
 failure_modes:
@@ -15,6 +15,12 @@ failure_modes:
 **Constraint: read-only reconnaissance.** You MUST NOT call `edit_file`, `write_file`, or any mutating bash command (no `git commit`, `git push`, `git checkout`, `mv`, `rm`, file redirection, package installs, etc.). Read-only tools only: `read_file`, `grep`, `glob`, `list_directory`, `memory_search`, and git queries (via `bash` or `git_read` when bash is unavailable). Under `git_read`, non-git shell commands (`cat`, `ls`, `stat`, `tail`) are not available; use `read_file`, `glob`, and `list_directory` instead. `memory_search` is non-mutating and is the **only** way to reach the cross-session fact archive — it is in scope for this skill, do not strip it from this list.
 
 If the survey reveals a fix that's tempting to apply, **return it as a recommendation in the snapshot** — the orchestrator decides whether to act. Even if the invoking brief sounds prescriptive ("draft the edit", "apply the change"), this skill stops at the snapshot and the preamble artifact. The orchestrator dispatches a separate implementation step afterward.
+
+## Scope
+
+This skill surveys **one checkout on this machine**: the session working directory, or the single repository path named in the arguments. It is a short, fixed survey, not a general audit. If the arguments name several repositories, survey the first one named. To cover two repositories, the orchestrator invokes the skill once for each.
+
+If the arguments ask for more than that (several repositories, another machine, a list of claims to verify, or pull-request, issue or deploy state), run the fixed survey for the one checkout and list the rest under **Out of scope** in your output, with one line telling the orchestrator to send it to a research agent. Do not attempt the wider audit here. Long runs of this skill are where false statements have crept in, and its output is pasted into other agents' briefs.
 
 ## Inline reconnaissance
 
@@ -90,44 +96,65 @@ Include the result (fresh or warning) in the Implementation risks line of the sn
 
 ## Synthesis
 
-Assemble the survey results into a ground-truth snapshot (6 lines minimum, 7 when SPINE.md has entries):
-- Branch: `<current>`, `<clean|diverged>`, upstream: `<fresh|stale>`
-- Recent work: last 3 commits or stash items
-- Infrastructure: CI present? package scripts? authoritative configs for this task
+Assemble the survey results into a snapshot with two parts, followed by the Brief Anchor. Your output has exactly these three parts and no other sections: anything else you found, including answers to questions the arguments asked, goes inside Unverified notes. Keep the two parts separate: the orchestrator relies on the first and treats the second as leads.
+
+### Observed state
+
+This part contains only the lines listed below, plus a stash line when stashes exist. Nothing else belongs here, however carefully you checked it: answers to questions from the arguments, pull-request or CI state, and anything about another repository go in Unverified notes.
+
+Copy each value from the output of a command you ran in this pass. Do not retype it from memory, round it, or infer it, and do not add a count or total unless a command printed that number. If a command failed, was blocked, or returned nothing, write `unknown (<reason>)` for that value.
+
+- Branch: `<current>`. Working tree: `clean` when `git status -s` printed nothing, otherwise `changes present` followed by up to its first 10 lines as printed.
+- Upstream: `<N ahead / M behind>` relative to the locally stored upstream ref. This skill cannot fetch, so do not describe the remote as fresh or current.
+- Recent work: last 3 commits (short SHA and subject as printed by `git log`) or stash items
+
+### Unverified notes
+
+Head this part with the line `Unverified notes (model-written; check before relying on them)`. Everything in it is your reading of what you saw, so it can be wrong.
+
+- Infrastructure: CI present? package scripts? authoritative configs for this task. Name the file each item came from.
 - Memory hits: facts (1-line each) + which stores were consulted, or `none (consulted: …)`
-- Spine constraints *(only when SPINE.md exists with entries)*: INV-*, REJ-*, TST-* entries. Omit this line entirely when SPINE.md is absent or empty.
+- Spine constraints *(only when SPINE.md exists with entries)*: INV-*, REJ-*, TST-* entries, quoted rather than paraphrased. Omit this line entirely when SPINE.md is absent or empty.
 - Implementation risks: e.g. "branch is `main`, don't edit directly"; "CI runs on push"; "memory says prior attempt used approach X"; include any eval-pipeline staleness warning here.
 - Epistemic confidence: `<high|medium|low>` — based on how much state could be verified. Flag if working directory is sparse, if domain is unfamiliar, or if key artifacts may be missing.
+- Out of scope *(only when the arguments asked for more than the fixed survey)*: what was not covered, and that it should go to a research agent.
 
-Surface the snapshot and stop. The orchestrator then uses these verified facts — not assumptions — to decide the next step. This skill never edits files.
+Before returning, check each number, name and state in your output against the tool result it came from. A value you cannot find in a tool result from this pass is removed, or moved to Unverified notes and marked as unchecked.
+
+Surface the snapshot and stop. The orchestrator may rely on the Observed state and the Brief Anchor as observations made at the time of this pass. The Unverified notes are leads to check, not facts to pass on. Do not call `workspace_publish` from this skill: workspace entries reach other agents without the Unverified label. This skill never edits files.
 
 ## Brief Anchor (auto-runs after synthesis)
 
-After the snapshot is assembled, construct the **Brief Anchor** — a path-verified grounding preamble the orchestrator pastes verbatim into every subsequent sub-agent brief.
+After the snapshot is assembled, construct the **Brief Anchor**: a short preamble the orchestrator pastes verbatim into the briefs of sub-agents that work in this checkout. It records what was observed in one checkout at one time.
 
 **Construction procedure:**
 
 1. From your state survey output, extract the verified `cwd` (from `git rev-parse --show-toplevel` combined with `git rev-parse --show-prefix` to reconstruct the full session path: `<toplevel>/<prefix>`), `branch` (from `git rev-parse --abbrev-ref HEAD`), and `HEAD` SHA (from `git rev-parse HEAD`).
 2. From your infrastructure survey output, extract the 2–4 canonical file paths most relevant to the task. For each, verify existence with `glob` or `read_file`; include the path only if it exists. Paths that don't exist are omitted; if zero paths survive, set the list to `(none verified)`.
-3. Assemble the preamble block:
+3. Record the observation time in UTC, from `get_runtime_state` or `date -u`. Write `unknown` if neither is available.
+4. Assemble the preamble block:
 
 ```
 ## Orchestrator grounding — read this first
 - **cwd**: <absolute path>
 - **branch**: <branch name>
 - **HEAD**: <full SHA>
+- **observed**: <UTC time of this survey, or unknown>
+- **scope**: this checkout only, as it was at the observed time
 - **canonical paths** (verify each on entry; emit GROUNDING_FAILED:<path> and abort if missing):
   - <verified_path_1>
   - <verified_path_2>  ← omit line if not applicable
 ```
 
-4. Append to the snapshot output under the heading **`## Brief Anchor`** so the orchestrator can copy it directly.
+5. Append to the snapshot output under the heading **`## Brief Anchor`** so the orchestrator can copy it directly. The block contains only the lines shown above. Notes and cautions belong in Unverified notes, not in the anchor.
 
 **Orchestrator usage contract:**
 
-- Prepend the Brief Anchor verbatim to every sub-agent brief that reads files, runs `git`/`gh` commands, or references explicit paths. Skip for pure-reasoning tasks.
+- Prepend the Brief Anchor verbatim to every sub-agent brief that reads files, runs `git`/`gh` commands, or references explicit paths in this checkout. Skip for pure-reasoning tasks.
+- The anchor describes one checkout. A sub-agent that works somewhere else (another repository, another machine, or its own worktree, including `isolation: "worktree"`) has a different cwd, branch and HEAD. Pass the anchor to such a sub-agent only as background labelled as the parent checkout, never as its own cwd, branch or HEAD. Run `ground-state` for the other checkout when it needs an anchor of its own.
+- Do not copy or paraphrase lines from the Unverified notes into sub-agent briefs as facts. If a brief needs one of them, tell the sub-agent to check it, or mark it as unverified in the brief.
 - Sub-agents receiving the anchor verify each listed path on entry (via `glob` or `read_file`). A missing path returns `GROUNDING_FAILED:<path>` — the orchestrator re-dispatches once with the corrected path. If the retry also returns `GROUNDING_FAILED`, emit `BRIEF_GROUND_ABORT` with both the expected and actual paths **plus the corrective command** the operator should run — `git worktree list` to find the intended checkout, then `cd <correct-worktree>` — and halt the wave.
-- The anchor is session-scoped: one construction pass per `ground-state` invocation. Do not re-invoke `ground-state` mid-session to refresh it; instead pass the existing anchor through.
+- The anchor is an observation, not a lock. Reuse it while the checkout has not changed. After anything that moves the checkout (a commit, checkout, pull, merge, rebase, or a sub-agent that wrote to it), its HEAD is stale. Before pasting it into another brief, refresh the `HEAD` line from `git rev-parse HEAD` and re-check `git status -s`, or re-run `ground-state`.
 
 **Skip when:**
 Task is Q&A only; single-line fix on an already-identified file; user says "skip pre-flight".
