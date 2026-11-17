@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.358.0] - 2026-11-17
+
 ### Added
 - integrate closed-router for 429-triggered credential rotation (#5046) (437f48be2)
 - write unified rate-limit headers to usage-headers.json (42ceb5bc7)
