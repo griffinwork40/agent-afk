@@ -115,6 +115,8 @@ export interface ToolHandlerContext {
    * without a session id, in which case the blocked marker is simply not written.
    */
   sessionId?: string;
+  /** Trusted top-level interactive install eligibility; still requires live human consent. */
+  lspInstallAllowed?: boolean;
   /**
    * Session-scoped registry of PIDs spawned by the bash tool.
    *

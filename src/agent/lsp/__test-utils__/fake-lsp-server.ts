@@ -38,6 +38,27 @@ export interface FakeServerConfig {
   spawnGrandchild?: boolean;
   /** Definition result echoes this file's open copy, falling back to disk. */
   readFileUri?: string;
+  capabilities?: Record<string, unknown>;
+  workspaceEdit?: unknown;
+  /**
+   * Like a real server: stamp each `documentChanges[].textDocument.version` in
+   * the rename result with the last version this server received for that uri.
+   */
+  stampVersions?: boolean;
+  prepareRename?: unknown;
+  documentSymbols?: unknown[];
+  workspaceSymbols?: unknown[];
+  codeActions?: unknown[];
+  resolvedCodeAction?: unknown;
+  /** workspace/applyEdit sent during executeCommand; command completes after its reply. */
+  commandEdit?: unknown;
+  /**
+   * Like `commandEdit` but several: sent one at a time as `apply-1`, `apply-2`,
+   * ..., each after the previous reply; the command answers after the last one.
+   */
+  commandEdits?: unknown[];
+  /** Delay (ms) between receiving executeCommand and pushing the first edit. */
+  commandDelayMs?: number;
 }
 
 /** Write the fake server script to `scriptPath`. */
@@ -53,15 +74,46 @@ if (cfg.spawnGrandchild) {
   log({ grandchild: gc.pid });
 }
 const texts = new Map();
+const versions = new Map();
+const stamped = (edit) => !cfg.stampVersions || !edit || !edit.documentChanges ? edit
+  : Object.assign({}, edit, { documentChanges: edit.documentChanges.map((d) => Object.assign({}, d, {
+    textDocument: Object.assign({}, d.textDocument, { version: versions.has(d.textDocument.uri) ? versions.get(d.textDocument.uri) : null }),
+  })) });
 const send = (o) => {
   const body = JSON.stringify(Object.assign({ jsonrpc: '2.0' }, o));
   process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body);
 };
 let buf = Buffer.alloc(0);
+let commandId;
+const commandEdits = cfg.commandEdits || (cfg.commandEdit === undefined ? undefined : [cfg.commandEdit]);
+const pushEdit = (n) => send({ id: 'apply-' + n, method: 'workspace/applyEdit', params: { edit: commandEdits[n - 1] } });
 const handle = (m) => {
   log({ msg: m });
   if (cfg.silent) return;
-  if (m.method === 'initialize') return send({ id: m.id, result: { capabilities: {} } });
+  if (m.method === 'initialize') return send({ id: m.id, result: { capabilities: cfg.capabilities || {} } });
+  const applied = !m.method && typeof m.id === 'string' && /^apply-(\\d+)$/.exec(m.id);
+  if (applied) {
+    const n = Number(applied[1]);
+    return n < commandEdits.length ? pushEdit(n + 1) : send({ id: commandId, result: m.result });
+  }
+  const results = {
+    'textDocument/prepareRename': cfg.prepareRename === undefined ? { defaultBehavior: true } : cfg.prepareRename,
+    'textDocument/rename': cfg.workspaceEdit === undefined ? null : stamped(cfg.workspaceEdit),
+    'textDocument/documentSymbol': cfg.documentSymbols || [],
+    'workspace/symbol': cfg.workspaceSymbols || [],
+    'textDocument/codeAction': cfg.codeActions || [],
+    'codeAction/resolve': cfg.resolvedCodeAction || null,
+  };
+  if (Object.prototype.hasOwnProperty.call(results, m.method) || m.method === 'workspace/executeCommand') {
+    if (cfg.crashOnRequest) process.exit(1);
+    if (cfg.hangRequests) return;
+    if (cfg.requestError) return send({ id: m.id, error: { code: -32601, message: 'nope' } });
+    if (m.method === 'workspace/executeCommand' && commandEdits) {
+      commandId = m.id;
+      return cfg.commandDelayMs ? void setTimeout(() => pushEdit(1), cfg.commandDelayMs) : pushEdit(1);
+    }
+    return send({ id: m.id, result: results[m.method] === undefined ? null : results[m.method] });
+  }
   if (m.method === 'initialized' && cfg.configurationSections) {
     return send({ id: 'cfg-1', method: 'workspace/configuration',
       params: { items: cfg.configurationSections.map((section) => ({ section })) } });
@@ -74,6 +126,7 @@ const handle = (m) => {
     const td = m.params.textDocument;
     const text = m.method === 'textDocument/didOpen' ? td.text : m.params.contentChanges[0].text;
     texts.set(td.uri, text);
+    versions.set(td.uri, td.version);
     if (!cfg.diagnostics && !cfg.echoText) return;
     const params = { uri: td.uri, diagnostics: cfg.echoText ? [{ message: text }] : cfg.diagnostics };
     if (cfg.publishVersion !== false) params.version = td.version;
