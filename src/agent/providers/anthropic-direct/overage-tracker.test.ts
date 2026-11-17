@@ -108,6 +108,18 @@ describe('OverageTracker', () => {
     expect(t.takeForResponse()).toBeUndefined();
   });
 
+  it.each([true, false])('clears a stale overage=%s observation when retry headers throw', (overage) => {
+    const t = new OverageTracker();
+    const good = h({ [`${P}overage-in-use`]: String(overage) });
+    t.observe(good);
+    const broken = h({});
+    broken.get = () => { throw new Error('broken response headers'); };
+    expect(() => t.observe(broken)).not.toThrow();
+    expect(t.takeForResponse()).toBeUndefined();
+    t.observe(good);
+    expect(t.takeForResponse()).toEqual({ measured: true, overage });
+  });
+
   it('writes the raw-evidence record at first observation and on change only', async () => {
     const w = new InMemoryTraceWriter();
     const t = new OverageTracker(w);

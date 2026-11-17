@@ -76,6 +76,24 @@ describe('sumProviderUsage', () => {
     });
   });
 
+  describe('overage fields (#4938)', () => {
+    it.each([false, true])('preserves one-sided measured overage (defined on right: %s)', (onRight) => {
+      for (const cost of [0, 0.25]) {
+        const measured: ProviderUsage = { stopReason: null, overageCostUsd: cost, overageRequests: cost === 0 ? 0 : 1 };
+        const result = onRight ? sumProviderUsage(empty, measured) : sumProviderUsage(measured, empty);
+        expect(result.overageCostUsd).toBe(measured.overageCostUsd);
+        expect(result.overageRequests).toBe(measured.overageRequests);
+      }
+    });
+
+    it('sums measured sides and leaves unmeasured sides absent', () => {
+      const measured: ProviderUsage = { stopReason: null, overageCostUsd: 0.25, overageRequests: 1 };
+      expect(sumProviderUsage(measured, measured)).toMatchObject({ overageCostUsd: 0.5, overageRequests: 2 });
+      expect(sumProviderUsage(empty, empty)).not.toHaveProperty('overageCostUsd');
+      expect(sumProviderUsage(empty, empty)).not.toHaveProperty('overageRequests');
+    });
+  });
+
   describe('stopReason', () => {
     it('prefers b.stopReason', () => {
       const a: ProviderUsage = { stopReason: 'tool_use' };
