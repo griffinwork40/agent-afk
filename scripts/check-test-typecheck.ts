@@ -71,6 +71,27 @@ export function detectConfigDiagnosticLines(output: string): string[] {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 
+/**
+ * Returns the current git branch name, or `'HEAD'` when in detached-HEAD state
+ * (e.g. CI shallow clones).  Never throws.
+ */
+function currentBranch(): string {
+  try {
+    const result = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    return result || 'HEAD';
+  } catch {
+    return 'HEAD';
+  }
+}
+
+function isMainBranch(): boolean {
+  return currentBranch() === 'main';
+}
+
 function baselinePath(): string {
   return path.join(repoRoot, BASELINE_REL);
 }
@@ -151,12 +172,13 @@ function measureErrors(): number {
  * Previously the local `parseArgs` did not guard this case, causing drift from
  * the contract enforced by `parseGrowthArgs` in the size-ceiling scripts.
  */
-const KNOWN_FLAGS = ['--check', '--update', '--allow-growth', '--reason'] as const;
+const KNOWN_FLAGS = ['--check', '--update', '--allow-growth', '--reason', '--no-shrink'] as const;
 
 interface ParsedArgs {
   mode: 'check' | 'update';
   allowGrowth: boolean;
   reason: string;
+  noShrink: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs | { error: string } {
@@ -172,7 +194,7 @@ function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   const growth = parseGrowthArgs(args, KNOWN_FLAGS);
   if ('error' in growth) return growth;
 
-  return { mode: isUpdate ? 'update' : 'check', allowGrowth: growth.allowGrowth, reason: growth.reason };
+  return { mode: isUpdate ? 'update' : 'check', allowGrowth: growth.allowGrowth, reason: growth.reason, noShrink: args.includes('--no-shrink') };
 }
 
 // ── Mode: check ───────────────────────────────────────────────────────────────
@@ -199,11 +221,19 @@ function runCheck(): void {
   }
 
   if (current < baselineCount) {
-    process.stdout.write(
-      `\u2713 lint:tests:check passed (${current} errors, down from baseline ${baselineCount}).\n` +
-        `  The error count shrank — lower the baseline to lock in the improvement:\n` +
-        `    pnpm lint:tests:update\n`,
-    );
+    if (isMainBranch()) {
+      process.stdout.write(
+        `\u2713 lint:tests:check passed (${current} errors, down from baseline ${baselineCount}).\n` +
+          `  The error count shrank — lower the baseline to lock in the improvement:\n` +
+          `    pnpm lint:tests:update\n`,
+      );
+    } else {
+      process.stdout.write(
+        `\u2713 lint:tests:check passed (${current} errors, down from baseline ${baselineCount}).\n` +
+          `  The error count shrank to ${current} (baseline is ${baselineCount}).\n` +
+          `  The baseline can only be lowered on main.\n`,
+      );
+    }
     // Still a pass — the burn-down is progressing. We only fail on regressions.
     process.exit(0);
   }
@@ -241,7 +271,7 @@ export function computeNewBaseline(
   return newBaseline;
 }
 
-function runUpdate(allowGrowth: boolean, reason: string): void {
+function runUpdate(allowGrowth: boolean, reason: string, noShrink = false): void {
   const previous = readBaseline();
   const current = measureErrors();
 
@@ -250,6 +280,23 @@ function runUpdate(allowGrowth: boolean, reason: string): void {
       `\u2717 lint:tests:update — error count GREW (${previous.errors} → ${current}).\n` +
         `  Refusing to raise the baseline without --allow-growth --reason "<why>".\n` +
         `  Fix the new errors, then re-run pnpm lint:tests:update.\n`,
+    );
+    process.exit(1);
+  }
+
+  if (current < previous.errors && !isMainBranch()) {
+    if (noShrink) {
+      process.stdout.write(
+        `✓ lint:tests:update — skipping baseline shrink off main (--no-shrink). Baseline unchanged at ${previous.errors}.
+`,
+      );
+      process.exit(0);
+    }
+    process.stderr.write(
+      `\u2717 lint:tests:update — refusing to lower the baseline off main.\n` +
+        `  The error count shrank to ${current} (baseline is ${previous.errors}).\n` +
+        `  The baseline can only be lowered on main.\n` +
+        `  Merge to main first, then run pnpm lint:tests:update there.\n`,
     );
     process.exit(1);
   }
@@ -289,7 +336,7 @@ function main(): void {
   }
 
   if (parsed.mode === 'update') {
-    runUpdate(parsed.allowGrowth, parsed.reason);
+    runUpdate(parsed.allowGrowth, parsed.reason, parsed.noShrink);
   } else {
     runCheck();
   }
