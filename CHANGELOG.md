@@ -12,8 +12,54 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- add .afk-scratch/ so throwaway files stop locking worktrees (#5016) (3fcd2151a)
+- LSP wave 2 — registry + consented install wired in, rename / code actions / document+workspace symbols (#4315) (2d423ea2a)
+- task_slug names isolated worktree branches (#4986) (43942118f)
+- block destructive git commands in child sessions (#4360) (4761d4973)
+
+### Fixed
+- exclude .afk-worktree-meta.json so fresh worktrees read clean (#5023) (a57f823a9)
+- Enter on file picker submits even when buffer already matches candidate (#5041) (248681890)
+- cover fallback edges and retain bounded failure notices (#4984) (09ef6e74d)
+- export buildContinuationRegistry, replace hand-rolled onEvict copies, add run-mode integration tests, broaden ownership guard to alias/property-access callees (#5004) (1f201e07d)
+- harden tty trace lifecycle and privacy guidance (#5005) (ada42a551)
+- log dropped and delivered model-fallback notices in streaming.loop (#5003) (a93be87b1)
+- avoid duplicate exit kills and unsafe lock cleanup (#5000) (6aa91b4ca)
+- join multi-part tool content before excerpting in OpenAI renderer (#4969) (2092db058)
+- make web_scrape binary error advice conditional on content type (#4974) (9d47de173)
+- tighten skill intro assertions in skill-identity-state.test.ts (#4997) (cb46b4735)
+- cover namespaced and imported registry skills in registerPluginSkills (#4999) (7bcd17738)
+- update AFK_PROMPT_EXPERIMENT description to --spec form; document unwired status (#4998) (2559903bb)
+- add close() to SessionAutosaver fakes and document seal-on-error intent (#5002) (c7d3e2e1f)
+- align RemoteSubagentHandle with SubagentHandle interface (#4038 lows) (#4965) (833cfa15f)
+- stop /skills listing every registry skill as its own plugin alt (#4989) (352d65037)
+- record summarizer input cap drops in compaction traces (#4973) (82975c79d)
+- snap vertical-nav landing to grapheme boundaries (#4987) (4f99cc032)
+- fix by-reference spy bug, add PauseController test, remove dead var and unused import (#4964) (58f3a39fc)
+- detect commented tagged stderr and mixed console calls (#4967) (c28ad5c06)
+- raise stale security override floors (13 prod advisories) (#4983) (b373da29a)
+- address advisory findings from pr-triage batch (#4847-#4857) (#4972) (ccb0e58dd)
+- correct OAuth slot key misreporting and narrow credential accessor (#4982) (898e51021)
+- prove post-clear tool and receipt continuity (#4978) (fbf24d5f6)
+- wrap start/onResize in CommitWriteTx, add inverse-nest test, add debug chunk count (#4981) (ac7cf0b1d)
+- pipe-retry clarity fixes — explicit rewritten param, notePrepended flag, combined test cases, schema pointer (#4977) (4fc9a7d2e)
+- report all unknown grep keys in one message; document RUNTIME_INJECTED_KEYS (#4970) (51324d7c6)
+- keep routing sentinel out of requested model names (#4966) (4500868c3)
+- document SPLIT_VALUED global scope, absent -G, and add regression tests (#4975) (43eab0590)
+- move endedAt before variable-length fields in saveSession payload (#4963) (db3876c16)
+- pin CI workflow tokens to read-only contents (#4980) (1851a2226)
+- restore async review guidance and cover invalid schedule filters (#4976) (8c574ed57)
+- add facet v16 entry to version history docs (#4979) (e3ffc1d1c)
+- name missing grandchild marker failures (#4971) (6257c9185)
+- await the session-meta sidecar write in ledger seal (#4990) (f2249cb97)
+- establish env-flag-gated A/B protocol for prompt tuning (#4468) (91bed192e)
+- pool exit cleanup, cross-process install lock, doc-sync counter, registry PATH note (#4518) (3a6567051)
+- style the skill intro as one brand/dim line (#4968) (1bfac13f7)
+
 ### Changed
 - API: `NoticeKind` includes `'model-fallback'` for automatic main-session model switches. Consumers with exhaustive notice-kind switches must handle this variant (#4904).
+- stop false Test (windows-2022) failure on superseded runs (#4985) (f830e7800)
 
 ## [5.356.0] - 2026-11-16
 
