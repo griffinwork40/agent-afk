@@ -4253,7 +4253,17 @@
     },
     {
       "kind": "flag",
+      "name": "afk worktree list --all",
+      "source": "src/cli/commands/worktree.ts"
+    },
+    {
+      "kind": "flag",
       "name": "afk worktree list --help",
+      "source": "src/cli/commands/worktree.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk worktree list --json",
       "source": "src/cli/commands/worktree.ts"
     },
     {

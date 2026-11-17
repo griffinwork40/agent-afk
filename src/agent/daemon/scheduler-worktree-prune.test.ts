@@ -113,7 +113,7 @@ describe('builtin worktree-prune across multiple roots', () => {
       .mockResolvedValueOnce(sweepResult({
         dryRun: true,
         candidates: [
-          { path: '/repo/fresh/.afk-worktrees/x', verdict: 'empty', owner: 'interactive', ageMs: 0 },
+          { path: '/repo/fresh/.afk-worktrees/x', verdict: 'empty', owner: 'interactive', ageMs: 0, branch: '', blocker: '' },
         ],
       }));
 
