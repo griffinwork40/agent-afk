@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.357.0] - 2026-11-17
+
 ### Added
 - add .afk-scratch/ so throwaway files stop locking worktrees (#5016) (3fcd2151a)
 - LSP wave 2 — registry + consented install wired in, rename / code actions / document+workspace symbols (#4315) (2d423ea2a)
