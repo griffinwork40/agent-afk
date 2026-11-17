@@ -221,7 +221,7 @@ describe('handleReturnKey — kind=file: file pick submits, directory pick does 
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('does NOT submit when kind=file and applySelection returns false (no candidate applied)', () => {
+  it('does NOT submit when kind=file and no candidate exists (empty picker)', () => {
     const st = makeState({
       dropdownOpen: true,
       candidates: [],
@@ -248,6 +248,42 @@ describe('handleReturnKey — kind=file: file pick submits, directory pick does 
     );
 
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('submits when kind=file, candidate exists, but applySelection is a no-op (buffer already matches)', () => {
+    // The user typed the complete file path before pressing Enter — the
+    // replacement is identity so applySelection returns false, but a valid
+    // candidate IS highlighted. Enter must still submit.
+    const fileValue = '@src/main.ts';
+    const st = makeState({
+      dropdownOpen: true,
+      candidates: [{ value: fileValue }],
+      selectedIndex: 0,
+      trigger: { kind: 'file', query: 'src/main.ts' },
+    });
+    const ctx = makeCtx();
+    const onSubmit = vi.fn();
+    const repaintFn = vi.fn() as unknown as typeof _repaint;
+    const schedulePaintFn = vi.fn() as unknown as typeof _schedulePaint;
+    // applySelection returns false — buffer text already matches candidate.
+    const applySelection = vi.fn().mockReturnValue(false) as unknown as typeof _applySelection;
+
+    handleReturnKey(
+      returnKey(),
+      '\r',
+      st,
+      { history: undefined } as never,
+      false,
+      { onSubmit },
+      repaintFn,
+      schedulePaintFn,
+      applySelection,
+      ctx,
+    );
+
+    expect(applySelection).toHaveBeenCalledOnce();
+    // Valid file candidate → submit even though buffer didn't change.
+    expect(onSubmit).toHaveBeenCalledOnce();
   });
 });
 

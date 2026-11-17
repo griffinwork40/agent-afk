@@ -204,11 +204,14 @@ export function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: strin
     const candidateValue = ac.candidates[ac.selectedIndex]?.value;
     const applied = self.applyDropdownSelection();
     if (kind === 'file') {
-      // Directory (trailing '/') → navigate deeper; the dropdown reopens
-      // for the directory's contents. File → accept AND fall through to
-      // submit so the user doesn't need a second Enter after the final
-      // file pick.
-      if (!applied || !shouldFilePickerSubmit(candidateValue)) return true;
+      // Directory (trailing '/') → navigate deeper; no candidate → bail.
+      // File → fall through to submit so the user doesn't need a second
+      // Enter after the final file pick. We check candidateValue instead
+      // of `applied`: when the buffer already holds the complete path,
+      // the replacement is a no-op (applied=false) but the user's intent
+      // is still "accept and send." The submit path resets autocomplete
+      // state, closing any residual dropdown.
+      if (!candidateValue || !shouldFilePickerSubmit(candidateValue)) return true;
     } else if (kind !== 'slash') {
       return true;
     } else if (!applied) {
