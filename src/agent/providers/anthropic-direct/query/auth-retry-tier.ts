@@ -23,6 +23,7 @@ import { runTurn } from '../loop.js';
 import type { RunTurnInput } from '../types.js';
 import type { RetryTierContext } from './retry-context.js';
 import { adoptFreshClient } from './live-client.js';
+import { emitSessionPhase } from '../../../trace/emit.js';
 
 /**
  * A 401 is retryable only in OAuth mode with a refresher wired.
@@ -86,14 +87,40 @@ export async function* turnWithAuthRetry(
 
   if (!authError) return;
 
+  // Extract the numeric HTTP status for the trace record (401 or 403).
+  // Invariant: `authError` can only be set when `isRetryableAuth` or
+  // `isRefreshablePermissionDenied` matched, both of which require
+  // `ctx.tokenRefresher !== undefined`. The `no-refresher` outcome is
+  // therefore impossible here; `refresh-null` is the earliest failure point.
+  const triggerStatus = (authError.error as unknown as { status?: number }).status ?? 0;
+
   // Delegate to the shared refresh helper. Same dedup field
   // (`refreshPromise`) coalesces this call with any concurrent
   // `forceClientRefresh()` from the turn-start catch-up or a hot-swap branch above.
   const refreshed = await adoptFreshClient(ctx, runInput);
   if (!refreshed) {
+    // Refresher was wired but returned null (token read failed / keychain locked).
+    void emitSessionPhase(runInput.traceWriter, {
+      phase: 'auth_retry_outcome',
+      metadata: { outcome: 'refresh-null', status: triggerStatus, authMode: ctx.authMode },
+    });
     yield authError;
     return;
   }
 
-  yield* runTurn(runInput);
+  // Replay the turn. Track whether the replay surfaces an error so the trace
+  // record names the correct outcome ('replay-failed' vs 'replayed').
+  let replayErrored = false;
+  for await (const event of runTurn(runInput)) {
+    if (event.type === 'error') replayErrored = true;
+    yield event;
+  }
+  void emitSessionPhase(runInput.traceWriter, {
+    phase: 'auth_retry_outcome',
+    metadata: {
+      outcome: replayErrored ? 'replay-failed' : 'replayed',
+      status: triggerStatus,
+      authMode: ctx.authMode,
+    },
+  });
 }
