@@ -125,8 +125,20 @@ export function ledgerCommits(effects: readonly LedgerEffect[], cwd: string): Ou
   return out;
 }
 
+/**
+ * True when the command string contains compound-operator characters that make
+ * it unsafe to infer a single mutating action. Any PR URL found in the output
+ * of such a command is recorded as `unknown` to avoid false attribution.
+ */
+export function isCompoundCommand(command: string): boolean {
+  return /&&|;|\||<</.test(command);
+}
+
 /** Infer the PR action from the gh verb in the command. */
 export function prActionFromCommand(command: string): PrAction {
+  // Compound commands (piped, chained, heredoc) may mix gh invocations with
+  // unrelated output — we cannot safely attribute a single mutating action.
+  if (isCompoundCommand(command)) return 'unknown';
   if (/\bgh\s+pr\s+create\b/.test(command)) return 'create';
   if (/\bgh\s+pr\s+merge\b/.test(command)) return 'merge';
   if (/\bgh\s+pr\s+(?:edit|comment|review)\b/.test(command)) return 'update';

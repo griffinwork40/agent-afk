@@ -24,6 +24,7 @@ import { readOutcomesMeta, readOutcomesJournal, checkBudget, type InputBudget } 
 import { readEffectsForSession } from '../effect-ledger/store.js';
 import { computeOutcomes } from './compute-outcomes.js';
 import { gitLogRange } from './git-range.js';
+import { settledEffects, ledgerCommits } from './outcomes-ledger.js';
 import { OutcomesV1Schema, type OutcomesV1 } from './outcomes-v1.schema.js';
 
 export interface SessionOutcomesContext {
@@ -75,11 +76,17 @@ async function compute(sessionId: string, ctx: SessionOutcomesContext, budget: I
   const startHead = meta?.gitHead?.headSha ?? null;
   const endHead = await readEndHead(cwd, budget.signal);
   checkBudget(budget);
-  const [gitLog, ledgerEntries, journal] = await Promise.all([
-    gitLogRange(cwd, startHead, endHead, { signal: budget.signal }),
+  // Load ledger and journal first so we can build ledgerShas for gitLogRange
+  // annotation (Option E: mark pulled commits vs session-authored commits).
+  const [ledgerEntries, journal] = await Promise.all([
     readEffectsForSession(sessionId, { budget }),
     readOutcomesJournal(sessionId, budget),
   ]);
+  checkBudget(budget);
+  const ledgerShas = new Set(
+    ledgerCommits(settledEffects(ledgerEntries), cwd).map((c) => c.sha.toLowerCase()),
+  );
+  const gitLog = await gitLogRange(cwd, startHead, endHead, { signal: budget.signal, ledgerShas });
   checkBudget(budget);
   const outcomes = computeOutcomes({
     cwd,
