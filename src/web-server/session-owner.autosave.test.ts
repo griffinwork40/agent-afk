@@ -14,7 +14,7 @@ function fakeSession(events: unknown[], throwAfter = false): AgentSession {
 }
 
 function fakeSaver(): SessionAutosaver & { saveTurn: ReturnType<typeof vi.fn<SessionAutosaver['saveTurn']>> } {
-  return { stats: {} as SessionAutosaver['stats'], saveTurn: vi.fn<SessionAutosaver['saveTurn']>() };
+  return { stats: {} as SessionAutosaver['stats'], saveTurn: vi.fn<SessionAutosaver['saveTurn']>(), close: vi.fn() };
 }
 
 describe('webTurnLabel', () => {
