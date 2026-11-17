@@ -214,6 +214,72 @@ describe('scrapeToMarkdown — content-type handling', () => {
       }),
     ).rejects.toThrow(/binary content/i);
   });
+
+  it('recommends extract_document for PDF binary content', async () => {
+    const fetchFn = vi.fn(async () =>
+      makeResponse({ contentType: 'application/pdf', body: '%PDF-1.7…' }),
+    );
+
+    await expect(
+      scrapeToMarkdown('https://example.com/doc.pdf', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        timeoutMs: 5000,
+        signal: freshSignal(),
+        lookupFn: publicLookup,
+      }),
+    ).rejects.toThrow(/extract_document/);
+  });
+
+  it('recommends view_image for image binary content', async () => {
+    const fetchFn = vi.fn(async () =>
+      makeResponse({ contentType: 'image/png', body: '\x89PNG…' }),
+    );
+
+    await expect(
+      scrapeToMarkdown('https://example.com/photo.png', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        timeoutMs: 5000,
+        signal: freshSignal(),
+        lookupFn: publicLookup,
+      }),
+    ).rejects.toThrow(/view_image/);
+  });
+
+  it('falls back to generic advice for unsupported image formats', async () => {
+    // image/svg+xml, image/avif, image/tiff etc. are not supported by view_image
+    // (which accepts only .png/.jpg/.gif/.webp) — they must NOT get the
+    // view_image-specific hint; the generic branch mentions extract_document
+    // conditionally and view_image for supported types only.
+    const fetchFn = vi.fn(async () =>
+      makeResponse({ contentType: 'image/svg+xml', body: '<svg/>' }),
+    );
+
+    await expect(
+      scrapeToMarkdown('https://example.com/icon.svg', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        timeoutMs: 5000,
+        signal: freshSignal(),
+        lookupFn: publicLookup,
+      }),
+    ).rejects.toThrow(/For \.pdf.*extract_document/);
+  });
+
+  it('recommends bash download for audio binary content', async () => {
+    const fetchFn = vi.fn(async () =>
+      makeResponse({ contentType: 'audio/mpeg', body: 'ID3…' }),
+    );
+
+    await expect(
+      scrapeToMarkdown('https://example.com/track.mp3', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        timeoutMs: 5000,
+        signal: freshSignal(),
+        lookupFn: publicLookup,
+      }),
+      // The generic branch's distinctive wording — not present in the
+      // extractable or supported-image branches.
+    ).rejects.toThrow(/For \.pdf.*extract_document/);
+  });
 });
 
 describe('scrapeToMarkdown — cancellation', () => {
