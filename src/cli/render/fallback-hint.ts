@@ -15,6 +15,7 @@
  */
 
 import { getConfiguredFallbackModel } from '../../agent/session/fallback-model.js';
+import { resolveModelId } from '../../agent/session/model-resolution.js';
 import { palette } from '../palette.js';
 
 /**
@@ -25,10 +26,8 @@ import { palette } from '../palette.js';
 export function buildFallbackHint(currentModel: string): string | undefined {
   const fallback = getConfiguredFallbackModel();
   if (!fallback) return undefined;
-  // Normalise for comparison: both sides are raw config strings, so a simple
-  // string equality check is correct (we do not resolve aliases here — the
-  // user set both values and they should match the same way they typed them).
-  if (fallback === currentModel) return undefined;
+  // stats.model may already be a concrete ID while config retains an alias.
+  if (resolveModelId(fallback) === resolveModelId(currentModel)) return undefined;
   return (
     palette.dim(`  Fallback ${palette.brand(fallback)} is configured. `) +
     palette.dim(`Run ${palette.brand('/model ' + fallback)}, then ${palette.brand('/retry')}.`)

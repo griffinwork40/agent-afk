@@ -10,6 +10,7 @@ import { QueryInputStream } from '../../session/input-iterable.js';
 import { resetSlotBindings } from '../../session/model-slots.js';
 import { resolveModelId } from '../../session/model-resolution.js';
 import { isModelFallbackArmed } from '../shared/model-fallback-armed.js';
+import { buildQueryFromConfig } from '../openai-compatible/query/build-query.js';
 import { UsageLimitError } from '../../../utils/errors.js';
 import type { AgentConfig, ResumeHistoryTurn } from '../../types/config-types.js';
 import type { JournalMessage } from '../../journal/index.js';
@@ -90,10 +91,11 @@ class FakeQuery {
 
 class FakeProvider implements ModelProvider {
   readonly queries: FakeQuery[] = [];
-  constructor(readonly name: string, public opts: ProviderOpts = {}) {}
+  constructor(readonly label: string, public opts: ProviderOpts = {}) {}
+  get name(): string { return this.label === 'openai' ? 'openai-compatible' : 'anthropic-direct'; }
   query(args: ProviderQueryArgs): ProviderQuery {
-    if (this.opts.throwOnQuery) throw new Error(`${this.name} cannot start`);
-    const q = new FakeQuery(args.config, args.prompt, `${this.name}#${this.queries.length}`, this.queries.length, this.opts);
+    if (this.opts.throwOnQuery) throw new Error(`${this.label} cannot start`);
+    const q = new FakeQuery(args.config, args.prompt, `${this.label}#${this.queries.length}`, this.queries.length, this.opts);
     this.queries.push(q);
     return q as unknown as ProviderQuery;
   }
@@ -109,12 +111,13 @@ function makeRouter(o: {
   config?: Partial<AgentConfig>;
   primary?: ProviderOpts;
   secondary?: ProviderOpts;
+  secondaryProvider?: ModelProvider;
 }) {
   const anthropic = new FakeProvider('anthropic', o.primary);
   const openai = new FakeProvider('openai', o.secondary);
   const fb = { value: o.fallback };
   const deps: ProviderRouterDeps = {
-    resolveProvider: (m) => (family(m) === 'openai-compatible' ? openai : anthropic),
+    resolveProvider: (m) => (family(m) === 'openai-compatible' ? o.secondaryProvider ?? openai : anthropic),
     providerNameForModel: family,
     resolveApiKey: () => undefined,
     ...(o.noFallbackDep ? {} : { getFallbackModel: () => fb.value }),
@@ -172,6 +175,21 @@ describe('ProviderRouter fallback: swap and replay', () => {
     expect(String(fq.turns[0])).toMatch(/opus → gpt-5\.5[\s\S]*\n\nhello$/);
     // Seeded without the failed user message; earlier context kept.
     expect(fq.config.resumeMessages).toEqual(SNAP.slice(0, 2));
+    await router.close();
+  });
+
+  it('does not carry the startup apiKey into a cross-family fallback with no resolved key', async () => {
+    const startupKey = 'test-startup-anthropic-key';
+    const { router, outer, iter, anthropic, openai } = makeRouter({
+      fallback: 'gpt-5.5', config: { apiKey: startupKey }, primary: firstTurnFails,
+    });
+    await pullInit(iter);
+    expect(anthropic.queries[0]!.config.apiKey).toBe(startupKey);
+    await driveTurn(iter, outer, 'hello');
+    const fallbackConfig = openai.queries[0]!.config;
+    expect(fallbackConfig.model).toBe('gpt-5.5');
+    expect(fallbackConfig).not.toHaveProperty('apiKey');
+    expect(anthropic.queries[0]!.config.apiKey).toBe(startupKey);
     await router.close();
   });
 
@@ -295,6 +313,45 @@ describe('ProviderRouter fallback: failure paths', () => {
     });
   }
 
+  it('surfaces a real OpenAI fallback credential error after init without restoring or retrying', async () => {
+    const fallbackConfigs: AgentConfig[] = [];
+    const secondaryProvider: ModelProvider = {
+      name: 'openai-compatible',
+      query: ({ config, prompt }) => {
+        fallbackConfigs.push(config);
+        return buildQueryFromConfig(config, prompt, {
+          authDeps: { readEnv: () => undefined, homedir: () => 'unused-test-home', readFile: () => null },
+        });
+      },
+    };
+    const { router, outer, iter, anthropic } = makeRouter({
+      fallback: 'gpt-5.5', primary: firstTurnFails, secondaryProvider,
+    });
+    try {
+      await pullInit(iter);
+      const events = await driveTurn(iter, outer, 'hello');
+      expect(events.map((e) => e.type)).toEqual(['notice', 'error']);
+      expect(events[0]).toMatchObject({ kind: 'model-fallback', fallback: { to: 'gpt-5.5' } });
+      const terminal = events.at(-1);
+      expect(terminal?.type).toBe('error');
+      if (terminal?.type !== 'error') throw new Error('Expected credential error');
+      expect(terminal.error).not.toBe(PRIMARY_ERR);
+      expect(terminal.error.message).toContain('OPENAI_API_KEY');
+      expect(fallbackConfigs).toHaveLength(1);
+      expect(armedOf(anthropic.queries[0]!)).toBe(false);
+      expect(isModelFallbackArmed(fallbackConfigs[0]!)).toBe(false);
+      expect(anthropic.queries).toHaveLength(1);
+      expect(anthropic.queries[0]!.closed).toBe(true);
+      // No automatic retry on either provider: the unauthenticated lane ends.
+      outer.pushUserMessage('again');
+      expect((await iter.next()).done).toBe(true);
+      expect(fallbackConfigs).toHaveLength(1);
+      expect(anthropic.queries).toHaveLength(1);
+    } finally {
+      await router.close();
+    }
+  });
+
   it('an ordinary error with no fallback configured behaves as before', async () => {
     const { router, outer, iter, anthropic } = makeRouter({ noFallbackDep: true, primary: firstTurnFails });
     await pullInit(iter);
@@ -340,6 +397,45 @@ describe('ProviderRouter fallback: concurrency during the swap', () => {
     expect(ev.filter((e) => e.type === 'turn.completed')).toHaveLength(1);
     expect(anthropic.queries[1]!.turns).toEqual(['next']);
     await router.close();
+  });
+
+  it.each(['haiku', 'gpt-5.5'])('interrupt plus deferred /model %s preserves the selection and re-evaluates arming', async (model) => {
+    const g = gated();
+    const { router, outer, iter, anthropic, openai } = makeRouter({
+      fallback: 'gpt-5.5', primary: { ...firstTurnFails, closeGate: g.closeGate },
+    });
+    try {
+      await pullInit(iter);
+      outer.pushUserMessage('hello');
+      const pending = iter.next();
+      await g.enteredP;
+      await router.interrupt();
+      await router.setModel(model);
+      g.release();
+      const terminal = await pending;
+      expect(terminal.done ? undefined : terminal.value).toMatchObject({
+        type: 'turn.completed', usage: { stopReason: 'interrupted' },
+      });
+      expect(openai.queries).toHaveLength(0);
+      expect(anthropic.queries).toHaveLength(2);
+      expect(anthropic.queries.every((q) => q.interrupts.length === 0 && q.turns.length <= 1)).toBe(true);
+      expect(anthropic.queries[1]!.turns).toEqual([]);
+      // Resuming the generator applies the deferred selection after restoring
+      // the primary. Neither the interrupted turn nor its fallback is replayed.
+      const events = await driveTurn(iter, outer, 'next');
+      expect(events.map((e) => e.type)).toEqual(['assistant.message', 'turn.completed']);
+      const selected = model === 'haiku' ? anthropic.queries[1]! : openai.queries[0]!;
+      if (model === 'haiku') expect(selected.setModelCalls).toEqual(['haiku']);
+      else expect(selected.config.model).toBe(model);
+      expect(selected.turns).toHaveLength(1);
+      expect(String(selected.turns[0])).toMatch(/next$/);
+      // Cancelled fallback remains available, except when /model selected it.
+      expect(armedOf(selected)).toBe(model !== 'gpt-5.5');
+      expect(openai.queries).toHaveLength(model === 'gpt-5.5' ? 1 : 0);
+    } finally {
+      g.release();
+      await router.close();
+    }
   });
 
   it('setModel during the swap is applied afterwards, not lost', async () => {

@@ -149,8 +149,11 @@ model that was rejected. Where the line goes depends on the surface:
   adds `servedModel` and `modelFallback` (`from`, `to`, `reason`) beside the
   requested `model`, and `--format stream-json` emits the notice event.
 - **Daemon and scheduled runs.** In the daemon log, on the run record as
-  `modelFallbackNote`, and in the task notification when one is sent. A run
-  that switched and then succeeded does not notify unless the task's
+  `modelFallbackNote`, and in the task notification when one is sent, even if
+  the turn fails after switching. The note is secret-redacted and limited to
+  400 characters plus a truncation marker in logs and telemetry. If the run
+  retries, its record keeps the most recent switch notice across attempts.
+  A run that switched and then succeeded does not notify unless the task's
   `notifyOn` is `always`.
 
 The switch is also recorded in the session trace as a `model_fallback` phase.
@@ -159,7 +162,9 @@ The switch is also recorded in the session trace as a `model_fallback` phase.
 
 - It does not switch in the middle of a turn. If the limit is hit after the
   model has already produced output or run a tool, the session pauses as usual.
-  The pause card adds: `Fallback <model> is configured. Run /model <model>, then /retry.`
+  Unless already on the fallback (aliases and tier names are compared by their
+  resolved model IDs), the pause card adds:
+  `Fallback <model> is configured. Run /model <model>, then /retry.`
 - It does not switch on overloaded (529) errors, authentication errors,
   context-length errors, refusals, or user interrupts.
 - It is one model, not a chain, and is used at most once per session. If the

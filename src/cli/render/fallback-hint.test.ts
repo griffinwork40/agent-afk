@@ -11,6 +11,7 @@ vi.mock('../../agent/session/fallback-model.js', () => ({
 
 import { buildFallbackHint } from './fallback-hint.js';
 import { getConfiguredFallbackModel } from '../../agent/session/fallback-model.js';
+import { resolveModelId } from '../../agent/session/model-resolution.js';
 
 const mockGetFallback = vi.mocked(getConfiguredFallbackModel);
 
@@ -25,6 +26,16 @@ describe('buildFallbackHint', () => {
 
   it('returns undefined when already on the fallback model', () => {
     mockGetFallback.mockReturnValue('sonnet');
+    expect(buildFallbackHint('sonnet')).toBeUndefined();
+  });
+
+  it.each(['sonnet', 'medium'])('suppresses the hint for resolved fallback %s', (alias) => {
+    mockGetFallback.mockReturnValue(alias);
+    expect(buildFallbackHint(resolveModelId(alias)!)).toBeUndefined();
+  });
+
+  it('suppresses the hint when the current model is an alias of the fallback id', () => {
+    mockGetFallback.mockReturnValue(resolveModelId('sonnet'));
     expect(buildFallbackHint('sonnet')).toBeUndefined();
   });
 

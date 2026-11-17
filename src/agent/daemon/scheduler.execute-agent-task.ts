@@ -86,8 +86,6 @@ interface AttemptResult {
   responseText: string;
   recovered: boolean;
   doneUnverified: boolean;
-  /** The fallback notice sentence when this run switched to `models.fallback`. */
-  modelFallbackNote?: string;
   /** Set when a cron-task elicitation was declined and a handoff written. */
   elicitationMessage?: string;
 }
@@ -129,9 +127,11 @@ export async function executeAgentTask(
   // in session-spawn.ts can update it. Retries share the same counter so
   // gateBlocks reflects the total across all attempts.
   const gateBlockCounter: GateBlockCounter = { count: 0 };
+  // Keep the latest switch across attempts, including attempts that throw.
+  const fallbackFields: ModelFallbackFields = {};
   ctx.idleDetector.increment();
   try {
-    const outcome = await runWithTaskRetry(() => runAgentAttempt(ctx, task, trigger, gateBlockCounter), {
+    const outcome = await runWithTaskRetry(() => runAgentAttempt(ctx, task, trigger, fallbackFields, gateBlockCounter), {
       ...policy,
       signal: ctx.shutdownSignal ?? new AbortController().signal,
       ...(ctx.isCancelled !== undefined ? { isCancelled: ctx.isCancelled } : {}),
@@ -157,13 +157,14 @@ export async function executeAgentTask(
         durationMs: ctx.now() - startTimeMs,
         status: 'error',
         errorMessage: redactInlineSecrets(errorMessage(outcome.error)),
+        ...fallbackFields,
         ...attemptsField,
         ...gateBlocksField,
       };
       ctx.writeTelemetry(record, task);
       return record;
     }
-    const { responseText, recovered, doneUnverified, elicitationMessage, modelFallbackNote } = outcome.value;
+    const { responseText, recovered, doneUnverified, elicitationMessage } = outcome.value;
     const status = gateBlockCounter.count > 0 && !recovered ? 'blocked' : 'success';
     const recoveryNote = gateBlockCounter.count > 0 && recovered ? gateRecoveryNote(gateBlockCounter) : undefined;
     const record: TelemetryRecord = {
@@ -172,7 +173,7 @@ export async function executeAgentTask(
       status,
       ...(status === 'blocked' ? { errorMessage: gateBlockReason(gateBlockCounter) } : {}),
       ...(recoveryNote !== undefined ? { gateRecoveryNote: recoveryNote } : {}),
-      ...(modelFallbackNote !== undefined ? { modelFallbackNote } : {}),
+      ...fallbackFields,
       responseExcerpt: responseText.length > 280
         ? `${responseText.slice(0, 280)}… [truncated]`
         : responseText,
@@ -192,7 +193,7 @@ export async function executeAgentTask(
 
 /** Telemetry fields for a run that switched to the `models.fallback` model. */
 export interface ModelFallbackFields {
-  /** The notice sentence shown at the switch. Absent when the run stayed on its model. */
+  /** Latest switch notice across attempts, capped at 400 chars plus a truncation marker. */
   modelFallbackNote?: string;
 }
 
@@ -205,6 +206,7 @@ async function runAgentAttempt(
   ctx: AgentTaskContext,
   task: ScheduledTask,
   trigger: TelemetryTrigger,
+  fallbackFields: ModelFallbackFields,
   gateBlockCounter?: GateBlockCounter,
 ): Promise<AttemptResult> {
   let session: AgentSession | null = null;
@@ -285,11 +287,6 @@ async function runAgentAttempt(
 
     const response = await session.sendMessage(task.command);
     const responseText = redactInlineSecrets(response.content);
-    // Nobody watches a daemon run's event stream, so the switch is read off the
-    // session afterwards: logged here, kept on the telemetry record, and shown
-    // in the task notification when one is sent.
-    const modelFallbackNote = readModelFallbackNote(session);
-    if (modelFallbackNote !== undefined) console.error(`[daemon] task ${task.taskId}: ${modelFallbackNote}`);
     // Persist the run like a REPL turn so it appears in `/resume`. Injected
     // (the sidecar store lives in src/cli/) and guarded: persistence must
     // never fail a tick that already succeeded.
@@ -309,9 +306,15 @@ async function runAgentAttempt(
       recovered: hasRecoveredFromGate(response, session.abortSignal?.aborted === true),
       doneUnverified: probeDoneUnverified(ctx, responseText, response),
       elicitationMessage,
-      ...(modelFallbackNote !== undefined ? { modelFallbackNote } : {}),
     };
   } finally {
+    // Capture before close clears metadata, even when sendMessage rejects.
+    // Nobody watches a daemon run's event stream; logs and telemetry carry it.
+    const modelFallbackNote = session ? readModelFallbackNote(session) : undefined;
+    if (modelFallbackNote !== undefined) {
+      fallbackFields.modelFallbackNote = modelFallbackNote;
+      console.error(`[daemon] task ${task.taskId}: ${modelFallbackNote}`);
+    }
     if (handlerInstalled) elicitationRouter.uninstallForSession(elicitationKey);
     if (session) {
       try {
@@ -344,7 +347,9 @@ async function runAgentAttempt(
 function readModelFallbackNote(session: AgentSession): string | undefined {
   try {
     const text = session.getSessionMetadata?.().modelFallback?.text;
-    return typeof text === 'string' && text.length > 0 ? text : undefined;
+    if (typeof text !== 'string' || text.length === 0) return undefined;
+    const redacted = redactInlineSecrets(text);
+    return redacted.length > 400 ? `${redacted.slice(0, 400)}… [truncated]` : redacted;
   } catch {
     return undefined;
   }
