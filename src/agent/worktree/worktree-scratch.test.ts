@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFile as execFileNode } from 'node:child_process';
 import { promises as fs, mkdtempSync, realpathSync, rmSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import {
@@ -55,8 +55,14 @@ async function readExclude(): Promise<string> {
 
 async function isLocked(wt: string): Promise<boolean> {
   const list = await git(repo, ['worktree', 'list', '--porcelain']);
-  const block = list.split('\n\n').find((b) => b.startsWith(`worktree ${wt}`));
-  return block?.split('\n').some((l) => l.startsWith('locked')) ?? false;
+  // Match by slug, not by full path: on Windows git prints forward slashes
+  // (and may print the long form of an 8.3 temp path), so a `startsWith` on
+  // the backslashed `wt` never finds the block.
+  const suffix = `/${basename(wt)}`;
+  const block = list
+    .split(/\r?\n\r?\n/)
+    .find((b) => (b.split(/\r?\n/)[0] ?? '').replace(/\\/g, '/').endsWith(suffix));
+  return block?.split(/\r?\n/).some((l) => l.startsWith('locked')) ?? false;
 }
 
 beforeEach(async () => {
