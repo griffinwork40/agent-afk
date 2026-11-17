@@ -19,6 +19,7 @@
 // that is trying to get around it.
 
 import { destructiveGitHeredocView } from './readonly-bash.destructive-git.heredoc.js';
+import { isLiteralCommand } from './readonly-bash.destructive-git.literal.js';
 import {
   baseName,
   gitSubcommand,
@@ -113,25 +114,29 @@ function plumbingDestructiveReason(sub: string, rest: readonly string[]): string
  *
  * `depth` is the nesting level of the enclosing command string; it is only
  * consumed by a shell alias (`alias.x=!…`), whose body is classified as a
- * nested command.
+ * nested command. `literal` says the enclosing command string is plain
+ * literal text (see `isLiteralCommand`); the `restore --staged` /
+ * `clean -n` exemptions are granted only then, so it defaults to false.
  */
-export function destructiveGitSegmentReason(argv: readonly string[], depth = 0): string | null {
-  return gitArgvReason(argv, depth, true);
+export function destructiveGitSegmentReason(argv: readonly string[], depth = 0, literal = false): string | null {
+  return gitArgvReason(argv, depth, true, literal);
 }
 
-function gitArgvReason(argv: readonly string[], depth: number, expandAliases: boolean): string | null {
+function gitArgvReason(argv: readonly string[], depth: number, expandAliases: boolean, literal: boolean): string | null {
   if (argv.includes('--help') || argv.includes('-h')) return null;
   const { sub, rest } = gitSubcommand(argv);
   if (sub === undefined || sub === 'help') return null;
   if (expandAliases) {
     const alias = inlineGitAliases(argv).get(sub);
-    if (alias !== undefined) return aliasReason(alias, rest, depth);
+    if (alias !== undefined) return aliasReason(alias, rest, depth, literal);
   }
   if (DESTRUCTIVE_GIT_SUBCMDS.has(sub)) {
     // Branch creation only adds a ref, so a child can still follow the
     // preamble's `git switch -c rescue-<name>` instruction.
     if ((sub === 'checkout' || sub === 'switch') && isPlainBranchCreation(sub, rest)) return null;
-    if ((sub === 'restore' || sub === 'clean') && isNonDestructiveMode(sub, rest)) return null;
+    // A comment, continuation or expansion can change the argv git receives,
+    // so the flag exemptions need a plain literal command (#4993).
+    if (literal && (sub === 'restore' || sub === 'clean') && isNonDestructiveMode(sub, rest)) return null;
     return `git ${sub} (working-tree destructive)`;
   }
   if (sub === 'reset') {
@@ -191,13 +196,13 @@ function isNonDestructiveMode(sub: string, rest: readonly string[]): boolean {
  * in a shell, so the body (plus the trailing args) is classified as a nested
  * command; any other alias is expanded once in place of the subcommand.
  */
-function aliasReason(alias: string, rest: readonly string[], depth: number): string | null {
+function aliasReason(alias: string, rest: readonly string[], depth: number, literal: boolean): string | null {
   if (alias.startsWith('!')) {
-    const verdict = classifyDestructiveGit([alias.slice(1), ...rest].join(' '), depth + 1);
+    const verdict = classifyDestructiveGit([alias.slice(1), ...rest].join(' '), depth + 1, literal);
     return verdict.destructive ? `git shell alias: ${verdict.reason ?? 'destructive'}` : null;
   }
   const expanded = [...alias.split(/\s+/).filter(Boolean), ...rest];
-  const reason = gitArgvReason(expanded, depth, false);
+  const reason = gitArgvReason(expanded, depth, false, literal);
   return reason !== null ? `git alias: ${reason}` : null;
 }
 
@@ -205,10 +210,10 @@ function aliasReason(alias: string, rest: readonly string[], depth: number): str
 // subset. When a compound-command keyword causes `resolveSegment` to return
 // null — or when the resolved base is not `git` — the raw token list may still
 // contain a literal `git` followed by a destructive subcommand.
-function hiddenDestructiveGit(tokens: readonly string[], depth: number): string | null {
+function hiddenDestructiveGit(tokens: readonly string[], depth: number, literal: boolean): string | null {
   for (let i = 0; i < tokens.length - 1; i++) {
     if (baseName(tokens[i]!) === 'git') {
-      const reason = destructiveGitSegmentReason(tokens.slice(i + 1), depth);
+      const reason = destructiveGitSegmentReason(tokens.slice(i + 1), depth, literal);
       if (reason !== null) return reason;
     }
   }
@@ -220,7 +225,7 @@ function hiddenDestructiveGit(tokens: readonly string[], depth: number): string 
 // printf/echo, not a parsed segment. If any segment is a shell interpreter
 // (possibly preceded by sudo/env/command), re-parse each string argument from
 // the preceding segment and recurse into classifyDestructiveGit.
-function pipeToShellDestructiveGit(command: string, depth: number): Verdict | null {
+function pipeToShellDestructiveGit(command: string, depth: number, literal: boolean): Verdict | null {
   const segs = [...tokenizeSegments(command)];
   for (let idx = 1; idx < segs.length; idx++) {
     const seg = segs[idx]!;
@@ -232,7 +237,7 @@ function pipeToShellDestructiveGit(command: string, depth: number): Verdict | nu
     if (!SHELL_INTERPS.has(baseName(seg[interpIdx]!))) continue;
     const prevSeg = segs[idx - 1]!;
     for (const tok of prevSeg.slice(1)) {
-      const inner = classifyDestructiveGit(tok, depth + 1);
+      const inner = classifyDestructiveGit(tok, depth + 1, literal);
       if (inner.destructive) return inner;
     }
   }
@@ -249,15 +254,16 @@ function classifySegment(
   rawTokens: readonly string[],
   vars: Map<string, string>,
   depth: number,
+  literal: boolean,
 ): Verdict | null {
   for (const payload of [...interpreterCommandStrings(rawTokens), ...evalPayloads(rawTokens)]) {
-    const inner = classifyDestructiveGit(payload, depth + 1);
+    const inner = classifyDestructiveGit(payload, depth + 1, literal);
     if (inner.destructive) return inner;
   }
   const seg = resolveSegment(rawTokens, vars);
   const reason = seg !== null && baseName(seg.command) === 'git'
-    ? destructiveGitSegmentReason(seg.argv, depth)
-    : hiddenDestructiveGit(rawTokens, depth);
+    ? destructiveGitSegmentReason(seg.argv, depth, literal)
+    : hiddenDestructiveGit(rawTokens, depth, literal);
   return reason !== null ? { destructive: true, reason } : null;
 }
 
@@ -275,31 +281,34 @@ function classifySegment(
  * closed. See the module comment for what this cannot see.
  *
  * @param depth - Nesting level; callers outside this module omit it.
+ * @param literalParent - False when an enclosing command string was not plain
+ *   literal text, so a payload decoded from it cannot earn a flag exemption.
  */
-export function classifyDestructiveGit(command: string, depth = 0): Verdict {
+export function classifyDestructiveGit(command: string, depth = 0, literalParent = true): Verdict {
   if (depth > MAX_NESTING) {
     return /\bgit\b/.test(command)
       ? { destructive: true, reason: 'git inside a deeply nested command (fail-closed)' }
       : { destructive: false };
   }
+  const literal = literalParent && isLiteralCommand(command);
   const heredocs = destructiveGitHeredocView(command);
   if (heredocs.uncertain !== undefined) {
     return { destructive: true, reason: `${heredocs.uncertain} (fail-closed)` };
   }
   for (const script of heredocs.scripts) {
-    const inner = classifyDestructiveGit(script, depth + 1);
+    const inner = classifyDestructiveGit(script, depth + 1, literal);
     if (inner.destructive) return inner;
   }
   command = heredocs.command;
   const vars = new Map<string, string>();
   for (const rawTokens of tokenizeSegments(command)) {
-    const verdict = classifySegment(rawTokens, vars, depth);
+    const verdict = classifySegment(rawTokens, vars, depth, literal);
     if (verdict !== null) return verdict;
   }
-  const piped = pipeToShellDestructiveGit(command, depth);
+  const piped = pipeToShellDestructiveGit(command, depth, literal);
   if (piped !== null) return piped;
   for (const rewritten of substitutionRewrites(command)) {
-    const inner = classifyDestructiveGit(rewritten, depth + 1);
+    const inner = classifyDestructiveGit(rewritten, depth + 1, literal);
     if (inner.destructive) return inner;
   }
   return { destructive: false };
