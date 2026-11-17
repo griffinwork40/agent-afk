@@ -14,11 +14,12 @@
  * same helpers as loop.hooks.test.ts and loop.trace.test.ts.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { RawMessageStreamEvent, MessageParam } from '@anthropic-ai/sdk/resources';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { MessageParam } from '@anthropic-ai/sdk/resources';
 import { runTurn } from './loop.js';
 import { JournalSync } from '../../journal/sync.js';
 import { anthropicJournalAdapter } from './journal-adapter.js';
+import { PauseController } from '../../session/pause-controller.js';
 import {
   fromArray,
   collect,
@@ -36,11 +37,18 @@ import {
 /**
  * A real JournalSync with no journal wired (sync is a no-op) and a spy on
  * `sync` so tests can inspect the messages arrays it was called with.
+ *
+ * The spy implementation captures a deep clone of each argument at call time
+ * so assertions are not affected by later mutations to the shared `messages`
+ * array (the original bug reported in issue #4816 finding 1).
  */
 function makeJournalSync() {
   const journalSync = new JournalSync<MessageParam>(undefined, anthropicJournalAdapter);
-  const sync = vi.spyOn(journalSync, 'sync');
-  return { journalSync, sync };
+  const snapshots: MessageParam[][] = [];
+  const sync = vi.spyOn(journalSync, 'sync').mockImplementation((msgs) => {
+    snapshots.push(structuredClone(msgs));
+  });
+  return { journalSync, sync, snapshots };
 }
 
 /** Two-round session: round 1 = tool_use, round 2 = end_turn text. */
@@ -74,12 +82,12 @@ describe('runTurn — round-boundary injection integration (#4769)', () => {
     const messages: MessageParam[] = [{ role: 'user', content: 'do work' }];
     const { journalSync } = makeJournalSync();
 
-    let capturedMessages: MessageParam[] | undefined;
     // Capture what messages look like when the client is called the second time
     // (after the steering injection should have occurred).
+    let capturedMessages: MessageParam[] | undefined;
     const createSpy = vi.spyOn(client.messages, 'create').mockImplementation(() => {
       if ((createSpy.mock.calls.length) === 2) {
-        capturedMessages = [...messages];
+        capturedMessages = structuredClone(messages);
       }
       return fromArray(
         (createSpy.mock.calls.length) === 1
@@ -115,12 +123,24 @@ describe('runTurn — round-boundary injection integration (#4769)', () => {
         ),
     );
     expect(steeringTurn).toBeDefined();
+
+    // Also verify via the snapshot taken at the second client call.
+    expect(capturedMessages).toBeDefined();
+    const steeringInSnapshot = capturedMessages!.find(
+      (m) =>
+        m.role === 'user' &&
+        Array.isArray(m.content) &&
+        (m.content as Array<{ type: string; text?: string }>).some(
+          (b) => b.type === 'text' && b.text === 'steer: check auth',
+        ),
+    );
+    expect(steeringInSnapshot).toBeDefined();
   });
 
   it('calls journalSync.sync() after pushing the steering turn (Finding 1: crash-safety)', async () => {
     const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'ok' }));
     const messages: MessageParam[] = [{ role: 'user', content: 'do work' }];
-    const { journalSync, sync } = makeJournalSync();
+    const { journalSync, snapshots } = makeJournalSync();
 
     let callIdx = 0;
     const client = makeClient(() => {
@@ -151,11 +171,10 @@ describe('runTurn — round-boundary injection integration (#4769)', () => {
 
     // journalSync.sync must have been called. It is called by runToolRound
     // (before tool dispatch) AND by applyBeforeNextRound (after steering push).
-    // We assert it was called with a messages array that INCLUDES the steering
-    // turn — proving the inter-round sync fired, not just the tool-round sync.
-    const syncCalls = sync.mock.calls as [MessageParam[]][];
-    const steeringWasSynced = syncCalls.some(([msgs]) =>
-      msgs.some(
+    // We assert against deep-cloned snapshots (not live references) so mutations
+    // to the shared messages array after the sync call cannot produce a false pass.
+    const steeringWasSynced = snapshots.some((snap) =>
+      snap.some(
         (m) =>
           m.role === 'user' &&
           Array.isArray(m.content) &&
@@ -170,7 +189,7 @@ describe('runTurn — round-boundary injection integration (#4769)', () => {
   it('is a no-op at the round boundary when beforeNextRound returns undefined', async () => {
     const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'ok' }));
     const messages: MessageParam[] = [{ role: 'user', content: 'do work' }];
-    const { journalSync, sync } = makeJournalSync();
+    const { journalSync, snapshots } = makeJournalSync();
 
     let callIdx = 0;
     const client = makeClient(() => {
@@ -181,8 +200,6 @@ describe('runTurn — round-boundary injection integration (#4769)', () => {
           : makeTextStream('Done'),
       );
     });
-
-    const syncCallsBefore = sync.mock.calls.length;
 
     await collect(
       runTurn({
@@ -211,22 +228,86 @@ describe('runTurn — round-boundary injection integration (#4769)', () => {
     );
     expect(steeringTurns).toHaveLength(0);
 
-    // journalSync may still be called by runToolRound (tool-round commit point),
-    // but NOT by applyBeforeNextRound (which is a no-op when text is undefined).
-    // The key assertion: no sync call contains a dedicated steering-text user turn
-    // (a user turn whose ONLY blocks are plain text, not tool_result).
-    const syncCalls = sync.mock.calls as [MessageParam[]][];
-    const anyDedicatedSteeringTurn = syncCalls.some(([msgs]) =>
-      msgs.some(
+    // Assert against deep-cloned snapshots: no sync call should contain a
+    // dedicated steering-text user turn (all-text user turn without tool_result).
+    const anyDedicatedSteeringTurn = snapshots.some((snap) =>
+      snap.some(
         (m) =>
           m.role === 'user' &&
           Array.isArray(m.content) &&
           (m.content as Array<{ type: string }>).every((b) => b.type === 'text'),
       ),
     );
-    // A dedicated steering turn (all-text user turn) should NOT be present
-    // when beforeNextRound returns undefined.
     expect(anyDedicatedSteeringTurn).toBe(false);
-    void syncCallsBefore; // used only to establish a before-snapshot reference
+  });
+
+  it('prepends PauseController pause note and triggers journal sync (#4816 finding 2)', async () => {
+    // Prime the PauseController singleton so consumeLastPauseDuration() returns
+    // a duration >60 s (the threshold below which formatPauseNote returns undefined).
+    const pc = PauseController.instance();
+    vi.spyOn(pc, 'consumeLastPauseDuration').mockReturnValueOnce(120_000);
+
+    const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'ok' }));
+    const messages: MessageParam[] = [{ role: 'user', content: 'do work' }];
+    const { journalSync, snapshots } = makeJournalSync();
+
+    let callIdx = 0;
+    const client = makeClient(() => {
+      callIdx += 1;
+      return fromArray(
+        callIdx === 1
+          ? makeToolUseStream('toolu_pause1', 'bash', '{}')
+          : makeTextStream('Done'),
+      );
+    });
+
+    await collect(
+      runTurn({
+        client,
+        messages,
+        system: null,
+        tools: [{ name: 'bash', input_schema: { type: 'object' } }],
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 1024,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+        journalSync,
+        // No beforeNextRound text — the pause note alone should trigger injection.
+        beforeNextRound: () => undefined,
+      }),
+    );
+
+    // A pause turn (all-text user turn containing the pause note keyword) must
+    // be present in the final messages array.
+    const pauseTurn = messages.find(
+      (m) =>
+        m.role === 'user' &&
+        Array.isArray(m.content) &&
+        (m.content as Array<{ type: string; text?: string }>).some(
+          (b) => b.type === 'text' && typeof b.text === 'string' && b.text.includes('resumed after'),
+        ),
+    );
+    expect(pauseTurn).toBeDefined();
+
+    // journalSync.sync must have been called with a snapshot that includes the
+    // pause turn (proving the inter-round sync fired after the pause note was pushed).
+    const pauseNoteWasSynced = snapshots.some((snap) =>
+      snap.some(
+        (m) =>
+          m.role === 'user' &&
+          Array.isArray(m.content) &&
+          (m.content as Array<{ type: string; text?: string }>).some(
+            (b) => b.type === 'text' && typeof b.text === 'string' && b.text.includes('resumed after'),
+          ),
+      ),
+    );
+    expect(pauseNoteWasSynced).toBe(true);
+  });
+
+  afterEach(() => {
+    // Restore PauseController singleton so spies from one test don't leak.
+    vi.restoreAllMocks();
   });
 });

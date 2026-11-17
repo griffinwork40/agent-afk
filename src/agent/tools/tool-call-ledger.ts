@@ -194,7 +194,11 @@ export class ToolCallLedger {
     // stays bounded at `turnWindow` entries rather than growing with session
     // length. `prune()` removes whole buckets; this trims within live buckets.
     const cutoff = bucket.latestTurn - this.turnWindow;
+    // cutoff > 0 guard: when latestTurn <= turnWindow no entry can be stale yet,
+    // so the scan and splice are always skipped on early turns.
     if (cutoff > 0) {
+      // O(turnWindow) scan per write — acceptable at the current default window
+      // size (20). If turnWindow grows significantly, replace with a pointer.
       const firstLive = bucket.entries.findIndex((e) => e.turnIndex >= cutoff);
       if (firstLive > 0) bucket.entries.splice(0, firstLive);
     }

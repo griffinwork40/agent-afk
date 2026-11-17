@@ -63,8 +63,9 @@ export const SKILL_IDENTITY_SCENARIOS: Record<string, PtyScenario> = {
     content(r, 'IMMED_DONE');
     await finish(r);
   }, {
-    exactlyOnce: ['IMMED_PURPOSE_REVIEW', 'args: src/foo.ts', 'IMMED_DONE'],
-    inScrollback: ['IMMED_PURPOSE_REVIEW'],
+    // The intro is one `/name · purpose` line; args live only in the user's echo.
+    exactlyOnce: ['/review · IMMED_PURPOSE_REVIEW', 'IMMED_DONE'], absent: ['args: src/foo.ts'],
+    inScrollback: ['/review · IMMED_PURPOSE_REVIEW'],
     order: [['IMMED_PURPOSE_REVIEW', 'IMMED_CONTENT_00'], ['IMMED_CONTENT_00', 'IMMED_DONE']],
   }),
   'skill-identity-delayed': scenario('arm precedes delayed first content', async ctx => {
@@ -87,11 +88,12 @@ export const SKILL_IDENTITY_SCENARIOS: Record<string, PtyScenario> = {
     await settle(120);
     // No process(content), no dispose and no manual overlay injection.
   }, {
-    // Regression (duplicate preview): only the committed intro shows the
-    // identity. The combined `/name · purpose` row is the live-banner form and
-    // must never paint beneath the intro.
-    inViewport: ['LIVE_PURPOSE_REVIEW'],
-    exactlyOnce: ['LIVE_PURPOSE_REVIEW'], absent: ['LIVE_CONTENT', '/review · LIVE_PURPOSE_REVIEW'],
+    // Regression (duplicate preview, #2915): only the committed intro shows the
+    // identity. The intro is itself the one-line `/name · purpose` form, so the
+    // purpose appearing exactly once is what proves no live-banner copy painted;
+    // the old banner also carried `args:`, which must never render.
+    inViewport: ['/review · LIVE_PURPOSE_REVIEW'],
+    exactlyOnce: ['LIVE_PURPOSE_REVIEW', '/review · LIVE_PURPOSE_REVIEW'], absent: ['LIVE_CONTENT', 'args: live.ts'],
   }),
   'skill-identity-cancelled': scenario('soft-stop after arm retains intro once and removes live overlay', async ctx => {
     const c = await surface(ctx);
@@ -101,7 +103,7 @@ export const SKILL_IDENTITY_SCENARIOS: Record<string, PtyScenario> = {
     await settle();
     await r.dispose();
     await settle();
-  }, { exactlyOnce: ['SOFT_CANCEL_PURPOSE'], absent: ['stopping…', '/diagnose · SOFT_CANCEL_PURPOSE'] }),
+  }, { exactlyOnce: ['SOFT_CANCEL_PURPOSE', '/diagnose · SOFT_CANCEL_PURPOSE'], absent: ['stopping…'] }),
   // Regression: dispose must clear both stopping flags before its final flush.
   'skill-identity-interrupt-regression': scenario('Ctrl+C affordance clears on dispose', async ctx => {
     const c = await surface(ctx);
@@ -117,7 +119,7 @@ export const SKILL_IDENTITY_SCENARIOS: Record<string, PtyScenario> = {
     await settle();
     await r.dispose();
     await settle();
-  }, { exactlyOnce: ['CANCEL_PURPOSE'], absent: ['interrupting', 'stopping…', '/diagnose · CANCEL_PURPOSE'] }),
+  }, { exactlyOnce: ['CANCEL_PURPOSE', '/diagnose · CANCEL_PURPOSE'], absent: ['interrupting', 'stopping…'] }),
   'skill-identity-back-to-back': scenario('two actual renderer lifetimes share the persistent surface', async ctx => {
     const c = await surface(ctx);
     const first = renderer(ctx.stdout, c, 'mint', 'B2B_SKILL_ONE');

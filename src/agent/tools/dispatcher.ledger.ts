@@ -46,11 +46,25 @@ import { repeatFailureFingerprint, type RepeatFailureGuard } from './repeat-fail
 import { ToolCallLedger, type LedgerHistory } from './tool-call-ledger.js';
 
 /**
+ * Read-only view of the session-scoped ledger exposed through
+ * {@link Dispatcher.toolCallLedger}. Intentionally omits `record` and
+ * `beginRound` to prevent external callers from mutating ledger state.
+ */
+export interface ToolCallLedgerReader {
+  /** The current tool-round ordinal (0 before any round has begun). */
+  readonly currentRound: number;
+  /** The underlying {@link ToolCallLedger} for diagnostics and iteration. */
+  readonly ledger: ToolCallLedger;
+  /** Prior settled observations of this exact call within the turn window. */
+  lookup(call: ToolCall): LedgerHistory;
+}
+
+/**
  * Session-scoped holder of one {@link ToolCallLedger} and the tool-round
  * counter used as its turn index. One instance per session (owned by the
  * provider); a dispatcher constructed without one creates its own.
  */
-export class ToolCallLedgerWiring {
+export class ToolCallLedgerWiring implements ToolCallLedgerReader {
   /** The underlying ledger. Read-only for consumers; written only via {@link record}. */
   readonly ledger: ToolCallLedger;
   /** -1 until the first round begins; then the 0-based current tool round. */

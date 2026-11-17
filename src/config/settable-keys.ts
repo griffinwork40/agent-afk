@@ -105,6 +105,10 @@ export const PROTECTED_ENV_KEYS: ReadonlySet<string> = new Set([
   'AFK_TELEGRAM_TAG_ONLY_CHAT_IDS',
   'AFK_TELEGRAM_NOTIFY_MODE',
   'AFK_TELEGRAM_PRIMARY_CHAT_ID',
+  // Prompt-experiment gating — lets the agent enroll itself in a treatment arm
+  // or activate an experiment by name; human-gated to keep the gate trustworthy.
+  'AFK_PROMPT_EXPERIMENT',
+  'AFK_PROMPT_EXPERIMENT_ARM',
   // State / credential-tree relocation — where AFK's own config, state, memory,
   // or Telegram auth is read from and written to.
   'AFK_HOME',

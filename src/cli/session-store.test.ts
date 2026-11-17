@@ -636,6 +636,25 @@ describe('session-registry bridge — storedToHandle / bindingsForStored', () =>
       expect(endedAtOffset + '"endedAt": 1793645244179'.length).toBeLessThan(1024);
     });
 
+    it('saveSession writes endedAt inside 1 KiB head even with long cwd and repoRoot', () => {
+      // Regression for #4851: previously `endedAt` was written after cwd and
+      // repoRoot, so deep paths could push it past the 1024-byte head window
+      // and cause startup-recall to treat a sealed session as live (skipped).
+      const stats = createSessionStats('sonnet');
+      // 400-character paths are well above realistic values but confirm the fix
+      // is structural (position in payload) rather than relying on path-length
+      // limits.
+      stats.cwd = '/home/user/' + 'deep/nested/path/'.repeat(23) + 'project';
+      stats.repoRoot = '/home/user/' + 'deep/nested/path/'.repeat(23) + 'project';
+      recordTurn(stats, 'a', 'b', { sessionId: 'end-head-paths' });
+      const p = saveSession(stats, 'end-head-paths-test', { closeTime: true });
+      const text = readFileSync(p, 'utf-8');
+      const endedAtOffset = Buffer.byteLength(text.slice(0, text.indexOf('"endedAt"')));
+      expect(text.indexOf('"endedAt"')).toBeGreaterThan(-1);
+      expect(text.indexOf('"endedAt"')).toBeLessThan(text.indexOf('"cwd"'));
+      expect(endedAtOffset + '"endedAt": 1793645244179'.length).toBeLessThan(1024);
+    });
+
     it('saveSession writes exitReason alongside endedAt when provided', () => {
       const stats = createSessionStats('sonnet');
       recordTurn(stats, 'a', 'b', { sessionId: 'exit-reason' });

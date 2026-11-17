@@ -504,6 +504,7 @@ Named-agent defaults apply when you select a type. An explicit `model`, `max_tur
 | `max_tool_use_iterations` | number | | Max tool-use rounds before graceful wind-down (default 0 = unlimited). |
 | `cwd` | string | | Absolute child working directory without `..`. Omit to inherit. Home directories, filesystem roots, and ancestors of home are refused. Mutually exclusive with worktree isolation. |
 | `isolation` | string | | `none` (default) or `worktree`. Creates a managed worktree; dirty or commits-ahead work is preserved and locked at teardown. Ignored for read-only agents. Mutually exclusive with `cwd` and `writeRoots`. |
+| `task_slug` | string | | With worktree isolation only: a short kebab summary (e.g. `issue-4112-telegram-retry`) that names the branch `afk/iso-<task_slug>-<suffix>`. Cleaned to lowercase `a-z0-9` and hyphens, truncated to 48 characters. Ignored without isolation and on continuation. |
 | `writeRoots` | string[] | | Extra absolute write roots without `..`, additive to a confined child's cwd. Does not itself request confinement for an unconfined fork. Mutually exclusive with worktree isolation. |
 | `readRoots` | string[] | | Extra absolute files or directories to read, without `..`; roots and home directories are refused. Additive to inherited scope; must be re-granted to grandchildren. Compatible with worktree isolation. |
 | `attachments` | string[] | | Up to 8 inbound image IDs or absolute image paths, not base64. |
@@ -538,6 +539,7 @@ Each node accepts these fields:
 | `agent_type` | string | | Named agent definition with prompt, tool allowlist, and model defaults. |
 | `attachments` | string[] | | Up to 8 inbound image IDs or absolute image paths. |
 | `isolation` | string | | `none` (default) or `worktree`. |
+| `task_slug` | string | | With worktree isolation only: short kebab summary that names the node's branch `afk/iso-<task_slug>-<suffix>`. |
 
 Each edge requires string fields `from` and `to`, naming nodes. Compose nodes are leaves: they cannot call `agent`, `skill`, or `compose`. Upstream output is untrusted data, not authority to change downstream instructions.
 

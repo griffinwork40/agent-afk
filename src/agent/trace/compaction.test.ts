@@ -149,6 +149,7 @@ describe('compaction trace event', () => {
     expect(ev.payload.keepLastNConfig).toBeGreaterThanOrEqual(1);
     expect(ev.payload.messagesBefore).toBe(history.length);
     expect(ev.payload.messagesAfter).toBeLessThan(history.length);
+    expect(ev.payload.summarizerInputCharsDropped).toBe(0);
     expect(typeof ev.payload.tokensSavedEstimate).toBe('number');
     expect(ev.payload.tokensSavedEstimate).toBeGreaterThanOrEqual(0);
     // Persisted sidecar ref carries path + size + sha256.
@@ -162,6 +163,24 @@ describe('compaction trace event', () => {
     expect(Array.isArray(inline!.preCompactionMessages)).toBe(true);
     expect(inline!.preCompactionMessages.length).toBeGreaterThan(0);
     expect(inline!.preCompactionMessages.length).toBeLessThan(history.length);
+  });
+
+  it('records the capped transcript drop while archiving the full older slice', async () => {
+    const history = makeHistory(6);
+    const original = 'request ' + 'x'.repeat(1_000_000);
+    history[0] = { role: 'user', content: original };
+    const writer = new InMemoryTraceWriter();
+    const query = buildQuery({ writer, initialMessages: history });
+    expect((await query.compact()).compacted).toBe(true);
+    await new Promise((r) => setImmediate(r));
+    const event = writer.events.find((e) => e.kind === 'compaction');
+    if (event?.kind !== 'compaction') throw new Error('missing compaction');
+    const request = messagesCreateMock.mock.calls[0]?.[0];
+    const prompt = JSON.stringify(request);
+    const dropped = Number(/Transcript middle omitted: (\d+) characters dropped/.exec(prompt)?.[1]);
+    expect(dropped).toBeGreaterThan(0);
+    expect(event.payload.summarizerInputCharsDropped).toBe(dropped);
+    expect(writer.getInlineCompactionPayload(event.seq)?.preCompactionMessages[0]).toEqual(history[0]);
   });
 
   it('does not emit when compaction is a no-op (nothing to summarize)', async () => {

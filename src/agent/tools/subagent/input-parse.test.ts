@@ -386,6 +386,27 @@ describe('parseAgentInput', () => {
     });
   });
 
+  describe('task_slug', () => {
+    it('passes task_slug through raw (cleaning happens at worktree naming)', () => {
+      const parsed = parseAgentInput({ prompt: 'p', isolation: 'worktree', task_slug: 'issue-4112-telegram-retry' });
+      expect(parsed.task_slug).toBe('issue-4112-telegram-retry');
+    });
+
+    it('does not change id_prefix', () => {
+      const parsed = parseAgentInput({ prompt: 'p', id_prefix: 'lane', task_slug: 'docs-pass' });
+      expect(parsed.id_prefix).toBe('lane');
+    });
+
+    it('omits task_slug when absent or blank', () => {
+      expect(parseAgentInput({ prompt: 'p' })).not.toHaveProperty('task_slug');
+      expect(parseAgentInput({ prompt: 'p', task_slug: '  ' })).not.toHaveProperty('task_slug');
+    });
+
+    it('throws when task_slug is not a string', () => {
+      expect(() => parseAgentInput({ prompt: 'p', task_slug: 7 })).toThrow(/task_slug must be a string/);
+    });
+  });
+
   describe('mode', () => {
     it("defaults to 'foreground' when omitted", () => {
       expect(parseAgentInput({ prompt: 'p' }).mode).toBe('foreground');

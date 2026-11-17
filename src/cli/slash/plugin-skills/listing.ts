@@ -18,7 +18,7 @@ import { getTerminalWidth } from '../../terminal-size.js';
 import { padDisplayRight, displayWidth } from '../../display.js';
 import { env } from '../../../config/env.js';
 import type { SlashCommand, SlashContext } from '../types.js';
-import { state, bareName, type DiscoveredSkill } from './state.js';
+import { state, bareName, isRegistrySource, type DiscoveredSkill } from './state.js';
 import type { SkillManifestEntry } from '../../../agent/tools/skill-bridge.js';
 import { renderSkillDetail, registryOriginToSource, friendlySource, tryGetRegistrySkill } from './listing-detail.js';
 import { renderSkillSearch, buildSearchUniverse } from './search-render.js';
@@ -106,6 +106,10 @@ function buildListingGroups(plugins: DiscoveredSkill[], internalUnlocked: boolea
   const altSlashByBare = new Map(state.collisions.map((c) => [c.bare, c.altSlash]));
 
   for (const skill of plugins) {
+    // The discovered list also carries the registry's own skills, which pass 1
+    // has already listed. Adding them again would file each one as an alt of
+    // itself.
+    if (isRegistrySource(skill.source)) continue;
     const bare = bareName(skill.name);
     const altSlash = altSlashByBare.get(bare);
     const slashName = altSlash ?? `/${skill.name}`;

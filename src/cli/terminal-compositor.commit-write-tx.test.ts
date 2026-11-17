@@ -156,6 +156,25 @@ describe('CommitWriteTx', () => {
     expect(output(stream).toString()).toBe('a');
   });
 
+  it('flushes once when inner ends before outer (ordinary nesting order)', () => {
+    const stream = tty();
+    const before = stream.write;
+    const outer = CommitWriteTx.begin(stream);
+    const inner = CommitWriteTx.begin(stream);
+    stream.write('b1');
+    stream.write('b2');
+    inner.end();
+    inner.end();
+    // depth is still 1 (outer open); no flush yet
+    expect(output(stream)).toBeNull();
+    expect(stream.write).not.toBe(before);
+    outer.end();
+    outer.end();
+    // depth reaches 0; single physical flush with sync framing (two chunks → not single-write fast path)
+    expect(stream.write).toBe(before);
+    expect(output(stream).toString()).toBe(SYNC_START + 'b1b2' + SYNC_END);
+  });
+
   it('is a no-op on non-TTY streams, without sync markers or patching', () => {
     const stream = new PassThrough() as unknown as NodeJS.WriteStream;
     const before = stream.write;

@@ -268,16 +268,16 @@ describe('buildSubagentsByModel', () => {
     expect(rollup!['(unknown)']?.started).toBe(1);
   });
 
-  it('puts model-less started rows in an (unknown) bucket', () => {
+  it.each([undefined, ''])('puts model-less starts (%s) in (unknown) without a requested name', (model) => {
     const events: TraceEvent[] = [
-      // started with no model field
-      { ts: ts(), seq: seq - 1, kind: 'subagent_lifecycle', payload: { transition: 'started', subagentId: 'sa-nomodel' } } as unknown as TraceEvent,
+      { ts: ts(), seq: seq - 1, kind: 'subagent_lifecycle', payload: { transition: 'started', subagentId: 'sa-nomodel', model } } as unknown as TraceEvent,
       terminal('failed', 'sa-nomodel'),
+      closureEv('sa-nomodel', 0.01),
     ];
     const rollup = buildSubagentsByModel(events);
     // Must return a non-undefined rollup (not silently dropped or ??\ {}).
     expect(rollup).toBeDefined();
-    expect(rollup!['(unknown)']).toMatchObject({ started: 1, failed: 1 });
+    expect(rollup!['(unknown)']).toEqual({ started: 1, succeeded: 0, failed: 1, cancelled: 0, costUsd: 0.01, requested: [] });
   });
 
   // Regression: two terminal rows for one id.

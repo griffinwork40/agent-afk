@@ -1021,21 +1021,23 @@ describe('renderVerdictCard — secondary-tier edge cases (#4777)', () => {
   });
 
   it('worthDoing field is rendered as a secondary-tier row', () => {
-    const state: TerminalState = {
-      kind: 'done',
-      whatWasDone: 'shipped it',
-      worthDoing: 'High user impact, low risk',
-      rawBody: '',
-    };
-    const out = stripAnsi(renderVerdictCard(state));
-    expect(out).toContain('worth doing');
-    expect(out).toContain('High user impact, low risk');
-    // worth doing is secondary — it must appear after the blank separator row.
-    const lines = out.split('\n');
-    const worthIdx = lines.findIndex((l) => l.includes('worth doing'));
-    expect(worthIdx).toBeGreaterThan(0);
-    const prevLine = lines[worthIdx - 1] ?? '';
-    expect(prevLine.trim()).toMatch(/^│\s+│$/);
+    withCols(80, () => {
+      const state: TerminalState = {
+        kind: 'done',
+        whatWasDone: 'shipped it',
+        worthDoing: 'High user impact, low risk',
+        rawBody: '',
+      };
+      const out = stripAnsi(renderVerdictCard(state));
+      expect(out).toContain('worth doing');
+      expect(out).toContain('High user impact, low risk');
+      // worth doing is secondary — it must appear after the blank separator row.
+      const lines = out.split('\n');
+      const worthIdx = lines.findIndex((l) => l.includes('worth doing'));
+      expect(worthIdx).toBeGreaterThan(0);
+      const prevLine = lines[worthIdx - 1] ?? '';
+      expect(prevLine.trim()).toMatch(/^│\s+│$/);
+    });
   });
 
   it('separator is absent when only secondary fields are present (no primary rows)', () => {

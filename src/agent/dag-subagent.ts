@@ -98,6 +98,12 @@ export interface SubagentDAGNode {
    */
   isolation?: 'none' | 'worktree';
   /**
+   * Human-readable worktree/branch name for an `isolation:"worktree"` node
+   * (compose `task_slug`). Cleaned and suffixed by `buildIsolatedSlug`;
+   * ignored without isolation.
+   */
+  taskSlug?: string;
+  /**
    * Per-node API key. When set, forwarded directly into the node's fork
    * config so the node's subagent authenticates with its own credential
    * rather than the manager's `parentApiKey` fallback. Corresponds to

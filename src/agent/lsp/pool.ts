@@ -220,6 +220,21 @@ export class LspServerPool {
     if (client) void client.dispose();
   }
 
+  /**
+   * Synchronous best-effort kill of every pooled client. Safe to call from a
+   * `process.on('exit')` handler. Complements `disposeAll()` (which is async
+   * and only reachable from interactive exit paths) by covering daemon,
+   * one-shot, and Telegram process exits (#4309 item 2).
+   */
+  killAll(): void {
+    for (const entry of this.entries.values()) {
+      entry.abortStart.abort();
+      const client = entry.client;
+      if (client) client.killSync();
+    }
+    this.entries.clear();
+  }
+
   /** Dispose every server (tests, process exit). */
   async disposeAll(): Promise<void> {
     const all = [...this.entries.values()];
@@ -248,6 +263,12 @@ export function getLspPool(): LspServerPool {
     // Graceful draining is async. The spawn-time guardian in client-process
     // independently kills ready, starting, and disposing servers on hard exit.
     registerCleanup(() => created.disposeAll());
+    // Non-interactive exit paths (daemon, one-shot, Telegram) never call
+    // runCleanupFunctions(), so registerCleanup alone does not cover them.
+    // A synchronous 'exit' handler ensures pooled children are killed on any
+    // process exit — the handler is sync-safe because client-process already
+    // uses the same pattern for its spawn-time guardian (#4309 item 2).
+    process.on('exit', () => { created.killAll(); });
   }
   return pool;
 }

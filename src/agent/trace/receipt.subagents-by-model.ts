@@ -275,7 +275,8 @@ export function buildSubagentsByModel(
 
     if (t === 'started') {
       bucket.started++;
-      bucketRequested.get(key)?.add(req);
+      // '(unknown)' routes model-less starts; it is not a requested model name.
+      if (req !== '(unknown)') bucketRequested.get(key)?.add(req);
       // A fallback re-run was served by toModel's credential, not the first attempt's.
       const fb = fallbackMap.get(id);
       const cred = fb !== undefined ? fb.credentialSource : startedCred.get(id);

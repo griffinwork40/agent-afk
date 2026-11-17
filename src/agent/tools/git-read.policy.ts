@@ -254,6 +254,20 @@ const COUNT_SHORT_RE = /^-(?:n(\d+)|(\d+))$/;
  * positional token. The normaliser joins them before `checkToken` runs.
  * Maps the bare option token to the prefix used to build the joined form.
  *
+ * Scope note (#4902): this map is GLOBAL — it runs for every subcommand, not
+ * only the ones that admit each option. For example, `-L` is only in `blame`'s
+ * allowlist, but the normaliser still consumes the following token on `log` or
+ * `diff` and produces `-L<value>` before `checkToken` runs. `checkToken` then
+ * rejects the joined form because `-L` is not in those subcommands' allowlists.
+ * Nothing is exploitable, but anyone adding a new entry to this map must
+ * confirm that the joined form is rejected by every subcommand that does NOT
+ * list the option — the token-consumption happens before per-subcommand checks.
+ *
+ * Diagnostic note (#4902): because joining happens before rejection, a
+ * wrong-subcommand call such as `diff --contains v1` is reported as
+ * `Rejected option "--contains=v1"` (the joined form), not `"--contains"`.
+ * The request is still denied; only the error message text is affected.
+ *
  * Security invariants:
  * 1. The next token must exist and must NOT start with `-`; a leading `-`
  *    signals another flag, not a value — the option is left unpaired and
@@ -270,6 +284,10 @@ const SPLIT_VALUED: ReadonlyMap<string, string> = new Map([
   ['--merged',   '--merged='],
   ['--no-merged','--no-merged='],
   ['-L', '-L'],  // blame: joined as -L<range> (no separator needed by git)
+  // `-G` (regex pickaxe) is intentionally absent (#4902): unlike `-S` (string
+  // search), `-G` runs a full regex against diff patches and can exhibit severe
+  // backtracking on pathological patterns. It is not in any subcommand's
+  // allowlist; do not add it here by symmetry with `-S`.
   ['-S', '-S'],  // log:   joined as -S<value> (no separator)
 ]);
 
