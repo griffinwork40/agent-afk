@@ -325,4 +325,18 @@ export const MISC_ENV_REGISTRY = [
     example: 'Authorization=Bearer tok123,X-Org=acme',
     category: 'misc',
   },
+
+  // ── Skill manifest ────────────────────────────────────────────────────────
+  {
+    name: 'AFK_SKILLS_MANIFEST_ALWAYS',
+    description:
+      'Always include the skills manifest in the system prompt whenever a skill executor ' +
+      'is present, regardless of whether the session is granted the skill tool. ' +
+      'Set to 1 to restore the pre-grant-gate behaviour. ' +
+      'Default unset (manifest is omitted for sessions that are denied the skill tool).',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'misc',
+  },
 ] as const satisfies readonly EnvVarMeta[];

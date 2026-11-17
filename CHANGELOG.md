@@ -63,6 +63,9 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 - API: `NoticeKind` includes `'model-fallback'` for automatic main-session model switches. Consumers with exhaustive notice-kind switches must handle this variant (#4904).
 - stop false Test (windows-2022) failure on superseded runs (#4985) (f830e7800)
 
+### Performance
+- prompt: omit the skills manifest (~19k tokens) from sessions that are denied the `skill` tool (research-agent, git-investigator, Explore, and any child whose tool list excludes `skill`). Sessions that are granted `skill` are unaffected. Set `AFK_SKILLS_MANIFEST_ALWAYS=1` to restore the previous behaviour.
+
 ## [5.356.0] - 2026-11-16
 
 ### Added

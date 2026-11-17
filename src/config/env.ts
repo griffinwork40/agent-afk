@@ -309,6 +309,20 @@ export function isPlainOutputRequested(): boolean {
 }
 
 /**
+ * Kill switch for the skill-manifest grant gate.
+ *
+ * Returns true when AFK_SKILLS_MANIFEST_ALWAYS=1 or =true, restoring the
+ * pre-gate behaviour (manifest included whenever a skill executor is present).
+ * Reads via env.AFK_SKILLS_MANIFEST_ALWAYS (never process.env directly).
+ */
+export function isSkillManifestAlways(): boolean {
+  const raw = env.AFK_SKILLS_MANIFEST_ALWAYS;
+  if (raw === undefined) return false;
+  const v = raw.trim().toLowerCase();
+  return v === '1' || v === 'true';
+}
+
+/**
  * Union of every registered env-var name. Useful for typed variable-name
  * parameters, e.g. `function readEnv(name: EnvVarName)`.
  *

@@ -39,6 +39,12 @@ export interface SystemPromptWiringArgs {
    * provides `getManifestScope()` for plugin/allowlist scoping.
    */
   skillExecutor?: SkillExecutor;
+  /**
+   * Whether to include the skill manifest. Computed at the call site via
+   * `skillManifestGranted()` so both providers share one decision rule.
+   * When false the manifest is omitted even if a skill executor is present.
+   */
+  includeSkillManifest?: boolean;
   /** Whether the `# Shared Workspace` fragment is included: a store is present AND
    *  both workspace tools are granted (`grantsWorkspacePrompt`, #4060). */
   workspacePromptEnabled: boolean;
@@ -133,8 +139,11 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
   // resolve against the session's dir, not the host process's (#876).
   // `pluginConfigs` and `skillAllowlist` from `getManifestScope()` scope the
   // manifest to the executor's configured boundaries.
-  const manifestScope = skillExecutor?.getManifestScope?.();
-  const manifest = skillExecutor
+  // Gate: include iff executor present AND call site granted `skill` via
+  // `skillManifestGranted()` in index.ts so both providers share one rule.
+  const includeManifest = args.includeSkillManifest !== false && skillExecutor !== undefined;
+  const manifestScope = includeManifest ? skillExecutor?.getManifestScope?.() : undefined;
+  const manifest = includeManifest
     ? buildSkillManifest(undefined, {
         ...(typeof config.cwd === 'string' && config.cwd.length > 0
           ? { cwd: config.cwd }
