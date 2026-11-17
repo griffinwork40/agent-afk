@@ -5,15 +5,28 @@
  * No real AFK_HOME reads.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, utimesSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sidecarPredatesWindow } from './session-prescreen.js';
+import { debugLog, isDebugEnabled } from '../../utils/debug.js';
+
+vi.mock('../../utils/debug.js', () => ({
+  debugLog: vi.fn(),
+  isDebugEnabled: vi.fn(() => false),
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, statSync: vi.fn(actual.statSync) };
+});
 
 let tmpDir: string;
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(isDebugEnabled).mockReturnValue(false);
   tmpDir = join(
     tmpdir(),
     `afk-prescreen-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -63,5 +76,68 @@ describe('sidecarPredatesWindow', () => {
 
   it('returns false when sessionsDir does not exist (safe fallback)', () => {
     expect(sidecarPredatesWindow('any', '/nonexistent/dir/xyz', cutoffMs)).toBe(false);
+  });
+
+  it.each(['../outside', 'nested/session', '..\\outside', 'nested\\session'])(
+    'rejects path separators without statting: %s', (sessionId) => {
+      expect(sidecarPredatesWindow(sessionId, tmpDir, cutoffMs)).toBe(false);
+      expect(statSync).not.toHaveBeenCalled();
+    },
+  );
+
+  it('logs every skip with mtime, cutoff delta, and cumulative stat metrics', () => {
+    vi.mocked(isDebugEnabled).mockReturnValue(true);
+    writeSidecar('old-debug', cutoffMs - 1000);
+    writeSidecar('recent-debug', cutoffMs + 1000);
+
+    expect(sidecarPredatesWindow('old-debug', tmpDir, cutoffMs)).toBe(true);
+    const first = vi.mocked(debugLog).mock.calls[0][1] as {
+      statCount: number; totalStatMs: number;
+    };
+    expect(debugLog).toHaveBeenLastCalledWith('[session-prescreen] skip', {
+      sessionId: 'old-debug', mtimeMs: expect.any(Number), cutoffMs,
+      deltaMs: expect.closeTo(-1000, 0), statCount: expect.any(Number),
+      statMs: expect.any(Number), totalStatMs: expect.any(Number),
+    });
+
+    // Successful non-skips and failed stats also count toward the loop cost.
+    expect(sidecarPredatesWindow('recent-debug', tmpDir, cutoffMs)).toBe(false);
+    expect(debugLog).toHaveBeenCalledTimes(1);
+    expect(sidecarPredatesWindow('missing-debug', tmpDir, cutoffMs)).toBe(false);
+    expect(sidecarPredatesWindow('old-debug', tmpDir, cutoffMs)).toBe(true);
+    expect(debugLog).toHaveBeenCalledTimes(3);
+    const last = vi.mocked(debugLog).mock.calls[2][1] as {
+      statCount: number; totalStatMs: number;
+    };
+    expect(last.statCount).toBe(first.statCount + 3);
+    expect(last.totalStatMs).toBeGreaterThanOrEqual(first.totalStatMs);
+  });
+
+  it('logs stat failures at DEBUG before conservatively falling back', () => {
+    vi.mocked(isDebugEnabled).mockReturnValue(true);
+    expect(sidecarPredatesWindow('missing-debug', tmpDir, cutoffMs)).toBe(false);
+    expect(debugLog).toHaveBeenCalledWith(
+      '[session-prescreen] stat failed; falling back',
+      expect.objectContaining({
+        sessionId: 'missing-debug', error: expect.objectContaining({ code: 'ENOENT' }),
+        statCount: expect.any(Number), statMs: expect.any(Number),
+        totalStatMs: expect.any(Number),
+      }),
+    );
+  });
+
+  it('does not log or read the performance clock when DEBUG is disabled', () => {
+    writeSidecar('quiet-old', cutoffMs - 1000);
+    writeSidecar('quiet-recent', cutoffMs + 1000);
+    const clock = vi.spyOn(performance, 'now');
+    try {
+      expect(sidecarPredatesWindow('quiet-old', tmpDir, cutoffMs)).toBe(true);
+      expect(sidecarPredatesWindow('quiet-recent', tmpDir, cutoffMs)).toBe(false);
+      expect(sidecarPredatesWindow('quiet-missing', tmpDir, cutoffMs)).toBe(false);
+      expect(debugLog).not.toHaveBeenCalled();
+      expect(clock).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
   });
 });
