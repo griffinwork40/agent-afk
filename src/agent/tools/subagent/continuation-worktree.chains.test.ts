@@ -44,8 +44,9 @@ import type { ToolResult } from '../types.js';
 import { SubagentExecutor, type SubagentExecutorContext } from '../subagent-executor.js';
 import { ContinuationRegistry, type ChainRecord } from '../../subagent/continuation-registry.js';
 import { builtinAgents } from '../../agents/builtins.js';
-import { buildIsolationTeardownHook, keepWorktreeForChain, releaseChainWorktree, repoRootFromWorktreePath } from './continuation-worktree.js';
+import { buildIsolationTeardownHook, keepWorktreeForChain } from './continuation-worktree.js';
 import { isContinuableChain, recordChainTerminal } from './continuation-dispatch.js';
+import { buildContinuationRegistry } from '../../session/wire-executors.js';
 
 const ISO = { path: '/repo/.afk-worktrees/iso-agent-tool-1-abc', branch: 'afk/iso', baseRef: 'HEAD', baseSha: 'deadbeef', repoRoot: '/repo' };
 
@@ -209,14 +210,13 @@ describe('session end or reset releases kept worktrees (dispose)', () => {
 
   const terminal = { childId: 'child-1', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: 'capped' };
 
-  // Same release shape as buildContinuationRegistry in wire-executors.ts.
-  function wireRelease(registry: ContinuationRegistry) {
-    const onEvict = vi.fn((chain: ChainRecord) => {
-      if (chain.isolatedWorktreePath === undefined) return;
-      const repoRoot = repoRootFromWorktreePath(chain.isolatedWorktreePath);
-      if (repoRoot === undefined) return;
-      void releaseChainWorktree({ repoRoot, worktreePath: chain.isolatedWorktreePath, chainId: chain.chainId, registry }).catch(() => undefined);
-    });
+  // Wire the production onEvict callback onto an existing registry so tests
+  // stay in sync with wire-executors.ts without maintaining a hand-rolled copy
+  // (#4957). Returns a vi.fn() spy wrapping the real callback.
+  function wireRelease(registry: ContinuationRegistry): ReturnType<typeof vi.fn> {
+    const proto = buildContinuationRegistry();
+    const realOnEvict = proto.onEvict!;
+    const onEvict = vi.fn((chain: ChainRecord) => realOnEvict(chain));
     registry.onEvict = onEvict;
     return onEvict;
   }
