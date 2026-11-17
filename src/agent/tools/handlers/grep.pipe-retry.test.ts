@@ -105,9 +105,12 @@ describe('grep pipe-retry integration', () => {
     const result = await handler({ pattern: 'alpha\\|beta', path: tempDir }, createSignal());
 
     expect(result.isError).toBeFalsy();
-    // Must contain the explanatory note
+    // Must contain the explanatory note exactly once — duplicate notes indicate
+    // the note was prepended in both the scan-cap path and the outer reconciler.
     expect(result.content).toContain('matched nothing');
+    expect(result.content.split('matched nothing').length - 1).toBe(1);
     expect(result.content).toContain('literal pipe');
+    expect(result.content.split('literal pipe').length - 1).toBe(1);
     expect(result.content).toContain("'alpha\\|beta'");
     expect(result.content).toContain("'alpha|beta'");
     // Must contain the actual matches
@@ -255,9 +258,13 @@ describe('grep pipe-retry abort and scan-cap', () => {
     expect(result.truncated).toBe(true);
     // Must contain the scan-cap note (references the ceiling).
     expect(result.content).toContain('scan ceiling');
-    // Must contain the reinterpretation note.
+    // Must contain the reinterpretation note exactly once — the scan-cap path
+    // prepends it internally (notePrepended=true), so the outer reconciler
+    // must not add a second copy.
     expect(result.content).toContain('matched nothing');
+    expect(result.content.split('matched nothing').length - 1).toBe(1);
     expect(result.content).toContain('literal pipe');
+    expect(result.content.split('literal pipe').length - 1).toBe(1);
   });
 
   // Finding 3: an unexpected rejection inside the retry still settles the tool call.
