@@ -27,12 +27,25 @@
 
 import { statSync } from 'node:fs';
 import { join } from 'node:path';
+import { debugLog, isDebugEnabled } from '../../utils/debug.js';
+
+// Cumulative across aggregator scans, counting only stats made with DEBUG on.
+let debugStatCount = 0;
+let debugTotalStatMs = 0;
+
+function recordDebugStat(startedAt: number) {
+  const statMs = performance.now() - startedAt;
+  debugStatCount += 1;
+  debugTotalStatMs += statMs;
+  return { statCount: debugStatCount, statMs, totalStatMs: debugTotalStatMs };
+}
 
 /**
  * Return `true` when the sidecar for `sessionId` can be ruled out of a time
  * window whose oldest allowed millisecond timestamp is `cutoffMs`.
  *
  * Returns `false` (do NOT skip) whenever:
+ *   - The id contains a path separator (not a sidecar filename stem).
  *   - The sidecar mtime is >= `cutoffMs` (session may be in-window).
  *   - The stat call fails for any reason (safe fallback: let the caller decide).
  *
@@ -45,12 +58,29 @@ export function sidecarPredatesWindow(
   sessionsDir: string,
   cutoffMs: number,
 ): boolean {
+  // Reject both separator styles, even when running on a different platform.
+  if (sessionId.includes('/') || sessionId.includes('\\')) return false;
+
+  const debug = isDebugEnabled();
+  const startedAt = debug ? performance.now() : 0;
   try {
     const mtime = statSync(join(sessionsDir, `${sessionId}.json`)).mtimeMs;
-    return mtime < cutoffMs;
-  } catch {
+    const timing = debug ? recordDebugStat(startedAt) : undefined;
+    const skip = mtime < cutoffMs;
+    if (debug && skip) {
+      debugLog('[session-prescreen] skip', {
+        sessionId, mtimeMs: mtime, cutoffMs, deltaMs: mtime - cutoffMs, ...timing,
+      });
+    }
+    return skip;
+  } catch (error) {
     // Can't stat (missing, permission error, …) — let the caller proceed so the
     // subsequent `getOrDeriveFacet` call can handle it in the normal way.
+    if (debug) {
+      debugLog('[session-prescreen] stat failed; falling back', {
+        sessionId, error, ...recordDebugStat(startedAt),
+      });
+    }
     return false;
   }
 }
