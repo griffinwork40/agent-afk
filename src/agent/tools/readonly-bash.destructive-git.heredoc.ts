@@ -4,6 +4,7 @@
  */
 import { baseName, resolveSegment, tokenizeSegments } from './readonly-bash.tokenizer.js';
 import { SHELL_INTERPS } from './readonly-bash.destructive-git.nested.js';
+import { hereStringAt, type HereString } from './readonly-bash.destructive-git.here-string.js';
 
 type Delimiter = { word: string; quoted: boolean; tabs: boolean; end: number };
 type View = { command: string; scripts: string[]; uncertain?: string };
@@ -132,6 +133,7 @@ export function destructiveGitHeredocView(command: string): View {
   const chunks: string[] = [];
   const scripts: string[] = [];
   let pending: Pending[] = [];
+  let hereStrings: HereString[] = [];
   let header = '';
   let quote = '';
   for (let i = 0; i < command.length;) {
@@ -157,7 +159,15 @@ export function destructiveGitHeredocView(command: string): View {
       continue;
     }
     if (command.startsWith('<<', i) && command[i - 1] !== '<') {
-      if (command[i + 2] === '<') { header += '<<<'; i += 3; continue; }
+      if (command[i + 2] === '<') {
+        header = header.replace(/(^|[\s;|&])\d+$/, '$1');
+        const word = hereStringAt(command, i, header.length);
+        if (word === null) return { command, scripts, uncertain: 'ambiguous here-string word' };
+        hereStrings.push(word);
+        header += ' ';
+        i = word.end;
+        continue;
+      }
       const delimiter = delimiterAt(command, i);
       if (delimiter === null) return { command, scripts, uncertain: 'ambiguous heredoc delimiter' };
       // An adjacent IO number belongs to the redirect, not the argv.
@@ -169,6 +179,9 @@ export function destructiveGitHeredocView(command: string): View {
     }
     if (ch !== '\n') { header += ch; i++; continue; }
     const preceding = chunks.join('');
+    const uncertain = collectHereStrings(header, preceding, hereStrings, scripts);
+    if (uncertain !== undefined) return { command, scripts, uncertain };
+    hereStrings = [];
     chunks.push(`${header}\n`);
     i++;
     // A pipeline can resume AFTER its heredoc terminator. Its eventual
@@ -200,8 +213,23 @@ export function destructiveGitHeredocView(command: string): View {
     pending = [];
   }
   if (pending.length > 0) return { command, scripts, uncertain: 'missing heredoc body' };
+  const uncertain = collectHereStrings(header, chunks.join(''), hereStrings, scripts);
+  if (uncertain !== undefined) return { command, scripts, uncertain };
   chunks.push(header);
   return { command: chunks.join(''), scripts };
+}
+
+/** Here-strings feed a word to stdin; unlike heredocs their quotes only
+ * protect the outer shell. A shell consumer still executes the quoted text.
+ */
+function collectHereStrings(header: string, preceding: string, words: HereString[], scripts: string[]): string | undefined {
+  for (const word of words) {
+    const { consumer, context } = consumerHeader(header, word.position);
+    const kind = consumerKind(consumer);
+    if (kind !== 'data') scripts.push(`${preceding}${context}\n${word.text}`);
+    if (kind === 'unknown' && /\bgit\b/.test(word.text)) return 'unknown here-string consumer with git payload';
+  }
+  return undefined;
 }
 
 function readBody(command: string, start: number, delimiter: Delimiter): { text: string; end: number } | null {

@@ -26,7 +26,7 @@ import { debugLog } from '../../utils/debug.js';
 import { HookBlockedError, errorMessage } from '../../utils/errors.js';
 import { checkToolPermission, type ToolPermissionConfig } from './permissions.js';
 import { classifyBashCommand } from './readonly-bash.js';
-import { classifyDestructiveGit } from './readonly-bash.tokenizer.js';
+import { checkDestructiveGitBash } from './dispatcher.destructive-git-gate.js';
 import { repeatCallFingerprint } from './repeat-circuit-breaker.js';
 import {
   DENIAL_CIRCUIT_BREAKER_THRESHOLD,
@@ -267,36 +267,6 @@ async function runCanUseTool(
     call.input = result.updatedInput;
   }
   return null;
-}
-
-/**
- * Child-session destructive-git gate. Returns an isError {@link ToolResult}
- * when `blockDestructiveGit` is true AND `call` is a `bash` invocation whose
- * command contains a working-tree-destructive git subcommand; otherwise
- * returns `null` (allow).
- *
- * Runs AFTER `checkReadOnlyBash` so read-only children that already block all
- * mutating bash never reach this gate.
- */
-async function checkDestructiveGitBash(
-  call: ToolCall,
-  deps: PreDispatchGateDeps,
-): Promise<ToolResult | null> {
-  if (!deps.blockDestructiveGit || call.name !== 'bash') return null;
-  const input = call.input;
-  const command =
-    typeof input === 'object' && input !== null
-      ? (input as Record<string, unknown>)['command']
-      : undefined;
-  if (typeof command !== 'string') return null;
-  const verdict = classifyDestructiveGit(command);
-  if (!verdict.destructive) return null;
-  const reason =
-    `Bash command blocked: child sessions may not run working-tree-destructive ` +
-    `git commands (${verdict.reason ?? 'destructive git command detected'}). ` +
-    `If this command is genuinely needed, report the requirement to your caller.`;
-  await emitPreToolUseBlock(call.name, reason, deps);
-  return { content: reason, isError: true, failureClass: 'permission-denied' };
 }
 
 /**

@@ -99,7 +99,7 @@ Dispatch one sub-agent per site in this layer, all in parallel, each in a worktr
   - The `diff_applied` for that site
   - The `failure_reason`
   - The current layer number and which layers (if any) already completed successfully
-  - Recommendation: "Revert layer N changes manually (e.g. `git diff > saved.patch` then `git checkout -- .` to discard, or `git switch -c rescue-<name>` to preserve), then diagnose with `/diagnose`."
+  - Recommendation: "Preserve layer N changes with `git diff > saved.patch` or `git switch -c rescue-<name>`, then diagnose with `/diagnose`. Child sessions must not use checkout/restore to discard changes. If restoring one file is intentional, use `git show <ref>:<path> > <path>` (quote paths and preserve local edits first; this overwrites the file), or report the requirement to the caller."
 
 ---
 

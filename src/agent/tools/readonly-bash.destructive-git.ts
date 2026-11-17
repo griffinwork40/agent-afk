@@ -104,8 +104,8 @@ function plumbingDestructiveReason(sub: string, rest: readonly string[]): string
  *   - `checkout` / `switch`  — always, except a plain branch creation
  *                              (`checkout -b|-B`, `switch -c|-C`, see
  *                              `isPlainBranchCreation`)
- *   - `restore`              — always (discards working-tree changes)
- *   - `clean`                — always (deletes untracked files)
+ *   - `restore`              — except index-only --staged / -S
+ *   - `clean`                — except --dry-run / -n
  *   - `reset --hard|--merge|--keep` — the forms that rewrite working-tree files
  *   - `stash drop/clear/pop/apply` — destroy stash entries or modify the tree
  *   - `read-tree -u`, `checkout-index -f`, `worktree remove --force`
@@ -131,6 +131,7 @@ function gitArgvReason(argv: readonly string[], depth: number, expandAliases: bo
     // Branch creation only adds a ref, so a child can still follow the
     // preamble's `git switch -c rescue-<name>` instruction.
     if ((sub === 'checkout' || sub === 'switch') && isPlainBranchCreation(sub, rest)) return null;
+    if ((sub === 'restore' || sub === 'clean') && isNonDestructiveMode(sub, rest)) return null;
     return `git ${sub} (working-tree destructive)`;
   }
   if (sub === 'reset') {
@@ -147,6 +148,42 @@ function gitArgvReason(argv: readonly string[], depth: number, expandAliases: bo
     return null;
   }
   return plumbingDestructiveReason(sub, rest);
+}
+
+/** Only actual options count: operands and paths named -n/--staged do not. */
+function isNonDestructiveMode(sub: string, rest: readonly string[]): boolean {
+  let safe = false;
+  let worktree = false;
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!;
+    if (arg === '--') break;
+    if (sub === 'restore') {
+      if (['--source', '-s', '--pathspec-from-file'].includes(arg)) { i++; continue; }
+      if (arg === '--staged') safe = true;
+      if (arg === '--worktree') worktree = true;
+      if (/^-[SW]+$/.test(arg)) {
+        safe ||= arg.includes('S');
+        worktree ||= arg.includes('W');
+      }
+      // Conservatively reject unrecognized/abbreviated options: e.g. --work.
+      if (arg.startsWith('-') && !/^-[SW]+$/.test(arg)
+        && !['--staged', '--worktree', '--pathspec-file-nul'].includes(arg)
+        && !arg.startsWith('--source=') && !arg.startsWith('--pathspec-from-file=')) return false;
+    } else {
+      if (arg === '-e' || arg === '--exclude') { i++; continue; }
+      if (arg === '--dry-run') safe = true;
+      if (arg.startsWith('--') && !['--dry-run', '--force', '--quiet', '--interactive'].includes(arg)
+        && !arg.startsWith('--exclude=')) return false;
+      // -e consumes the rest of a short bundle (or the next argv word).
+      if (/^-[^-]/.test(arg)) {
+        const flags = arg.slice(1).split('e')[0]!;
+        if (!/^[dfxXinq]*$/.test(flags)) return false;
+        if (flags.includes('n')) safe = true;
+        if (arg === `-${flags}e`) i++;
+      }
+    }
+  }
+  return safe && !worktree;
 }
 
 /**
