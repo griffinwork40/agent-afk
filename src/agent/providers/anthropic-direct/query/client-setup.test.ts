@@ -20,6 +20,7 @@ const refreshMock = vi.fn<[], Promise<string | null>>();
 
 vi.mock('../../../auth/keychain.js', () => ({
   refreshClaudeCodeOauthToken: () => refreshMock(),
+  parseAccountIdentifier: (token: string) => `acct:${token}`,
 }));
 
 // Base fetch under the tracing wrapper: hermetic, returns canned headers (#4883).

@@ -62,6 +62,12 @@ export interface TurnDriverContext {
   readonly hookRegistry: HookRegistry | undefined;
   readonly throttleQueue: import('./throttle-queue.js').ThrottleQueue | undefined;
   readonly overageTracker: import('./overage-tracker.js').OverageTracker | undefined;
+  /**
+   * Per-turn writer for `~/.afk/state/usage-headers.json` (#5012). `flush()`
+   * is called once at `turn.completed` to atomically persist the last-seen
+   * unified header snapshot. Undefined for non-OAuth sessions.
+   */
+  readonly usageHeadersWriter: import('./usage-headers-writer.js').UsageHeadersTurnWriter | undefined;
   readonly fastModeController: import('../../fast-mode.js').FastModeController | undefined;
   /** Inter-round steering callback; undefined when not wired (top-level or non-background sessions). */
   readonly beforeNextRound: (() => string | undefined) | undefined;
@@ -332,7 +338,7 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
             turnEmittedTerminal = true;
             // Invariant: release mutation wiring before publishing completion;
             // consumers may rewind without advancing this generator again.
-            endTurnCheckpoint(ctx, checkpoint);
+            endTurnCheckpoint(ctx, checkpoint); ctx.usageHeadersWriter?.flush(); // persist unified headers once per turn (#5012)
             yield { ...event, ...(checkpoint ? { userMessageId: checkpoint.turnId } : {}) };
             if (ctx.state.closed) return;
             continue;

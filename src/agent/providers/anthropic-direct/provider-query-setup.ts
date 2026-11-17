@@ -39,6 +39,7 @@ export interface QuerySetupResult {
   systemPrefix: Awaited<ReturnType<typeof setUpQueryClient>>['systemPrefix'];
   throttleQueue: ReturnType<typeof setUpQueryClient>['throttleQueue'];
   overageTracker: ReturnType<typeof setUpQueryClient>['overageTracker'];
+  usageHeadersWriter: ReturnType<typeof setUpQueryClient>['usageHeadersWriter'];
   tokenRefresher: ReturnType<typeof setUpQueryClient>['tokenRefresher'];
   /** See {@link RetryLayerOptions.credentialFromStore}. */
   credentialFromStore: boolean;
@@ -86,7 +87,7 @@ export function setUpQuerySession(
 
   // Client + observability wiring (throttle mailbox, quota capture, tracing
   // fetch) and the OAuth token refresher that must reuse all three.
-  const { client, throttleQueue, overageTracker, systemPrefix, tokenRefresher } = setUpQueryClient({
+  const { client, throttleQueue, overageTracker, usageHeadersWriter, systemPrefix, tokenRefresher } = setUpQueryClient({
     config,
     token,
     authMode,
@@ -251,6 +252,7 @@ export function setUpQuerySession(
     systemPrefix,
     throttleQueue,
     overageTracker,
+    usageHeadersWriter,
     tokenRefresher,
     credentialFromStore,
     queryDispatcher,

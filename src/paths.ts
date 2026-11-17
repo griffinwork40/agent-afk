@@ -817,6 +817,9 @@ export function getEffectLedgerPath(): string {
   return join(getAfkStateDir(), 'effect-ledger.jsonl');
 }
 
+/** Last-seen `anthropic-ratelimit-unified-*` header snapshot (#5012). Mode 0600, atomic write. */
+export const getUsageHeadersPath = (): string => join(getAfkStateDir(), 'usage-headers.json');
+
 // ---------------------------------------------------------------------------
 // What-if state
 // ---------------------------------------------------------------------------
