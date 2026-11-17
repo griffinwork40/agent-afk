@@ -77,8 +77,9 @@ export async function runWorktreeCleanup(params: WorktreeCleanupParams): Promise
     return;
   }
 
-  // Re-ensure the afk excludes (`.afk-scratch/`, the meta file) before the
-  // dirty check, so a tree created before they existed also reads as clean.
+  // Re-ensure the shared excludes before the dirty check, so a tree made before
+  // the meta-file entry existed reads clean for that file. Scratch stays
+  // protected by the ignored-file probe unless this tree has its own opt-in.
   await ensureAfkExcludes(execFile, currentPath);
   let status: { stdout: string; stderr: string };
   let ignoredProbeEarly: Awaited<ReturnType<typeof probeNonRebuildableIgnoredFiles>> | undefined;

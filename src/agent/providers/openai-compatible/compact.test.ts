@@ -55,6 +55,63 @@ describe('openaiCompactionOps.renderMessage', () => {
     expect(r).toContain('look');
     expect(r).toContain('[image]');
   });
+
+  it('preserves boundaries between multipart tool-result text parts (B1 regression)', () => {
+    // 'Exit code: 1' and '0 tests passed' must NOT merge into 'Exit code: 10 tests passed'.
+    const msg: OpenAIMessage = {
+      role: 'tool',
+      tool_call_id: 'c',
+      content: [
+        { type: 'text', text: 'Exit code: 1' },
+        { type: 'text', text: '0 tests passed' },
+      ],
+    };
+    const r = openaiCompactionOps.renderMessage(msg);
+    expect(r).toContain('Exit code: 1');
+    expect(r).toContain('0 tests passed');
+    // The two parts must be separated — the joined text must NOT contain the
+    // concatenated token 'Exit code: 10 tests passed'.
+    expect(r).not.toContain('Exit code: 10 tests passed');
+  });
+
+  it('renders [image] placeholder for image parts in tool-array content (N1 regression)', () => {
+    const msg: OpenAIMessage = {
+      role: 'tool',
+      tool_call_id: 'c',
+      content: [
+        { type: 'text', text: 'some text' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } },
+      ],
+    };
+    const r = openaiCompactionOps.renderMessage(msg);
+    expect(r).toContain('some text');
+    expect(r).toContain('[image]');
+  });
+
+
+  it('joins multi-part tool content and excerpts once (not N × TOOL_RESULT_EXCERPT_CHARS)', () => {
+    // Build a tool message with two text parts each just under the excerpt
+    // threshold. If excerpted separately each would pass through whole, giving
+    // ~3,000 chars total. Joined they exceed the threshold so the result must
+    // be capped to roughly TOOL_RESULT_EXCERPT_CHARS characters.
+    const half = 'A'.repeat(1_400) + ' TAIL';
+    const msg: OpenAIMessage = {
+      role: 'tool',
+      tool_call_id: 'x',
+      content: [
+        { type: 'text', text: half },
+        { type: 'text', text: half },
+      ],
+    };
+    const rendered = openaiCompactionOps.renderMessage(msg);
+    // The two halves joined are ~2,810 chars which exceeds TOOL_RESULT_EXCERPT_CHARS
+    // (1,500), so the renderer must elide and the output must be well under 3,000.
+    expect(rendered.length).toBeLessThan(2_500);
+    expect(rendered).toContain('chars elided');
+    // The tail sentinel from the second part must survive (it sits at the end
+    // of the joined string, which is preserved by excerptHeadTail).
+    expect(rendered).toContain('TAIL');
+  });
 });
 
 /** History with `n` fresh user turns interleaved with assistant replies. */

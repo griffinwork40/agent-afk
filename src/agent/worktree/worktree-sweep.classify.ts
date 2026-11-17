@@ -54,6 +54,8 @@ export interface WorktreeMeta {
   createdAt: string;
   baseSha?: string;
   baseBranch?: string;
+  /** Creation-time opt-in: the root .afk-scratch/ may be deleted with this tree. */
+  scratchDisposable?: boolean;
   /** Why the tree was preserved at teardown. Only set by teardown paths. */
   preservedReason?: 'dirty' | 'commits-ahead' | 'ignored-local-state';
   /** ISO timestamp when the tree was preserved. */

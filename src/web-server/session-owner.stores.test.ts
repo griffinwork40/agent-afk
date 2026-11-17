@@ -20,7 +20,7 @@ vi.mock('../cli/shared-helpers.js', () => ({
 }));
 vi.mock('../agent/default-hook-registry.js', () => ({ createDefaultHookRegistry: () => ({ registry: {} }) }));
 vi.mock('../agent/permissions-store.js', () => ({ seedPersistedGrants: () => {} }));
-vi.mock('../cli/session-autosave.js', () => ({ createSessionAutosaver: () => ({}) }));
+vi.mock('../cli/session-autosave.js', () => ({ createSessionAutosaver: () => ({ saveTurn: () => {}, close: () => {} }) }));
 vi.mock('./session-owner.wiring.js', () => ({ wireWebSession: async () => ({
   provider: {}, __bindSession: () => {},
   memoryStore: { close: mocks.memoryClose }, workspaceStore: { close: mocks.workspaceClose },

@@ -262,6 +262,11 @@ export class ModelFallbackController {
     }
     host.pendingAssistantText = ''; // i
     const notice = buildSwitchNotice(from, to, previousFamily, host.active!.family);
+    // Contract: replay uses ProviderUserTurn content, NOT the outgoing family's
+    // wire payload or its possibly mutated journal entry. As with /model, the
+    // receiving provider owns block conversion/capability degradation (e.g.
+    // OpenAI buildUserContent maps images and flattens unsupported documents).
+    // Preserve the original blocks here; only prepend the model-switch notice.
     host.active!.input.pushUserMessage(prependNotice(turn.content, notice));
     return true;
   }

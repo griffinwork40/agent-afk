@@ -19,11 +19,37 @@ function parse(relative: string): ts.SourceFile {
   return ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
 }
 
+/**
+ * Collect every call whose resolved callee name matches `name`.
+ * Handles three forms:
+ *   wireExecutors(...)              — plain identifier
+ *   mod.wireExecutors(...)          — property access
+ *   aliasedName(...)                — import alias: resolve via top-level
+ *                                     ImportDeclaration bindings in `source`
+ */
 function calls(source: ts.SourceFile, name: string): ts.CallExpression[] {
+  // Resolve import aliases: `import { wireExecutors as we } from '...'` → 'we'
+  const aliases = new Set<string>([name]);
+  for (const stmt of source.statements) {
+    if (!ts.isImportDeclaration(stmt)) continue;
+    const bindings = stmt.importClause?.namedBindings;
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    for (const el of bindings.elements) {
+      if ((el.propertyName ?? el.name).text === name) {
+        aliases.add(el.name.text);
+      }
+    }
+  }
+
   const found: ts.CallExpression[] = [];
   function visit(node: ts.Node): void {
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === name) {
-      found.push(node);
+    if (ts.isCallExpression(node)) {
+      const expr = node.expression;
+      if (ts.isIdentifier(expr) && aliases.has(expr.text)) {
+        found.push(node);
+      } else if (ts.isPropertyAccessExpression(expr) && expr.name.text === name) {
+        found.push(node);
+      }
     }
     ts.forEachChild(node, visit);
   }

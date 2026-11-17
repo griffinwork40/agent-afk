@@ -4,18 +4,20 @@ import { queryLspDiagnostics } from './lsp-diagnostics.js';
 import { queryLspSymbol } from './lsp-symbols.js';
 import { withPooledFile, type QueryContext } from '../../lsp/query.js';
 import { DiagnosticsStore } from '../../lsp/diagnostics-store.js';
+import { resolveLspServer } from './lsp-server.js';
 
 vi.mock('node:fs/promises', async (original) => ({ ...await original<typeof import('node:fs/promises')>(), readFile: vi.fn() }));
 vi.mock('../../lsp/query.js', async (original) => ({
   ...await original<typeof import('../../lsp/query.js')>(),
   withPooledFile: vi.fn(),
 }));
-
+vi.mock('./lsp-server.js', () => ({ resolveLspServer: vi.fn() }));
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubEnv('AFK_LSP_DIAGNOSTICS_TIMEOUT_MS', '100');
   vi.stubEnv('AFK_LSP_SYMBOLS_TIMEOUT_MS', '100');
   vi.mocked(readFile).mockImplementation(() => new Promise(() => {}));
+  vi.mocked(resolveLspServer).mockResolvedValue({ kind: 'resolved', spec: { definition: {} as never, command: 'fake', args: [], source: 'override' }, root: '/fake' });
 });
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers(); });
 
@@ -32,7 +34,7 @@ it('aborts during the diagnostics wait after the source read completes', async (
   } as unknown as QueryContext;
   vi.mocked(withPooledFile).mockImplementationOnce(async (_spec, _path, _content, _opts, fn) => fn(ctx));
   const controller = new AbortController();
-  const result = queryLspDiagnostics('/source.ts', undefined, controller.signal);
+  const result = queryLspDiagnostics('/source.ts', undefined, undefined, controller.signal);
   await vi.advanceTimersByTimeAsync(0);
   expect(waitFor).toHaveBeenCalledWith('file:///source.ts', 1, 0, 100, controller.signal);
   expect(vi.getTimerCount()).toBe(1);
@@ -43,7 +45,7 @@ it('aborts during the diagnostics wait after the source read completes', async (
 });
 
 const queries = [
-  { name: 'diagnostics', run: (signal?: AbortSignal) => queryLspDiagnostics('/source.ts', undefined, signal), timeout: [], aborted: [] },
+  { name: 'diagnostics', run: (signal?: AbortSignal) => queryLspDiagnostics('/source.ts', undefined, undefined, signal), timeout: [], aborted: [] },
   { name: 'symbols', run: (signal?: AbortSignal) => queryLspSymbol('/source.ts', 'definition', 1, 1, undefined, undefined, signal),
     timeout: { locations: [], error: 'LSP symbols timed out (increase AFK_LSP_SYMBOLS_TIMEOUT_MS)' }, aborted: { locations: [], error: 'Aborted' } },
 ];

@@ -50,6 +50,15 @@ export interface FsOps {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+interface TraceHeader {
+  version: 2;
+  width: number;
+  height: number;
+  timestamp: number;
+  // Privacy allowlist: never serialize arbitrary process.env entries.
+  env: { TERM: string };
+}
+
 type WriteFn = typeof process.stdout.write;
 
 interface SavedWrites {
@@ -64,6 +73,8 @@ let _startMs: number = 0;
 let _saved: SavedWrites | null = null;
 let _disabled = false;
 let _fs: FsOps = nodeFs;
+let _resizeTimer: ReturnType<typeof setTimeout> | null = null;
+let _pendingResize: [number, 'r', string] | null = null;
 
 // TextDecoder with fatal:false so incomplete multibyte sequences produce U+FFFD
 // rather than throwing — safe for tee-d chunks that split a codepoint boundary.
@@ -87,6 +98,7 @@ function _writeLine(line: string): void {
 function _disable(reason: string): void {
   if (_disabled) return;
   _disabled = true;
+  _clearResize();
   process.stderr.write(`[afk tty-trace] recorder disabled (${reason})\n`);
   if (_fd !== null) {
     try { _fs.closeSync(_fd); } catch { /* best-effort */ }
@@ -108,17 +120,33 @@ function _decode(chunk: Uint8Array | string): string {
 /** Record an output event: `[t, "o", data]` */
 function _recordOutput(chunk: Uint8Array | string): void {
   if (_fd === null || _disabled) return;
+  _flushResize();
   const data = _decode(chunk);
   if (data.length === 0) return;
   _writeLine(JSON.stringify([_elapsed(), 'o', data]));
 }
 
-/** Record a resize event: `[t, "r", "COLSxROWS"]` */
+/** Cancel pending work before closing or replacing the recording fd. */
+function _clearResize(): void {
+  if (_resizeTimer !== null) clearTimeout(_resizeTimer);
+  _resizeTimer = null;
+  _pendingResize = null;
+}
+
+/** Flush before output so replay applies the terminal size that output used. */
+function _flushResize(): void {
+  const event = _pendingResize;
+  _clearResize();
+  if (event !== null) _writeLine(JSON.stringify(event));
+}
+
+/** Coalesce resize storms: synchronous disk writes otherwise block the REPL. */
 function _recordResize(): void {
   if (_fd === null || _disabled) return;
-  const cols = getTerminalWidth();
-  const rows = getTerminalHeight();
-  _writeLine(JSON.stringify([_elapsed(), 'r', `${cols}x${rows}`]));
+  _clearResize();
+  _pendingResize = [_elapsed(), 'r', `${getTerminalWidth()}x${getTerminalHeight()}`];
+  _resizeTimer = setTimeout(_flushResize, 50);
+  _resizeTimer.unref();
 }
 
 /**
@@ -159,7 +187,12 @@ function _wrapWrite(original: WriteFn): WriteFn {
  *   avoid ESM-lock issues with `vi.spyOn`.
  */
 export function installTtyTrace(fsOps?: FsOps): void {
-  if (_saved !== null) return;                  // already installed
+  if (_saved !== null) {
+    if (_disabled) {
+      process.stderr.write('[afk tty-trace] recorder remains disabled; call uninstallTtyTrace before reinstalling\n');
+    }
+    return; // healthy repeated installs remain idempotent
+  }
   const tracePath = env.AFK_TTY_TRACE;
   if (!tracePath) return;                       // opt-in only
   if (!process.stdout.isTTY) return;            // TTY guard — zero overhead otherwise
@@ -197,7 +230,7 @@ export function installTtyTrace(fsOps?: FsOps): void {
   // read it through the typed env object without re-registering.
   const cols = getTerminalWidth();
   const rows = getTerminalHeight();
-  const header = {
+  const header: TraceHeader = {
     version: 2,
     width: cols,
     height: rows,
@@ -232,6 +265,7 @@ export function installTtyTrace(fsOps?: FsOps): void {
 export function uninstallTtyTrace(): void {
   if (_saved === null) return;
 
+  _flushResize();
   process.stdout.write = _saved.stdoutWrite;
   process.stderr.write = _saved.stderrWrite;
   process.stdout.off('resize', _recordResize);

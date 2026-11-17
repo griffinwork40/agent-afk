@@ -109,6 +109,38 @@ describe('schema-as-source-of-truth: category field agrees with categorizeTool',
   });
 });
 
+// ── Invariant 3b: code_symbols input-sensitive classification ──────────────
+// categorizeTool(name) without input returns the schema's static category
+// ('read'). With a mutating subcommand input, it must return 'write'. This
+// guards against callers (e.g. phase-reducer) that omit the input argument
+// and silently misclassify rename/code_actions(apply:true) as reads.
+
+describe('schema-as-source-of-truth: code_symbols input-sensitive category', () => {
+  it('code_symbols with no input classifies as read (schema default)', () => {
+    expect(categorizeTool('code_symbols')).toBe('read');
+  });
+
+  it('code_symbols rename (apply default) classifies as write', () => {
+    expect(categorizeTool('code_symbols', { subcommand: 'rename' })).toBe('write');
+  });
+
+  it('code_symbols rename apply:false classifies as read (preview only)', () => {
+    expect(categorizeTool('code_symbols', { subcommand: 'rename', apply: false })).toBe('read');
+  });
+
+  it('code_symbols code_actions apply:true classifies as write', () => {
+    expect(categorizeTool('code_symbols', { subcommand: 'code_actions', apply: true })).toBe('write');
+  });
+
+  it('code_symbols code_actions apply:false classifies as read (list only)', () => {
+    expect(categorizeTool('code_symbols', { subcommand: 'code_actions', apply: false })).toBe('read');
+  });
+
+  it('code_symbols document_symbols classifies as read regardless of input', () => {
+    expect(categorizeTool('code_symbols', { subcommand: 'document_symbols' })).toBe('read');
+  });
+});
+
 // ── Invariant 4: schedule tools are categorized as 'schedule' ──────────────
 
 describe('schema-as-source-of-truth: schedule tools', () => {

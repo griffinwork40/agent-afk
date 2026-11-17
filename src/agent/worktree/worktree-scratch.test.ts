@@ -21,7 +21,7 @@ import {
   excludeHasScratchEntry,
   missingAfkExcludes,
 } from './worktree-scratch.js';
-import { createManagedWorktree, teardownIsolatedWorktree } from '../tools/handlers/worktree-managed.js';
+import { createManagedWorktree, removeManagedWorktreeGuarded, teardownIsolatedWorktree } from '../tools/handlers/worktree-managed.js';
 import type { ExecFileFn } from './worktree-sweep.js';
 
 const execFile = promisify(execFileNode) as ExecFileFn;
@@ -97,6 +97,45 @@ describe('ensureAfkExcludes', () => {
     expect(excludeHasMetaEntry(content)).toBe(true);
   });
 
+  it('creates a missing info directory and exclude file', async () => {
+    await fs.rm(join(repo, '.git', 'info'), { recursive: true });
+    expect(await ensureAfkExcludes(execFile, repo)).toBe(true);
+    expect(excludeHasScratchEntry(await readExclude())).toBe(true);
+    if (process.platform !== 'win32') {
+      expect((await fs.stat(join(repo, '.git', 'info', 'exclude'))).mode & 0o777).toBe(0o644);
+    }
+  });
+
+  it('preserves a different writer’s append between the read and write', async () => {
+    const excludePath = join(repo, '.git', 'info', 'exclude');
+    const readFile = fs.readFile.bind(fs);
+    vi.spyOn(fs, 'readFile').mockImplementationOnce(async () => {
+      const snapshot = await readFile(excludePath, 'utf-8');
+      await fs.appendFile(excludePath, '\nother-writer/\n');
+      return snapshot;
+    });
+    expect(await ensureAfkExcludes(execFile, repo)).toBe(true);
+    const content = await readExclude();
+    expect(content).toContain('\nother-writer/\n');
+    expect(excludeHasScratchEntry(content)).toBe(true);
+  });
+
+  it('keeps a no-trailing-newline append from another writer on its own line', async () => {
+    const excludePath = join(repo, '.git', 'info', 'exclude');
+    await fs.writeFile(excludePath, '# existing\n');
+    const readFile = fs.readFile.bind(fs);
+    vi.spyOn(fs, 'readFile').mockImplementationOnce(async () => {
+      const snapshot = await readFile(excludePath, 'utf-8');
+      await fs.appendFile(excludePath, 'other-writer/');
+      return snapshot;
+    });
+    expect(await ensureAfkExcludes(execFile, repo)).toBe(true);
+    const lines = (await readExclude()).split('\n');
+    expect(lines).toContain('other-writer/');
+    expect(lines).toContain(AFK_SCRATCH_EXCLUDE_PATTERN);
+    expect(lines).toContain(AFK_META_EXCLUDE_PATTERN);
+  });
+
   it('writes to the SHARED common dir when called from a linked worktree', async () => {
     const wt = join(repo, '.afk-worktrees', 'linked');
     await git(repo, ['worktree', 'add', '-q', '-b', 'afk/linked', wt]);
@@ -169,8 +208,11 @@ describe('teardown in a repo that does NOT gitignore the meta file', () => {
 
 describe('isolated-worktree teardown with .afk-scratch/', () => {
   it('createManagedWorktree ensures the exclude entry', async () => {
-    await makeManagedTree('create');
+    const wt = await makeManagedTree('create');
     expect(excludeHasScratchEntry(await readExclude())).toBe(true);
+    expect(excludeHasMetaEntry(await readExclude())).toBe(true);
+    const meta = JSON.parse(await fs.readFile(join(wt, '.afk-worktree-meta.json'), 'utf-8'));
+    expect(meta.scratchDisposable).toBe(true);
   });
 
   it('a tree whose only extra content is .afk-scratch/ files is removed, not locked', async () => {
@@ -179,19 +221,54 @@ describe('isolated-worktree teardown with .afk-scratch/', () => {
     await fs.writeFile(join(wt, '.afk-scratch', 'COMMIT_BODY.txt'), 'msg');
     // Gitignored by the repo AND inside scratch: still disposable, no ignored-local-state.
     await fs.writeFile(join(wt, '.afk-scratch', 'notes.local.txt'), 'x');
+    await fs.writeFile(join(wt, '.afk-scratch', 'prod.env'), 'disposable');
     const result = await teardownIsolatedWorktree({ execFile, repoRoot: repo, worktreePath: wt });
     expect(result).toEqual({ removed: true, preserved: false });
     expect(existsSync(wt)).toBe(false);
   });
 
-  it('a tree created BEFORE the exclude existed still benefits (re-ensured at teardown)', async () => {
+  it.each([false, true])('preserves a plain tree without opt-in (shared exclude already present: %s)', async (excluded) => {
     const wt = join(repo, '.afk-worktrees', 'legacy');
     await git(repo, ['worktree', 'add', '-q', '-b', 'afk/legacy', wt]);
-    expect(existsSync(join(repo, '.git', 'info', 'exclude')) && excludeHasScratchEntry(await readExclude())).toBe(false);
+    if (excluded) await makeManagedTree('other-opted-in');
+    expect(excludeHasScratchEntry(await readExclude())).toBe(excluded);
+    await fs.mkdir(join(wt, '.afk-scratch'));
+    await fs.writeFile(join(wt, '.afk-scratch', 'notes.md'), 'keep');
+    const result = await removeManagedWorktreeGuarded({ execFile, repoRoot: repo, worktreePath: wt });
+    expect(result).toMatchObject({ removed: false, reason: 'ignored-local-state', detail: '.afk-scratch/' });
+    expect(await fs.readFile(join(wt, '.afk-scratch', 'notes.md'), 'utf-8')).toBe('keep');
+  });
+
+  it.each(['{}', '{', 'null', '[]', '{"scratchDisposable":"true"}', '{"scratchDisposable":false}'])(
+    'protects scratch with absent or invalid opt-in metadata: %s', async (meta) => {
+      const wt = await makeManagedTree('invalid-meta');
+      await fs.writeFile(join(wt, '.afk-worktree-meta.json'), meta);
+      await fs.mkdir(join(wt, '.afk-scratch'));
+      await fs.writeFile(join(wt, '.afk-scratch', 'notes.md'), 'keep');
+      expect(await removeManagedWorktreeGuarded({ execFile, repoRoot: repo, worktreePath: wt }))
+        .toMatchObject({ removed: false, reason: 'ignored-local-state' });
+      expect(existsSync(join(wt, '.afk-scratch', 'notes.md'))).toBe(true);
+    },
+  );
+
+  it('protects scratch when metadata is unreadable as a file', async () => {
+    const wt = await makeManagedTree('unreadable-meta');
+    await fs.unlink(join(wt, '.afk-worktree-meta.json'));
+    await fs.mkdir(join(wt, '.afk-worktree-meta.json'));
+    await fs.mkdir(join(wt, '.afk-scratch'));
+    await fs.writeFile(join(wt, '.afk-scratch', 'notes.md'), 'keep');
+    expect(await removeManagedWorktreeGuarded({ execFile, repoRoot: repo, worktreePath: wt }))
+      .toMatchObject({ removed: false, reason: 'ignored-local-state' });
+    expect(existsSync(join(wt, '.afk-scratch', 'notes.md'))).toBe(true);
+  });
+
+  it('retries exclusion for an opted-in tree when the creation-time entry is lost', async () => {
+    const wt = await makeManagedTree('retry');
+    await fs.writeFile(join(repo, '.git', 'info', 'exclude'), '# reset\n');
     await fs.mkdir(join(wt, '.afk-scratch'));
     await fs.writeFile(join(wt, '.afk-scratch', 'pr-body.txt'), 'b');
-    const result = await teardownIsolatedWorktree({ execFile, repoRoot: repo, worktreePath: wt });
-    expect(result.removed).toBe(true);
+    expect(await teardownIsolatedWorktree({ execFile, repoRoot: repo, worktreePath: wt }))
+      .toEqual({ removed: true, preserved: false });
   });
 
   it('an untracked file outside .afk-scratch/ still preserves and locks as dirty', async () => {
