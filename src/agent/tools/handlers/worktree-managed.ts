@@ -227,8 +227,8 @@ export async function createManagedWorktree(
   // meta write without being able to fail the create.
   await registerWorktreeRoot(repoRoot);
   // Agent scratch dir (`.afk-scratch/`) ignored via the shared info/exclude, so
-  // throwaway files there never make teardown preserve-and-lock the tree.
-  // Never throws; on failure the tree just behaves as before.
+  // creation-time meta below opts this tree into disposable scratch content.
+  // Exclusion is shared, but the probe requires each tree's own opt-in.
   await ensureScratchExcluded(execFile, repoRoot);
   // Meta write is what makes this tree a first-class citizen of the sweep
   // protocol (age from createdAt, PID liveness). Best-effort: never fail the
@@ -245,6 +245,7 @@ export async function createManagedWorktree(
       createdAt: new Date().toISOString(),
       baseSha,
       baseBranch: baseRef,
+      scratchDisposable: true,
     });
   } catch { /* best-effort */ }
   // Invariant (#3601): setup runs only AFTER the meta write, so the sweep
@@ -339,8 +340,8 @@ export async function removeManagedWorktreeGuarded(
 ): Promise<GuardedRemoveOutcome> {
   const { execFile, repoRoot, worktreePath, force } = args;
   if (!force) {
-    // Re-ensure before the dirty check so trees created before the scratch
-    // exclude existed (or whose create-time write failed) also benefit.
+    // Retry a failed create-time exclude write before the dirty check. This
+    // does not opt older trees in: the probe requires their own metadata.
     await ensureScratchExcluded(execFile, worktreePath);
     if (await isManagedWorktreeDirty(execFile, worktreePath)) {
       return { removed: false, reason: 'dirty' };

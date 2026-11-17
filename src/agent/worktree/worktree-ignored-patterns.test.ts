@@ -292,9 +292,11 @@ describe('classifyIgnoredEntry — SwiftPM and optional toolchain directories', 
 });
 
 describe('classifyIgnoredEntry — afk agent scratch dir', () => {
-  it('classifies the root .afk-scratch/ (collapsed or a leaf beneath it) as opaque', () => {
-    expect(classifyIgnoredEntry('.afk-scratch/')).toBe('opaque');
-    expect(classifyIgnoredEntry('.afk-scratch/commit-msg.txt')).toBe('opaque');
+  it('protects root scratch paths when creation-time opt-in is unknown', () => {
+    expect(classifyIgnoredEntry('.afk-scratch/')).toBe('protected');
+    expect(classifyIgnoredEntry('.afk-scratch/commit-msg.txt')).toBe('protected');
+    expect(classifyIgnoredEntry('.afk-scratch/node_modules/')).toBe('protected');
+    expect(classifyIgnoredEntry('.afk-scratch/.DS_Store')).toBe('protected');
   });
 
   it('does not extend to a nested copy, which keeps the protected default', () => {
@@ -302,7 +304,7 @@ describe('classifyIgnoredEntry — afk agent scratch dir', () => {
     expect(classifyIgnoredEntry('sub/.afk-scratch/notes.txt')).toBe('protected');
   });
 
-  it('a credential-format leaf, if ever reported individually beneath it, still outranks the dir', () => {
+  it('protects credential-format leaves without creation-time opt-in', () => {
     expect(classifyIgnoredEntry('.afk-scratch/prod.env')).toBe('protected');
   });
 });

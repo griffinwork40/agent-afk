@@ -1,5 +1,5 @@
 /**
- * The sanctioned scratch directory for agents working in an afk-managed
+ * Contract: the sanctioned scratch directory for agents working in an afk-managed
  * worktree: `.afk-scratch/` at the worktree root.
  *
  * Contract: agents need somewhere to put throwaway files (commit message
@@ -9,9 +9,10 @@
  * `ignored-local-state`, a lock that is never auto-released). This module
  * makes `.afk-scratch/` invisible to `git status` in ANY repository, without
  * touching a tracked file, by appending one anchored pattern to
- * `<git-common-dir>/info/exclude` — the per-repo exclude file every linked
- * worktree of that repo shares. The ignored-file probe separately classifies
- * the directory as rebuildable (`worktree-ignored-patterns.ts`).
+ * `<git-common-dir>/info/exclude`, the per-repo exclude file every linked
+ * worktree of that repo shares. The ignored-file probe only treats the root
+ * directory as disposable when this worktree's meta records the creation-time
+ * opt-in. Shared exclusion alone never sanctions another worktree's files.
  *
  * Invariant: {@link ensureScratchExcluded} never throws and never deletes
  * anything. On any failure it returns `false` and the caller proceeds exactly
@@ -22,8 +23,7 @@
  */
 
 import { promises as fs } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
-import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { debugLog } from '../../utils/debug.js';
 import { errorMessage } from '../../utils/errors.js';
 
@@ -41,6 +41,17 @@ export type ScratchGitRunner = (
   file: string,
   args: string[],
 ) => Promise<{ stdout: string; stderr: string }>;
+
+/** Missing, unreadable, or malformed metadata never sanctions scratch deletion. */
+export async function isScratchDisposable(worktreePath: string): Promise<boolean> {
+  try {
+    const meta: unknown = JSON.parse(await fs.readFile(join(worktreePath, '.afk-worktree-meta.json'), 'utf-8'));
+    return typeof meta === 'object' && meta !== null && !Array.isArray(meta) &&
+      'scratchDisposable' in meta && meta.scratchDisposable === true;
+  } catch {
+    return false;
+  }
+}
 
 /** True when an exclude file's content already ignores the scratch dir. */
 export function excludeHasScratchEntry(content: string): boolean {
@@ -85,8 +96,10 @@ export async function ensureScratchExcluded(
     }
     if (excludeHasScratchEntry(content)) return true;
     const sep = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
-    const next = `${content}${sep}# afk: agent scratch dir, deleted with the worktree\n${AFK_SCRATCH_EXCLUDE_PATTERN}\n`;
-    await atomicWriteFileAsync(excludePath, next, { mode: 0o644 });
+    const addition = `${sep}# afk: agent scratch dir, disposable only in opted-in worktrees\n${AFK_SCRATCH_EXCLUDE_PATTERN}\n`;
+    await fs.mkdir(dirname(excludePath), { recursive: true });
+    // O_APPEND preserves lines another writer added after our read.
+    await fs.appendFile(excludePath, addition, { mode: 0o644 });
     return true;
   } catch (err) {
     debugLog('[worktree-scratch] could not ensure .afk-scratch/ exclude:', errorMessage(err));

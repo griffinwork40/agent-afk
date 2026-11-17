@@ -118,11 +118,6 @@ const OPAQUE_REBUILDABLE_DIRS: readonly RegExp[] = [
   /(?:^|\/)\.dart_tool\//,
   // Zig's build cache: pure compiled-output cache, no user-authored content.
   /(?:^|\/)\.zig-cache\//,
-  // The afk agent scratch dir (`worktree-scratch.ts`): disposable by contract,
-  // agents are told its files die with the worktree. Root-anchored on purpose,
-  // because only the root copy is the sanctioned one afk excludes; a nested
-  // `sub/.afk-scratch/` keeps today's classification.
-  /^\.afk-scratch\//,
 ];
 
 /**
@@ -308,7 +303,8 @@ function isSensitiveFormat(leaf: string): boolean {
  */
 export function classifyIgnoredEntry(relPath: string): IgnoredEntryClass {
   const normalized = normalizeIgnoredPath(relPath);
-  if (normalized === '') return 'protected';
+  // Path-only callers cannot prove creation-time opt-in, so scratch stays protected.
+  if (normalized === '' || normalized === '.afk-scratch' || normalized.startsWith('.afk-scratch/')) return 'protected';
   const leaf = leafOf(normalized).toLowerCase();
   if (isSensitiveFormat(leaf)) return 'protected';
   if (!isGeneratedArtifact(normalized, leaf) && SENSITIVE_NAME_HINTS.some((re) => re.test(leaf))) {
