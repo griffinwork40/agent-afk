@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**276 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**277 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -89,6 +89,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
+| `AFK_CLOSED_ROUTER` | boolean |  |  | `1` | Set to 1 to enable closed-router credential rotation on subscription-limit 429s. When set, afk shells out to `closed-router rotate --once --json` before entering the multi-hour park loop. On a successful rotation the turn is replayed with the new credential. When all accounts are exhausted (`all-hot`), the existing park behavior applies. Requires `closed-router` to be on PATH. Default: unset (disabled). |
 | `AFK_IMAGE_API_KEY` | string |  |  |  | Dedicated OpenAI API key for the image_generate tool. Checked before OPENAI_API_KEY to keep image billing separate from chat completions. When unset, OPENAI_API_KEY is used as a fallback. Get a key from https://platform.openai.com/api-keys. |
 | `AFK_LOCAL_API_KEY` | string |  | `local` | `local` | Placeholder API key for local Anthropic-compatible servers (vllm-mlx, etc.). Set when AFK_LOCAL_BASE_URL is configured. |
 | `ANTHROPIC_API_KEY` | string |  |  |  | Anthropic API key. Tier-1 credential — overrides keychain OAuth and CLAUDE_CODE_OAUTH_TOKEN. |
