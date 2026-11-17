@@ -23,7 +23,7 @@ import { randomBytes } from 'node:crypto';
 import { resolveRepoRoot as resolveRepoRootCanonical } from '../../../utils/git.js';
 
 import { registerWorktreeRoot } from '../../../agent/worktree/worktree-root-registry.js';
-import { ensureScratchExcluded } from '../../../agent/worktree/worktree-scratch.js';
+import { ensureAfkExcludes } from '../../../agent/worktree/worktree-scratch.js';
 import type { WorktreeDisposition } from './worktree-disposition.js';
 import {
   fetchIfRemoteRef,
@@ -513,8 +513,9 @@ async function createWorktreeAt(
   // fires if the user later reopens a REPL in this same repo. Best-effort by
   // contract (never throws), so it cannot fail a create that already succeeded.
   await registerWorktreeRoot(repoRoot);
-  // Shared exclude only hides scratch; the meta below sanctions its disposal.
-  await ensureScratchExcluded(execFile, repoRoot);
+  // Same afk excludes as managed create; never throws. The exclude only hides
+  // scratch; the meta below sanctions its disposal. The meta-file entry is ungated.
+  await ensureAfkExcludes(execFile, repoRoot);
 
   // Constraint: cleanup() runs at session shutdown, potentially LONG after
   // the worktree was created. All state needed for cleanup is passed as

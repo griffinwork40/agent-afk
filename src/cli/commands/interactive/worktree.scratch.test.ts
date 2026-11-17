@@ -1,7 +1,9 @@
 /**
  * `afk -w` session cleanup and the `.afk-scratch/` agent scratch dir: scratch
- * files alone are disposable only with creation-time opt-in. Other untracked
- * files still preserve the tree. Real git repos under os.tmpdir(); never touches the real checkout.
+ * files alone are disposable only with creation-time opt-in, and the afk meta
+ * file alone never preserves the tree (it is excluded for every tree). Other
+ * untracked files still preserve the tree. Real git repos under os.tmpdir();
+ * never touches the real checkout.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFile as execFileNode } from 'node:child_process';
@@ -11,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { runWorktreeCleanup } from './worktree.cleanup.js';
 import { setupWorktree } from './worktree.js';
-import { ensureScratchExcluded } from '../../../agent/worktree/worktree-scratch.js';
+import { ensureAfkExcludes } from '../../../agent/worktree/worktree-scratch.js';
 import type { ExecFileFn } from './worktree.js';
 
 const execFile = promisify(execFileNode) as ExecFileFn;
@@ -28,7 +30,8 @@ beforeEach(async () => {
   await git(repo, ['config', 'user.email', 't@example.com']);
   await git(repo, ['config', 'user.name', 't']);
   await git(repo, ['config', 'commit.gpgsign', 'false']);
-  await fs.writeFile(join(repo, '.gitignore'), '.afk-worktrees/\n.afk-worktree-meta.json\n');
+  // The meta file is deliberately NOT gitignored: the shared exclude must cover it.
+  await fs.writeFile(join(repo, '.gitignore'), '.afk-worktrees/\n');
   await git(repo, ['add', '.gitignore']);
   await git(repo, ['commit', '-q', '-m', 'init']);
   vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -62,9 +65,16 @@ describe('afk -w session cleanup with .afk-scratch/', () => {
     expect(existsSync(wt)).toBe(false);
   });
 
+  it('removes a tree whose only extra content is the afk meta file', async () => {
+    const wt = await makeTree('i-meta');
+    await fs.writeFile(join(wt, '.afk-worktree-meta.json'), '{"owner":"interactive"}');
+    await runWorktreeCleanup({ worktreePath: wt, branch: 'i-meta', repoRoot: repo, execFile });
+    expect(existsSync(wt)).toBe(false);
+  });
+
   it.each([false, true])('preserves scratch without opt-in (shared exclude already present: %s)', async (excluded) => {
     const wt = await makeTree('i-legacy');
-    if (excluded) await ensureScratchExcluded(execFile, repo);
+    if (excluded) await ensureAfkExcludes(execFile, repo);
     await fs.mkdir(join(wt, '.afk-scratch'));
     await fs.writeFile(join(wt, '.afk-scratch', 'notes.md'), 'keep');
     await runWorktreeCleanup({ worktreePath: wt, branch: 'i-legacy', repoRoot: repo, execFile });

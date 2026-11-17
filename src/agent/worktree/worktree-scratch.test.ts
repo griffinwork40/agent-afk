@@ -14,9 +14,12 @@ import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import {
+  AFK_META_EXCLUDE_PATTERN,
   AFK_SCRATCH_EXCLUDE_PATTERN,
-  ensureScratchExcluded,
+  ensureAfkExcludes,
+  excludeHasMetaEntry,
   excludeHasScratchEntry,
+  missingAfkExcludes,
 } from './worktree-scratch.js';
 import { createManagedWorktree, removeManagedWorktreeGuarded, teardownIsolatedWorktree } from '../tools/handlers/worktree-managed.js';
 import type { ExecFileFn } from './worktree-sweep.js';
@@ -74,19 +77,29 @@ afterEach(() => {
   rmSync(repo, { recursive: true, force: true });
 });
 
-describe('ensureScratchExcluded', () => {
+describe('ensureAfkExcludes', () => {
   it('appends the anchored pattern once (idempotent) and keeps prior content', async () => {
     await fs.writeFile(join(repo, '.git', 'info', 'exclude'), '# existing\nfoo/');
-    expect(await ensureScratchExcluded(execFile, repo)).toBe(true);
-    expect(await ensureScratchExcluded(execFile, repo)).toBe(true);
+    expect(await ensureAfkExcludes(execFile, repo)).toBe(true);
+    expect(await ensureAfkExcludes(execFile, repo)).toBe(true);
     const content = await readExclude();
     expect(content.startsWith('# existing\nfoo/\n')).toBe(true);
     expect(content.split('\n').filter((l) => l === AFK_SCRATCH_EXCLUDE_PATTERN)).toHaveLength(1);
+    expect(content.split('\n').filter((l) => l === AFK_META_EXCLUDE_PATTERN)).toHaveLength(1);
+  });
+
+  it('adds only the missing entry when one is already present', async () => {
+    await fs.writeFile(join(repo, '.git', 'info', 'exclude'), `${AFK_SCRATCH_EXCLUDE_PATTERN}\n`);
+    expect(missingAfkExcludes(await readExclude())).toEqual([AFK_META_EXCLUDE_PATTERN]);
+    expect(await ensureAfkExcludes(execFile, repo)).toBe(true);
+    const content = await readExclude();
+    expect(content.split('\n').filter((l) => l === AFK_SCRATCH_EXCLUDE_PATTERN)).toHaveLength(1);
+    expect(excludeHasMetaEntry(content)).toBe(true);
   });
 
   it('creates a missing info directory and exclude file', async () => {
     await fs.rm(join(repo, '.git', 'info'), { recursive: true });
-    expect(await ensureScratchExcluded(execFile, repo)).toBe(true);
+    expect(await ensureAfkExcludes(execFile, repo)).toBe(true);
     expect(excludeHasScratchEntry(await readExclude())).toBe(true);
     if (process.platform !== 'win32') {
       expect((await fs.stat(join(repo, '.git', 'info', 'exclude'))).mode & 0o777).toBe(0o644);
@@ -101,16 +114,32 @@ describe('ensureScratchExcluded', () => {
       await fs.appendFile(excludePath, '\nother-writer/\n');
       return snapshot;
     });
-    expect(await ensureScratchExcluded(execFile, repo)).toBe(true);
+    expect(await ensureAfkExcludes(execFile, repo)).toBe(true);
     const content = await readExclude();
     expect(content).toContain('\nother-writer/\n');
     expect(excludeHasScratchEntry(content)).toBe(true);
   });
 
+  it('keeps a no-trailing-newline append from another writer on its own line', async () => {
+    const excludePath = join(repo, '.git', 'info', 'exclude');
+    await fs.writeFile(excludePath, '# existing\n');
+    const readFile = fs.readFile.bind(fs);
+    vi.spyOn(fs, 'readFile').mockImplementationOnce(async () => {
+      const snapshot = await readFile(excludePath, 'utf-8');
+      await fs.appendFile(excludePath, 'other-writer/');
+      return snapshot;
+    });
+    expect(await ensureAfkExcludes(execFile, repo)).toBe(true);
+    const lines = (await readExclude()).split('\n');
+    expect(lines).toContain('other-writer/');
+    expect(lines).toContain(AFK_SCRATCH_EXCLUDE_PATTERN);
+    expect(lines).toContain(AFK_META_EXCLUDE_PATTERN);
+  });
+
   it('writes to the SHARED common dir when called from a linked worktree', async () => {
     const wt = join(repo, '.afk-worktrees', 'linked');
     await git(repo, ['worktree', 'add', '-q', '-b', 'afk/linked', wt]);
-    expect(await ensureScratchExcluded(execFile, wt)).toBe(true);
+    expect(await ensureAfkExcludes(execFile, wt)).toBe(true);
     expect(excludeHasScratchEntry(await readExclude())).toBe(true);
     await fs.mkdir(join(wt, '.afk-scratch'));
     await fs.writeFile(join(wt, '.afk-scratch', 'PR_BODY.md'), 'body');
@@ -120,7 +149,7 @@ describe('ensureScratchExcluded', () => {
   it('fails safe: returns false (never throws) outside a git repo', async () => {
     const notRepo = realpathSync(mkdtempSync(join(tmpdir(), 'afk-scratch-nogit-')));
     try {
-      expect(await ensureScratchExcluded(execFile, notRepo)).toBe(false);
+      expect(await ensureAfkExcludes(execFile, notRepo)).toBe(false);
       expect(existsSync(join(notRepo, 'info'))).toBe(false);
     } finally {
       rmSync(notRepo, { recursive: true, force: true });
@@ -129,12 +158,51 @@ describe('ensureScratchExcluded', () => {
 
   it('fails safe when the git runner throws', async () => {
     const throwing = (async () => { throw new Error('git missing'); }) as ExecFileFn;
-    expect(await ensureScratchExcluded(throwing, repo)).toBe(false);
+    expect(await ensureAfkExcludes(throwing, repo)).toBe(false);
   });
 
   it('recognises an existing unanchored entry as already present', () => {
     expect(excludeHasScratchEntry('.afk-scratch/\n')).toBe(true);
     expect(excludeHasScratchEntry('# .afk-scratch/\n')).toBe(false);
+    expect(excludeHasMetaEntry('.afk-worktree-meta.json\r\n')).toBe(true);
+    expect(excludeHasMetaEntry('# .afk-worktree-meta.json\n')).toBe(false);
+  });
+});
+
+describe('teardown in a repo that does NOT gitignore the meta file', () => {
+  /** Drop the meta line from the tracked .gitignore, as most consumer repos have it. */
+  async function ungitignoreMeta(): Promise<void> {
+    await fs.writeFile(join(repo, '.gitignore'), '.afk-worktrees/\n*.local.txt\n');
+    await git(repo, ['commit', '-q', '-am', 'no meta ignore']);
+  }
+
+  it('a fresh managed tree reads clean and is removed, not locked', async () => {
+    await ungitignoreMeta();
+    const wt = await makeManagedTree('meta-only');
+    expect(existsSync(join(wt, '.afk-worktree-meta.json'))).toBe(true);
+    expect(await git(wt, ['status', '--porcelain'])).toBe('');
+    const result = await teardownIsolatedWorktree({ execFile, repoRoot: repo, worktreePath: wt });
+    expect(result).toEqual({ removed: true, preserved: false });
+    expect(existsSync(wt)).toBe(false);
+  });
+
+  it('a tree created BEFORE the exclude existed is removed too (re-ensured at teardown)', async () => {
+    await ungitignoreMeta();
+    const wt = join(repo, '.afk-worktrees', 'legacy-meta');
+    await git(repo, ['worktree', 'add', '-q', '-b', 'afk/legacy-meta', wt]);
+    await fs.writeFile(join(wt, '.afk-worktree-meta.json'), '{"owner":"agent"}');
+    expect(await git(wt, ['status', '--porcelain'])).toBe('?? .afk-worktree-meta.json');
+    const result = await teardownIsolatedWorktree({ execFile, repoRoot: repo, worktreePath: wt });
+    expect(result.removed).toBe(true);
+  });
+
+  it('real work next to the meta file still preserves and locks', async () => {
+    await ungitignoreMeta();
+    const wt = await makeManagedTree('meta-and-work');
+    await fs.writeFile(join(wt, 'notes.md'), 'real work');
+    const result = await teardownIsolatedWorktree({ execFile, repoRoot: repo, worktreePath: wt });
+    expect(result).toEqual({ removed: false, preserved: true, reason: 'dirty' });
+    expect(await isLocked(wt)).toBe(true);
   });
 });
 
@@ -142,6 +210,7 @@ describe('isolated-worktree teardown with .afk-scratch/', () => {
   it('createManagedWorktree ensures the exclude entry', async () => {
     const wt = await makeManagedTree('create');
     expect(excludeHasScratchEntry(await readExclude())).toBe(true);
+    expect(excludeHasMetaEntry(await readExclude())).toBe(true);
     const meta = JSON.parse(await fs.readFile(join(wt, '.afk-worktree-meta.json'), 'utf-8'));
     expect(meta.scratchDisposable).toBe(true);
   });
