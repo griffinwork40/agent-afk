@@ -48,8 +48,9 @@ export const SANDBOX_ENV_REGISTRY = [
       'Platform support: macOS uses sandbox-exec (deprecated API, still ' +
       'functional as of macOS 15). Linux requires bwrap (bubblewrap); there is ' +
       'no Landlock fallback. Windows and unsupported platforms refuse the spawn. ' +
-      'Background bash spawning is not covered yet; do not use this setting ' +
-      'as a sandbox for run_in_background commands. Reads and network access ' +
+      'Background bash spawning (run_in_background) is covered via the same ' +
+      'mechanism: the sandbox policy is applied at process-launcher level when ' +
+      'this variable is set. Reads and network access ' +
       'are not restricted. This is not a VM boundary: pre-existing hardlinks, ' +
       'bind-mount aliases and concurrent host topology changes are not covered. ' +
       'When explicitly set but the sandbox mechanism is unavailable, the ' +
