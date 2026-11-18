@@ -123,7 +123,7 @@ describe('untilSignal (contract verification)', () => {
 
   it('cleanup is called and promise resolves on simulated SIGINT', async () => {
     let sigintHandler: (() => void) | undefined;
-    const once = vi.spyOn(process, 'once').mockImplementation((event: string, handler: () => void) => {
+    const once = vi.spyOn(process, 'once').mockImplementation((event: string | symbol, handler: (...args: unknown[]) => void) => {
       if (event === 'SIGINT') sigintHandler = handler;
       return process;
     });
