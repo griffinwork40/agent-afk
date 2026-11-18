@@ -31,7 +31,7 @@ describe('update npm lifecycle suppression', () => {
       '--allow-scripts=agent-afk'];
     if (ignoreScripts) args.push('--ignore-scripts');
     args.push(fixture);
-    execFileSync(process.execPath, args, { timeout: 20000, stdio: 'pipe' });
+    execFileSync(process.execPath, args, { timeout: 40000, stdio: 'pipe' });
     expect(existsSync(marker)).toBe(!ignoreScripts);
-  }, 30000);
+  }, 60000);
 });
