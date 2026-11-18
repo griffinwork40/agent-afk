@@ -816,12 +816,12 @@ describe('orphaned-dir-cleanup', () => {
       telemetryPath: telemetryFile,
     });
 
-    expect(result.candidates).toContainEqual({
+    expect(result.candidates).toContainEqual(expect.objectContaining({
       path: orphanPath,
       verdict: 'orphaned-dir-preserved',
       owner: 'interactive',
       ageMs: 0,
-    });
+    }));
     expect(result.removed).not.toContain(orphanPath);
     await expect(fs.stat(orphanPath)).resolves.toBeDefined();
   });

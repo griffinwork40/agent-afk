@@ -29,6 +29,16 @@
  * immediately following non-whitespace text is `.length`, `.padEnd(`, or
  * `.padStart(`, it is flagged.
  *
+ * Known limitations (by design, matching check-terminal-width.ts behaviour):
+ *   1. Multi-line calls are skipped — the scanner only inspects single source
+ *      lines. A `palette.X(` that spans multiple lines will not be flagged.
+ *      In practice all palette calls in this codebase fit on one line.
+ *   2. Nested palette calls such as `palette.a(palette.b(x).padEnd(n))` are
+ *      not detected: the inner `.padEnd` sits at paren depth ≥ 1 and the
+ *      outer scan closes before seeing it. No such pattern exists on HEAD.
+ *      Fix nested misuse by scanning the inner expression recursively if this
+ *      pattern ever appears.
+ *
  * False-positive rate on HEAD (2026-11-14): 0 — the scanner correctly ignores
  * `palette.X(str.padEnd(n))` (pad applied before styling) and
  * `palette.X(arr.length)` (array length passed into the template literal that
@@ -44,6 +54,7 @@
  */
 
 import * as fs from 'node:fs';
+import { realpathSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { groupViolationsByFile, isProdTs, walkSourceFiles } from './lib/walk-source-files.js';
@@ -100,10 +111,14 @@ export function scanLine(line: string): string[] {
       if (idx === -1) break;
 
       // Find the opening `(` after `palette.<word>`.
-      // The word continues until the `(` — skip alphanumeric / dot chars.
+      // The member name runs until the first `(`; we only skip over identifier
+      // chars (word chars) and then optional whitespace — a non-whitespace,
+      // non-`(` character (e.g. `;` or `,`) means this is not a call site.
       let openParen = idx + prefix.length;
-      while (openParen < line.length && line[openParen] !== '(') openParen++;
-      if (openParen >= line.length) {
+      while (openParen < line.length && /\w/.test(line[openParen]!)) openParen++;
+      // Allow optional whitespace between name and `(`.
+      while (openParen < line.length && line[openParen] !== '(' && /\s/.test(line[openParen]!)) openParen++;
+      if (openParen >= line.length || line[openParen] !== '(') {
         searchFrom = idx + prefix.length;
         continue;
       }
@@ -237,8 +252,6 @@ function main(): void {
 }
 
 // Only run when executed directly (not when imported by tests).
-import { realpathSync } from 'node:fs';
-
 function isMain(): boolean {
   const argv1 = process.argv[1];
   if (!argv1) return false;

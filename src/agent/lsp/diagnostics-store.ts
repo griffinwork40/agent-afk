@@ -45,6 +45,12 @@ export class DiagnosticsStore {
     return this.seqCounter;
   }
 
+  /** Latest matching diagnostics for code-action context; never borrow another version. */
+  current(uri: string, version: number): readonly unknown[] {
+    const entry = this.latest.get(uri);
+    return entry?.version === version ? entry.diagnostics : [];
+  }
+
   /** Record a raw publishDiagnostics params object. Malformed input is ignored. */
   record(params: unknown): void {
     if (typeof params !== 'object' || params === null) return;

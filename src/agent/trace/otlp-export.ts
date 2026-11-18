@@ -169,11 +169,11 @@ export function traceToOtlp(
   // (every REPL cycle), not the session total. Each `agent.invoke` child span
   // carries its own subagent's cost, so a sum over spans must not count child
   // spend twice. `afk.session.turn_count` is the root's turns over the same
-  // cycles, and the two are present or absent together. Absent when the root's
-  // spend is unknown: no cost record, or a process-exit backstop seal with no
-  // closed root cycle that can be told apart from a child's (#4912). On an
-  // unsealed trace whose closures cannot be attributed, both come from the
-  // last closure.
+  // cycles. Both are absent when the root's spend is unknown: no cost record,
+  // or a process-exit backstop seal with no closed root cycle that can be told
+  // apart from a child's (#4912). `turn_count` may also be absent independently
+  // when a seal carries cost but no turn count. On an unsealed trace whose
+  // closures cannot be attributed, both come from the last closure.
   const costResult = costAcc.result();
   const finalCost = costResult.rootCostUsd;
   const finalTurns = costResult.rootTurnCount;

@@ -23,6 +23,7 @@ import {
 import { handleProgressEvent } from './streaming.progress.js';
 import { routeFromCtx, sendOptions } from './route.js';
 import type { WatchdogState } from './streaming.watchdog.js';
+import { debugLog } from '../utils/debug.js';
 
 /**
  * Mutable snapshot of the stream_retry round boundary — tracks accumulated /
@@ -208,7 +209,14 @@ export async function processInlineEvent(
     // its buffer, and cleanFinal deletes the preview entirely. Explicit routing
     // also preserves the topic when this turn originated from a callback query.
     const route = routeFromCtx(ctx);
-    if (route) await ctx.telegram.sendMessage(route.chatId, event.text, sendOptions(route)).catch(() => {});
+    if (!route) {
+      debugLog('[telegram] model-fallback notice: routeFromCtx returned undefined — notice not delivered', event.text);
+      return false;
+    }
+    await ctx.telegram.sendMessage(route.chatId, event.text, sendOptions(route)).catch((err: unknown) => {
+      debugLog('[telegram] model-fallback notice send failed:', err);
+    });
+    debugLog('[telegram] model-fallback notice delivered to chatId', route.chatId, '—', event.text);
     return false;
   }
 

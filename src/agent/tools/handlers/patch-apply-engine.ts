@@ -220,7 +220,9 @@ function planPatchChanges(
  * (validation errors for any failed write). When `writeErrors` is non-empty
  * the caller must unlink all returned `tempFiles` before returning.
  */
-async function writeTempFiles(planned: PlannedChange[]): Promise<{
+async function writeTempFiles(
+  planned: PlannedChange[], guard?: (path: string) => Promise<void>,
+): Promise<{
   tempFiles: Array<{ tempPath: string; targetPath: string; originalMode: number | undefined }>;
   writeErrors: ValidationError[];
 }> {
@@ -242,8 +244,10 @@ async function writeTempFiles(planned: PlannedChange[]): Promise<{
         }
       }
       // Ensure the parent directory exists (for new files).
+      await guard?.(plan.resolvedPath);
       await mkdir(dirname(plan.resolvedPath), { recursive: true });
-      await writeFile(tmp, plan.newContent, 'utf-8');
+      await guard?.(plan.resolvedPath);
+      await writeFile(tmp, plan.newContent, { encoding: 'utf-8', flag: 'wx' });
       // Restore original permissions on the temp file before rename so the
       // final file inherits the correct mode, not the process umask.
       if (originalMode !== undefined) {
@@ -279,6 +283,7 @@ async function writeTempFiles(planned: PlannedChange[]): Promise<{
 async function renameAndRollback(
   tempFiles: Array<{ tempPath: string; targetPath: string; originalMode: number | undefined }>,
   planned: PlannedChange[],
+  guard?: (path: string) => Promise<void>,
 ): Promise<{ renameErrors: ValidationError[] }> {
   const renameErrors: ValidationError[] = [];
   const completedRenames: Array<{
@@ -290,6 +295,7 @@ async function renameAndRollback(
   for (let i = 0; i < tempFiles.length; i++) {
     const tf = tempFiles[i]!;
     try {
+      await guard?.(tf.targetPath);
       await rename(tf.tempPath, tf.targetPath);
       completedRenames.push({
         targetPath: tf.targetPath,
@@ -355,6 +361,7 @@ export async function applyPatch(
   fileContents: Map<string, string | null>,
   resolveBase: string | undefined,
   dryRun: boolean,
+  guard?: (path: string) => Promise<void>,
 ): Promise<PatchApplyResult> {
   const { planned, combinedDiff, structuredDiff, filesChanged } =
     planPatchChanges(changes, fileContents, resolveBase);
@@ -371,7 +378,7 @@ export async function applyPatch(
   }
 
   // Phase 2a: write temp files (same directory => same mount point => atomic rename).
-  const { tempFiles, writeErrors } = await writeTempFiles(planned);
+  const { tempFiles, writeErrors } = await writeTempFiles(planned, guard);
 
   if (writeErrors.length > 0) {
     // Clean up any temp files already written.
@@ -390,8 +397,19 @@ export async function applyPatch(
     };
   }
 
+  // Validate ALL destinations before the first commit, then each destination
+  // again immediately before rename. Keep one transaction/rollback boundary.
+  try {
+    for (const plan of planned) await guard?.(plan.resolvedPath);
+  } catch (err) {
+    for (const tf of tempFiles) {
+      try { await unlink(tf.tempPath); } catch { /* best-effort cleanup */ }
+    }
+    return { status: 'validation_failed', diff: combinedDiff, files_changed: [],
+      errors: [{ path: '', error: 'destination_changed', detail: errorMessage(err) }] };
+  }
   // Phase 2b: commit point -- rename all temp files to their targets.
-  const { renameErrors } = await renameAndRollback(tempFiles, planned);
+  const { renameErrors } = await renameAndRollback(tempFiles, planned, guard);
 
   if (renameErrors.length > 0) {
     return {

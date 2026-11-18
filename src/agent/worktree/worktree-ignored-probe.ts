@@ -29,6 +29,7 @@ import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ExecFileFn } from './worktree-sweep.js';
 import { classifyIgnoredEntry, type IgnoredEntryClass } from './worktree-ignored-patterns.js';
+import { AFK_SCRATCH_DIR, isScratchDisposable } from './worktree-scratch.js';
 
 export {
   classifyIgnoredEntry,
@@ -208,8 +209,12 @@ export async function probeNonRebuildableIgnoredFiles(
   const top = await readIgnoredEntries(execFile, worktreePath);
   // Unreadable → never force-remove on a guess.
   if ('failure' in top) return { protect: true, because: 'git-failed', detail: top.failure };
+  const scratchDisposable = await isScratchDisposable(worktreePath);
   for (const entry of top.entries) {
     const { verdict, resolvedEntry } = await classifyResolvingSymlinkedDirs(worktreePath, entry);
+    // The shared exclude can hide another worktree's pre-existing files. Only
+    // this tree's creation-time opt-in permits skipping the root scratch dir.
+    if (scratchDisposable && resolvedEntry.startsWith(`${AFK_SCRATCH_DIR}/`)) continue;
     if (verdict === 'protected') {
       return { protect: true, because: 'non-rebuildable-entry', detail: entry };
     }

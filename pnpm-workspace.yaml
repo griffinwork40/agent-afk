@@ -27,11 +27,13 @@ overrides:
   # GHSA-v2hh-gcrm-f6hx, GHSA-7p8r-x3mc-p8w7, GHSA-f65p-4m7j-42xc,
   # GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp, GHSA-qw65-cvwx-89v3,
   # GHSA-hrr3-gc8f-f4qj
-  # 4.x line: scheme spoofing, host confusion, path equivalence, scheme
-  # injection, all fixed in 4.2.3 (a >=3.1.8 floor let vulnerable 4.2.1 through)
+  # 4 additional CVEs (scheme spoofing, host confusion, path equivalence,
+  # scheme injection) all backported to 3.1.9 alongside 4.2.3 fixes:
   # GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-xhq7-xmqj-769h,
   # GHSA-333x-w4r6-6crp
-  fast-uri: ">=4.2.3"
+  # Pinned <4 to stay inside ajv's declared range (^3.0.1); every advisory
+  # above has a confirmed 3.x backport — 3.1.9 is fully patched.
+  fast-uri: ">=3.1.9 <4"
 
   # ip-address: 6 SSRF/trust-boundary CVEs fixed across 10.2.1–10.7.1
   # GHSA-mwp4-54f8-5fhr, GHSA-4xrf-jv44-h6hh, GHSA-22jq-vg5j-6vgg,

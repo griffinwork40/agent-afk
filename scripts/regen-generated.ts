@@ -116,6 +116,14 @@ const REGENERATORS: readonly { name: string; script: string; args: readonly stri
   { name: 'lint:tests:update', script: 'check-test-typecheck.ts', args: ['--update'], growth: true },
 ];
 
+function isMainBranch(root: string): boolean {
+  try {
+    return git(root, ['rev-parse', '--abbrev-ref', 'HEAD']).trim() === 'main';
+  } catch {
+    return false;
+  }
+}
+
 export function main(argv = process.argv.slice(2), cwd = process.cwd()): void {
   const parsed = parseGrowthArgs(argv, ['--allow-growth', '--reason']);
   if ('error' in parsed) throw new Error(parsed.error);
@@ -125,11 +133,15 @@ export function main(argv = process.argv.slice(2), cwd = process.cwd()): void {
   // Invariant: inspect every code conflict BEFORE writing any baseline union.
   const unions = unionConflicts(root, unmerged);
   const growth = parsed.allowGrowth ? ['--allow-growth', '--reason', parsed.reason] : [];
+  const onMain = isMainBranch(root);
   for (const { name, script, args, growth: ratchet } of REGENERATORS) {
     console.log(`→ pnpm ${name}`);
+    // lint:tests:update must not lower the baseline off main — pass --no-shrink
+    // so a shrink is silently skipped rather than aborting the whole regen run.
+    const noShrinkArgs = (!onMain && name === 'lint:tests:update') ? ['--no-shrink'] : [];
     const result = spawnSync(process.execPath, [
       '--import', import.meta.resolve('tsx'), path.join(root, 'scripts', script),
-      ...args, ...(ratchet ? growth : []),
+      ...args, ...(ratchet ? growth : []), ...noShrinkArgs,
     ], { cwd: root, stdio: 'inherit' });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`${name} failed (${result.signal ?? result.status}); generated files were not staged.`);

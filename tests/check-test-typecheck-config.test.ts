@@ -77,6 +77,61 @@ describe('check-test-typecheck fatal config CLI guard', () => {
     },
   );
 
+  it('--allow-growth does NOT bypass off-main shrink refusal', async () => {
+    // Spec item 1: the guard is now `if (current < previous.errors && !isMainBranch())`
+    // — allowGrowth no longer exempts it. Growth only approves increases.
+    vi.resetModules();
+    // tsc exits 0 with no errors (current=0 < baseline=10 → shrink).
+    vi.mocked(execFileSync).mockImplementation((_cmd: string, cmdArgs?: readonly string[] | readonly string[]) => {
+      const a = cmdArgs as string[] | undefined;
+      // git rev-parse --abbrev-ref HEAD → off-main branch
+      if (a && a.includes('--abbrev-ref')) return 'feature-branch\n' as never;
+      // tsc call: exits 0, no output (zero errors)
+      return '' as never;
+    });
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(JSON.stringify({ errors: 10 }));
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const writeBaseline = vi.mocked(fs.writeFileSync);
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('CLI exit'); });
+    // --update --allow-growth --reason: must still refuse the shrink off-main.
+    process.argv = ['node', scriptPath, '--update', '--allow-growth', '--reason', 'intentional'];
+
+    await expect(import('../scripts/check-test-typecheck.js')).rejects.toThrow('CLI exit');
+
+    expect(exit).toHaveBeenCalledWith(1);
+    const stderrText = stderr.mock.calls.map(([arg]) => String(arg)).join('');
+    expect(stderrText).toContain('refusing to lower the baseline off main');
+    expect(writeBaseline).not.toHaveBeenCalled();
+    void stdout; // not asserted — stderr path is the invariant
+  });
+
+  it('--no-shrink skips the off-main shrink refusal with exit 0, baseline unchanged', async () => {
+    // Spec item 1: --no-shrink lets regen:generated pass through without aborting
+    // when the typecheck count shrank on a feature branch.
+    vi.resetModules();
+    vi.mocked(execFileSync).mockImplementation((_cmd: string, cmdArgs?: readonly string[] | readonly string[]) => {
+      const a = cmdArgs as string[] | undefined;
+      if (a && a.includes('--abbrev-ref')) return 'feature-branch\n' as never;
+      return '' as never;
+    });
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(JSON.stringify({ errors: 10 }));
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const writeBaseline = vi.mocked(fs.writeFileSync);
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('CLI exit'); });
+    process.argv = ['node', scriptPath, '--update', '--no-shrink'];
+
+    await expect(import('../scripts/check-test-typecheck.js')).rejects.toThrow('CLI exit');
+
+    expect(exit).toHaveBeenCalledWith(0);
+    const stdoutText = stdout.mock.calls.map(([arg]) => String(arg)).join('');
+    expect(stdoutText).toContain('--no-shrink');
+    expect(stdoutText).toContain('10'); // baseline count preserved in skip message
+    expect(writeBaseline).not.toHaveBeenCalled();
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
   it('does NOT reject semantic TS1xxx codes (e.g. TS1064)', async () => {
     // TS1064 (async return type) is a semantic diagnostic, not a parser error.
     // It coexists with normal type errors and must pass through to the ratchet,

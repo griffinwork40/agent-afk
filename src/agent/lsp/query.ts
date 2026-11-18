@@ -101,6 +101,24 @@ export async function withPooledFile<T>(
   }
 }
 
+/** Acquire a warm server for a workspace-only query (no synthetic document open). */
+export async function withPooledWorkspace<T>(
+  spec: ServerSpec,
+  opts: PooledQueryOptions,
+  fn: (ctx: Pick<QueryContext, 'client' | 'remainingMs'>) => Promise<T>,
+): Promise<T> {
+  const deadline = Date.now() + opts.timeoutMs;
+  const remainingMs = () => Math.max(0, deadline - Date.now());
+  const client = await (opts.pool ?? getLspPool()).acquire(spec, opts.root, {
+    timeoutMs: remainingMs(), signal: opts.signal,
+  });
+  const release = client.hold();
+  try {
+    client.closeOthers('');
+    return await fn({ client, remainingMs });
+  } finally { release(); }
+}
+
 /**
  * Wait for the publishDiagnostics matching this sync. A changed document
  * waits for a publish newer than the sync (version-matched when the

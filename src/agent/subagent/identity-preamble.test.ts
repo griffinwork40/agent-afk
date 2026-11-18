@@ -9,6 +9,7 @@ import {
   renderSubagentIdentityPreamble,
   shouldEmitOrientationBlock,
   WORKTREE_STASH_RULE,
+  worktreeScratchRule,
 } from './identity-preamble.js';
 import type { AgentConfig } from '../types/config-types.js';
 
@@ -171,6 +172,22 @@ describe('renderSubagentIdentityPreamble', () => {
       cwd: WORKTREE_CWD,
     });
     expect(out).toContain(WORKTREE_STASH_RULE);
+  });
+
+  it('emits the scratch-dir rule naming the worktree ROOT .afk-scratch/ when cwd is in a worktree', () => {
+    const out = renderSubagentIdentityPreamble({
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      cwd: '/repo/.afk-worktrees/my-slug/src/deep',
+    });
+    expect(out).toContain(worktreeScratchRule('/repo/.afk-worktrees/my-slug/.afk-scratch/'));
+    expect(out).toContain('deleted with the worktree');
+  });
+
+  it('does NOT emit the scratch-dir rule outside a worktree', () => {
+    const out = renderSubagentIdentityPreamble({ isNonInteractive: true, depth: 1, maxDepth: 3, cwd: '/repo/src' });
+    expect(out).not.toContain('.afk-scratch');
   });
 
   it('stash rule appears after nesting-depth section (correct ordering)', () => {

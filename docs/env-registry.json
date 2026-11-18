@@ -137,6 +137,14 @@
       "category": "display"
     },
     {
+      "name": "AFK_CLOSED_ROUTER",
+      "description": "Set to 1 to enable closed-router credential rotation on subscription-limit 429s. When set, afk shells out to `closed-router rotate --once --json` before entering the multi-hour park loop. On a successful rotation the turn is replayed with the new credential. When all accounts are exhausted (`all-hot`), the existing park behavior applies. Requires `closed-router` to be on PATH. Default: unset (disabled).",
+      "type": "boolean",
+      "required": false,
+      "category": "auth",
+      "secret": true
+    },
+    {
       "name": "AFK_COMPACT_KEEP_LAST_TURNS",
       "description": "Number of recent turns the compactor keeps verbatim during /compact. Default tuned in compact-handler.ts.",
       "type": "number",
@@ -1083,7 +1091,7 @@
     },
     {
       "name": "AFK_PROMPT_EXPERIMENT",
-      "description": "Names the active prompt experiment (e.g. \"narration-v2\", \"explore-rewrite\"). When set, `isPromptExperimentActive(name)` returns true for the matching name and `getPromptVariant(name)` reads `AFK_PROMPT_EXPERIMENT_ARM` to assign the session to \"control\" or \"treatment\" (10 episodes per arm, matching the narration-directive A/B template — see docs/prompt-tuning-protocol.md). Unset or empty = no experiment active; all sessions see the default prompt. Use only with `afk whatif --env AFK_PROMPT_EXPERIMENT=<name> --env AFK_PROMPT_EXPERIMENT_ARM=control|treatment` for isolated episode runs — never set persistently in afk.env. See docs/prompt-tuning-protocol.md for the full gate-first protocol and hard veto list before using this var.",
+      "description": "Names the active prompt experiment (e.g. \"narration-v2\", \"explore-rewrite\"). When set, `isPromptExperimentActive(name)` returns true for the matching name and `getPromptVariant(name)` reads `AFK_PROMPT_EXPERIMENT_ARM` to assign the session to \"control\" or \"treatment\" (10 episodes per arm, matching the narration-directive A/B template — see docs/prompt-tuning-protocol.md). Unset or empty = no experiment active; all sessions see the default prompt. Use with a spec file: `afk whatif --spec <name>.json --verify --yes --samples 10` (put both AFK_PROMPT_EXPERIMENT and AFK_PROMPT_EXPERIMENT_ARM as `kind:\"env\"` entries in the spec) — never set persistently in afk.env. See docs/prompt-tuning-protocol.md for the full gate-first protocol and hard veto list before using this var.",
       "type": "string",
       "required": false,
       "example": "explore-rewrite",
@@ -1283,6 +1291,14 @@
       "type": "boolean",
       "required": false,
       "category": "debug"
+    },
+    {
+      "name": "AFK_SKILLS_MANIFEST_ALWAYS",
+      "description": "Always include the skills manifest in the system prompt whenever a skill executor is present, regardless of whether the session is granted the skill tool. Set to 1 to restore the pre-grant-gate behaviour. Default unset (manifest is omitted for sessions that are denied the skill tool).",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "misc"
     },
     {
       "name": "AFK_SMOKE_TEXT",

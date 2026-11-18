@@ -25,8 +25,6 @@
 import { debugLog } from '../../utils/debug.js';
 import { HookBlockedError, errorMessage } from '../../utils/errors.js';
 import { checkToolPermission, type ToolPermissionConfig } from './permissions.js';
-import { classifyBashCommand } from './readonly-bash.js';
-import { classifyDestructiveGit } from './readonly-bash.tokenizer.js';
 import { repeatCallFingerprint } from './repeat-circuit-breaker.js';
 import {
   DENIAL_CIRCUIT_BREAKER_THRESHOLD,
@@ -51,11 +49,11 @@ import type { ToolCall, ToolResult } from '../providers/anthropic-direct/types.j
 import type { CanUseTool, PermissionResult } from '../types/sdk-types.js';
 import type { TraceSink } from '../trace/index.js';
 import type { GrantManager } from './grant-manager.js';
-import { isBackgroundBashLaunch } from './bash-background-flag.js';
-import { isReadOnlyGitToolEnabled, READONLY_BASH_DISABLED_REASON, readOnlyBashDenialOverride } from './readonly-git-surface.js';
+import { readOnlyBashDenialOverride } from './readonly-git-surface.js';
 import { isPeerToolBlocked, peerToolChildDenial } from './peer-tool-gate.js';
 import type { HookBlockRepeatState } from './hook-block-repeat-breaker.js';
 import { applyHookBlockRepeatGate as applyHookBlockRepeat } from './dispatcher.hook-block-repeat-gate.js';
+import { bashCommandDenialReason } from './dispatcher.pre-dispatch-gates.bash.js';
 
 // ---------------------------------------------------------------------------
 // Mutable state
@@ -269,92 +267,8 @@ async function runCanUseTool(
   return null;
 }
 
-/**
- * Child-session destructive-git gate. Returns an isError {@link ToolResult}
- * when `blockDestructiveGit` is true AND `call` is a `bash` invocation whose
- * command contains a working-tree-destructive git subcommand; otherwise
- * returns `null` (allow).
- *
- * Runs AFTER `checkReadOnlyBash` so read-only children that already block all
- * mutating bash never reach this gate.
- */
-async function checkDestructiveGitBash(
-  call: ToolCall,
-  deps: PreDispatchGateDeps,
-): Promise<ToolResult | null> {
-  if (!deps.blockDestructiveGit || call.name !== 'bash') return null;
-  const input = call.input;
-  const command =
-    typeof input === 'object' && input !== null
-      ? (input as Record<string, unknown>)['command']
-      : undefined;
-  if (typeof command !== 'string') return null;
-  const verdict = classifyDestructiveGit(command);
-  if (!verdict.destructive) return null;
-  const reason =
-    `Bash command blocked: child sessions may not run working-tree-destructive ` +
-    `git commands (${verdict.reason ?? 'destructive git command detected'}). ` +
-    `If this command is genuinely needed, report the requirement to your caller.`;
-  await emitPreToolUseBlock(call.name, reason, deps);
-  return { content: reason, isError: true, failureClass: 'permission-denied' };
-}
-
-/**
- * Read-only-skill bash gate. Returns an isError {@link ToolResult} when the
- * dispatcher is in `readOnlyBash` mode AND `call` is a `bash` invocation
- * whose command classifies as MUTATING; otherwise returns `null` (allow).
- *
- * Invariant: this runs AFTER the permission check at both call sites
- * (`execute()` single-path and `executeBatch()` phase-1), mirroring a
- * PreToolUse gate but living in the dispatcher because — unlike the hook
- * registry — it needs the raw `call.input.command` string. The input shape
- * is guarded: a non-object input or missing/non-string `command` is treated
- * as a no-op pass-through (the handler will surface its own validation
- * error), so we never throw here.
- */
-async function checkReadOnlyBash(
-  call: ToolCall,
-  deps: PreDispatchGateDeps,
-): Promise<ToolResult | null> {
-  if (!deps.readOnlyBash || call.name !== 'bash') return null;
-  const input = call.input;
-  const command =
-    typeof input === 'object' && input !== null
-      ? (input as Record<string, unknown>)['command']
-      : undefined;
-  // #3754 backstop: with AFK_READONLY_GIT_TOOL on, read-only surfaces get no
-  // shell at all (the allowlist swap normally hides it; this covers any path
-  // that reached the dispatcher with bash still admitted).
-  if (isReadOnlyGitToolEnabled()) {
-    await emitPreToolUseBlock(call.name, READONLY_BASH_DISABLED_REASON, deps);
-    return { content: READONLY_BASH_DISABLED_REASON, isError: true, failureClass: 'permission-denied' };
-  }
-  if (typeof command !== 'string') return null;
-  // A background launch outlives the call and is never read-only recon,
-  // whatever the command text says.
-  if (isBackgroundBashLaunch(call.name, input)) {
-    const bgReason =
-      'Bash command blocked: read-only agents may not start background processes ' +
-      '(run_in_background). Run read-only commands in the foreground instead.';
-    await emitPreToolUseBlock(call.name, bgReason, deps);
-    return { content: bgReason, isError: true, failureClass: 'permission-denied' };
-  }
-  const verdict = classifyBashCommand(command);
-  if (!verdict.mutating) return null;
-  // Reason text is shared by the model-visible result and the trace event so
-  // the two can never drift; the command string itself is deliberately NOT
-  // recorded (ADR 0001 §G.4 keeps raw commands out of telemetry).
-  const reason =
-    `Bash command blocked: read-only skill may not run mutating commands ` +
-    `(${verdict.reason ?? 'mutation detected'}). Allowed: read-only recon ` +
-    `(git status/log/diff/show/ls-remote, ls, cat, find, grep, gh pr view/diff). ` +
-    `For a remote ref you have not fetched, \`gh pr diff <n>\`, \`gh pr view <n>\` ` +
-    `and \`git ls-remote\` need no local ref — \`git fetch\` is blocked. ` +
-    `Do NOT retry variants of a blocked command: if the task genuinely requires a ` +
-    `mutation, stop and report that requirement to your caller instead.`;
-  await emitPreToolUseBlock(call.name, reason, deps);
-  return { content: reason, isError: true, failureClass: 'permission-denied' };
-}
+// Bash-command gates (checkReadOnlyBash, checkDestructiveGitBash) extracted to
+// dispatcher.pre-dispatch-gates.bash.ts.
 
 /**
  * Repeat-loop circuit breaker. Increments a per-dispatcher consecutive-call
@@ -690,15 +604,16 @@ export async function runPreDispatchGates(
   // 2b. Read-only-skill bash gate. Runs after the permission check so the
   // allowlist denial (if any) takes precedence; blocks mutating bash while
   // letting read-only recon through.
-  const bashBlock = await checkReadOnlyBash(call, deps);
-  if (bashBlock) return bashBlock;
-
   // 2b-bis. Destructive-git gate. Runs after readOnlyBash so read-only children
   // (where all mutating bash is already blocked) never redundantly reach this.
   // Blocks checkout/switch/restore/clean/reset --hard/stash drop|clear|pop for
   // ALL child sessions where blockDestructiveGit is true.
-  const destructiveGitBlock = await checkDestructiveGitBash(call, deps);
-  if (destructiveGitBlock) return destructiveGitBlock;
+  // Both run inside bashCommandDenialReason, in that order.
+  const bashDenial = bashCommandDenialReason(call, deps);
+  if (bashDenial !== undefined) {
+    await emitPreToolUseBlock(call.name, bashDenial, deps);
+    return { content: bashDenial, isError: true, failureClass: 'permission-denied' };
+  }
 
   // 2c. Repeat-loop circuit breaker. Short-circuits no-progress loops where
   // the model calls the same tool with byte-identical input N times in a row.

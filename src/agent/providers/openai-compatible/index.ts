@@ -44,7 +44,8 @@ import { WorkspaceStore, createWorkspaceHandlers } from '../../workspace/index.j
 import { StateStore } from '../../state/state-store.js';
 import { createStateHandlers } from '../../state/state-tools.js';
 import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
-import { grantsWorkspacePrompt, providerGrantsTool } from '../shared/tool-grant.js';
+import { grantsWorkspacePrompt, providerGrantsTool, skillManifestGranted } from '../shared/tool-grant.js';
+import { isSkillManifestAlways } from '../../../config/env.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { selectBaseSchemas } from './base-schemas.js';
 import { sortMcpSchemas } from '../../tools/schemas.order.js';
@@ -295,6 +296,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const spw = buildSystemPromptWiring({
       config,
       skillExecutor: this.providerOpts.skillExecutor ?? undefined,
+      // Gate: include iff executor present AND `skill` is not explicitly denied.
+      // Uses fail-open fallback for absent callbacks (pre-gate compat). See
+      // `skillManifestGranted` in tool-grant.ts for the full rule.
+      includeSkillManifest: skillManifestGranted(
+        this.providerOpts.skillExecutor !== undefined && this.providerOpts.skillExecutor !== null,
+        (toolName) => this.grantsTool(toolName),
+        isSkillManifestAlways(),
+      ),
       workspacePromptEnabled: grantsWorkspacePrompt((toolName) => this.grantsTool(toolName)),
       readOnlyMemory: this.providerOpts.readOnlyMemory,
       readOnlyState: this.providerOpts.readOnlyState,

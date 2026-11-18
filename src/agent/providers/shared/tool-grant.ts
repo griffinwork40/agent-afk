@@ -64,3 +64,32 @@ export function grantsToolStrict(
 ): boolean {
   return grantsTool?.(toolName) === true;
 }
+
+// Contract: whether to include the skill manifest in the system prompt.
+//
+// The rule differs from `grantsToolStrict` deliberately: a MISSING grantsTool
+// callback means "embedder never wired permissions" and must keep today's
+// behaviour (manifest included), because those contexts received the manifest
+// before this gate existed and may rely on it.  `grantsToolStrict` is
+// fail-closed (missing callback => false) which would silently drop the
+// manifest for all embedders that never set up permissions -- the wrong
+// default for a backwards-compatibility gate.
+//
+// Logic: include iff a skill executor exists AND the grant callback does not
+// explicitly deny `skill`.  "Explicitly deny" means the callback is present
+// AND returns false.  Absent callback => include (preserve prior behaviour).
+//
+// The `killSwitch` parameter maps to `AFK_SKILLS_MANIFEST_ALWAYS=1`: when
+// true the grant check is skipped and the manifest is included whenever a
+// skill executor is present, restoring the pre-gate behaviour entirely.
+export function skillManifestGranted(
+  hasSkillExecutor: boolean,
+  grantsTool: ((toolName: string) => boolean) | undefined,
+  killSwitch: boolean,
+): boolean {
+  if (!hasSkillExecutor) return false;
+  if (killSwitch) return true;
+  // No callback: embedder never wired permissions; keep existing behaviour.
+  if (grantsTool === undefined) return true;
+  return grantsTool('skill');
+}

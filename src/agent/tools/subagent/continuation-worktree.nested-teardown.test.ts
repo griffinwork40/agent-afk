@@ -15,10 +15,16 @@ vi.mock('../handlers/worktree-managed.js', () => ({ teardownIsolatedWorktree, cr
 const execFileAsync = vi.hoisted(() => vi.fn());
 vi.mock('../../../utils/exec-file.js', () => ({ execFileAsync }));
 
+// Mock foreground-promotion so integration tests can drive teardown via the
+// same path as production without a real model call (#4957).
+const runForegroundWithPromotion = vi.hoisted(() => vi.fn());
+vi.mock('./foreground-promotion.js', () => ({ runForegroundWithPromotion }));
+
 import type { SubagentResult } from '../../subagent.js';
-import { ContinuationRegistry, type ChainRecord } from '../../subagent/continuation-registry.js';
-import { instrumentHandleForChain } from './continuation-dispatch.js';
-import { releaseChainWorktree, repoRootFromWorktreePath } from './continuation-worktree.js';
+import { ContinuationRegistry } from '../../subagent/continuation-registry.js';
+import { instrumentHandleForChain, markChainPromoted, wireDispatchChain } from './continuation-dispatch.js';
+import { releaseChainWorktree } from './continuation-worktree.js';
+import { buildContinuationRegistry } from '../../session/wire-executors.js';
 
 const REPO = path.join(os.tmpdir(), 'nested-teardown-repo');
 const TREE = path.join(REPO, '.afk-worktrees', 'iso-agent-tool-1');
@@ -47,13 +53,11 @@ interface LinkHandle {
 
 /** An admitted link 2 on a chain whose worktree is kept, with a controllable nested manager. */
 function admittedLink(maxContinuations: number, events: string[]) {
-  const registry = new ContinuationRegistry({ maxRounds: 150, maxContinuations });
-  const onEvict = vi.fn((chain: ChainRecord) => {
-    if (chain.isolatedWorktreePath === undefined) return;
-    const repoRoot = repoRootFromWorktreePath(chain.isolatedWorktreePath);
-    if (repoRoot === undefined) return;
-    void releaseChainWorktree({ repoRoot, worktreePath: chain.isolatedWorktreePath, chainId: chain.chainId, registry }).catch(() => undefined);
-  });
+  // Use the production factory so this test stays in sync with
+  // wire-executors.ts without maintaining a hand-rolled onEvict copy (#4957).
+  const registry = buildContinuationRegistry({ maxRounds: 150, maxContinuations });
+  const realOnEvict = registry.onEvict!;
+  const onEvict = vi.fn((chain: Parameters<typeof realOnEvict>[0]) => realOnEvict(chain));
   registry.onEvict = onEvict;
   const chain = registry.createChain({ owner: 'o', rootSessionId: 'r', roundCap: 5, inputs: { writeCapable: false, isolation: 'worktree' } });
   registry.recordTerminal(chain.chainId, terminal);
@@ -166,5 +170,108 @@ describe('kept worktree release waits for the link nested teardown', () => {
     await releaseChainWorktree({ repoRoot: REPO, worktreePath: TREE, chainId: chain.chainId, registry });
     expect(unlocks()).toHaveLength(1);
     expect(teardownIsolatedWorktree).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Integration: each run mode reaches the wrapped teardown that guards worktree
+ * release (#4957). These tests wire via wireDispatchChain (the production path)
+ * rather than instrumentHandleForChain directly, so a future change to the
+ * wrapping logic is immediately caught.
+ */
+describe('run-mode integration: wrapped teardown is reached by each run mode', () => {
+  /** Build a link handle + chain wired through wireDispatchChain. */
+  function setupLink(events: string[]) {
+    const registry = buildContinuationRegistry({ maxRounds: 150, maxContinuations: 1 });
+    const ctx = { depth: 0, continuationRegistry: registry, parentSession: { sessionId: 'root-1' } };
+    const nested = deferred();
+    const childManager = {
+      teardownAll: vi.fn(async () => {
+        events.push('nested-start');
+        await nested.promise;
+        events.push('nested-done');
+      }),
+    };
+    const handle = {
+      id: 'child-1',
+      runToResult: vi.fn(async () => capped()),
+      runInBackground: vi.fn((_p: unknown, cb?: (r: SubagentResult) => void) => { cb?.(capped()); }),
+      teardown: vi.fn(async () => { events.push('handle-teardown'); }),
+      session: { messageJournal: { length: 0, flush: vi.fn().mockResolvedValue(undefined) } },
+    };
+    const chain = wireDispatchChain({
+      ctx, parsed: { prompt: 'go', isolation: 'worktree' } as never,
+      handle, childConfig: { cwd: TREE }, currentCwd: TREE,
+      writeCapable: true, isolated: true, childManager,
+    })!;
+    registry.setIsolatedWorktreePath(chain.chainId, TREE);
+    return { registry, chain, handle, nested };
+  }
+
+  beforeEach(() => {
+    runForegroundWithPromotion.mockImplementation(
+      async (a: { handle: { runToResult: (p: never) => Promise<SubagentResult>; teardown: () => Promise<void> }; prompt: string }) => {
+        try {
+          await a.handle.runToResult(a.prompt as never);
+          return { content: 'done', isError: false };
+        } finally {
+          await a.handle.teardown();
+        }
+      },
+    );
+  });
+
+  it('foreground (runForegroundWithPromotion): release waits for nested teardown', async () => {
+    const events: string[] = [];
+    execFileAsync.mockImplementation(async () => { events.push('unlock'); return { stdout: '', stderr: '' }; });
+    const { registry, chain, handle, nested } = setupLink(events);
+    // Drive via runForegroundWithPromotion, which calls handle.teardown() in its finally block.
+    const fgDone = runForegroundWithPromotion({ handle, prompt: 'go' } as never);
+    await chain.settling;
+    await flushMicrotasks();
+    // Dispose signals worktree release; teardown is still pending inside runForegroundWithPromotion.
+    registry.dispose();
+    expect(unlocks()).toHaveLength(0);
+    expect(teardownIsolatedWorktree).not.toHaveBeenCalled();
+    nested.resolve();
+    await fgDone;
+    await vi.waitFor(() => expect(teardownIsolatedWorktree).toHaveBeenCalledTimes(1));
+    expect(events).toEqual(['nested-start', 'nested-done', 'handle-teardown', 'unlock']);
+  });
+
+  it('promoted (markChainPromoted + background delivery): release waits for nested teardown', async () => {
+    const events: string[] = [];
+    execFileAsync.mockImplementation(async () => { events.push('unlock'); return { stdout: '', stderr: '' }; });
+    const { registry, chain, handle, nested } = setupLink(events);
+    markChainPromoted(handle);
+    // Promoted: background callback delivers the result, teardown fires externally.
+    handle.runInBackground(undefined as never);
+    await chain.settling;
+    await flushMicrotasks();
+    registry.dispose();
+    expect(unlocks()).toHaveLength(0);
+    expect(teardownIsolatedWorktree).not.toHaveBeenCalled();
+    nested.resolve();
+    await handle.teardown();
+    await vi.waitFor(() => expect(teardownIsolatedWorktree).toHaveBeenCalledTimes(1));
+    expect(events).toContain('nested-done');
+    expect(events).toContain('handle-teardown');
+    expect(events.indexOf('nested-done')).toBeLessThan(events.indexOf('handle-teardown'));
+  });
+
+  it('background (runInBackground): release waits for nested teardown', async () => {
+    const events: string[] = [];
+    execFileAsync.mockImplementation(async () => { events.push('unlock'); return { stdout: '', stderr: '' }; });
+    const { registry, chain, handle, nested } = setupLink(events);
+    handle.runInBackground(undefined as never);
+    await chain.settling;
+    await flushMicrotasks();
+    registry.dispose();
+    expect(unlocks()).toHaveLength(0);
+    expect(teardownIsolatedWorktree).not.toHaveBeenCalled();
+    nested.resolve();
+    await handle.teardown();
+    await vi.waitFor(() => expect(teardownIsolatedWorktree).toHaveBeenCalledTimes(1));
+    expect(events).toEqual(['nested-start', 'nested-done', 'handle-teardown', 'unlock']);
   });
 });

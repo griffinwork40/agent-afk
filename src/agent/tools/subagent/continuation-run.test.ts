@@ -234,17 +234,26 @@ describe('D8 continuation through the agent executor', () => {
     const { JournalFileWriter } = await import('../../journal/journal-file.js');
     const origFlush = JournalFileWriter.prototype.flush;
     let delayed = 0;
+    // Use a promise the test controls so the flush is held open indefinitely until
+    // we explicitly release it — guaranteeing chain.settling is still set when we
+    // assert, regardless of how fast the runner is.
+    let releaseFlush!: () => void;
+    const flushHold = new Promise<void>((r) => { releaseFlush = r; });
     vi.spyOn(JournalFileWriter.prototype, 'flush').mockImplementation(async function (this: InstanceType<typeof JournalFileWriter>) {
       delayed++;
-      await new Promise((r) => setTimeout(r, 300));
+      await flushHold;
       return origFlush.call(this);
     });
     const { run, registry, session } = await setup();
+    // run() returns once the result is delivered; the mock flush is still held at
+    // this point because we have not called releaseFlush() yet.
     const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
     const chainId = first.continuation!.chainId;
     const chain = registry.get(chainId)!;
-    expect(chain.settling).toBeDefined(); // result delivered while the flush is still pending
+    expect(chain.settling).toBeDefined(); // flush is still held — settling must be set
     expect(chain.inFlight).toBe(true);
+    // Release the flush so settling can complete, then issue the continuation.
+    releaseFlush();
     const second = await run({ prompt: 'immediately', continuation_chain_id: chainId });
     expect(second.isError, second.content).not.toBe(true);
     expect(delayed).toBeGreaterThan(0);

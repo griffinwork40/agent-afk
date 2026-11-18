@@ -9,7 +9,7 @@ import {
 } from './credential-source.js';
 import { DEFAULT_SLOT_BINDINGS, type ModelSlots } from '../session/model-slots.js';
 import { loadClaudeCodeOauthToken } from './keychain.js';
-import { _resetLastResolvedAnthropicCredential, resolveAnthropicCredential } from './credential-resolver.js';
+import { _resetLastResolvedAnthropicCredential, resolveAnthropicCredential, lastResolvedAnthropicMatchesToken } from './credential-resolver.js';
 import { providerForModel } from '../providers/index.js';
 
 const keychain = vi.hoisted(() => ({ token: 'sk-ant-oat01-keychain' as string | undefined, codexAuth: null as string | null }));
@@ -174,5 +174,44 @@ describe('credentialSourceForModel', () => {
   it('a non-oat configApiKey when the ambient tier is a subscription records nothing', () => {
     // keychain is set to sk-ant-oat01-keychain (subscription) in beforeEach.
     expect(credentialSourceForModel('claude-sonnet-4-6', undefined, { configApiKey: 'sk-ant-api03-unrelated' })).toBeUndefined();
+  });
+});
+
+// #4982 finding: lastResolvedAnthropicMatchesToken is used in credential-source.ts
+// to avoid re-exposing the token, but had no direct test coverage.
+describe('lastResolvedAnthropicMatchesToken', () => {
+  beforeEach(() => {
+    for (const k of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']) vi.stubEnv(k, '');
+    keychain.token = 'sk-ant-oat01-keychain';
+    _resetLastResolvedAnthropicCredential();
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('returns false before any resolution', () => {
+    expect(lastResolvedAnthropicMatchesToken('sk-ant-oat01-keychain')).toBe(false);
+  });
+
+  it('returns true for the token of the last resolved credential', () => {
+    resolveAnthropicCredential();
+    expect(lastResolvedAnthropicMatchesToken('sk-ant-oat01-keychain')).toBe(true);
+  });
+
+  it('returns false for a different key after resolution', () => {
+    resolveAnthropicCredential();
+    expect(lastResolvedAnthropicMatchesToken('sk-ant-oat01-other')).toBe(false);
+  });
+
+  it('returns false after reset', () => {
+    resolveAnthropicCredential();
+    _resetLastResolvedAnthropicCredential();
+    expect(lastResolvedAnthropicMatchesToken('sk-ant-oat01-keychain')).toBe(false);
+  });
+
+  it('updates to the most recently resolved token (env beats keychain)', () => {
+    resolveAnthropicCredential(); // resolves keychain first
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-api03-env');
+    resolveAnthropicCredential(); // now resolves env key
+    expect(lastResolvedAnthropicMatchesToken('sk-ant-api03-env')).toBe(true);
+    expect(lastResolvedAnthropicMatchesToken('sk-ant-oat01-keychain')).toBe(false);
   });
 });

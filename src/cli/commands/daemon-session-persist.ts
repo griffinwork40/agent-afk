@@ -33,6 +33,11 @@ export function makeDaemonTurnPersister(model: AgentModelInput): (args: TaskTurn
         console.error(palette.error(`[daemon] ${task.taskId}: session sidecar save failed; run will not appear in /resume: ${err instanceof Error ? err.message : String(err)}`), err);
       },
     });
+    // saveTurn is best-effort and swallows its own errors (see SessionAutosaver
+    // contract). close() seals the sidecar with endedAt + exitReason even when
+    // the turn save failed — a sealed sidecar with no turns is recoverable, but
+    // an unsealed sidecar with turns is excluded from startup-recall (which
+    // reads endedAt to filter finished sessions).
     saver.saveTurn(userInput, response.content, response.metadata);
     saver.close('task-complete');
   };

@@ -255,20 +255,15 @@ export class LspServerPool {
 
 let pool: LspServerPool | null = null;
 
-/** Process-wide pool singleton; registers exit cleanup on first use. */
+/** Process-wide pool singleton; registers graceful cleanup on first use. */
 export function getLspPool(): LspServerPool {
   if (!pool) {
     const created = new LspServerPool();
     pool = created;
     // Graceful draining is async. The spawn-time guardian in client-process
-    // independently kills ready, starting, and disposing servers on hard exit.
+    // independently covers ready, starting, and disposing servers on hard exit
+    // (direct-root fallback on win32; no blocking taskkill per pooled server).
     registerCleanup(() => created.disposeAll());
-    // Non-interactive exit paths (daemon, one-shot, Telegram) never call
-    // runCleanupFunctions(), so registerCleanup alone does not cover them.
-    // A synchronous 'exit' handler ensures pooled children are killed on any
-    // process exit — the handler is sync-safe because client-process already
-    // uses the same pattern for its spawn-time guardian (#4309 item 2).
-    process.on('exit', () => { created.killAll(); });
   }
   return pool;
 }

@@ -4,7 +4,7 @@
  * Usage:
  *   afk events github --repo <owner/repo> --on <event[,event]> [--command <template>]
  *                     [--interval <ms>] [--once]
- *   afk events serve  --secret <hmac-secret> [--command <template>]
+ *   afk events serve  --secret-env <env-var> [--command <template>]
  *                     [--port <port>] [--allow-external]
  *
  * `afk events github` is a `gh api`-based polling producer.

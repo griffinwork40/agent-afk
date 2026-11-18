@@ -50,6 +50,12 @@ export interface PromptAssemblyArgs {
    * provides `getManifestScope()` for plugin/allowlist scoping.
    */
   skillExecutor?: SkillExecutor;
+  /**
+   * Whether to include the skill manifest. Computed at the call site via
+   * `skillManifestGranted()` so both providers share one decision rule.
+   * When false the manifest is omitted even if a skill executor is present.
+   */
+  includeSkillManifest?: boolean;
   runtimeStateSource: RuntimeStateSource;
   /** User-supplied system prompt, already normalized to a string or null. */
   userSystem: string | null;
@@ -85,8 +91,12 @@ export function assembleQueryPrompt(args: PromptAssemblyArgs): AssembledPrompt {
   // openai-compatible call site — a per-provider divergence here is how a
   // fork on one provider silently keeps the self-entry.
   const { skillExecutor } = args;
-  const manifestScope = skillExecutor?.getManifestScope?.();
-  const manifest = skillExecutor
+  // Gate: include iff executor present AND the call site granted `skill`.
+  // `includeSkillManifest` is computed by `skillManifestGranted()` in
+  // provider-query-setup.ts so both providers share one decision rule.
+  const includeManifest = args.includeSkillManifest !== false && skillExecutor !== undefined;
+  const manifestScope = includeManifest ? skillExecutor?.getManifestScope?.() : undefined;
+  const manifest = includeManifest
     ? buildSkillManifest(undefined, {
         cwd,
         ...(typeof config.skillDispatchName === 'string' &&

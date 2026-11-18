@@ -144,8 +144,6 @@ export class SessionCostAccumulator {
   private lastClosureTurns: number | undefined;
   /** Cost and turns of the last unstamped closure: the root's final closure when it was written. */
   private lastRootClosure: { cost: number; turns: number | undefined } | undefined;
-  /** Number of unstamped (root-cycle) closures. */
-  private rootClosureCount = 0;
   /** `subagentId` from the last closure event; `null` = root (field absent); `undefined` = no closure yet. */
   private lastClosureSubagentId: string | null | undefined = undefined;
   /** Sum of cost across all root-cycle closures (no `subagentId`). Used for the root/subagent split on multi-cycle traces (#4896). */
@@ -193,7 +191,6 @@ export class SessionCostAccumulator {
         // Root closure: accumulate for the multi-cycle root/subagent split.
         this.rootCycleSum += cost;
         if (turns !== undefined) this.rootCycleTurnCount += turns;
-        this.rootClosureCount++;
         this.lastRootClosure = { cost, turns };
       } else {
         this.hasChildClosure = true;
@@ -219,7 +216,9 @@ export class SessionCostAccumulator {
   private addOverage(p: Record<string, unknown>): void {
     const cost = finiteNonNeg(p['overageCostUsd']);
     const requests = finiteNonNeg(p['overageRequests']);
-    if (cost === undefined || requests === undefined) return;
+    // Parsed traces bypass the write-time schema: reject a corrupt pair rather
+    // than invent a rounded request count or sum fractional requests.
+    if (cost === undefined || requests === undefined || !Number.isInteger(requests)) return;
     const prev = this.overage ?? { costUsd: 0, requests: 0 };
     this.overage = { costUsd: prev.costUsd + cost, requests: prev.requests + requests };
   }
@@ -253,7 +252,7 @@ export class SessionCostAccumulator {
     // (#4912 item 1). Otherwise the root is UNKNOWN: leave it absent rather
     // than promote a child's closure to root.
     if (this.sealIncomplete) {
-      const rootKnown = this.rootClosureCount > 0 && this.provenanceKnown();
+      const rootKnown = this.lastRootClosure !== undefined && this.provenanceKnown();
       const rootCostUsd = rootKnown ? this.rootCycleSum : undefined;
       return {
         ...(rootKnown ? { rootCostUsd, rootTurnCount: this.rootCycleTurnCount } : {}),

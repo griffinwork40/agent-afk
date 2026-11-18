@@ -39,6 +39,12 @@ export interface GitLogEntry {
   sha: string;
   subject: string;
   repo: string;
+  /**
+   * Present only when `gitLogRange` was given a `ledgerShas` set.
+   * True  → session authored this commit (found in effect ledger / tool results).
+   * False → commit arrived via pull/rebase; session merely observed it.
+   */
+  sessionAuthored?: boolean;
 }
 
 export interface ComputeOutcomesInput {
@@ -138,13 +144,9 @@ export function computeOutcomes(input: ComputeOutcomesInput): OutcomesV1 {
   const effects = settledEffects(input.ledgerEntries);
   const events = dedupeToolEvents([...input.toolEvents]);
 
-  const gitCommits: OutcomeCommit[] = (input.gitLog ?? []).map((g) => ({
-    sha: g.sha,
-    repo: g.repo,
-    subject: g.subject,
-    source: 'git_log',
-  }));
-  const journalCommits = events.flatMap((ev): OutcomeCommit[] => {
+  // Collect ledger and tool-result commits for merging with git_log entries.
+  const ledgerCommitList = ledgerCommits(effects, cwd);
+  const journalCommitEvents = events.flatMap((ev): OutcomeCommit[] => {
     if (ev.toolName !== 'bash' || ev.isError === true || ev.result === undefined) return [];
     const args = parseInput(ev.inputRaw ?? ev.input);
     const command = asString(args?.['command']) ?? ev.input;
@@ -152,7 +154,16 @@ export function computeOutcomes(input: ComputeOutcomesInput): OutcomesV1 {
     return ledgerCommits([{ command, result: ev.result }], cwd)
       .map((c) => ({ ...c, source: 'tool_result' as const }));
   });
-  const commits = mergeCommits(gitCommits, [...ledgerCommits(effects, cwd), ...journalCommits]);
+
+  const gitCommits: OutcomeCommit[] = (input.gitLog ?? []).map((g) => ({
+    sha: g.sha,
+    repo: g.repo,
+    subject: g.subject,
+    source: 'git_log',
+    // Carry through sessionAuthored when gitLogRange populated it.
+    ...(g.sessionAuthored !== undefined ? { sessionAuthored: g.sessionAuthored } : {}),
+  }));
+  const commits = mergeCommits(gitCommits, [...ledgerCommitList, ...journalCommitEvents]);
 
   const prs = ledgerPrs(effects); // deduped by url inside the extractor
   const files = filesFromToolEvents(events, cwd);

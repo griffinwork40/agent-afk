@@ -80,14 +80,35 @@ function renderMessage(msg: OpenAIMessage): string {
 
   // Tool-result content is excerpted head-and-tail (errors and final results
   // sit at the end); user/assistant prose is rendered whole.
-  const fit = (text: string): string =>
-    msg.role === 'tool' ? excerptHeadTail(text, TOOL_RESULT_EXCERPT_CHARS) : text;
+  // For tool messages with array content, join all text parts first and excerpt
+  // the joined string once — matching the Anthropic renderer's behaviour and
+  // ensuring a multi-part result is bounded to TOOL_RESULT_EXCERPT_CHARS total,
+  // not N × TOOL_RESULT_EXCERPT_CHARS.
   if (typeof msg.content === 'string') {
-    if (msg.content.length > 0) lines.push(fit(msg.content));
+    if (msg.content.length > 0) {
+      const text = msg.role === 'tool' ? excerptHeadTail(msg.content, TOOL_RESULT_EXCERPT_CHARS) : msg.content;
+      lines.push(text);
+    }
   } else if (Array.isArray(msg.content)) {
-    for (const part of msg.content) {
-      if (part.type === 'text') lines.push(fit(part.text));
-      else if (part.type === 'image_url') lines.push('[image]');
+    if (msg.role === 'tool') {
+      // Collect all text parts, join with newline to preserve part boundaries,
+      // then excerpt once — matching the Anthropic renderer and bounding the
+      // total to TOOL_RESULT_EXCERPT_CHARS regardless of part count.
+      const joined = msg.content
+        .filter((p) => p.type === 'text')
+        .map((p) => (p as { type: 'text'; text: string }).text)
+        .join('\n');
+      if (joined.length > 0) lines.push(excerptHeadTail(joined, TOOL_RESULT_EXCERPT_CHARS));
+      // Retain a placeholder for image parts so image-only or mixed arrays
+      // don't silently render as an empty body.
+      for (const p of msg.content) {
+        if (p.type === 'image_url') lines.push('[image]');
+      }
+    } else {
+      for (const part of msg.content) {
+        if (part.type === 'text') lines.push((part as { type: 'text'; text: string }).text);
+        else if (part.type === 'image_url') lines.push('[image]');
+      }
     }
   }
 

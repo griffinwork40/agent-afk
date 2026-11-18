@@ -24,7 +24,8 @@ import { dumpIfEnabled } from '../../session/prompt-dump.js';
 import { logStablePartsTokens } from '../shared/prompt-fragment-tokens.js';
 import type { ProviderQueryContext } from './provider-context.js';
 import { normalizeSystemPromptOverlay } from '../shared/system-prompt.js';
-import { grantsWorkspacePrompt, grantsToolStrict } from '../shared/tool-grant.js';
+import { grantsWorkspacePrompt, grantsToolStrict, skillManifestGranted } from '../shared/tool-grant.js';
+import { isSkillManifestAlways } from '../../../config/env.js';
 import { deriveCredentialFromStore } from './provider-query-setup.credential.js';
 import { loadClaudeCodeOauthToken } from '../../auth/keychain.js';
 
@@ -39,6 +40,7 @@ export interface QuerySetupResult {
   systemPrefix: Awaited<ReturnType<typeof setUpQueryClient>>['systemPrefix'];
   throttleQueue: ReturnType<typeof setUpQueryClient>['throttleQueue'];
   overageTracker: ReturnType<typeof setUpQueryClient>['overageTracker'];
+  usageHeadersWriter: ReturnType<typeof setUpQueryClient>['usageHeadersWriter'];
   tokenRefresher: ReturnType<typeof setUpQueryClient>['tokenRefresher'];
   /** See {@link RetryLayerOptions.credentialFromStore}. */
   credentialFromStore: boolean;
@@ -68,6 +70,15 @@ export function resolveUserSystem(sp: AgentConfig['systemPrompt']): string | nul
   return normalizeSystemPromptOverlay(sp);
 }
 
+/** Compute the includeSkillManifest flag for assembleQueryPrompt. */
+function resolveIncludeSkillManifest(ctx: ProviderQueryContext): boolean {
+  return skillManifestGranted(
+    ctx.skillExecutor !== undefined && ctx.skillExecutor !== null,
+    ctx.grantsTool,
+    isSkillManifestAlways(),
+  );
+}
+
 /** Run the credential/model/dispatcher/prompt half of `query()`. */
 export function setUpQuerySession(
   ctx: ProviderQueryContext,
@@ -86,7 +97,7 @@ export function setUpQuerySession(
 
   // Client + observability wiring (throttle mailbox, quota capture, tracing
   // fetch) and the OAuth token refresher that must reuse all three.
-  const { client, throttleQueue, overageTracker, systemPrefix, tokenRefresher } = setUpQueryClient({
+  const { client, throttleQueue, overageTracker, usageHeadersWriter, systemPrefix, tokenRefresher } = setUpQueryClient({
     config,
     token,
     authMode,
@@ -197,6 +208,10 @@ export function setUpQuerySession(
     // preserved: manifest is built iff skillExecutor is truthy (same invariant
     // as the constructor's `if (opts.skillExecutor) schemas.push(skillTool)`).
     skillExecutor: ctx.skillExecutor ?? undefined,
+    // Gate: include iff executor present AND `skill` is not explicitly denied.
+    // Uses fail-open fallback for absent callbacks (pre-gate compat). See
+    // `skillManifestGranted` in tool-grant.ts for the full rule.
+    includeSkillManifest: resolveIncludeSkillManifest(ctx),
     runtimeStateSource,
     userSystem,
     // Dynamic agent-type listing injected into the volatile system-prompt tail
@@ -251,6 +266,7 @@ export function setUpQuerySession(
     systemPrefix,
     throttleQueue,
     overageTracker,
+    usageHeadersWriter,
     tokenRefresher,
     credentialFromStore,
     queryDispatcher,

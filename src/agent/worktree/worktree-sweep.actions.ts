@@ -60,6 +60,8 @@ export async function sweepOrphanDirs(
       verdict: guard.remove ? 'orphaned-dir' : 'orphaned-dir-preserved',
       owner: 'interactive',
       ageMs: orphanAgeMs,
+      branch: '',
+      blocker: '',
     });
     if (!guard.remove) {
       result.warnings.push(

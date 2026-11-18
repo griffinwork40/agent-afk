@@ -357,7 +357,15 @@ export type SessionPhaseName =
   // combination changes, never per request. `metadata`: `status`,
   // `overageStatus`, `overageInUse`, `representativeClaim` (header values,
   // short strings, absent headers omitted) and `overage` (the rule's verdict).
-  | 'ratelimit_unified_state';
+  | 'ratelimit_unified_state'
+  // Contract: auth-retry tier outcome (#5022 item 1). Single event emitted
+  // fire-and-forget by `turnWithAuthRetry` on every 401/403 trigger. The tier
+  // is only reached when a refresher is wired (api-key mode 401s bypass it
+  // entirely), so 'no-refresher' is not a reachable outcome and is not emitted.
+  // `metadata.outcome`: 'refresh-null' | 'replay-failed' | 'replayed'.
+  // `metadata.status`: HTTP status (401 or 403).
+  // `metadata.authMode`: 'oauth' | 'api-key'. PURE OBSERVABILITY.
+  | 'auth_retry_outcome';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

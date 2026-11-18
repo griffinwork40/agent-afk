@@ -461,7 +461,7 @@ describe('SessionOwner — retire()', () => {
     internals.controls.set(id, { close: vi.fn().mockResolvedValue(undefined) });
     internals.pending.set(id, 0);
     internals.turns.set(id, Promise.resolve());
-    internals.autosavers.set(id, {});
+    internals.autosavers.set(id, { close: vi.fn() });
     internals.mcpManagers.set(id, { disconnectAll: vi.fn().mockResolvedValue(undefined) });
 
     owner.retire(id);
@@ -515,7 +515,7 @@ describe('SessionOwner — completed turns are saved to the session sidecar', ()
     const owner = freshOwner();
     const internals = owner as unknown as Internals;
     const saveTurn = vi.fn();
-    internals.autosavers.set('s1', { stats: {}, saveTurn });
+    internals.autosavers.set('s1', { stats: {}, saveTurn, close: vi.fn() });
     internals.sessions.set('s1', {
       async *sendMessageStream() {
         yield { type: 'message', message: { role: 'assistant', content: 'reply' } };

@@ -43,12 +43,15 @@ import type { SlashCommand, SlashContext, SlashResult, Writer } from '../types.j
 import { errorMessage } from '../../../utils/errors.js';
 import { resolveRepoRoot } from '../../../utils/git.js';
 import { writeTable } from '../output-blocks.js';
+import { runInventory } from '../../../agent/worktree/worktree-inventory.js';
+import type { InventoryResult } from '../../../agent/worktree/worktree-inventory.js';
 
 const execFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
 
 interface ParsedArgs {
   scope: Scope;
   apply: boolean;
+  all: boolean;
   unknown: string[];
 }
 
@@ -57,11 +60,13 @@ function parseArgs(args: string, defaultScope: Scope): ParsedArgs {
     .split(/\s+/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
-  const result: ParsedArgs = { scope: defaultScope, apply: false, unknown: [] };
+  const result: ParsedArgs = { scope: defaultScope, apply: false, all: false, unknown: [] };
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i] as string;
     if (tok === '--apply') {
       result.apply = true;
+    } else if (tok === '--all') {
+      result.all = true;
     } else if (tok === '--scope' && i + 1 < tokens.length) {
       const next = tokens[i + 1] as string;
       i++;
@@ -172,10 +177,77 @@ async function gatherOwnerships(
   return out;
 }
 
+/** Render a cross-repo inventory from `--all` to the REPL output writer. */
+async function renderInventory(out: Writer, inventory: InventoryResult): Promise<void> {
+  let grandTotal = 0;
+  for (const repo of inventory.repos) {
+    if (repo.contested) {
+      out.warn(`[contested lock — skipped] ${repo.repoRoot}`);
+      continue;
+    }
+    if (repo.rows.length === 0) continue;
+
+    out.line();
+    out.line(palette.bold(repo.repoRoot));
+
+    const ownerships = await gatherOwnerships(repo.rows);
+    await renderList(out, repo.rows, ownerships);
+
+    const sizeStr = repo.totalDiskKb !== undefined
+      ? repo.totalDiskKb >= 1_048_576
+        ? ` · ${(repo.totalDiskKb / 1_048_576).toFixed(1)}G`
+        : repo.totalDiskKb >= 1_024
+          ? ` · ${(repo.totalDiskKb / 1_024).toFixed(0)}M`
+          : ` · ${repo.totalDiskKb}K`
+      : '';
+    const tally = buildVerdictTallyString(repo.rows);
+    out.line(palette.dim(`  → ${repo.rows.length} worktree(s)${sizeStr}${tally}`));
+    for (const w of repo.warnings) out.warn(w);
+    grandTotal += repo.rows.length;
+  }
+
+  if (grandTotal === 0) {
+    out.info('No afk-managed worktrees found across any registered repository.');
+  } else {
+    const totalSz = inventory.totalDiskKb !== undefined
+      ? inventory.totalDiskKb >= 1_048_576
+        ? ` · ${(inventory.totalDiskKb / 1_048_576).toFixed(1)}G`
+        : inventory.totalDiskKb >= 1_024
+          ? ` · ${(inventory.totalDiskKb / 1_024).toFixed(0)}M`
+          : ` · ${inventory.totalDiskKb}K`
+      : '';
+    out.line(palette.info(
+      `Total: ${grandTotal} worktree(s) across ${inventory.repos.length} repo(s)${totalSz}`,
+    ));
+  }
+
+  if (inventory.unregisteredRoots.length > 0) {
+    out.warn(
+      `${inventory.unregisteredRoots.length} repo(s) have an .afk-worktrees/ directory ` +
+      'but are absent from the registry (their worktrees are invisible to the sweep engine):',
+    );
+    for (const r of inventory.unregisteredRoots) out.warn(`   ${r}`);
+  }
+}
+
 async function handleList(ctx: SlashContext, args: string): Promise<SlashResult> {
   const parsed = parseArgs(args, 'interactive');
   if (parsed.unknown.length > 0) {
     ctx.out.warn(`Unknown args ignored: ${parsed.unknown.join(' ')}`);
+  }
+
+  if (parsed.all) {
+    let currentRoot: string | undefined;
+    try { currentRoot = await resolveRepoRoot(); } catch { /* ok */ }
+    let inventory;
+    try {
+      inventory = await runInventory({ execFile, extraRoots: currentRoot ? [currentRoot] : [] });
+    } catch (err) {
+      ctx.out.error(`Inventory failed: ${errorMessage(err)}`);
+      return 'continue';
+    }
+    await renderInventory(ctx.out, inventory);
+    return 'continue';
   }
 
   let repoRoot: string;
@@ -293,8 +365,8 @@ async function handlePrune(ctx: SlashContext, args: string): Promise<SlashResult
 export const worktreeCmd: SlashCommand = {
   name: '/worktree',
   summary: 'List or prune afk-managed git worktrees',
-  usage: '/worktree list | /worktree prune [--apply] [--scope <interactive|diagnose|all>]',
-  hint: 'When you want to audit or clean up stale afk-managed git worktrees from past sessions.',
+  usage: '/worktree list [--all] | /worktree prune [--apply] [--scope <interactive|diagnose|all>]',
+  hint: 'When you want to audit or clean up stale afk-managed git worktrees from past sessions. Pass --all to see every worktree across all registered repositories.',
   async handler(ctx, args) {
     const trimmed = args.trim();
     if (trimmed.length === 0 || trimmed.startsWith('list')) {
@@ -304,7 +376,7 @@ export const worktreeCmd: SlashCommand = {
       return handlePrune(ctx, trimmed.replace(/^prune\s*/, ''));
     }
     ctx.out.error(
-      `Unknown /worktree subcommand. Usage:\n  /worktree list\n  /worktree prune [--apply] [--scope <interactive|diagnose|all>]`,
+      `Unknown /worktree subcommand. Usage:\n  /worktree list [--all]\n  /worktree prune [--apply] [--scope <interactive|diagnose|all>]`,
     );
     return 'continue';
   },

@@ -89,6 +89,19 @@ describe('applyPatch (dry-run)', () => {
 });
 
 describe('applyPatch (live write)', () => {
+  it.each([2, 3, 4])('honors the destination guard at write/commit boundary %i', async (boundary) => {
+    const filePath = await writeTemp('guarded.txt', 'old');
+    let checks = 0;
+    const guard = async () => {
+      if (++checks === boundary) throw new Error('destination changed');
+    };
+    const result = await applyPatch([{ path: filePath, content: 'new' }],
+      new Map([[filePath, 'old']]), tempDir, false, guard);
+    expect(result.status).not.toBe('applied');
+    expect(checks).toBe(boundary);
+    expect(await readFile(filePath, 'utf8')).toBe('old');
+  });
+
   it('writes correct content for full-file replacement', async () => {
     const filePath = await writeTemp('write.txt', 'old content\n');
     const changes: PatchFileChange[] = [{ path: filePath, content: 'new content\n' }];

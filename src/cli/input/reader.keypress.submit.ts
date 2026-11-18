@@ -93,7 +93,7 @@ export function handleReturnKey(
     const candidateValue = st.ac.candidates[st.ac.selectedIndex]?.value;
     const applied = applySelectionFn(st, repaintCtx, repaintFn);
     if (kind === 'slash' && applied) { callbacks.onSubmit(); }
-    else if (kind === 'file' && applied && shouldFilePickerSubmit(candidateValue)) { callbacks.onSubmit(); }
+    else if (kind === 'file' && candidateValue && shouldFilePickerSubmit(candidateValue)) { callbacks.onSubmit(); }
   } else if (endsWithBackslashContinuation(st.input.buffer)) {
     // Trailing backslash escapes Enter → convert to a real newline.
     st.input = InputCore.replaceRange(

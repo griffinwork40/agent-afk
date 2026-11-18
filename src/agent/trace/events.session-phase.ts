@@ -156,6 +156,10 @@ export const SessionPhaseNameSchema = z.enum([
   // Raw unified rate-limit header evidence for the overage rule (#4883).
   // Must mirror types.session-phase.ts.
   'ratelimit_unified_state',
+  // Auth-retry tier outcome (#5022, item 1). Single event emitted on every
+  // 401/403 trigger; metadata carries outcome, status, authMode. See
+  // SessionPhaseName JSDoc in types.session-phase.ts for the full contract.
+  'auth_retry_outcome',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

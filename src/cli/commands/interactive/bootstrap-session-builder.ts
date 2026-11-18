@@ -104,6 +104,10 @@ export function buildAgentSession(deps: BuildAgentSessionDeps, sharedMemoryStore
     // session construction so the sidecar and trace reflect the tier active
     // at startup, not at an arbitrary later read.
     credentialSource: tryCredentialSourceForModel(String(deps.model), explicitProviderHints(deps.explicitProvider)),
+    // Trusted top-level interactive REPL: LSP install consent prompts are
+    // reachable. The dispatcher enforces the rest of the predicate (no parent
+    // session, no subagent id, not non-interactive) structurally.
+    lspInstallAllowed: true,
     // Resolve the credential for the ACTUAL session model + explicit
     // `--provider` (if any), not the env-derived default alone. Without
     // explicit hints, `afk i --provider xai` with a Claude model would inject

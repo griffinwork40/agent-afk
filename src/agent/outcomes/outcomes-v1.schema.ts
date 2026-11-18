@@ -24,6 +24,14 @@ export const OutcomeCommitSchema = z.object({
   /** First line of the commit message. */
   subject: z.string(),
   source: z.enum(['git_log', 'effect_ledger', 'tool_result']),
+  /**
+   * True when the session can be shown to have authored this commit (found in
+   * the effect ledger or tool results). False when the commit arrived via a
+   * pull/rebase and the session merely observed it. Absent (undefined) when
+   * the source is not `git_log` (ledger/tool_result commits are always
+   * session-authored by construction).
+   */
+  sessionAuthored: z.boolean().optional(),
 });
 export type OutcomeCommit = z.infer<typeof OutcomeCommitSchema>;
 

@@ -146,6 +146,8 @@ export class OverageTracker {
       const metadata: Record<string, string | boolean> = { ...c.evidence, overage: c.overage };
       void emitSessionPhase(this.writer, { phase: 'ratelimit_unified_state', metadata }).catch(() => {});
     } catch {
+      // Failed classification is unmeasured, not the previous retry's state.
+      this.latest = undefined;
       // Observability only: never disturb the request path.
     }
   }

@@ -28,6 +28,7 @@ import { env } from '../../../config/env.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { debugLog } from '../../../utils/debug.js';
 import { sleep } from '../../../utils/sleep.js';
+import { ensureAfkExcludes } from '../../worktree/worktree-scratch.js';
 import { runWorktreeSetup, type SetupCommandRunner, type WorktreeSetupResult } from '../../worktree/worktree-setup.js';
 
 /** Default git runner. Exported so callers without their own can reuse it. */
@@ -225,6 +226,11 @@ export async function createManagedWorktree(
   // path must do the same. Awaited but non-throwing, so it orders before the
   // meta write without being able to fail the create.
   await registerWorktreeRoot(repoRoot);
+  // Shared info/exclude entries: `/.afk-scratch/` (hidden from git status, but
+  // disposable only because the meta below opts this tree in; the probe
+  // requires each tree's own opt-in) and `/.afk-worktree-meta.json` (applies to
+  // every tree, so the meta file alone never reads as dirty). Never throws.
+  await ensureAfkExcludes(execFile, repoRoot);
   // Meta write is what makes this tree a first-class citizen of the sweep
   // protocol (age from createdAt, PID liveness). Best-effort: never fail the
   // create over the rev-parse or the write.
@@ -240,6 +246,7 @@ export async function createManagedWorktree(
       createdAt: new Date().toISOString(),
       baseSha,
       baseBranch: baseRef,
+      scratchDisposable: true,
     });
   } catch { /* best-effort */ }
   // Invariant (#3601): setup runs only AFTER the meta write, so the sweep
@@ -334,6 +341,11 @@ export async function removeManagedWorktreeGuarded(
 ): Promise<GuardedRemoveOutcome> {
   const { execFile, repoRoot, worktreePath, force } = args;
   if (!force) {
+    // Re-ensure before the dirty check: trees made before the meta-file entry
+    // existed (or whose create-time write failed) then stop reading dirty for
+    // that file alone. Does not opt older trees into disposable scratch: the
+    // probe still requires their own creation-time metadata.
+    await ensureAfkExcludes(execFile, worktreePath);
     if (await isManagedWorktreeDirty(execFile, worktreePath)) {
       return { removed: false, reason: 'dirty' };
     }

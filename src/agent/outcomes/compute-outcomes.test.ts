@@ -91,6 +91,8 @@ describe('computeOutcomes', () => {
     const url = 'https://github.com/o/r/pull/437';
     const out = computeOutcomes(base({
       ledgerEntries: [
+        // Compound command (&&): action must be 'unknown' — cannot safely
+        // attribute a single mutating action (fix for issue #4954 Option B).
         ...ledger('git push && gh pr create --fill', `remote: \n${url}`),
         ...ledger('gh pr comment 437 --body hi', `${url}#issuecomment-1`),
         ...ledger('gh pr merge 316 --merge', '✓ Merged pull request o/r#316 (title)'),
@@ -99,7 +101,9 @@ describe('computeOutcomes', () => {
       ],
     }));
     expect(out.prs).toEqual([
-      { url, action: 'create' },
+      // 'git push && gh pr create --fill' is compound → unknown (not 'create').
+      // 'gh pr comment' later sees the same url with 'update', which beats 'unknown'.
+      { url, action: 'update' },
       { url: 'https://github.com/o/r/pull/316', action: 'merge' },
       { url: 'https://github.com/o/r/pull/9', action: 'unknown' },
       { url: 'https://github.com/o/r/pull/10', action: 'update' },

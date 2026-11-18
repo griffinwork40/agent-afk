@@ -301,14 +301,14 @@ describe('MessageHandler.wakeIdleSession (#3839)', () => {
       isClaimed: () => false,
       sessionManager: { getSessionIfExists: () => ({ state: 'idle', sessionId: 'topic-test' }) },
       messageQueues: new Map(),
-      processOne: async (_route: unknown, ctx: { reply: (t: string) => Promise<unknown> }) => {
+      processOne: async (_route: unknown, ctx: { reply: (t: string) => Promise<unknown> }, _content: string) => {
         capturedReply = ctx.reply.bind(ctx);
       },
       log: vi.fn(),
       bot: bot as unknown as import('telegraf').Telegraf,
     };
 
-    wakeIdleSessionImpl(topicRoute, deps as Parameters<typeof wakeIdleSessionImpl>[1]);
+    wakeIdleSessionImpl(topicRoute, deps as unknown as Parameters<typeof wakeIdleSessionImpl>[1]);
     // processOne is async fire-and-forget; wait for it to run.
     await vi.waitFor(() => expect(capturedReply).toBeDefined());
 
@@ -316,6 +316,45 @@ describe('MessageHandler.wakeIdleSession (#3839)', () => {
     await capturedReply('Something went wrong');
 
     expect(sendMessage).toHaveBeenCalledWith(7000, 'Something went wrong', { message_thread_id: 42 });
+
+    void handler; // suppress unused warning
+  });
+
+  it('omits message_thread_id from send options when route has no threadId (#4931)', async () => {
+    // Verifies the General / no-thread path: reply callback must call sendMessage
+    // WITHOUT message_thread_id so the message lands in General (not a topic).
+    const sm = makeSessionManager('idle');
+    const handler = makeHandler(sm);
+
+    const bot = (handler as unknown as { bot: { telegram: { sendMessage: ReturnType<typeof vi.fn> } } }).bot;
+    const sendMessage = bot.telegram.sendMessage;
+    sendMessage.mockResolvedValue({} as import('telegraf/types').Message.TextMessage);
+
+    // Route with no threadId — General topic.
+    const generalRoute = { chatId: 7001 };
+
+    const { wakeIdleSessionImpl } = await import('./message.wake-idle.js');
+    let capturedReply!: (text: string) => Promise<unknown>;
+    const deps = {
+      isClaimed: () => false,
+      sessionManager: { getSessionIfExists: () => ({ state: 'idle', sessionId: 'general-test' }) },
+      messageQueues: new Map(),
+      processOne: async (_route: unknown, ctx: { reply: (t: string) => Promise<unknown> }, _content: string) => {
+        capturedReply = ctx.reply.bind(ctx);
+      },
+      log: vi.fn(),
+      bot: bot as unknown as import('telegraf').Telegraf,
+    };
+
+    wakeIdleSessionImpl(generalRoute, deps as unknown as Parameters<typeof wakeIdleSessionImpl>[1]);
+    await vi.waitFor(() => expect(capturedReply).toBeDefined());
+
+    await capturedReply('Something went wrong');
+
+    // sendMessage must be called without message_thread_id (absent, not undefined).
+    expect(sendMessage).toHaveBeenCalledWith(7001, 'Something went wrong', {});
+    const callOptions = sendMessage.mock.calls[0]![2] as Record<string, unknown>;
+    expect(callOptions).not.toHaveProperty('message_thread_id');
 
     void handler; // suppress unused warning
   });

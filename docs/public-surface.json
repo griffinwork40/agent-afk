@@ -933,6 +933,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_CLOSED_ROUTER",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_COMPACT_KEEP_LAST_TURNS",
       "source": "src/config/env.model.ts"
     },
@@ -1620,6 +1625,11 @@
       "kind": "env",
       "name": "AFK_SHOW_DIFFS",
       "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SKILLS_MANIFEST_ALWAYS",
+      "source": "src/config/env.misc.ts"
     },
     {
       "kind": "env",
@@ -4243,7 +4253,17 @@
     },
     {
       "kind": "flag",
+      "name": "afk worktree list --all",
+      "source": "src/cli/commands/worktree.ts"
+    },
+    {
+      "kind": "flag",
       "name": "afk worktree list --help",
+      "source": "src/cli/commands/worktree.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk worktree list --json",
       "source": "src/cli/commands/worktree.ts"
     },
     {
