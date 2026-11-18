@@ -30,6 +30,7 @@ import {
   isPathWithin,
   parseWorktreeList,
   classifyCandidate,
+  shortBranchName,
 } from './worktree-sweep.classify.js';
 export { MIN_EMPTY_AGE_MS } from './worktree-sweep.classify.js';
 import { applySchedulePin, loadSchedulePinsForSweep } from './worktree-sweep.schedule-pins.js';
@@ -121,6 +122,21 @@ interface SweepCandidateSummary {
   owner: 'interactive' | 'diagnose' | 'unknown';
   /** Age in milliseconds since creation (or directory birth-time if no meta). */
   ageMs: number;
+  /**
+   * Short branch name (e.g. `afk/my-feature`), or empty string when
+   * the worktree is in a detached-HEAD state or the branch is unknown.
+   */
+  branch: string;
+  /**
+   * Raw git lock reason string (the part after `locked` in porcelain output),
+   * or undefined when the worktree is not locked.
+   */
+  lockReason?: string;
+  /**
+   * Human-readable explanation of what is keeping this tree alive and what
+   * would make it reclaimable. Empty string for active/clean trees.
+   */
+  blocker: string;
 }
 
 export interface SweepResult {
@@ -137,6 +153,44 @@ export interface SweepResult {
   contested?: boolean;
 }
 
+
+// ---------------------------------------------------------------------------
+// Blocker description builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a plain-language blocker string for a candidate: what is keeping it
+ * alive and what the operator must do to make it reclaimable. Returns an
+ * empty string for clean/active trees that do not need any action.
+ */
+function buildBlocker(
+  verdict: WorktreeVerdict,
+  candidate: WorktreeCandidate,
+  lockReason: string | undefined,
+): string {
+  if (verdict === 'locked') {
+    const reason = lockReason ?? '';
+    // Strip the "afk: " prefix added by the `keep` action so the display
+    // shows the operator-supplied reason rather than the internal prefix.
+    const display = reason.startsWith('afk: ') ? reason.slice('afk: '.length) : reason;
+    return display
+      ? `locked — reason: "${display}"; run action "release" to unlock`
+      : 'locked by git; run action "release" to unlock';
+  }
+  if (verdict === 'stale-dirty' || verdict === 'stale-clean') {
+    const parts: string[] = [];
+    if (candidate.commitsUnpushed > 0) {
+      parts.push(`${candidate.commitsUnpushed} unpushed commit(s)`);
+    } else if (candidate.commitsAhead > 0) {
+      parts.push(`${candidate.commitsAhead} unpushed commit(s) (branch already pushed)`);
+    }
+    if (candidate.isDirty && candidate.dirtyReason !== 'clean') {
+      parts.push(String(candidate.dirtyReason));
+    }
+    return parts.length > 0 ? parts.join('; ') : '';
+  }
+  return '';
+}
 
 // ---------------------------------------------------------------------------
 // Public entry point: runSweep()
@@ -252,6 +306,8 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
           verdict: 'orphaned-registration',
           owner: resolvedOwner,
           ageMs: 0,
+          branch: shortBranchName(entry.branch),
+          blocker: '',
         });
         if (!effectiveDryRun) {
           hasOrphanedRegistrations = true;
@@ -283,7 +339,15 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
 
       const raw = classifyCandidate(candidate, maxAgeDaysClean, maxAgeDaysDirty);
       const verdict = applySchedulePin(raw, entry.path, schedulePins, result.warnings);
-      result.candidates.push({ path: entry.path, verdict, owner: resolvedOwner, ageMs });
+      result.candidates.push({
+        path: entry.path,
+        verdict,
+        owner: resolvedOwner,
+        ageMs,
+        branch: shortBranchName(entry.branch),
+        lockReason: entry.lockReason,
+        blocker: buildBlocker(verdict, candidate, entry.lockReason),
+      });
 
       if (effectiveDryRun) continue;
 
