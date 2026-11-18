@@ -21,6 +21,7 @@ import {
   MAX_SEEN_FOR_TESTS,
   type GhRunner,
   type GithubEventType,
+  type GithubPollerTickRecord,
 } from './github-event-poller.js';
 import type { QueuedTask } from './queue-store.js';
 
@@ -30,15 +31,18 @@ import type { QueuedTask } from './queue-store.js';
 
 let queueDir: string;
 let stateDir: string;
+let telemetryDir: string;
 
 beforeEach(() => {
   queueDir = mkdtempSync(join(tmpdir(), 'afk-gh-poller-q-'));
   stateDir = mkdtempSync(join(tmpdir(), 'afk-gh-poller-s-'));
+  telemetryDir = mkdtempSync(join(tmpdir(), 'afk-gh-poller-t-'));
 });
 
 afterEach(() => {
   rmSync(queueDir, { recursive: true, force: true });
   rmSync(stateDir, { recursive: true, force: true });
+  rmSync(telemetryDir, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
 
@@ -72,8 +76,21 @@ function makePoller(ghRunner: GhRunner, events: GithubEventType[] = ['pr_comment
     commandTemplate: 'Handle {{event_type}} in {{repo}} (id: {{event_id}})',
     queueDir,
     stateDir,
+    telemetryPath: join(telemetryDir, 'telemetry.jsonl'),
     ghRunner,
   });
+}
+
+function readTelemetryRecords(): GithubPollerTickRecord[] {
+  const p = join(telemetryDir, 'telemetry.jsonl');
+  try {
+    return readFileSync(p, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as GithubPollerTickRecord);
+  } catch {
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -595,5 +612,70 @@ describe('GithubEventPoller — dedup survives a restart (#4039)', () => {
     await poller2.tick();
     // Only the new event (id=2) should be enqueued.
     expect(readQueuedTasks()).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Structured telemetry per tick (#4039)
+// ---------------------------------------------------------------------------
+
+describe('GithubEventPoller — structured telemetry per tick (#4039)', () => {
+  it('writes one telemetry record per tick with correct surface and repo', async () => {
+    const runner = makePrCommentRunner([
+      { id: 10, body: 'hi', html_url: 'https://github.com/owner/repo/pull/1#comment-10', created_at: '2026-01-01T00:00:00Z' },
+    ]);
+    const poller = makePoller(runner, ['pr_comment']);
+    await poller.tick();
+
+    const records = readTelemetryRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]?.surface).toBe('github-event-poller');
+    expect(records[0]?.repo).toBe('owner/repo');
+    expect(records[0]?.events).toEqual(['pr_comment']);
+  });
+
+  it('records fetched, enqueued, and skipped counts', async () => {
+    const runner = makePrCommentRunner([
+      { id: 1, body: 'a', html_url: 'u1', created_at: '2026-01-01T00:00:00Z' },
+      { id: 2, body: 'b', html_url: 'u2', created_at: '2026-01-02T00:00:00Z' },
+    ]);
+    const poller = makePoller(runner, ['pr_comment']);
+
+    // First tick: both events are new — fetched=2, enqueued=2, skipped=0.
+    await poller.tick();
+    const r1 = readTelemetryRecords();
+    expect(r1).toHaveLength(1);
+    expect(r1[0]?.fetched).toBe(2);
+    expect(r1[0]?.enqueued).toBe(2);
+    expect(r1[0]?.skipped).toBe(0);
+
+    // Second tick: same events already seen — fetched=2, enqueued=0, skipped=2.
+    await poller.tick();
+    const r2 = readTelemetryRecords();
+    expect(r2).toHaveLength(2);
+    expect(r2[1]?.fetched).toBe(2);
+    expect(r2[1]?.enqueued).toBe(0);
+    expect(r2[1]?.skipped).toBe(2);
+  });
+
+  it('records a fetchError when a fetch throws', async () => {
+    const runner: GhRunner = async () => { throw new Error('network failure'); };
+    const poller = makePoller(runner, ['pr_comment']);
+    await poller.tick();
+
+    const records = readTelemetryRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]?.fetchError).toContain('network failure');
+    expect(records[0]?.fetched).toBe(0);
+    expect(records[0]?.enqueued).toBe(0);
+  });
+
+  it('record timestamp is an ISO string', async () => {
+    const poller = makePoller(async () => [], ['pr_comment']);
+    await poller.tick();
+
+    const records = readTelemetryRecords();
+    expect(records).toHaveLength(1);
+    expect(new Date(records[0]?.timestamp ?? '').toISOString()).toBe(records[0]?.timestamp);
   });
 });
