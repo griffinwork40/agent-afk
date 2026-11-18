@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { env, ENV_REGISTRY, getEnvVarMeta, getMissingRequiredEnvVars } from './env.js';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { env, ENV_REGISTRY, getEnvVarMeta, getMissingRequiredEnvVars, isSkillManifestAlways } from './env.js';
 
 describe('env / ENV_REGISTRY consistency', () => {
   it('every own property in env has a matching ENV_REGISTRY entry', () => {
@@ -211,5 +211,36 @@ describe('secret hardening', () => {
         e.secret && e.example !== undefined && ALLOWED_SECRET_EXAMPLES[e.name] !== e.example,
     );
     expect(violations.map((e) => e.name)).toEqual([]);
+  });
+});
+
+describe('isSkillManifestAlways', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('returns false when unset', () => {
+    vi.stubEnv('AFK_SKILLS_MANIFEST_ALWAYS', undefined as unknown as string);
+    expect(isSkillManifestAlways()).toBe(false);
+  });
+
+  it('returns true for \'1\'', () => {
+    vi.stubEnv('AFK_SKILLS_MANIFEST_ALWAYS', '1');
+    expect(isSkillManifestAlways()).toBe(true);
+  });
+
+  it('returns true for \'true\'', () => {
+    vi.stubEnv('AFK_SKILLS_MANIFEST_ALWAYS', 'true');
+    expect(isSkillManifestAlways()).toBe(true);
+  });
+
+  it('returns true for \'TRUE\' (case-insensitive)', () => {
+    vi.stubEnv('AFK_SKILLS_MANIFEST_ALWAYS', 'TRUE');
+    expect(isSkillManifestAlways()).toBe(true);
+  });
+
+  it('returns false for other values', () => {
+    vi.stubEnv('AFK_SKILLS_MANIFEST_ALWAYS', 'yes');
+    expect(isSkillManifestAlways()).toBe(false);
   });
 });
