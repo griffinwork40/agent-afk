@@ -68,6 +68,7 @@ For the fastest availability check, ask the agent to call `get_runtime_state` wi
 | `artifact_get` | Retrieve registered artifact metadata. | R, S, D with existing blob read access |
 | `artifact_list` | List visible registered artifacts. | R, S, D with existing blob read access |
 | `artifact_read` | Read bounded text or return a blob path. | R, S, D with existing blob read access |
+| `artifact_publish` | Register a file or inline content in the artifact registry, returning a stable ID. | R, S, D with existing path read access |
 | **Configuration and scheduling** | | |
 | `config_get` | Read masked AFK configuration. | R, S, D |
 | `config_set` | Change allowed configuration for future sessions. | R, S, D |
@@ -99,7 +100,7 @@ A tool appearing here does not grant permission to use it. Check [tool access](/
 
 ## Artifact registry reads
 
-These read-only tools expose the existing filesystem artifact registry. Each tool rejects indexes larger than 8 MiB before parsing; compact the registry through its maintenance API before retrying. They do not register new outputs or change retention. Automatic screenshot/capture registration, workspace/trace IDs, publication tools, and quota/retention enforcement remain separate work under #1415.
+These tools expose the filesystem artifact registry. Each read tool rejects indexes larger than 8 MiB before parsing; compact the registry through its maintenance API before retrying. Automatic screenshot/capture registration, workspace/trace IDs, and sweep/quota enforcement remain separate work under #1415.
 
 An artifact ID **does not grant access**. All three tools apply the existing credential floor and session read roots to the canonical stored blob. A confined child needs an explicit read grant for that blob/store; inaccessible records are omitted from lists. Missing IDs return `null`. Metadata is a bounded summary (ID, URI, hash, size, MIME type, producer, registration timestamp, retention); arbitrary tags and lineage are not returned. A declared retention policy is metadata, not a guarantee that TTL cleanup has run.
 
@@ -136,6 +137,23 @@ Read small UTF-8 text in byte slices. Default read is 4 KiB; maximum is 16 KiB. 
 | `limit` | integer | | Maximum bytes, default 4096, maximum 16384. |
 
 A text result includes `bytes_read`, `truncated`, and `next_offset` when more bytes remain. A byte slice can split a UTF-8 character, yielding a replacement character at the boundary. Reads past EOF return empty text. Reads do not mutate registry metadata or blobs.
+
+### `artifact_publish`
+
+Register a local file or inline UTF-8 content in the content-addressed artifact registry. Returns a stable `art_<32hex>` ID and bounded metadata. Supply exactly one of `path` or `content`.
+
+Path inputs must be accessible via the existing session read roots — `artifact_publish` does not grant new access. Inline content is bounded at 64 KiB; larger outputs should be written to disk first. Each registered artifact is immutable; new versions are new artifacts with lineage. Per-session publish cap is controlled by `AFK_ARTIFACT_SESSION_LIMIT` (default 50).
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `path` | string | ✓ or `content` | Existing file to register. Mutually exclusive with `content`. |
+| `content` | string | ✓ or `path` | Inline UTF-8 string to register (max 64 KiB). Mutually exclusive with `path`. |
+| `media_type` | string | | MIME type (e.g. `text/markdown`, `application/json`). Required for inline content; inferred from extension for path inputs. |
+| `retention` | string | | `permanent` (never swept), `session` (default, swept with originating session), or `ttl:<ms>` (evict after given milliseconds from registration). |
+| `inputs` | array | | Stable IDs of input artifacts this was derived from (lineage). Each entry must match `art_<32hex>`. Max 16 entries. |
+| `tags` | object | | Free-form string key/value tags for filtering and discovery. |
+
+Returns bounded metadata: `id`, `uri`, `hash`, `size`, `media_type`, `retention`, `created_at`, and `producer`. Arbitrary tags and full lineage are not echoed back.
 
 ## File System
 

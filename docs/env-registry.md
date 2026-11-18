@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**278 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**279 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -282,6 +282,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
+| `AFK_ARTIFACT_SESSION_LIMIT` | string |  |  |  | Maximum number of artifacts the artifact_publish tool may register per session. Prevents unbounded storage growth in autonomous loops. Default: 50. |
 | `AFK_BANNER_PLAIN` | boolean |  |  | `1` | Suppress the ANSI-colored banner at REPL startup. Useful for non-TTY captures and CI logs. |
 | `AFK_BASH_PREVIEW_HEAD_LINES` | number |  | `0` | `3` | Number of leading non-empty lines shown in the bash output head block of the TUI outcome preview. 0 (default) disables the head block entirely. Accepted range 0–200; non-integer, negative, or out-of-range input falls back to the default. When head + tail >= total non-empty lines, all lines are shown without a hidden-line notice. Keep preview preferences separate from model-context caps (AFK_BASH_PREVIEW_TAIL_LINES). |
 | `AFK_BASH_PREVIEW_TAIL_LINES` | number |  | `7` | `10` | Number of trailing non-empty lines shown in the bash output tail block of the TUI outcome preview. Default 7 (compact tail-first preview). Accepted range 0–200; non-integer, negative, or out-of-range input falls back to the default. When head + tail >= total non-empty lines, all lines are shown without a hidden-line notice. Keep preview preferences separate from model-context caps (AFK_BASH_PREVIEW_HEAD_LINES). |
