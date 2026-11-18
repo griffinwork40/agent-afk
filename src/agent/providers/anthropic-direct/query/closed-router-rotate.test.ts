@@ -1,5 +1,5 @@
 /**
- * closed-router-rotate: shells out to `closed-router rotate --once --json`
+ * closed-router-rotate: shells out to `closed-router rotate --once --json --on-limit`
  * on a subscription-limit 429 to rotate to a fresh OAuth account.
  *
  * Coverage:

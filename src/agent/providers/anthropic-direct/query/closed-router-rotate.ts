@@ -20,7 +20,7 @@ import { env } from '../../../../config/env.js';
 
 const execFileAsync = promisify(execFile);
 
-/** Kinds returned by `closed-router rotate --once --json`. */
+/** Kinds returned by `closed-router rotate --once --json --on-limit`. */
 export type ClosedRouterKind = 'rotated' | 'reset' | 'no-action' | 'all-hot' | 'error';
 
 export type ClosedRouterResult =
@@ -74,7 +74,7 @@ export async function tryClosedRouterRotate(): Promise<ClosedRouterResult> {
   try {
     const { stdout } = await execFileAsync(
       'closed-router',
-      ['rotate', '--once', '--json'],
+      ['rotate', '--once', '--json', '--on-limit'],
       { timeout: 10_000, maxBuffer: 64 * 1024 },
     );
 
