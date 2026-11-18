@@ -120,6 +120,13 @@ export const SessionPhaseNameSchema = z.enum([
   // PreToolUse blocks on the same gate key trip the breaker. metadata carries
   // { tool, count, fork } where fork is true for forked children.
   'hook_block_repeat_tripped',
+  // Per-endpoint concurrency semaphore wait (#3886). metadata: { baseUrl, activeCount }.
+  'endpoint_semaphore_wait',
+  // Denial circuit breaker trip (#3849). Emitted exactly once when a forked
+  // sub-agent accumulates DENIAL_CIRCUIT_BREAKER_THRESHOLD consecutive
+  // path-approval containment read denials. metadata carries
+  // { count, fork, deniedPaths } where deniedPaths is comma-separated.
+  'denial_circuit_breaker_tripped',
   // Post-cancel late billing delta (#3931). See SessionPhaseName JSDoc in
   // types.session-phase.ts. metadata: { subagentId, provider, uncachedInput,
   // cacheRead, cacheWrite, output }. At most one per cancelled run.

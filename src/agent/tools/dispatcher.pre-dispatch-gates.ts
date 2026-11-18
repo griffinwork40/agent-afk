@@ -198,12 +198,12 @@ export async function emitPreToolUseBlock(
  * successful tool result, so a fork that probes a couple of out-of-scope
  * paths and then makes progress never trips.
  */
-function recordForkReadDenial(
+async function recordForkReadDenial(
   call: ToolCall,
   blockReason: string | undefined,
   blockResult: ToolResult,
   deps: PreDispatchGateDeps,
-): ToolResult {
+): Promise<ToolResult> {
   if (
     deps.parentSessionId === undefined ||
     !READ_PATH_TOOLS.has(call.name) ||
@@ -217,6 +217,20 @@ function recordForkReadDenial(
   if (!breaker.deniedPaths.includes(deniedPath)) breaker.deniedPaths.push(deniedPath);
   deps.state.denialBreaker = breaker;
   if (breaker.count < DENIAL_CIRCUIT_BREAKER_THRESHOLD) return blockResult;
+  // Emit exactly once at trip time so the measurement path in `afk insights`
+  // can count distinct breaker trip episodes (#3849). Mirrors the
+  // `hook_block_repeat_tripped` pattern in dispatcher.hook-block-repeat-gate.ts.
+  if (breaker.count === DENIAL_CIRCUIT_BREAKER_THRESHOLD) {
+    void emitSessionPhase(deps.traceWriter, {
+      phase: 'denial_circuit_breaker_tripped',
+      metadata: {
+        count: breaker.count,
+        fork: true,
+        deniedPaths: breaker.deniedPaths.join(', '),
+        ...(deps.subagentId !== undefined ? { subagentId: deps.subagentId } : {}),
+      },
+    });
+  }
   return {
     content: buildDenialBreakerMessage(breaker.deniedPaths, breaker.count),
     isError: true,
@@ -421,12 +435,12 @@ export function resetProgressBreakers(state: PreDispatchGateMutableState): void 
  *
  * @internal
  */
-export function accountDenialBreakerPostGate(
+export async function accountDenialBreakerPostGate(
   call: ToolCall,
   blockReason: string | undefined,
   blockResult: ToolResult,
   deps: PreDispatchGateDeps,
-): ToolResult {
+): Promise<ToolResult> {
   return recordForkReadDenial(call, blockReason, blockResult, deps);
 }
 
@@ -570,7 +584,7 @@ export async function runPreDispatchGates(
         // Pass err.reason to applyHookBlockRepeat so it can exclude containment
         // denials (isSubagentContainmentDenial) without relying on blockReason,
         // which is only set on the parallelSafe path.
-        const afterDenial = recordForkReadDenial(call, err.reason, blockResult, deps);
+        const afterDenial = await recordForkReadDenial(call, err.reason, blockResult, deps);
         return applyHookBlockRepeat(call, afterDenial, deps, err.reason);
       }
       throw err;
