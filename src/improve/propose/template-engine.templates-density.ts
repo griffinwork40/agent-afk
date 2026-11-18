@@ -129,6 +129,35 @@ interface PatternTemplate {
 // tool-failure-density
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Helpers — errorClusters rendering
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract `errorClusters` from a card's detail field, returning an empty
+ * array when absent or malformed.
+ *
+ * Each cluster entry must have `normalized` (string), `count` (number), and
+ * `sample` (string). Entries that do not conform are silently skipped.
+ */
+function extractClusters(card: FailureCard): Array<{ normalized: string; count: number; sample: string }> {
+  const raw = card.detail['errorClusters'];
+  if (!Array.isArray(raw)) return [];
+  const result: Array<{ normalized: string; count: number; sample: string }> = [];
+  for (const entry of raw) {
+    if (
+      entry !== null &&
+      typeof entry === 'object' &&
+      typeof (entry as Record<string, unknown>)['normalized'] === 'string' &&
+      typeof (entry as Record<string, unknown>)['count'] === 'number' &&
+      typeof (entry as Record<string, unknown>)['sample'] === 'string'
+    ) {
+      result.push(entry as { normalized: string; count: number; sample: string });
+    }
+  }
+  return result;
+}
+
 export const toolFailureDensityTemplate: PatternTemplate = {
   rootCauseClass: 'unknown',
   hypothesis: (card) => {
@@ -146,11 +175,24 @@ export const toolFailureDensityTemplate: PatternTemplate = {
     const truncatedPart = truncated > 0
       ? ` ${truncated} of those failures were also truncated, which often indicates a separate output-shape problem.`
       : '';
-    return (
-      `The '${toolName}' tool returned isError: true on ${failures}/${total} calls (${rate}).${truncatedPart} ` +
-      `Likely causes: (a) the tool's handler has a bug, (b) the model is calling the tool with malformed inputs the tool rejects, ` +
-      `(c) a permission/hook guard is denying legitimate calls, or (d) the tool legitimately returns isError as a signal to the model and this detector is firing on normal behavior.`
-    );
+
+    // If error clusters are available, name the dominant one so the hypothesis
+    // says "dominant cause: X (61%)" instead of falling back to options A-D.
+    const clusters = extractClusters(card);
+    const failureCount = typeof card.detail['failureCount'] === 'number' ? card.detail['failureCount'] : 0;
+    let clusterPart = '';
+    if (clusters.length > 0 && failureCount > 0) {
+      const top = clusters[0]!;
+      const pct = ((top.count / failureCount) * 100).toFixed(0);
+      clusterPart = ` Dominant error cluster (${top.count}/${failureCount}, ${pct}%): "${top.normalized}" — sample: "${top.sample}".`;
+    }
+
+    const tail = clusters.length > 0
+      ? `${clusterPart} See the error clusters section in the fix sketch for the full breakdown.`
+      : ` Likely causes: (a) the tool's handler has a bug, (b) the model is calling the tool with malformed inputs the tool rejects, ` +
+        `(c) a permission/hook guard is denying legitimate calls, or (d) the tool legitimately returns isError as a signal to the model and this detector is firing on normal behavior.`;
+
+    return `The '${toolName}' tool returned isError: true on ${failures}/${total} calls (${rate}).${truncatedPart}${tail}`;
   },
   fixSketch: (card) => {
     const toolName = typeof card.detail['toolName'] === 'string' ? card.detail['toolName'] : '<the tool>';
@@ -163,7 +205,25 @@ export const toolFailureDensityTemplate: PatternTemplate = {
     // so the subagents/ path is correct when using the session ID directly.
     // The witness label (random UUID under state/witness/) is separate from the
     // session ID (under state/sessions/); card.detail.sessionIds holds session IDs.
+
+    // Build the error-clusters section when clusters are available.
+    const clusters = extractClusters(card);
+    const clusterSection: string[] = [];
+    if (clusters.length > 0) {
+      clusterSection.push('## Error clusters (normalized error heads, descending by count)');
+      clusterSection.push('');
+      const failureCount = typeof card.detail['failureCount'] === 'number' ? card.detail['failureCount'] : 0;
+      for (const c of clusters) {
+        const pct = failureCount > 0 ? ` (${((c.count / failureCount) * 100).toFixed(0)}%)` : '';
+        clusterSection.push(`- **${c.normalized}** — ${c.count}${pct} failures · sample: \`${c.sample}\``);
+      }
+      clusterSection.push('');
+      clusterSection.push('Use the dominant cluster above to pick the most likely root cause in the candidate fixes below.');
+      clusterSection.push('');
+    }
+
     return [
+      ...clusterSection,
       '## Diagnostic steps (do these first)',
       '',
       // H2 fix: positional arg, not --session/--tool flags

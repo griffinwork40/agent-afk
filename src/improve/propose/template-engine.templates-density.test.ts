@@ -30,6 +30,7 @@ function makeToolCard(toolName: string, extra: Record<string, unknown> = {}): Fa
     firstSeen: '2026-05-22T10:00:00.000Z',
     lastSeen: '2026-05-22T10:00:00.000Z',
     occurrenceCount: 3,
+    sightingCount: 0,
     evidence: [],
     notes: [],
     detail: {
@@ -147,5 +148,72 @@ describe('toolFailureDensityTemplate — fixSketch', () => {
     expect(sketch).toContain('afk trace show sess-abc123 --results');
     expect(sketch).not.toContain('--session');
     expect(sketch).not.toContain('--tool sess-abc123');
+  });
+
+  // errorClusters: card WITH clusters surfaces them in fixSketch
+  it('fixSketch includes error-clusters section when card has errorClusters', () => {
+    const card = makeToolCard('bash', {
+      failureCount: 10,
+      errorClusters: [
+        { normalized: 'command blocked by risk classifier', count: 7, sample: 'command blocked by risk classifier (hook: bash-guard)' },
+        { normalized: 'enoent no such file or directory', count: 3, sample: 'ENOENT: no such file or directory, open \'/tmp/foo\'' },
+      ],
+    });
+    const sketch = toolFailureDensityTemplate.fixSketch(card);
+    expect(sketch).toContain('Error clusters');
+    expect(sketch).toContain('command blocked by risk classifier');
+    expect(sketch).toContain('enoent no such file or directory');
+    // sample text is embedded
+    expect(sketch).toContain('bash-guard');
+    // percentage rendered
+    expect(sketch).toContain('70%');
+  });
+
+  // errorClusters: card WITHOUT clusters omits the section (no regression)
+  it('fixSketch has no error-clusters section when errorClusters is absent', () => {
+    const sketch = toolFailureDensityTemplate.fixSketch(makeToolCard('bash'));
+    expect(sketch).not.toContain('Error clusters');
+  });
+
+  // errorClusters: card with empty clusters array omits the section
+  it('fixSketch has no error-clusters section when errorClusters is an empty array', () => {
+    const card = makeToolCard('bash', { errorClusters: [] });
+    const sketch = toolFailureDensityTemplate.fixSketch(card);
+    expect(sketch).not.toContain('Error clusters');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// toolFailureDensityTemplate — hypothesis with errorClusters
+// ---------------------------------------------------------------------------
+
+describe('toolFailureDensityTemplate — hypothesis with errorClusters', () => {
+  it('names the dominant cluster when errorClusters is present', () => {
+    const card = makeToolCard('wait_for', {
+      failureCount: 20,
+      errorClusters: [
+        { normalized: 'timed out after <dur>', count: 15, sample: 'timed out after 30s' },
+        { normalized: 'enoent no such file', count: 5, sample: 'ENOENT: no such file' },
+      ],
+    });
+    const hypothesis = toolFailureDensityTemplate.hypothesis(card);
+    // dominant cluster named with percentage
+    expect(hypothesis).toContain('timed out after <dur>');
+    expect(hypothesis).toContain('75%');
+    // sample included
+    expect(hypothesis).toContain('timed out after 30s');
+    // should NOT fall back to options A-D when clusters present
+    expect(hypothesis).not.toContain('Likely causes: (a)');
+  });
+
+  it('falls back to options A-D when errorClusters is absent', () => {
+    const hypothesis = toolFailureDensityTemplate.hypothesis(makeToolCard('bash'));
+    expect(hypothesis).toContain('Likely causes: (a)');
+  });
+
+  it('falls back to options A-D when errorClusters is an empty array', () => {
+    const card = makeToolCard('bash', { errorClusters: [] });
+    const hypothesis = toolFailureDensityTemplate.hypothesis(card);
+    expect(hypothesis).toContain('Likely causes: (a)');
   });
 });
