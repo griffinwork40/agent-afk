@@ -216,7 +216,9 @@ export class SessionCostAccumulator {
   private addOverage(p: Record<string, unknown>): void {
     const cost = finiteNonNeg(p['overageCostUsd']);
     const requests = finiteNonNeg(p['overageRequests']);
-    if (cost === undefined || requests === undefined) return;
+    // Parsed traces bypass the write-time schema: reject a corrupt pair rather
+    // than invent a rounded request count or sum fractional requests.
+    if (cost === undefined || requests === undefined || !Number.isInteger(requests)) return;
     const prev = this.overage ?? { costUsd: 0, requests: 0 };
     this.overage = { costUsd: prev.costUsd + cost, requests: prev.requests + requests };
   }

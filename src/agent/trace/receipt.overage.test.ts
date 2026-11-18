@@ -143,6 +143,19 @@ describe('overage cost end to end (#4883)', () => {
     expect(r.cost).not.toHaveProperty('overageRequests');
   });
 
+  it('a closure rounding cap preserves requests without implying missing responses (#4938)', async () => {
+    const w = new InMemoryTraceWriter();
+    await emitClosureEvent(w, {
+      ...signals, finalTurnCount: 1, finalCostUsd: 0.3,
+      runningTokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+      overage: { costUsd: 0.1 + 0.2, requests: 2 },
+    });
+    const r = receiptOf(w);
+    expect(w.events.find((e) => e.kind === 'closure')?.payload).toMatchObject({ overageCostUsd: 0.3, overageRequests: 2 });
+    expect(r.cost).toMatchObject({ overageCostUsd: 0.3, overageRequests: 2 });
+    expect(r.cost).not.toHaveProperty('overageIncomplete');
+  });
+
   it('never reports more overage than the session total', () => {
     const events = [
       { ts: 't', seq: 0, kind: 'closure', payload: { reason: 'model_end_turn', finalTurnCount: 1, finalCostUsd: 1, finalTokens: {}, overageCostUsd: 5, overageRequests: 3 } },

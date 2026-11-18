@@ -167,6 +167,11 @@ export async function emitClosureEvent(
  * Closure overage fields (#4883). Clamped to `finalCostUsd` so a closure never
  * claims more overage than it spent (the two can only diverge through a
  * provider rounding quirk; both sum the same per-response costs).
+ * The cap itself has no epsilon. Receipt completeness separately tolerates
+ * 1e-9 USD when comparing closure and seal totals (`overageIsIncomplete` in
+ * trace/cost.ts). This rounding cap does not set `overageIncomplete`: it is
+ * not evidence of missing responses. Keep the request count, since adjusting
+ * fractional dollars does not remove an observed overage response.
  */
 function closureOverageFields(
   overage: { costUsd: number; requests: number } | undefined,
