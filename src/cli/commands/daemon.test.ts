@@ -538,11 +538,12 @@ describe('registerDaemonCrashHandlers', () => {
     // Without this, the 200 ms timer arms on every process.emit('uncaughtException')
     // call and fires during vitest worker teardown, killing the worker with exit
     // code 1 and failing the job (#5019).
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     exitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: number | string | null) => undefined as never);
   });
 
   afterEach(() => {
+    expect(exitSpy).not.toHaveBeenCalled();
     vi.clearAllTimers();
     exitSpy.mockRestore();
     vi.useRealTimers();
@@ -550,6 +551,7 @@ describe('registerDaemonCrashHandlers', () => {
     process.removeAllListeners('uncaughtException');
     process.removeAllListeners('unhandledRejection');
     _resetDaemonCrashHandlersForTest();
+    process.exitCode = undefined;
   });
 
   it('push includes error text without in-flight tasks when none provided', () => {
