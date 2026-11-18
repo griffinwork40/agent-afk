@@ -29,8 +29,110 @@ import {
   buildVerdictTallyString,
 } from '../../agent/worktree/display.js';
 import type { Scope } from '../../agent/worktree/display.js';
+import { runInventory } from '../../agent/worktree/worktree-inventory.js';
+import type { InventoryResult } from '../../agent/worktree/worktree-inventory.js';
 
 const execFile = promisify(execFileCallback) as ExecFileFn;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Format a KiB value as a human-readable string (G / M / K). */
+function fmtKb(kb: number): string {
+  if (kb >= 1_048_576) return `${(kb / 1_048_576).toFixed(1)}G`;
+  if (kb >= 1_024) return `${(kb / 1_024).toFixed(0)}M`;
+  return `${kb}K`;
+}
+
+/** Print a cross-repo inventory table to stdout. */
+function printInventoryTable(inventory: InventoryResult): void {
+  const header = [
+    'REPO'.padEnd(30), 'PATH'.padEnd(38), 'BRANCH'.padEnd(28),
+    'OWNER'.padEnd(12), 'AGE'.padEnd(6), 'SIZE'.padEnd(8),
+    'STATUS'.padEnd(22), 'PRUNE?',
+  ].join(' | ');
+  console.log(palette.heading(header)); // console-ok
+  console.log(palette.dim('-'.repeat(header.length))); // console-ok
+
+  let grandTotal = 0;
+  for (const repo of inventory.repos) {
+    if (repo.contested) {
+      console.log(palette.warning(`  [contested lock — skipped] ${repo.repoRoot}`)); // console-ok
+      continue;
+    }
+    if (repo.rows.length === 0) continue;
+    const repoShort = repo.repoRoot.slice(-29).padEnd(30);
+    for (const c of repo.rows) {
+      const sizeStr = c.diskKb !== undefined ? fmtKb(c.diskKb) : '-';
+      const row = [
+        repoShort, c.path.slice(-37).padEnd(38),
+        (c.branch || '(detached)').slice(0, 27).padEnd(28),
+        c.owner.padEnd(12), formatAge(c.ageMs).padEnd(6), sizeStr.padEnd(8),
+        c.verdict.padEnd(22), verdictWouldPrune(c.verdict),
+      ].join(' | ');
+      const line = c.blocker
+        ? `${palette.dim(row)}\n    ${palette.warning(`↳ ${c.blocker}`)}`
+        : palette.dim(row);
+      console.log(line); // console-ok
+      grandTotal++;
+    }
+    const repoSz = repo.totalDiskKb !== undefined ? ` · ${fmtKb(repo.totalDiskKb)}` : '';
+    const tally = buildVerdictTallyString(repo.rows);
+    console.log(palette.dim(`  → ${repo.rows.length} worktree(s)${repoSz}${tally}`)); // console-ok
+    for (const w of repo.warnings) console.log(palette.warning(`  ${w}`)); // console-ok
+  }
+
+  if (grandTotal === 0) {
+    console.log(palette.dim('  (no afk-managed worktrees found across any registered repository)')); // console-ok
+  } else {
+    const totalSz = inventory.totalDiskKb !== undefined ? ` · ${fmtKb(inventory.totalDiskKb)}` : '';
+    console.log(palette.info( // console-ok
+      `Total: ${grandTotal} worktree(s) across ${inventory.repos.length} repo(s)${totalSz}`,
+    ));
+  }
+
+  if (inventory.unregisteredRoots.length > 0) {
+    console.log(''); // console-ok
+    console.log(palette.warning( // console-ok
+      `⚠  ${inventory.unregisteredRoots.length} repo(s) have an .afk-worktrees/ directory ` +
+      'but are absent from the registry (their worktrees are invisible to the sweep engine):',
+    ));
+    for (const r of inventory.unregisteredRoots) console.log(palette.warning(`   ${r}`)); // console-ok
+  }
+}
+
+/** Print a single-repo worktree list table to stdout. */
+function printSingleRepoTable(candidates: ReadonlyArray<{
+  path: string; branch: string; owner: string; ageMs: number; verdict: string; blocker: string;
+}>): void {
+  const header = [
+    'PATH'.padEnd(45), 'BRANCH'.padEnd(28), 'OWNER'.padEnd(12),
+    'AGE'.padEnd(6), 'STATUS'.padEnd(22), 'PRUNE?',
+  ].join(' | ');
+  console.log(palette.heading(header)); // console-ok
+  console.log(palette.dim('-'.repeat(header.length))); // console-ok
+
+  for (const c of candidates) {
+    const row = [
+      c.path.slice(-44).padEnd(45), (c.branch || '(detached)').slice(0, 27).padEnd(28),
+      c.owner.padEnd(12), formatAge(c.ageMs).padEnd(6),
+      c.verdict.padEnd(22), verdictWouldPrune(c.verdict),
+    ].join(' | ');
+    const line = c.blocker
+      ? `${palette.dim(row)}\n    ${palette.warning(`↳ ${c.blocker}`)}`
+      : palette.dim(row);
+    console.log(line); // console-ok
+  }
+
+  if (candidates.length === 0) {
+    console.log(palette.dim('  (no afk-managed worktrees found)')); // console-ok
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Command registration
+// ---------------------------------------------------------------------------
 
 export function registerWorktreeCommand(program: Command): void {
   const worktree = program
@@ -41,55 +143,35 @@ export function registerWorktreeCommand(program: Command): void {
   worktree
     .command('list')
     .description('List all afk-managed worktrees and show prune candidates (dry-run only)')
-    .action(async () => {
-      let repoRoot: string;
-      try {
-        repoRoot = await resolveRepoRoot();
-      } catch (err) {
-        handleCommandError(err);
+    .option('--all', 'List worktrees across ALL registered repositories, not just the current one')
+    .option('--json', 'Emit machine-readable JSON instead of a table')
+    .action(async (options: { all: boolean; json: boolean }) => {
+      if (options.all) {
+        let currentRoot: string | undefined;
+        try { currentRoot = await resolveRepoRoot(); } catch { /* ok */ }
+        let inventory;
+        try {
+          inventory = await runInventory({ execFile, extraRoots: currentRoot ? [currentRoot] : [] });
+        } catch (err) {
+          handleCommandError(new Error(`Inventory failed: ${errorMessage(err)}`));
+        }
+        if (options.json) { console.log(JSON.stringify(inventory, null, 2)); return; } // console-ok
+        printInventoryTable(inventory);
+        return;
       }
 
+      let repoRoot: string;
+      try { repoRoot = await resolveRepoRoot(); } catch (err) { handleCommandError(err); }
       let result;
       try {
-        result = await runSweep({
-          execFile,
-          repoRoot,
-          dryRun: true,
-        });
-      } catch (err) {
-        handleCommandError(new Error(`Sweep failed: ${errorMessage(err)}`));
-      }
+        result = await runSweep({ execFile, repoRoot, dryRun: true });
+      } catch (err) { handleCommandError(new Error(`Sweep failed: ${errorMessage(err)}`)); }
 
-      const header = [
-        'PATH'.padEnd(45),
-        'OWNER'.padEnd(12),
-        'AGE'.padEnd(6),
-        'STATUS'.padEnd(22),
-        'PRUNE?',
-      ].join(' | ');
-      console.log(palette.heading(header));
-      console.log(palette.dim('-'.repeat(header.length)));
-
-      for (const c of result.candidates) {
-        const row = [
-          c.path.slice(-44).padEnd(45),
-          c.owner.padEnd(12),
-          formatAge(c.ageMs).padEnd(6),
-          c.verdict.padEnd(22),
-          verdictWouldPrune(c.verdict),
-        ].join(' | ');
-        console.log(palette.dim(row));
-      }
-
-      if (result.candidates.length === 0) {
-        console.log(palette.dim('  (no afk-managed worktrees found)'));
-      }
-
+      if (options.json) { console.log(JSON.stringify(result.candidates, null, 2)); return; } // console-ok
+      printSingleRepoTable(result.candidates);
       if (result.warnings.length > 0) {
         console.log(''); // console-ok
-        for (const w of result.warnings) {
-          console.log(palette.warning(w));
-        }
+        for (const w of result.warnings) console.log(palette.warning(w)); // console-ok
       }
     });
 
@@ -108,35 +190,22 @@ export function registerWorktreeCommand(program: Command): void {
       scope: string;
     }) => {
       let repoRoot: string;
-      try {
-        repoRoot = await resolveRepoRoot();
-      } catch (err) {
-        handleCommandError(err);
-      }
+      try { repoRoot = await resolveRepoRoot(); } catch (err) { handleCommandError(err); }
 
       const config = loadConfig();
       const { maxAgeDaysClean, maxAgeDaysDirty } = resolveSweepPolicy({
         overrides: {
           ...(options.maxAgeDaysClean !== undefined
-            ? { maxAgeDaysClean: parseInt(options.maxAgeDaysClean, 10) }
-            : {}),
+            ? { maxAgeDaysClean: parseInt(options.maxAgeDaysClean, 10) } : {}),
           ...(options.maxAgeDaysDirty !== undefined
-            ? { maxAgeDaysDirty: parseInt(options.maxAgeDaysDirty, 10) }
-            : {}),
+            ? { maxAgeDaysDirty: parseInt(options.maxAgeDaysDirty, 10) } : {}),
         },
         config: config.daemon?.worktreePrune,
-        env: {
-          maxAgeDaysClean: env.AFK_WORKTREE_MAX_AGE_CLEAN,
-          maxAgeDaysDirty: env.AFK_WORKTREE_MAX_AGE_DIRTY,
-        },
+        env: { maxAgeDaysClean: env.AFK_WORKTREE_MAX_AGE_CLEAN, maxAgeDaysDirty: env.AFK_WORKTREE_MAX_AGE_DIRTY },
       });
 
       let scopeVal: Scope;
-      try {
-        scopeVal = parseScope(options.scope);
-      } catch (err) {
-        handleCommandError(err);
-      }
+      try { scopeVal = parseScope(options.scope); } catch (err) { handleCommandError(err); }
 
       // Invariant: an explicit `--apply` bypasses the soft-launch valve. The
       // valve's job is to preview a root a few times before the UNATTENDED
@@ -148,25 +217,16 @@ export function registerWorktreeCommand(program: Command): void {
       // nothing, at exit 0. The dry-run branch below must NOT set this flag:
       // that is what keeps a brand-new repo previewing before it is reaped.
       const sweepOptions: SweepOptions = {
-        execFile,
-        repoRoot,
-        dryRun: !options.apply,
-        maxAgeDaysClean,
-        maxAgeDaysDirty,
-        scope: scopeVal,
+        execFile, repoRoot, dryRun: !options.apply,
+        maxAgeDaysClean, maxAgeDaysDirty, scope: scopeVal,
         ...(options.apply === true ? { bypassSoftLaunch: true } : {}),
       };
 
       let result;
-      try {
-        result = await runSweep(sweepOptions);
-      } catch (err) {
-        handleCommandError(new Error(`Sweep failed: ${errorMessage(err)}`));
-      }
+      try { result = await runSweep(sweepOptions); }
+      catch (err) { handleCommandError(new Error(`Sweep failed: ${errorMessage(err)}`)); }
 
-      if (result.dryRun) {
-        console.log(palette.warning(`🔍 Dry-run mode — no changes made.`));
-      }
+      if (result.dryRun) console.log(palette.warning(`🔍 Dry-run mode — no changes made.`)); // console-ok
 
       // Tally per-verdict instead of an arithmetic subtraction. Orphaned-
       // registration candidates aren't in `removed` (git worktree prune is
@@ -175,12 +235,12 @@ export function registerWorktreeCommand(program: Command): void {
       const warnCount = result.warnings.filter((w) => w.startsWith('[WARN]')).length;
       const errorCount = result.warnings.filter((w) => w.startsWith('[ERROR]')).length;
       const tallyStr = buildVerdictTallyString(result.candidates);
-      console.log(palette.info(`Removed: ${result.removed.length}, Warned: ${warnCount}, Errors: ${errorCount}${tallyStr}`));
+      console.log(palette.info(`Removed: ${result.removed.length}, Warned: ${warnCount}, Errors: ${errorCount}${tallyStr}`)); // console-ok
 
       for (const c of result.candidates) {
         const isRemoved = result.removed.includes(c.path);
         const icon = isRemoved ? palette.error('✗') : palette.success('✓');
-        console.log(palette.dim(`  ${icon} [${c.verdict.padEnd(22)}] ${c.path}`));
+        console.log(palette.dim(`  ${icon} [${c.verdict.padEnd(22)}] ${c.path}`)); // console-ok
       }
 
       const hasErrors = printWarnings(result.warnings);
