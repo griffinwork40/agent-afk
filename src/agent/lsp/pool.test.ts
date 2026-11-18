@@ -19,6 +19,7 @@ import {
   type FakeServerConfig,
 } from './__test-utils__/fake-lsp-server.js';
 import { LspServerPool, getIdleShutdownMs, DEFAULT_LSP_IDLE_SHUTDOWN_MS } from './pool.js';
+import { CrashLoopGuard } from './crash-loop-guard.js';
 import { LspClientError } from './client.js';
 import { withPooledFile, awaitSyncDiagnostics } from './query.js';
 import { DiagnosticsStore } from './diagnostics-store.js';
@@ -307,6 +308,62 @@ describe('#4293 review fixes', () => {
     expect(again.published?.diagnostics).toEqual([{ message: 'a2-edited-elsewhere' }]);
     expect(messagesWithMethod(logFile, 'textDocument/didOpen').filter((m) => m?.params.textDocument.uri === uriA)).toHaveLength(2);
   }, 10_000);
+});
+
+// ---------------------------------------------------------------------------
+// Crash-loop guard integration (#4272)
+// ---------------------------------------------------------------------------
+
+describe('crash-loop guard', () => {
+  it('trips after 3 crashes within the window and blocks further acquires', async () => {
+    // Use an injectable clock guard so the window never expires under CI load.
+    let t = 0;
+    const guard = new CrashLoopGuard({ now: () => t, limit: 3, windowMs: 120_000 });
+    const { logFile, spec } = setup({ crashOnRequest: true });
+    const pool = newPool({ guardFor: () => guard });
+
+    for (let i = 0; i < 3; i++) {
+      t += 1_000;
+      const client = await pool.acquire(spec, tempDir, { timeoutMs: 5_000 });
+      await client.request('textDocument/definition', position('file:///x.ts'), { timeoutMs: 3_000 })
+        .catch(() => null);
+      // Wait for pool to evict the crashed client before the next loop iteration.
+      await until(() => pool.size === 0, 5_000);
+    }
+
+    expect(guard.failed).toBe(true);
+    expect(spawnCount(logFile)).toBe(3);
+
+    // The 4th acquire must be rejected immediately (no new spawn).
+    const err = await pool.acquire(spec, tempDir, { timeoutMs: 2_000 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LspClientError);
+    expect((err as LspClientError).kind).toBe('exited');
+    expect(spawnCount(logFile)).toBe(3); // no 4th spawn
+  }, 30_000);
+
+  it('a missing binary (spawn error) does not count toward the guard', async () => {
+    let t = 0;
+    const guard = new CrashLoopGuard({ now: () => t, limit: 3, windowMs: 120_000 });
+    const pool = newPool({ guardFor: () => guard });
+    const spec: ServerSpec = {
+      definition: TYPESCRIPT_SERVER_DEFINITION,
+      command: path.join(tempDir, 'no-such-binary-afk-guard'),
+      args: [],
+      source: 'override',
+    };
+
+    // Attempt acquire multiple times; each should fail with spawn/exited
+    // but must NOT trip the guard.
+    for (let i = 0; i < 3; i++) {
+      t += 1_000;
+      const err = await pool.acquire(spec, tempDir, { timeoutMs: 2_000 }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(LspClientError);
+      expect(['spawn', 'exited']).toContain((err as LspClientError).kind);
+    }
+
+    expect(guard.failed).toBe(false);
+    expect(guard.recentCrashes).toBe(0);
+  }, 20_000);
 });
 
 describe('DiagnosticsStore unversioned settle (C-3)', () => {
