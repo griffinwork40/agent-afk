@@ -751,6 +751,126 @@ function drainQuery(
 }
 
 // ---------------------------------------------------------------------------
+// auth_retry_outcome trace phase (#5022 item 1)
+// ---------------------------------------------------------------------------
+
+describe('AnthropicDirectProvider — auth_retry_outcome trace phase', () => {
+  beforeEach(() => {
+    messagesCreateMock.mockReset();
+    anthropicCtorMock.mockReset();
+    __setAnthropicClientFactory(null);
+    installFactory();
+  });
+
+  function collectPhases(writer: InMemoryTraceWriter): Array<{ phase: string; metadata?: Record<string, unknown> }> {
+    return writer.events
+      .filter((e) => e.kind === 'session_phase')
+      .map((e) => {
+        const p = (e as unknown as { payload: { phase: string; metadata?: Record<string, unknown> } }).payload;
+        return { phase: p.phase, metadata: p.metadata };
+      });
+  }
+
+  it('401 in api-key mode (no refresher wired) → no auth_retry_outcome emitted (tier never fires)', async () => {
+    // Contract: isRetryableAuth requires authMode==='oauth' AND tokenRefresher
+    // set. In api-key mode the predicate returns false, so the 401 is never
+    // intercepted and turnWithAuthRetry emits nothing — the error surfaces
+    // directly without any trace event from this tier.
+    messagesCreateMock.mockImplementation(() => { throw make401Error(); });
+
+    const traceWriter = new InMemoryTraceWriter();
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('test'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-classic', traceWriter },
+    });
+    // Intentionally do NOT wire a tokenRefresher (api-key mode).
+    await collect(query);
+
+    const phases = collectPhases(traceWriter);
+    const outcome = phases.find((p) => p.phase === 'auth_retry_outcome');
+    expect(outcome).toBeUndefined();
+    // The error must still surface.
+    // (Verified by other tests; here we only check the trace is silent.)
+  });
+
+  it('401 + refresher returns null → emits auth_retry_outcome(refresh-null, 401)', async () => {
+    messagesCreateMock.mockImplementation(() => { throw make401Error(); });
+
+    const traceWriter = new InMemoryTraceWriter();
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('test'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', traceWriter },
+    });
+    (query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } })
+      .retry.tokenRefresher = vi.fn(async () => null);
+
+    await collect(query);
+
+    const phases = collectPhases(traceWriter);
+    const outcome = phases.find((p) => p.phase === 'auth_retry_outcome');
+    expect(outcome).toBeDefined();
+    expect(outcome?.metadata?.['outcome']).toBe('refresh-null');
+    expect(outcome?.metadata?.['status']).toBe(401);
+  });
+
+  it('401 + successful refresh + replay succeeds → emits auth_retry_outcome(replayed, 401)', async () => {
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx === 1) throw make401Error();
+      return fromArray(makeTextStream('ok'));
+    });
+
+    const traceWriter = new InMemoryTraceWriter();
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('test'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', traceWriter },
+    });
+    (query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } })
+      .retry.tokenRefresher = vi.fn(async () => new MockAnthropic({ authToken: 'sk-ant-oat01-fresh' }) as unknown as Anthropic);
+
+    await collect(query);
+
+    const phases = collectPhases(traceWriter);
+    const outcome = phases.find((p) => p.phase === 'auth_retry_outcome');
+    expect(outcome).toBeDefined();
+    expect(outcome?.metadata?.['outcome']).toBe('replayed');
+    expect(outcome?.metadata?.['status']).toBe(401);
+  });
+
+  it('401 + successful refresh + replay re-errors → emits auth_retry_outcome(replay-failed, 401)', async () => {
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      // Both the initial call and the replay throw 401.
+      throw make401Error();
+    });
+
+    const traceWriter = new InMemoryTraceWriter();
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('test'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', traceWriter },
+    });
+    (query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } })
+      .retry.tokenRefresher = vi.fn(async () => new MockAnthropic({ authToken: 'sk-ant-oat01-fresh' }) as unknown as Anthropic);
+
+    const events = await collect(query);
+
+    const phases = collectPhases(traceWriter);
+    const outcome = phases.find((p) => p.phase === 'auth_retry_outcome');
+    expect(outcome).toBeDefined();
+    expect(outcome?.metadata?.['outcome']).toBe('replay-failed');
+    expect(outcome?.metadata?.['status']).toBe(401);
+    // The replay error must still surface to the caller.
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // turnWithUsageLimitRetry integration tests
 // ---------------------------------------------------------------------------
 

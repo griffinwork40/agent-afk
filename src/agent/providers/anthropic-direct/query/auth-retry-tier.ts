@@ -23,6 +23,7 @@ import { runTurn } from '../loop.js';
 import type { RunTurnInput } from '../types.js';
 import type { RetryTierContext } from './retry-context.js';
 import { adoptFreshClient } from './live-client.js';
+import { emitSessionPhase } from '../../../trace/emit.js';
 
 /**
  * A 401 is retryable only in OAuth mode with a refresher wired.
@@ -86,14 +87,47 @@ export async function* turnWithAuthRetry(
 
   if (!authError) return;
 
+  // Extract the numeric HTTP status for the trace record (401 or 403).
+  // Invariant: `authError` can only be set when `isRetryableAuth` or
+  // `isRefreshablePermissionDenied` matched, both of which require
+  // `ctx.tokenRefresher !== undefined`. The `no-refresher` outcome is
+  // therefore impossible here; `refresh-null` is the earliest failure point.
+  const triggerStatus = (authError.error as unknown as { status?: number }).status ?? 0;
+
   // Delegate to the shared refresh helper. Same dedup field
   // (`refreshPromise`) coalesces this call with any concurrent
   // `forceClientRefresh()` from the turn-start catch-up or a hot-swap branch above.
   const refreshed = await adoptFreshClient(ctx, runInput);
   if (!refreshed) {
+    // Refresher was wired but returned null (token read failed / keychain locked).
+    void emitSessionPhase(runInput.traceWriter, {
+      phase: 'auth_retry_outcome',
+      metadata: { outcome: 'refresh-null', status: triggerStatus, authMode: ctx.authMode },
+    });
     yield authError;
     return;
   }
 
-  yield* runTurn(runInput);
+  // Replay the turn. Collect all events so the trace record (emitted before
+  // the terminal yield) names the correct outcome ('replay-failed' vs
+  // 'replayed'). Emitting AFTER the final `yield event` is unreachable in
+  // production because TurnStreamRunner.runStream breaks on the done/error
+  // event and abandons the generator via .return(), so we accumulate first,
+  // emit the phase, then yield — matching the refresh-null pattern above.
+  const replayEvents: ProviderEvent[] = [];
+  for await (const event of runTurn(runInput)) {
+    replayEvents.push(event);
+  }
+  const replayErrored = replayEvents.some((e) => e.type === 'error');
+  void emitSessionPhase(runInput.traceWriter, {
+    phase: 'auth_retry_outcome',
+    metadata: {
+      outcome: replayErrored ? 'replay-failed' : 'replayed',
+      status: triggerStatus,
+      authMode: ctx.authMode,
+    },
+  });
+  for (const event of replayEvents) {
+    yield event;
+  }
 }
