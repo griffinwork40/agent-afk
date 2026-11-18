@@ -130,6 +130,22 @@ describe('real commit write transaction with active scroll guard and footer pain
     expect(bytes).toContain('BACKGROUND');
   });
 
+  it('phase 3 paint emits text before erasing trailing content (#4908 change 2)', async () => {
+    // Byte-order invariant: committed rows above the frame must be painted as
+    // CUP → text → EL(\x1b[K), not CUP → EL(\x1b[2K) → text.  The old shape
+    // left every row blank between the EL and the text — a blank intermediate
+    // state visible at every tmux 3.6a read boundary that fell in between.
+    // The new shape overwrites old content with new text first, then clears
+    // only the trailing chars, so no blank intermediate state is possible.
+    const after = await commitBytes(true, 'PaintOrderLine.\nSecond.', 1);
+    expect(after).toHaveLength(1);
+    const bytes = withoutSync(after[0]!);
+    // Phase 3 band rows must use the text-first shape (CUP + text + \x1b[K).
+    expect(bytes).toMatch(/\x1b\[\d+;1HPaintOrderLine\.\x1b\[K/);
+    // The old shape (CUP + \x1b[2K + text) must NOT appear for committed rows.
+    expect(bytes).not.toMatch(/\x1b\[\d+;1H\x1b\[2KPaintOrderLine\./);
+  });
+
   it('phase 3 paint adds no extra DECSTBM sequences to the commit (#4908 change 1)', async () => {
     // Byte-order invariant: phase 3 (the CUP-paint of committed rows above the
     // frame) must NOT contribute its own DECSTBM reset/re-arm pair.  Before
