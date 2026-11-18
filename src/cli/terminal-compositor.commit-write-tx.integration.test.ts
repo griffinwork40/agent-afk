@@ -130,6 +130,37 @@ describe('real commit write transaction with active scroll guard and footer pain
     expect(bytes).toContain('BACKGROUND');
   });
 
+  it('footer band is repainted before being erased during setExtraRows (#4908 change 3)', () => {
+    // Byte-order invariant: when setExtraRows adjusts the reserved footer band,
+    // the status line must be repainted BEFORE eraseReservedBand clears ghost
+    // copies. The old order (erase → repaint) left every reserved row blank
+    // until repaint fired — visible at tmux 3.6a read boundaries. The new order
+    // (repaint → erase) overwrites ghosts with fresh content first; erase then
+    // only clears rows not covered by any footer bar.
+    //
+    // We detect the ordering by recording writes and checking that the STATUS
+    // text appears before any \x1b[2K that targets a footer-band row (not the
+    // status row itself which always clears before painting).
+    const { stdout, writes } = recordingTTY();
+    const status = new StatusLine({ stream: stdout, force: true, throttleMs: 0 });
+    status.start();
+    status.repaint({ model: 'STATUS', cost: 0, tokens: 0, contextPct: 0 });
+    writes.length = 0;
+    status.setExtraRows(2); // reserves rows 28,29 above the status row (30)
+    status.stop();
+    const all = writes.join('');
+    // STATUS text must appear somewhere in the output.
+    expect(all).toContain('STATUS');
+    // Find the index of the STATUS text and the first band-row erase (\x1b[28;1H\x1b[2K).
+    const statusIdx = all.indexOf('STATUS');
+    // The first reserved-band-row erase (not the status row's own erase).
+    const bandEraseIdx = all.indexOf('\x1b[28;1H\x1b[2K');
+    if (bandEraseIdx >= 0) {
+      // STATUS repaint must precede the band erase.
+      expect(statusIdx).toBeLessThan(bandEraseIdx);
+    }
+  });
+
   it('phase 3 paint emits text before erasing trailing content (#4908 change 2)', async () => {
     // Byte-order invariant: committed rows above the frame must be painted as
     // CUP → text → EL(\x1b[K), not CUP → EL(\x1b[2K) → text.  The old shape
