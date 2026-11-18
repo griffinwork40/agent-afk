@@ -77,10 +77,32 @@ export async function isScratchDisposable(worktreePath: string): Promise<boolean
 
 /** The afk exclude patterns an exclude file's content does not yet carry. */
 export function missingAfkExcludes(content: string): string[] {
-  const lines = new Set(content.split(/\r?\n/).map((line) => line.trim()));
+  // Split without trimming: a leading space is part of the git pattern and
+  // would make git treat the line as a literal path with a space prefix —
+  // git check-ignore would not match the intended path.
+  const rawLines = content.split(/\r?\n/);
   return AFK_EXCLUDE_ENTRIES
-    .filter((entry) => !lines.has(entry.pattern) && !lines.has(entry.unanchored))
+    .filter((entry) => !isEffectivelyPresent(rawLines, entry.pattern, entry.unanchored))
     .map((entry) => entry.pattern);
+}
+
+/**
+ * True when `rawLines` contains `pattern` or `unanchored` as an exact line,
+ * AND that line is not undone by a later negation (`!<pattern>` or
+ * `!<unanchored>`).  Git processes gitignore-style files top-to-bottom: a
+ * negation after a match wins and re-exposes the path.
+ */
+function isEffectivelyPresent(rawLines: string[], pattern: string, unanchored: string): boolean {
+  // The last matching or negating line wins (git's top-to-bottom precedence).
+  let found = false;
+  for (const line of rawLines) {
+    if (line === pattern || line === unanchored) {
+      found = true;
+    } else if (line === `!${pattern}` || line === `!${unanchored}`) {
+      found = false;
+    }
+  }
+  return found;
 }
 
 /** True when an exclude file's content already ignores the scratch dir. */
