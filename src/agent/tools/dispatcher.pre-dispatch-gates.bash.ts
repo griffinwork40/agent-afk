@@ -51,7 +51,9 @@ export function checkDestructiveGitBash(call: ToolCall, flags: BashGateFlags): s
   return (
     `Bash command blocked: child sessions may not run working-tree-destructive ` +
     `git commands (${verdict.reason ?? 'destructive git command detected'}). ` +
-    `If this command is genuinely needed, report the requirement to your caller.`
+    `To restore one file intentionally, use git show <ref>:<path> > <path> ` +
+    `(quote paths and preserve local edits first); this overwrites that file. ` +
+    `Otherwise, report the requirement to your caller.`
   );
 }
 

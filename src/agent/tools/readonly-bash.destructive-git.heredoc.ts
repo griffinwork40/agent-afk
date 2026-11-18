@@ -4,6 +4,13 @@
  */
 import { baseName, resolveSegment, tokenizeSegments } from './readonly-bash.tokenizer.js';
 import { SHELL_INTERPS } from './readonly-bash.destructive-git.nested.js';
+import {
+  collectHereStrings,
+  continuedHereStringPipeline,
+  hereStringAt,
+  restoreHereStrings,
+  type HereString,
+} from './readonly-bash.destructive-git.here-string.js';
 
 type Delimiter = { word: string; quoted: boolean; tabs: boolean; end: number };
 type View = { command: string; scripts: string[]; uncertain?: string };
@@ -132,6 +139,7 @@ export function destructiveGitHeredocView(command: string): View {
   const chunks: string[] = [];
   const scripts: string[] = [];
   let pending: Pending[] = [];
+  let hereStrings: HereString[] = [];
   let header = '';
   let quote = '';
   for (let i = 0; i < command.length;) {
@@ -157,7 +165,17 @@ export function destructiveGitHeredocView(command: string): View {
       continue;
     }
     if (command.startsWith('<<', i) && command[i - 1] !== '<') {
-      if (command[i + 2] === '<') { header += '<<<'; i += 3; continue; }
+      if (command[i + 2] === '<') {
+        const io = /(?:^|[\s;|&])(\d+)$/.exec(header)?.[1] ?? '';
+        header = header.slice(0, header.length - io.length);
+        const word = hereStringAt(command, i, header.length, io);
+        if (word === null) return { command, scripts, uncertain: 'ambiguous here-string word' };
+        hereStrings.push(word);
+        // An opaque word stays in place, as on main; a literal one is masked.
+        header += word.text === null ? `${io}<<<` : ' ';
+        i = word.end;
+        continue;
+      }
       const delimiter = delimiterAt(command, i);
       if (delimiter === null) return { command, scripts, uncertain: 'ambiguous heredoc delimiter' };
       // An adjacent IO number belongs to the redirect, not the argv.
@@ -169,7 +187,13 @@ export function destructiveGitHeredocView(command: string): View {
     }
     if (ch !== '\n') { header += ch; i++; continue; }
     const preceding = chunks.join('');
-    chunks.push(`${header}\n`);
+    if (continuedHereStringPipeline(hereStrings, preceding, header)) {
+      return { command, scripts, uncertain: 'continued here-string pipeline' };
+    }
+    const uncertain = collectHereStrings(hereStrings, preceding, pipelineAt(header), scripts);
+    if (uncertain !== undefined) return { command, scripts, uncertain };
+    chunks.push(`${restoreHereStrings(header, hereStrings)}\n`);
+    hereStrings = [];
     i++;
     // A pipeline can resume AFTER its heredoc terminator. Its eventual
     // consumer is not visible in this header, so do not grant cat an exemption.
@@ -200,8 +224,18 @@ export function destructiveGitHeredocView(command: string): View {
     pending = [];
   }
   if (pending.length > 0) return { command, scripts, uncertain: 'missing heredoc body' };
-  chunks.push(header);
+  const uncertain = collectHereStrings(hereStrings, chunks.join(''), pipelineAt(header), scripts);
+  if (uncertain !== undefined) return { command, scripts, uncertain };
+  chunks.push(restoreHereStrings(header, hereStrings));
   return { command: chunks.join(''), scripts };
+}
+
+/** Consumer pipeline and its kind for a redirect at `position` in `header`. */
+function pipelineAt(header: string): (position: number) => { context: string; kind: string } {
+  return (position) => {
+    const { consumer, context } = consumerHeader(header, position);
+    return { context, kind: consumerKind(consumer) };
+  };
 }
 
 function readBody(command: string, start: number, delimiter: Delimiter): { text: string; end: number } | null {

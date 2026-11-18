@@ -3096,6 +3096,8 @@ describe('blockDestructiveGit gate', () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain('working-tree-destructive');
     expect(result.failureClass).toBe('permission-denied');
+    expect(result.content).toContain('git show <ref>:<path> > <path>');
+    expect(result.content).toContain('preserve local edits first');
   });
 
   it('allows git commit when blockDestructiveGit is true', async () => {

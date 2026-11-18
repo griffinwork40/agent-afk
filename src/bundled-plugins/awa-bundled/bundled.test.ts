@@ -119,7 +119,9 @@ const PINNED_HASHES = {
   // (`pnpm test <file>` / `pnpm test -t "AuthService"`) plus a note to never emit
   // the `--` form. Bundled-only — mirror into the user-scope /refactor at
   // ~/.afk/skills/ if it drifts back.
-  refactor: '51c9a94a8f7626c78bbf60daba589a64912b2616a9ff5b6ac2235f3c686ff8e1',
+  // #4993: replace the child-blocked checkout discard advice with preservation
+  // and an explicit single-file git-show alternative. Bundled-only child gate.
+  refactor: '66381a9023f9424e4bca97e273e951d7290188c7afb7aafb80959f1054068cad',
   research: '052f8ec6f467f5b9200bea01286bebecf079c7135897a6a503c9cd74a019304b',
   // History: /review Wave 1 no longer mandates a `git show` re-read (#726,
   // #777); severity and disposition split into separate axes with an explicit
@@ -342,6 +344,13 @@ describe('bundled skills', () => {
     // hit depth limits, or produce non-deterministic results. A later edit that
     // removes the prohibition or re-introduces `agent`/`skill` dispatch would
     // silently break the no-dispatch guarantee the orchestrator depends on.
+    it('refactor recovery respects the child destructive-git gate (#4993)', () => {
+      const content = readBundled('refactor');
+      expect(content).not.toContain('git checkout -- .');
+      expect(content).toContain('git show <ref>:<path> > <path>');
+      expect(content).toContain('preserve local edits first');
+    });
+
     it('ground-state keeps the no-dispatch invariant (#1134)', () => {
       const content = readBundled('ground-state');
       const inlineRecon = content.match(
