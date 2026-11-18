@@ -496,6 +496,14 @@
       "category": "misc"
     },
     {
+      "name": "AFK_GOAL_CHECKS",
+      "description": "Colon-separated list of shell commands that must all exit 0 before a goal is considered complete (Phase 2a quality gates). Each command is executed in the session working directory via the platform shell. An empty or unset value skips all checks (vacuously passing). Example: `pnpm test:pnpm lint` runs the test suite and then the linter. Commands that contain a literal colon must be expressed using an alternative form (limitation of the colon separator).",
+      "type": "string",
+      "required": false,
+      "example": "pnpm test:pnpm lint",
+      "category": "misc"
+    },
+    {
       "name": "AFK_GOBLIN_MASCOT",
       "description": "Reacting goblin mini-sprite in the reserved footer band while the agent runs tools (3 rows, animated). 1 = on, unset/0 = off (default). Claims terminal rows, so it is opt-in.",
       "type": "boolean",

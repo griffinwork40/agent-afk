@@ -1153,6 +1153,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_GOAL_CHECKS",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_GOBLIN_MASCOT",
       "source": "src/config/env.ui.ts"
     },
