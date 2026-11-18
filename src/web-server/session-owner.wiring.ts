@@ -154,7 +154,10 @@ export async function wireWebSession(
 
   // Late-bind helper so callers can wire after session construction.
   const getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'] =
-    () => executors.rootManager.getPendingChildTerminalWrites();
+    () => [
+      ...executors.rootManager.getPendingChildTerminalWrites(),
+      ...executors.continuationRegistry.getPendingReleaseWrites(),
+    ];
 
   const wiring: WebSessionWiring = {
     provider,
