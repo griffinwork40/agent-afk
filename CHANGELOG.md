@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.359.0] - 2026-11-18
+
 ### Added
 - cross-repo inventory of afk-managed worktrees (e0f73d61b)
 
