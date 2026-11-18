@@ -12,6 +12,13 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- cross-repo inventory of afk-managed worktrees (e0f73d61b)
+
+### Fixed
+- raise update.lifecycle spawn timeout from 20s to 40s (#5059) (3051aa49f)
+- record auth-retry-tier outcome in witness trace (40e29cf44)
+
 ## [5.358.0] - 2026-11-17
 
 ### Added
