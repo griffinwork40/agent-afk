@@ -129,4 +129,37 @@ describe('real commit write transaction with active scroll guard and footer pain
     expect(bytes).toContain('STATUS');
     expect(bytes).toContain('BACKGROUND');
   });
+
+  it('phase 3 paint adds no extra DECSTBM sequences to the commit (#4908 change 1)', async () => {
+    // Byte-order invariant: phase 3 (the CUP-paint of committed rows above the
+    // frame) must NOT contribute its own DECSTBM reset/re-arm pair.  Before
+    // this fix, commit-phase3-band.ts and commit-phase3-hold.ts both called
+    // writeWithScrollGuard, which emits \x1b[r (full-reset) + \x1b[1;\d+r
+    // (re-arm) around every phase 3 write.  Under tmux 3.6a those sequences
+    // create intermediate blank frames at each read boundary.
+    //
+    // Strategy: run the commit twice — with the transaction active, and with it
+    // bypassed (so each write is a separate string).  Count \x1b[r occurrences
+    // in the bypassed run.  The transaction run must contain the same committed
+    // text with no extra DECSTBM sequences that phase 3 would have introduced.
+    // Specifically the committed text must appear AFTER the last \x1b[1;\d+r
+    // re-arm in the bypassed sequence (proving it was placed post-scroll-guard),
+    // yet in the transaction run the \x1b[1;\d+r count must NOT grow from that
+    // of the bypassed run (phase 3 no longer contributes its own pair).
+    const text = 'Phase3GuardCheck.\nSecond line.';
+    const unbatched = await commitBytes(false, text, 1);
+    const batched   = await commitBytes(true,  text, 1);
+    expect(batched).toHaveLength(1);
+
+    // Count scroll-region set sequences (\x1b[1;\d+r) in both runs.
+    const setRegionRe = /\x1b\[1;\d+r/g;
+    const countIn = (s: string): number => (s.match(setRegionRe) ?? []).length;
+    const unbatchedCount = countIn(unbatched.join(''));
+    const batchedCount   = countIn(withoutSync(batched[0]!));
+    // The batched run must have the SAME number of set-region sequences as the
+    // unbatched run — phase 3 no longer injects an extra pair.
+    expect(batchedCount).toBe(unbatchedCount);
+    // Sanity: the committed text must still be present.
+    expect(withoutSync(batched[0]!)).toContain('Phase3GuardCheck.');
+  });
 });

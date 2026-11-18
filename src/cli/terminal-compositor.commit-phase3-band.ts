@@ -3,7 +3,6 @@ import type { CommittedBandHost } from './terminal-compositor.committed-band-com
 import type { CommitGeometry } from './terminal-compositor.commit-geometry.js';
 import type { CommitRoute } from './terminal-compositor.commit-route.js';
 import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
-import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
 import { clearCommittedBand } from './terminal-compositor.committed-band-commit.js';
 import { compositorBand } from './terminal-compositor.content-band.js';
 import { retainedArchivedPrefix } from './terminal-compositor.band-archived-prefix.js';
@@ -180,9 +179,11 @@ export function commitPhase3Band(
       }
     }
     if (out.length > 0) {
-      writeWithScrollGuard(self, () => {
-        self.stdout.write(out);
-      });
+      // Phase 3 paints exclusively via CUP+EL — no \n — so it never triggers
+      // the DECSTBM scroll region. The scroll guard is a no-op here and adds
+      // two extra DECSTBM reset/re-arm sequences inside the commit transaction,
+      // creating intermediate blank states visible to tmux 3.6a. Write directly.
+      self.stdout.write(out);
     }
     self.committedBandArchivedPrefix = retainedArchivedPrefix(self, contiguousPriorBand, run.length - capped.length);
     self.committedBand = capped;
