@@ -108,13 +108,17 @@ export async function* turnWithAuthRetry(
     return;
   }
 
-  // Replay the turn. Track whether the replay surfaces an error so the trace
-  // record names the correct outcome ('replay-failed' vs 'replayed').
-  let replayErrored = false;
+  // Replay the turn. Collect all events so the trace record (emitted before
+  // the terminal yield) names the correct outcome ('replay-failed' vs
+  // 'replayed'). Emitting AFTER the final `yield event` is unreachable in
+  // production because TurnStreamRunner.runStream breaks on the done/error
+  // event and abandons the generator via .return(), so we accumulate first,
+  // emit the phase, then yield — matching the refresh-null pattern above.
+  const replayEvents: ProviderEvent[] = [];
   for await (const event of runTurn(runInput)) {
-    if (event.type === 'error') replayErrored = true;
-    yield event;
+    replayEvents.push(event);
   }
+  const replayErrored = replayEvents.some((e) => e.type === 'error');
   void emitSessionPhase(runInput.traceWriter, {
     phase: 'auth_retry_outcome',
     metadata: {
@@ -123,4 +127,7 @@ export async function* turnWithAuthRetry(
       authMode: ctx.authMode,
     },
   });
+  for (const event of replayEvents) {
+    yield event;
+  }
 }
