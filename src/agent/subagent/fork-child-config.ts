@@ -101,6 +101,20 @@ export interface AssembleChildConfigArgs<T> {
    * Undefined = unnamed/bare dispatch → orientation block emitted.
    */
   resolvedAgentType?: string;
+  /**
+   * When `true`, the child's identity preamble includes the scratch-dir
+   * sentence telling the agent to put throwaway files in `.afk-scratch/` and
+   * that those files are deleted with the worktree.
+   *
+   * Must be derived from an async `isScratchDisposable(worktreeRoot)` read
+   * before `assembleChildConfig` is called. Never infer from the cwd path
+   * alone — the meta file may be absent (pre-#5016 worktrees, failed writes,
+   * external creation) and the directory is then protected by the sweep's
+   * `ignored-local-state` check.
+   *
+   * Absent / `false` → scratch-dir sentence is suppressed (safe default).
+   */
+  scratchDisposable?: boolean;
 }
 
 /** The manager-owned parent fields every fork passes (`SubagentManager.parentForkFields`). */
@@ -129,6 +143,7 @@ export type ParentForkFields = Pick<
  * @param resolvedAgentType - Forwarded to gate the session-start orientation
  *   block: emitted for unnamed and `general-purpose` children only.
  * @param parentSessionId - Parent session id included in the orientation block.
+ * @param scratchDisposable - Forwarded to gate the scratch-dir sentence.
  */
 function applyForkPreambles(
   config: AgentConfig,
@@ -136,9 +151,10 @@ function applyForkPreambles(
   yieldEnabled?: boolean,
   resolvedAgentType?: string,
   parentSessionId?: string,
+  scratchDisposable?: boolean,
 ): AgentConfig {
   return injectToolBudgetPreamble(
-    injectSubagentIdentityPreamble(config, nestedAgentAllowlist, yieldEnabled, resolvedAgentType, parentSessionId),
+    injectSubagentIdentityPreamble(config, nestedAgentAllowlist, yieldEnabled, resolvedAgentType, parentSessionId, scratchDisposable),
   );
 }
 
@@ -489,7 +505,7 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     ...(options.phaseRole === 'read-only'
       ? { provider: buildPhaseRestrictedProvider('read-only', effectiveChildModel, args.workspaceStore) }
       : {}),
-  }, args.nestedAgentAllowlist, args.yieldEnabled, args.resolvedAgentType, options.parent.sessionId);
+  }, args.nestedAgentAllowlist, args.yieldEnabled, args.resolvedAgentType, options.parent.sessionId, args.scratchDisposable);
 
   return applyWorkspacePreamble(assembled, args.workspaceStore, workspaceEntries);
 }

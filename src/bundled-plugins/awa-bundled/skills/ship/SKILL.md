@@ -63,10 +63,15 @@ Stage only the confirmed files, then write the commit message to a temp file wit
 
 ```
 # 1. Pick the scratch dir <SCRATCH>. It must not be the working tree itself:
-#    - Your cwd is under `.afk-worktrees/` (an afk-managed worktree):
-#        <worktree-root>/.afk-scratch
+#    - Your system prompt says to put throwaway files in `.afk-scratch/`
+#      (the scratch-dir sentence is present): use <worktree-root>/.afk-scratch
 #      git ignores it, you can always write there, and it is deleted with
 #      the worktree.
+#    - Your cwd is under `.afk-worktrees/` but the scratch-dir sentence is
+#      absent (pre-#5016 worktree or external creation): use the path printed by
+#        git rev-parse --absolute-git-dir
+#      This writes inside the git dir, which is never tracked or shown by
+#      `git status`. Do NOT assume `.git/`: in a linked worktree `.git` is a FILE.
 #    - Any other checkout: the path printed by
 #        git rev-parse --absolute-git-dir
 #      Do NOT assume `.git/`: in a linked worktree `.git` is a FILE.
