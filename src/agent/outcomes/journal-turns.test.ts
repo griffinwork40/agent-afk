@@ -442,3 +442,39 @@ describe('journalMessagesToTurns — sidecar input parity', () => {
     expect(events[1]!.input).toBe(summarizeToolInput('edit_file', editInput));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Pre-PR journal edge case: literal <framework-context> token typed by user
+// ---------------------------------------------------------------------------
+
+describe('journalMessagesToTurns — pre-PR journal legacy behavior', () => {
+  it('pins legacy behavior: literal <framework-context> in pre-PR journal is treated as harness context (known limit)', () => {
+    // History: journals written before this PR have no harness envelope.
+    // If the user typed text that happens to open with <framework-context>,
+    // extractUserContent Strategy 0 treats the opening tag as a harness boundary
+    // and strips everything up to the first </framework-context>.
+    // This is a known limit documented in journal-turns.ts.
+    const rawText =
+      '<framework-context>\nsome context\n</framework-context>\nactual user prompt';
+    const messages: JournalMessage[] = [
+      userText(rawText),
+      assistantText('ok'),
+    ];
+    const turns = journalMessagesToTurns(messages);
+    // Strategy 0 fires: text after the closing tag is returned as user content.
+    expect(turns[0]!.user).toBe('actual user prompt');
+  });
+
+  it('post-PR journal: real harness envelope is correctly stripped, leaving typed text', () => {
+    // With a real harness-emitted envelope (from withPendingContext drain),
+    // extractUserContent correctly strips the envelope and returns only what
+    // the user typed.
+    const envelope = '<framework-context>\n[placeholder-prevent] some context\n</framework-context>\n\nfix the bug';
+    const messages: JournalMessage[] = [
+      userText(envelope),
+      assistantText('done'),
+    ];
+    const turns = journalMessagesToTurns(messages);
+    expect(turns[0]!.user).toBe('fix the bug');
+  });
+});

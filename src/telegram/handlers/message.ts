@@ -579,6 +579,7 @@ export class MessageHandler {
         reEnqueued = true;
         return;
       }
+      withdrawContext?.();
       if (error instanceof StreamTimeoutError) {
         // Honest timeout -- the message already explains the cause. NOT a network
         // or Claude rate-limit error, so don't misclassify it as one.

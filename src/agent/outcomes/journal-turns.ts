@@ -162,6 +162,14 @@ export function journalMessagesToTurns(messages: JournalMessage[]): Turn[] {
     // persists; extractUserContent returns undefined when it finds no
     // preamble structure, in which case the raw text is kept.
     const rawText = textOf(msg.content);
+    // History: journal-turns uses extractUserContent (post-drain aware, Strategy 0
+    // looks for a <framework-context> envelope) on the first user message.
+    // For journals written BEFORE this PR, there is no harness envelope — the
+    // old heuristics in extractUserContent still run and are intentionally
+    // unchanged. If a pre-PR journal contains a literal `<framework-context>`
+    // token typed by the user, Strategy 0 would silently treat everything before
+    // the first `</framework-context>` as harness context. This is a known limit
+    // of the envelope strategy on legacy journals; a pinning test covers it.
     const isFirstUserTurn = !turns.some((t) => t.user !== undefined);
     const userText = isFirstUserTurn ? (extractUserContent(rawText) ?? rawText) : rawText;
     turns.push(userText ? { user: userText } : {});

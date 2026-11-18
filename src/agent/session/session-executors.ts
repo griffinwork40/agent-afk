@@ -40,7 +40,7 @@ export interface SessionExecutorsBindTarget {
   readonly abortSignal: AbortSignal;
   readonly hookRegistry: HookRegistry | undefined;
   readonly messageJournal: MessageJournal | undefined;
-  getInputStreamRef(): Pick<InputStreamRef, 'pushUserMessage' | 'queueFrameworkContext'>;
+  getInputStreamRef(): Pick<InputStreamRef, 'pushUserMessage' | 'queueFrameworkContext' | 'withdrawFrameworkContext'>;
   /**
    * Accumulate a child subagent's token usage and optional USD cost into the
    * parent session's `session_sealed` billing rollup.
