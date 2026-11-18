@@ -7,9 +7,20 @@
  * 403 Forbidden (seat removed / subscription inactive): the token is valid
  * but the account lacks API access — typically because the premium seat was
  * removed during an account swap. Refreshing picks up a different account's
- * token if the operator already ran `afk login` in a side terminal; if the
- * keychain still holds the same token, the replay re-403s and surfaces
- * cleanly. Both paths attempt exactly one refresh-and-replay.
+ * token if the keychain now holds a different account's token, the replay
+ * succeeds; if not, the error surfaces immediately. In API-key mode no
+ * refresher is wired, so this returns false and the 403 surfaces without retry.
+ * Both paths attempt exactly one refresh-and-replay.
+ *
+ * # Delayed second refresh (cache-bypass)
+ *
+ * When the first replay itself returns a 401, the in-process keychain read
+ * cache (5-second TTL, `keychain.ts`) may have served the old revoked token to
+ * `forceClientRefresh`. We clear the cache and wait
+ * {@link CACHE_BYPASS_DELAY_MS} before a second refresh attempt — long enough
+ * for a concurrent keychain write to settle — then replay once more. Only
+ * attempted on 401 (not 403): a re-403 on replay means the credential was
+ * valid but the seat is gone, so a cache race cannot explain it.
  *
  * Extracted from `retry-layer.ts` (#824 split); the class keeps a `yield*`
  * delegate. See {@link RetryTierContext} for why the tier reads live
@@ -24,6 +35,14 @@ import type { RunTurnInput } from '../types.js';
 import type { RetryTierContext } from './retry-context.js';
 import { adoptFreshClient } from './live-client.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
+import { clearKeychainCache } from '../../../auth/keychain.js';
+
+/**
+ * Delay before the cache-bypass second refresh attempt, in milliseconds.
+ * Long enough for a concurrent keychain write-back to complete; short enough
+ * not to stall the turn noticeably in the common (non-race) case.
+ */
+export const CACHE_BYPASS_DELAY_MS = 150;
 
 /**
  * A 401 is retryable only in OAuth mode with a refresher wired.
@@ -65,6 +84,9 @@ export function isRefreshablePermissionDenied(ctx: RetryTierContext, error: Erro
 /**
  * Inner tier: on a single 401 or 403, refresh once and replay. Deduplicates
  * concurrent refresh calls via the layer's shared `refreshPromise`.
+ *
+ * When the first replay itself returns a 401, a second cache-bypassing refresh
+ * attempt is made after a short delay (see {@link CACHE_BYPASS_DELAY_MS}).
  */
 export async function* turnWithAuthRetry(
   ctx: RetryTierContext,
@@ -118,6 +140,73 @@ export async function* turnWithAuthRetry(
   for await (const event of runTurn(runInput)) {
     replayEvents.push(event);
   }
+
+  // Check whether the replay itself produced a 401. If so, the in-process
+  // keychain cache may have served the old revoked token to `forceClientRefresh`
+  // above. Clear the cache, wait briefly, and try a second refresh + replay.
+  // Only for 401 (not 403): a re-403 means the seat is gone, not a cache race.
+  const replayAuth401 = replayEvents.find(
+    (e) =>
+      e.type === 'error' &&
+      isRetryableAuth(ctx, e.error),
+  );
+
+  if (replayAuth401 && !isClosed()) {
+    // Clear the in-process keychain cache so the next forceClientRefresh reads
+    // the live store rather than the potentially-stale cached token.
+    clearKeychainCache();
+    // Brief delay: give a concurrent keychain write-back time to complete.
+    await new Promise<void>((resolve) => setTimeout(resolve, CACHE_BYPASS_DELAY_MS));
+
+    if (isClosed()) {
+      void emitSessionPhase(runInput.traceWriter, {
+        phase: 'auth_retry_outcome',
+        metadata: { outcome: 'replay-failed', status: triggerStatus, authMode: ctx.authMode },
+      });
+      for (const event of replayEvents) {
+        yield event;
+      }
+      return;
+    }
+
+    const refreshed2 = await adoptFreshClient(ctx, runInput);
+    if (refreshed2) {
+      const replay2Events: ProviderEvent[] = [];
+      for await (const event of runTurn(runInput)) {
+        replay2Events.push(event);
+      }
+      const replay2Errored = replay2Events.some((e) => e.type === 'error');
+      void emitSessionPhase(runInput.traceWriter, {
+        phase: 'auth_retry_outcome',
+        metadata: {
+          outcome: replay2Errored ? 'replay-failed' : 'replayed',
+          status: triggerStatus,
+          authMode: ctx.authMode,
+          cacheBypass: true,
+        },
+      });
+      for (const event of replay2Events) {
+        yield event;
+      }
+      return;
+    }
+    // Second refresh returned null — fall through to yield the first replay's events.
+    void emitSessionPhase(runInput.traceWriter, {
+      phase: 'auth_retry_outcome',
+      metadata: {
+        outcome: 'replay-failed',
+        status: triggerStatus,
+        authMode: ctx.authMode,
+        cacheBypass: true,
+        secondRefreshNull: true,
+      },
+    });
+    for (const event of replayEvents) {
+      yield event;
+    }
+    return;
+  }
+
   const replayErrored = replayEvents.some((e) => e.type === 'error');
   void emitSessionPhase(runInput.traceWriter, {
     phase: 'auth_retry_outcome',

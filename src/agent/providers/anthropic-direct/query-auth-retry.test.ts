@@ -15,6 +15,14 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// Top-level mock for clearKeychainCache — used by the cache-bypass second-refresh tests.
+// Must be at module scope (not inside a describe) so Vitest hoists it correctly.
+const clearKeychainCacheMock = vi.hoisted(() => vi.fn());
+vi.mock('../../auth/keychain.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../auth/keychain.js')>();
+  return { ...original, clearKeychainCache: clearKeychainCacheMock };
+});
 import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
 import type { ProviderEvent } from '../../provider.js';
@@ -867,6 +875,131 @@ describe('AnthropicDirectProvider — auth_retry_outcome trace phase', () => {
     expect(outcome?.metadata?.['status']).toBe(401);
     // The replay error must still surface to the caller.
     expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cache-bypass second refresh (#5022 item 2)
+// ---------------------------------------------------------------------------
+
+describe('AnthropicDirectProvider — cache-bypass second refresh on replay-401', () => {
+  beforeEach(() => {
+    messagesCreateMock.mockReset();
+    anthropicCtorMock.mockReset();
+    clearKeychainCacheMock.mockReset();
+    __setAnthropicClientFactory(null);
+    installFactory();
+  });
+
+  function collectPhases(writer: InMemoryTraceWriter): Array<{ phase: string; metadata?: Record<string, unknown> }> {
+    return writer.events
+      .filter((e) => e.kind === 'session_phase')
+      .map((e) => {
+        const p = (e as unknown as { payload: { phase: string; metadata?: Record<string, unknown> } }).payload;
+        return { phase: p.phase, metadata: p.metadata };
+      });
+  }
+
+  it('replay-401 triggers cache clear and second refresh; second replay succeeds → replayed+cacheBypass', async () => {
+    // Call sequence: 401, 401 (replay), success (second replay).
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx <= 2) throw make401Error();
+      return fromArray(makeTextStream('ok'));
+    });
+
+    const traceWriter = new InMemoryTraceWriter();
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('test'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', traceWriter },
+    });
+    (query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } })
+      .retry.tokenRefresher = vi.fn(async () => new MockAnthropic({ authToken: 'sk-ant-oat01-fresh' }) as unknown as Anthropic);
+
+    const events = await collect(query);
+
+    // clearKeychainCache must have been called once (the cache-bypass path).
+    expect(clearKeychainCacheMock).toHaveBeenCalledTimes(1);
+
+    // The trace must record the second attempt with cacheBypass:true and outcome:'replayed'.
+    const phases = collectPhases(traceWriter);
+    const outcomes = phases.filter((p) => p.phase === 'auth_retry_outcome');
+    // Only one auth_retry_outcome is emitted (from the second attempt that resolved).
+    expect(outcomes.length).toBeGreaterThanOrEqual(1);
+    const bypassOutcome = outcomes.find((o) => o.metadata?.['cacheBypass'] === true);
+    expect(bypassOutcome).toBeDefined();
+    expect(bypassOutcome?.metadata?.['outcome']).toBe('replayed');
+
+    // The turn must complete successfully (no error events).
+    expect(events.some((e) => e.type === 'turn.completed')).toBe(true);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+  });
+
+  it('replay-401 triggers cache clear; second refresh returns null → replay-failed+cacheBypass+secondRefreshNull', async () => {
+    // Call sequence: 401, 401 (replay). Second refresh returns null.
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      throw make401Error();
+    });
+
+    const traceWriter = new InMemoryTraceWriter();
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('test'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', traceWriter },
+    });
+    // First call returns a client; second returns null.
+    let refreshCallIdx = 0;
+    (query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } })
+      .retry.tokenRefresher = vi.fn(async () => {
+        refreshCallIdx += 1;
+        if (refreshCallIdx === 1) return new MockAnthropic({ authToken: 'sk-ant-oat01-fresh' }) as unknown as Anthropic;
+        return null;
+      });
+
+    const events = await collect(query);
+
+    expect(clearKeychainCacheMock).toHaveBeenCalledTimes(1);
+
+    const phases = collectPhases(traceWriter);
+    const outcomes = phases.filter((p) => p.phase === 'auth_retry_outcome');
+    const bypassOutcome = outcomes.find((o) => o.metadata?.['cacheBypass'] === true);
+    expect(bypassOutcome).toBeDefined();
+    expect(bypassOutcome?.metadata?.['outcome']).toBe('replay-failed');
+    expect(bypassOutcome?.metadata?.['secondRefreshNull']).toBe(true);
+
+    // The original replay error must surface.
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+  });
+
+  it('403 on replay does NOT trigger the cache-bypass path (seat-gone, not a cache race)', async () => {
+    // Call sequence: 401 (triggers first refresh), 403 (replay). Cache-bypass only fires on 401.
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx === 1) throw make401Error();
+      // Replay returns 403 (seat removed).
+      const err = new Error('403 Forbidden');
+      (err as Error & { status: number }).status = 403;
+      throw err;
+    });
+
+    const traceWriter = new InMemoryTraceWriter();
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('test'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', traceWriter },
+    });
+    (query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } })
+      .retry.tokenRefresher = vi.fn(async () => new MockAnthropic({ authToken: 'sk-ant-oat01-fresh' }) as unknown as Anthropic);
+
+    await collect(query);
+
+    // clearKeychainCache must NOT have been called: a 403 on replay is not a cache race.
+    expect(clearKeychainCacheMock).not.toHaveBeenCalled();
   });
 });
 

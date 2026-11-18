@@ -1,11 +1,12 @@
 /** Synchronous phases of the foreground run; all inputs and lifetime state are explicit. */
+import { execFileSync } from 'node:child_process';
 import type { RunForegroundArgs, PromotedSubagentInfo } from './foreground-promotion.js';
 import type { ToolResult } from '../types.js';
 import type { SubagentResult } from '../../subagent/result.js';
 import type { ContinuationResultFields } from './continuation-dispatch.js';
 import type { QueuedNoteClaim } from './queued-note.js';
 import { annotateIfIncomplete, incompleteToolResultFields } from '../../subagent/result.js';
-import { emitTelemetry, truncate, boundedStopReason, measurePartial, buildFailurePayload } from './failure-payload.js';
+import { emitTelemetry, truncate, boundedStopReason, measurePartial, buildFailurePayload, type WorktreeContext } from './failure-payload.js';
 import { capSubagentResult } from './foreground-promotion.result-cap.js';
 import { withProvenanceHeader } from './foreground-promotion.provenance.js';
 import { errorMessage } from '../../../utils/errors.js';
@@ -14,6 +15,44 @@ import { debugLog } from '../../../utils/debug.js';
 import { teardownBackgroundWorktree } from '../handlers/worktree-managed.background.js';
 import { describePreserveReason, type teardownIsolatedWorktree } from '../handlers/worktree-managed.js';
 type RunPromise = ReturnType<RunForegroundArgs['handle']['runToResult']>;
+
+/**
+ * Collect lightweight git state from a child's working directory for inclusion
+ * in the failure payload. Best-effort: any individual read that fails is
+ * silently omitted. Never throws.
+ *
+ * @param cwd - Absolute path to the child's working directory.
+ */
+export function collectWorktreeContext(cwd: string): WorktreeContext {
+  const ctx: WorktreeContext = { cwd };
+  const GIT_TIMEOUT_MS = 3_000;
+  const gitOpts = { cwd, encoding: 'utf8' as const, timeout: GIT_TIMEOUT_MS };
+  try {
+    const branch = execFileSync(
+      'git',
+      ['--no-optional-locks', 'rev-parse', '--abbrev-ref', 'HEAD'],
+      { ...gitOpts, stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim();
+    if (branch) ctx.branch = branch;
+  } catch { /* best-effort */ }
+  try {
+    const sha = execFileSync(
+      'git',
+      ['--no-optional-locks', 'rev-parse', 'HEAD'],
+      { ...gitOpts, stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim();
+    if (sha) ctx.headSha = sha;
+  } catch { /* best-effort */ }
+  try {
+    const status = execFileSync(
+      'git',
+      ['--no-optional-locks', 'status', '--porcelain'],
+      { ...gitOpts, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    ctx.dirtyCount = status.trim() === '' ? 0 : status.trim().split('\n').length;
+  } catch { /* best-effort */ }
+  return ctx;
+}
 
 export function foregroundPromotionPayload(
   job: { jobId: string; subagentId: string; label: string },
@@ -111,7 +150,7 @@ export function emitForegroundRejection(
 
 /** Synchronous shaping keeps telemetry and result assignment in the race continuation. */
 export function foregroundCompletionResult(
-  args: Pick<RunForegroundArgs, 'handle' | 'identity' | 'parentSessionId' | 'depth' | 'model' | 'parentModel' | 'idPrefix'>,
+  args: Pick<RunForegroundArgs, 'handle' | 'identity' | 'parentSessionId' | 'depth' | 'model' | 'parentModel' | 'idPrefix' | 'childCwd'>,
   result: Awaited<RunPromise>,
   startedAt: number,
 ): ToolResult {
@@ -204,12 +243,16 @@ export function foregroundCompletionResult(
   // instead of a plain error string, so the model can distinguish
   // schema mismatch / partial output / hard failure rather than seeing
   // a flattened "Subagent failed: ..." line.
+  const worktreeContext = args.childCwd !== undefined
+    ? collectWorktreeContext(args.childCwd)
+    : undefined;
   const payload = buildFailurePayload({
     status: result.status,
     errorMessage: errorMsg,
     schemaErrorMessage: result.schemaError?.message,
     partialOutput: result.partialOutput,
     subagentId: handle.id,
+    ...(worktreeContext !== undefined ? { worktreeContext } : {}),
   });
   // Invariant: the caller assigns this result before finally appends SubagentStop context.
   // incompleteToolResultFields flags the ZERO-OUTPUT stream_incomplete case
