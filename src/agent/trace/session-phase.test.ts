@@ -380,6 +380,7 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     stream_accepted_after_drop: true,
     connection_retry: true,
     connection_retry_exhausted: true,
+    endpoint_semaphore_wait: true,
     usage_notice: true,
     tool_degraded: true,
     strategy_nudge_fired: true,

@@ -66,7 +66,7 @@ describe('root registry worktree release trace wiring (#4958)', () => {
     expect(pendingReleaseWrites.length).toBeGreaterThan(0);
 
     const shutdownCfg = managerShutdownConfig(rootManager, composeExecutor, undefined, registry);
-    const pendingWrites = shutdownCfg.getPendingChildTerminalWrites();
+    const pendingWrites = shutdownCfg.getPendingChildTerminalWrites!();
     expect(pendingWrites.length).toBeGreaterThan(0);
 
     await traceWriter.seal(
