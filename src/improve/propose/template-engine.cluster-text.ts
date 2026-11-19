@@ -12,15 +12,24 @@ const MAX_CLUSTERS = 5;
 const MAX_TEXT_LENGTH = 200;
 // Deliberately independent of the current machine's home: cards can come from
 // other users/platforms. Quoted paths may contain spaces; bare paths end at
-// whitespace or an error-message delimiter. Keep the basename, not the home.
-const HOME_PATH = /(?:[A-Z]:[\\/](?:Users|Documents and Settings)[\\/][^\\/\s"'`]+|\/(?:Users|home)\/[^/\s"'`]+|\/root)(?:[\\/][^\s"'`<>()[\]{},;]*)?/gi;
-const QUOTED_HOME_PATH = /(["'`])((?:[A-Z]:[\\/](?:Users|Documents and Settings)[\\/]|\/(?:Users|home)\/|\/root(?:[\\/]|$))[^\r\n]*?)\1/gi;
+// an error-message delimiter (but NOT whitespace, so space-containing directory
+// names like "My Project" are captured). Keep the basename, not the home.
+//
+// Patterns covered:
+//   • POSIX:   /Users/<name>/…  /home/<name>/…  /root/…  (bare or quoted)
+//   • Windows: C:\Users\<name>\… (bare or quoted, forward or back slash)
+//   • UNC:     \\<host>\<share>\Users\<name>\… (bare or quoted)
+//
+// /root boundary: negative lookahead (?![a-zA-Z0-9_]) prevents matching
+// /rootfs, /root2, etc. while still matching /root, /root/ and /root\….
+const HOME_PATH = /(?:\\\\[^\\/\s"'`]+[\\/][^\\/\s"'`]+[\\/](?:Users|Documents and Settings)[\\/][^\\/\s"'`]+|[A-Z]:[\\/](?:Users|Documents and Settings)[\\/][^\\/\s"'`]+|\/(?:Users|home)\/[^/\s"'`]+|\/root(?![a-zA-Z0-9_]))(?:[\\/](?:[^\s"'`<>()[\]{},;][^"'`<>()[\]{},;]*)?)?/gi;
+const QUOTED_HOME_PATH = /(["'`])((?:\\\\[^\\/\s"'`]+[\\/][^\\/\s"'`]+[\\/](?:Users|Documents and Settings)[\\/]|[A-Z]:[\\/](?:Users|Documents and Settings)[\\/]|\/(?:Users|home)\/|\/root(?![a-zA-Z0-9_])(?:[\\/]|$))[^\r\n]*?)\1/gi;
 
 function collapsePath(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, '');
   const parts = trimmed.split(/[\\/]/);
   // A home directory alone must not preserve the user's name as the basename.
-  const isHome = /^(?:[A-Z]:[\\/](?:Users|Documents and Settings)[\\/][^\\/]+|\/(?:Users|home)\/[^/]+|\/root)$/i.test(trimmed);
+  const isHome = /^(?:\\\\[^\\/]+[\\/][^\\/]+[\\/](?:Users|Documents and Settings)[\\/][^\\/]+|[A-Z]:[\\/](?:Users|Documents and Settings)[\\/][^\\/]+|\/(?:Users|home)\/[^/]+|\/root)$/i.test(trimmed);
   return isHome ? '<home>' : `<home>/…/${parts.at(-1) ?? ''}`;
 }
 
