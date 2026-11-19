@@ -110,12 +110,16 @@ describe('pooled request timeout incidents', () => {
     const { pool, spec, root, guard } = setup();
     const record = vi.spyOn(guard, 'recordCrash');
     const client = await pool.acquire(spec, root);
+    const disposeSpy = vi.spyOn(client, 'dispose');
     await realTimeout(client);
     await realTimeout(client);
     expect(pool.size).toBe(1);
     await realTimeout(client);
     expect(guard.failed).toBe(true);
     expect(pool.size).toBe(0);
+    // The pool must have triggered dispose itself when evicting the client.
+    expect(disposeSpy).toHaveBeenCalled();
+    // Wait for the client to fully shut down before the test ends.
     await client.dispose();
     expect(client.alive).toBe(false);
     expect(record).toHaveBeenCalledTimes(3);
@@ -152,6 +156,78 @@ describe('pooled request timeout incidents', () => {
     vi.useRealTimers();
     await Promise.all(starts);
     expect(record).toHaveBeenCalledTimes(3);
+  });
+
+  it('three starts abandoned by abort (never timed out) leave the guard clean and allow a fresh start', async () => {
+    const { root, spec, guard } = setup({ silent: true });
+    const starts: Array<Promise<unknown>> = [];
+    const realStart = LspClient.start.bind(LspClient);
+    vi.spyOn(LspClient, 'start').mockImplementation((...args) => {
+      const started = realStart(...args);
+      starts.push(started.catch(() => undefined));
+      return started;
+    });
+    const pool = new LspServerPool({ guardFor: () => guard, abandonedStartGraceMs: 20 });
+    pools.push(pool);
+    vi.useFakeTimers();
+    for (let i = 1; i <= 3; i++) {
+      const controller = new AbortController();
+      const result = pool.acquire(spec, root, { signal: controller.signal }).catch((err: unknown) => err);
+      controller.abort();
+      expect(await result).toMatchObject({ kind: 'aborted' });
+      expect(guard.recentCrashes).toBe(0);
+      expect(pool.size).toBe(1);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(pool.size).toBe(0);
+      expect(guard.recentCrashes).toBe(0);
+    }
+    expect(guard.failed).toBe(false);
+    // Pool should accept a fresh start after three abort-only abandoned starts.
+    const fourth = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await fourth).toMatchObject({ kind: 'timeout' });
+    expect(pool.spawned).toBe(4);
+    // Advance past the grace window so the 4th start's abandon timer fires and
+    // the aborted start process resolves, allowing Promise.all(starts) to settle.
+    await vi.advanceTimersByTimeAsync(20);
+    vi.useRealTimers();
+    await Promise.all(starts);
+  });
+
+  it('one start with one timeout acquirer and one aborted acquirer records exactly one incident after grace', async () => {
+    const { root, spec, guard } = setup({ silent: true });
+    const starts: Array<Promise<unknown>> = [];
+    const realStart = LspClient.start.bind(LspClient);
+    vi.spyOn(LspClient, 'start').mockImplementation((...args) => {
+      const started = realStart(...args);
+      starts.push(started.catch(() => undefined));
+      return started;
+    });
+    const pool = new LspServerPool({ guardFor: () => guard, abandonedStartGraceMs: 20 });
+    pools.push(pool);
+    vi.useFakeTimers();
+    // Acquirer A: times out after 50 ms.
+    const resultA = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
+    // Acquirer B: aborted immediately.
+    const controller = new AbortController();
+    const resultB = pool.acquire(spec, root, { signal: controller.signal }).catch((err: unknown) => err);
+    controller.abort();
+    expect(await resultB).toMatchObject({ kind: 'aborted' });
+    // Still one waiter (A); no incident yet, start still alive.
+    expect(guard.recentCrashes).toBe(0);
+    expect(pool.size).toBe(1);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await resultA).toMatchObject({ kind: 'timeout' });
+    // Grace window: both acquirers gone but start still live.
+    expect(pool.size).toBe(1);
+    expect(guard.recentCrashes).toBe(0);
+    await vi.advanceTimersByTimeAsync(20);
+    // Grace timer fired: hadTimeout is true, so exactly one incident.
+    expect(pool.size).toBe(0);
+    expect(guard.recentCrashes).toBe(1);
+    expect(pool.spawned).toBe(1);
+    vi.useRealTimers();
+    await Promise.all(starts);
   });
 
   it('does not count an abandoned start that a new acquirer picks up within grace', async () => {

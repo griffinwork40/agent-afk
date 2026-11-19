@@ -83,6 +83,8 @@ interface Entry {
   lastAcquiredAt: number;
   idleTimer: NodeJS.Timeout | null;
   abandonTimer: NodeJS.Timeout | null;
+  /** True once at least one acquirer left this start via a deadline expiry (kind `timeout`). */
+  hadTimeout: boolean;
 }
 
 function realpathOr(p: string): string {
@@ -115,7 +117,7 @@ export class LspServerPool {
    * Rejects with `LspClientError` on spawn failure, crash during start,
    * timeout, or abort. Never returns a dead client.
    *
-   * Rejects with `LspClientError` kind `'failed'` when the crash-loop guard
+   * Rejects with `LspClientError` kind `'exited'` when the crash-loop guard
    * has tripped for this server (3 crashes within 120 s): the caller should
    * silently degrade rather than retry.
    */
@@ -144,7 +146,7 @@ export class LspServerPool {
     const entry: Entry = {
       key, client: null, starting: null, waiters: 0,
       abortStart: new AbortController(), guard, idleTimer: null, abandonTimer: null,
-      lastAcquiredAt: Date.now(),
+      lastAcquiredAt: Date.now(), hadTimeout: false,
     };
     this.entries.set(key, entry);
     this.spawnCount++;
@@ -183,8 +185,9 @@ export class LspServerPool {
         if (this.entries.get(key) === entry) {
           // A failed shared start counts once here, never per acquirer.
           // Cancellation and missing binaries are not incidents. A start killed
-          // by the abandon grace timer is counted there: it is evicted before
-          // its 'aborted' rejection lands here.
+          // by the abandon grace timer is handled there (counted only when at
+          // least one acquirer timed out); by the time this rejection lands the
+          // entry is already evicted, so the guard check below is skipped.
           const lspErr = err instanceof LspClientError ? err : null;
           if (!lspErr || (lspErr.kind !== 'spawn' && lspErr.kind !== 'aborted')) guard.recordCrash();
           this.evict(entry);
@@ -216,13 +219,18 @@ export class LspServerPool {
       }
     });
     let gaveUp = false;
+    let timedOut = false;
     try {
       return await Promise.race([starting, guard]);
     } catch (err) {
-      gaveUp = err instanceof LspClientError && (err.kind === 'timeout' || err.kind === 'aborted');
+      if (err instanceof LspClientError && (err.kind === 'timeout' || err.kind === 'aborted')) {
+        gaveUp = true;
+        if (err.kind === 'timeout') timedOut = true;
+      }
       throw err;
     } finally {
       for (const c of cleanups) c();
+      if (timedOut) entry.hadTimeout = true;
       entry.waiters--;
       // Last acquirer gave up on a still-starting server: give it a short
       // grace to finish warming, then kill it so it cannot linger forever.
@@ -230,9 +238,11 @@ export class LspServerPool {
         entry.abandonTimer = setTimeout(() => {
           entry.abandonTimer = null;
           if (entry.starting && entry.waiters === 0 && this.entries.get(entry.key) === entry) {
-            // One incident per killed shared start: a server hung in
-            // `initialize` would otherwise respawn and burn every caller's budget.
-            entry.guard.recordCrash();
+            // Count as an incident only when at least one acquirer left via a
+            // deadline expiry (kind `timeout`). A start abandoned solely by
+            // cancellation (kind `aborted`) is killed silently — the server is
+            // not hung, just unwanted.
+            if (entry.hadTimeout) entry.guard.recordCrash();
             entry.abortStart.abort();
             this.evict(entry);
           }
