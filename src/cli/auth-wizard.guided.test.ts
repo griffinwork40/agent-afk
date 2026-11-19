@@ -4,12 +4,14 @@ import { runAuthWizard } from './auth-wizard.js';
 import { promptSecret } from '../utils/prompt-secret.js';
 import { upsertEnvVar } from '../utils/envFile.js';
 import { checkCredential } from './auth-wizard.check.js';
+import { isDaemonRunning } from './auth-wizard.daemon.js';
 import { registerLoginCommand } from './commands/login-command.js';
 
 vi.mock('../utils/prompt-secret.js', () => ({ promptSecret: vi.fn() }));
 vi.mock('../utils/envFile.js', () => ({ upsertEnvVar: vi.fn() }));
 vi.mock('../paths.js', () => ({ getEnvConfigPath: () => 'fake-config/afk.env' }));
 vi.mock('./auth-wizard.check.js', () => ({ checkCredential: vi.fn() }));
+vi.mock('./auth-wizard.daemon.js', () => ({ isDaemonRunning: vi.fn() }));
 vi.mock('./config.js', () => ({ loadConfig: () => ({}) }));
 vi.mock('./shared-helpers.js', () => ({ getModel: () => 'sonnet' }));
 vi.mock('../agent/providers/index.js', () => ({ providerForModel: () => 'anthropic-direct' }));
@@ -43,6 +45,22 @@ afterEach(() => {
 });
 
 describe('guided sign-in', () => {
+  it('keeps the daemon restart hint for someone who already runs a daemon', async () => {
+    vi.mocked(isDaemonRunning).mockReturnValue(true);
+    await runAuthWizard();
+    expect(output()).toContain('Restart any running afk daemon to pick up the new token.');
+  });
+  it('accepts a short y as confirmation', async () => {
+    vi.mocked(promptSecret).mockResolvedValueOnce('gateway-obviously-fake').mockResolvedValueOnce('y');
+    await runAuthWizard();
+    expect(upsertEnvVar).toHaveBeenCalledOnce();
+  });
+  it('does not mistake another kind of Anthropic key for an OpenAI key', async () => {
+    vi.mocked(promptSecret).mockResolvedValue('sk-ant-admin01-obviously-fake');
+    await runAuthWizard();
+    expect(output()).not.toContain('OpenAI');
+    expect(promptSecret).toHaveBeenCalledOnce();
+  });
   it('explains keys, billing, Claude Code, other providers and invisible paste before asking', async () => {
     await runAuthWizard();
     expect(output()).toContain('afk is free');

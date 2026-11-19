@@ -17,7 +17,8 @@ const OTHER_PROVIDER_PREFIXES = [
 ] as const;
 
 function credentialWarning(token: string): string | undefined {
-  if (token.startsWith('sk-ant-api') || token.startsWith('sk-ant-oat')) return undefined;
+  // Every Anthropic credential kind shares this prefix; the live check judges the rest.
+  if (token.startsWith('sk-ant-')) return undefined;
   const other = OTHER_PROVIDER_PREFIXES.find(({ prefix }) => token.startsWith(prefix));
   return other
     ? `This looks like an ${other.provider} key, not an Anthropic key.`
@@ -26,8 +27,8 @@ function credentialWarning(token: string): string | undefined {
 
 async function confirmSave(question: string): Promise<boolean> {
   // Reuse the no-echo reader so an accidental second paste never echoes a key.
-  const answer = await promptAuthSecret(`${question} Type yes to confirm (input hidden): `);
-  return answer.toLowerCase() === 'yes';
+  const answer = await promptAuthSecret(`${question} Type yes to confirm (your typing stays hidden): `);
+  return /^y(es)?$/i.test(answer.trim());
 }
 
 function nothingSaved(message: string): never {
