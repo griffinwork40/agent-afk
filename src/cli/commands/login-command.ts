@@ -38,6 +38,7 @@ export { promptToken };
 export function registerLoginCommand(program: Command): void {
   program
     .command('login [token]')
+    .alias('setup')
     .description('Save an Anthropic API key or OAuth token for afk to use')
     .option('--force', 'Override existing credentials even if already authenticated')
     .action(async (token: string | undefined, opts: { force?: boolean }) => {
