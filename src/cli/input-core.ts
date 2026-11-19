@@ -71,11 +71,22 @@ function moveCursor(state: InputCoreState, cursor: number): InputCoreState {
  * Walk backward from `cursor` over a "word" boundary: first skip any
  * trailing whitespace, then skip the run of non-whitespace before it.
  * Mirrors readline's `backward-kill-word` (Option+Delete on macOS).
+ *
+ * Steps by grapheme cluster (via previousGraphemeIndex) so multi-code-unit
+ * graphemes (emoji, combined sequences) are never split (#4987).
  */
 function wordStartBefore(buffer: string, cursor: number): number {
   let i = clampIndex(cursor, buffer.length);
-  while (i > 0 && /\s/.test(buffer.charAt(i - 1))) i--;
-  while (i > 0 && !/\s/.test(buffer.charAt(i - 1))) i--;
+  while (i > 0) {
+    const prev = previousGraphemeIndex(buffer, i);
+    if (!/\s/.test(buffer.slice(prev, i))) break;
+    i = prev;
+  }
+  while (i > 0) {
+    const prev = previousGraphemeIndex(buffer, i);
+    if (/\s/.test(buffer.slice(prev, i))) break;
+    i = prev;
+  }
   return i;
 }
 
@@ -83,12 +94,23 @@ function wordStartBefore(buffer: string, cursor: number): number {
  * Walk forward from `cursor` over a "word" boundary: skip leading
  * whitespace, then the run of non-whitespace after it.
  * Mirrors readline's `kill-word` (Option+Fn-Delete on macOS).
+ *
+ * Steps by grapheme cluster (via nextGraphemeIndex) so multi-code-unit
+ * graphemes (emoji, combined sequences) are never split (#4987).
  */
 function wordEndAfter(buffer: string, cursor: number): number {
   const len = buffer.length;
   let i = clampIndex(cursor, len);
-  while (i < len && /\s/.test(buffer.charAt(i))) i++;
-  while (i < len && !/\s/.test(buffer.charAt(i))) i++;
+  while (i < len) {
+    const next = nextGraphemeIndex(buffer, i);
+    if (!/\s/.test(buffer.slice(i, next))) break;
+    i = next;
+  }
+  while (i < len) {
+    const next = nextGraphemeIndex(buffer, i);
+    if (/\s/.test(buffer.slice(i, next))) break;
+    i = next;
+  }
   return i;
 }
 

@@ -613,11 +613,18 @@ describe('planGitRead (#4902): SPLIT_VALUED is global — -L rejected on non-bla
   // rejected because `-L` is not in log's allowlist. This test pins that
   // rejection so a future allowlist addition cannot silently widen -L to log.
   it('log -L 1,10:f is rejected (SPLIT_VALUED joins tokens, checkToken rejects for log)', () => {
-    expect(planGitRead({ subcommand: 'log', args: ['-L', '1,10:f'] }, CWD).ok).toBe(false);
+    const result = planGitRead({ subcommand: 'log', args: ['-L', '1,10:f'] }, CWD);
+    expect(result.ok).toBe(false);
+    // The SPLIT_VALUED normaliser joins `-L` + `1,10:f` into `-L1,10:f` before
+    // checkToken runs, so the rejection message names the joined form.
+    expect(!result.ok && result.error).toMatch('-L1,10:f');
   });
 
   it('diff -L 1,10:f is rejected (SPLIT_VALUED joins tokens, checkToken rejects for diff)', () => {
-    expect(planGitRead({ subcommand: 'diff', args: ['-L', '1,10:f'] }, CWD).ok).toBe(false);
+    const result = planGitRead({ subcommand: 'diff', args: ['-L', '1,10:f'] }, CWD);
+    expect(result.ok).toBe(false);
+    // Same join: the error must mention the joined form, not the bare `-L`.
+    expect(!result.ok && result.error).toMatch('-L1,10:f');
   });
 });
 
