@@ -1,0 +1,68 @@
+---
+title: "Glossary"
+description: "Plain-language definitions for the computer, AI, and AFK terms used in these docs."
+---
+
+New to command-line tools? Start with the first section, then look up unfamiliar words as you need them. Each term links to a guide with more detail.
+
+## Using your computer
+
+| Term | Meaning in these docs |
+|---|---|
+| [Terminal](/installation) | An app where you type instructions to your computer and read its replies as text. You run the `afk` command here. |
+| [Shell](/installation) | The program inside a terminal that reads and runs your commands, such as zsh, Bash, or PowerShell. Commands written for one shell may need different wording in another. |
+| [PowerShell](/installation) | A shell commonly used on Windows. AFK can run on native Windows and uses PowerShell for agent shell commands when Git Bash is unavailable. |
+| [Command](/reference/cli) | An instruction you type and submit with Enter, such as `afk --version`. Commands beginning with `afk` go in your terminal; AFK's slash commands, such as `/help`, go inside its conversation. |
+| [CLI](/reference/cli) | Short for command-line interface: a way to use software by typing commands rather than clicking buttons. The installed AFK CLI is named `afk`. |
+| [Node.js](/installation) | The software that runs AFK on your computer. Install a supported version before installing AFK. |
+| [npm](/installation) | A package manager: a tool that downloads and installs software made for Node.js. You use it to install the package named `agent-afk`, which provides the command named `afk`. |
+| [PATH](/troubleshooting/install-errors#the-afk-command-is-not-found) | A list of folders your shell searches when you type a command. AFK can be installed but still not found if its command's folder is missing from this list. |
+| [Working directory](/first-session) | The folder a program is currently working from. For AFK, choose the folder containing the files you want it to work on. |
+| [Git repository](/guides/worktrees) | A project folder whose file history is tracked by Git. AFK's worktree features need a Git repository, but an ordinary conversation does not. |
+| [Worktree](/guides/worktrees) | A separate working copy of a Git project, so an agent can edit files without mixing them with another task's edits. It separates files, not all access to your computer. |
+| [Environment variable](/configuration/editing-config) | A named setting a program reads when it starts, often used for configuration or credentials. AFK also loads saved environment settings from its user configuration file. |
+
+## Models, sign-in, and cost
+
+| Term | Meaning in these docs |
+|---|---|
+| [Provider](/configuration/models-providers) | The service or connection AFK uses to reach an AI model, such as Anthropic, OpenAI, xAI, or a compatible local server. The provider determines which credentials and connection settings are needed. |
+| [Model](/configuration/models-providers) | The AI system that reads your request and generates a response or decides which tools to use. You can choose different models for different tasks. |
+| [Model slot](/configuration/models-providers) | A configurable nickname such as `small`, `medium`, or `large` that points to a model and can include its connection settings. It is not a separate subscription. |
+| [API key](/configuration/api-keys) | A secret issued by a provider that lets AFK use that provider's service on your account. Keep it private and check the provider's billing arrangements before using it. |
+| [OAuth token](/configuration/api-keys) | A secret sign-in credential that gives software access to an account without sharing the account password. AFK supports several provider-specific token sources, and tokens can expire. |
+| [Token](/guides/usage-and-cost) | In model usage, a small piece of text counted toward input, output, and often cost; it is not necessarily a whole word. A sign-in token or Telegram bot token means a secret credential instead. |
+| [Local model](/guides/local-models) | An AI model served by software you run yourself, rather than a hosted provider account. AFK connects to that server; installing AFK alone does not install or start a local model. |
+
+## Conversations and unattended work
+
+| Term | Meaning in these docs |
+|---|---|
+| [REPL](/surfaces/repl) | Short for read-evaluate-print loop: AFK's ongoing conversation in your terminal. Type a request, read the response, then continue in the same session. |
+| [Session](/concepts/sessions-and-context) | One conversation together with its model choice, permissions, and recorded activity. A session can contain many messages. |
+| [Turn](/concepts/sessions-and-context) | One exchange starting with a new message, during which the agent may respond and use tools. It is part of a session, not necessarily a new conversation. |
+| [Context](/concepts/sessions-and-context) | The information available to the model for its current response, including instructions, conversation, and tool results. The model's context window limits how much can fit at once. |
+| [Compaction](/concepts/sessions-and-context) | Summarizing older conversation to make room in the model's context while keeping recent turns. It is not the same as deleting all saved conversation records. |
+| [Tool](/guides/tool-access) | An action the agent can call, such as reading a file or running a command. Available tools and permissions determine what it can actually do, beyond writing a reply. |
+| [Subagent](/guides/subagents) | A separate agent conversation given a smaller task by the main agent. It returns findings to the agent that sent it and can have different tool access or a different model. |
+| [Daemon](/surfaces/daemon) | AFK's program for running scheduled or queued work without an interactive conversation open. The daemon still needs to be running on a computer to do that work. |
+| [Service](/guides/run-as-service) | A program supervised by your operating system so it can start automatically and restart after a crash. AFK can install its daemon or Telegram bot this way. |
+| [Permission mode](/configuration/permissions) | A setting that controls checks on agent actions, such as approval for file access outside the working folder or read-only planning. It is not a guarantee that every shell command asks permission or that the agent is sandboxed. |
+
+## Extensions
+
+| Term | Meaning in these docs |
+|---|---|
+| [Skill](/skills/custom) | A reusable procedure or workflow you can ask AFK to run. It can give instructions to the current conversation or run in a separate agent session. |
+| [Plugin](/guides/mcp-plugins) | An installable package of extensions, such as skills, agent definitions, hooks, or tool connections. Some plugins run code, so install only ones you trust. |
+| [MCP](/guides/mcp-plugins) | Short for Model Context Protocol: a shared way for external programs or services to offer tools to AFK. An MCP server is the program or service providing those tools. |
+| [Hook](/guides/hooks) | Code that runs at a defined point, such as before the agent uses a tool. Hooks can check, change, or block actions where the runtime supports it. |
+| [AFK.md](/configuration/afk-md) | A file of instructions and project information that AFK can load into its conversations. Instructions guide the model; they are not enforced access controls. |
+
+## Related
+
+<Cards>
+  <Card title="Install AFK" href="/installation" description="Get Node.js and the afk command running." />
+  <Card title="Install and first-run errors" href="/troubleshooting/install-errors" description="Match an error message to a practical remedy." />
+  <Card title="Telegram bot" href="/surfaces/telegram" description="Set up reports and conversations on your phone." />
+</Cards>

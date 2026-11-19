@@ -349,7 +349,9 @@ function readModelFallbackNote(session: AgentSession): string | undefined {
     const text = session.getSessionMetadata?.().modelFallback?.text;
     if (typeof text !== 'string' || text.length === 0) return undefined;
     const redacted = redactInlineSecrets(text);
-    return redacted.length > 400 ? `${redacted.slice(0, 400)}… [truncated]` : redacted;
+    // Spread to Unicode code points so we never cut a surrogate pair in half.
+    const chars = [...redacted];
+    return chars.length > 400 ? `${chars.slice(0, 400).join('')}… [truncated]` : redacted;
   } catch {
     return undefined;
   }

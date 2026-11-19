@@ -7,9 +7,9 @@ Install the `agent-afk` npm package to get the `afk` command. It runs on macOS, 
 
 ## Requirements
 
-* Node.js matching `^22.22.2 || ^24.15.0 || >=26.0.0`. In plain terms: Node 22.22.2 or newer within 22.x, Node 24.15.0 or newer within 24.x, or Node 26 and later.
-* npm, available with a standard Node.js installation. You do not need pnpm to install the published CLI.
-* A terminal and access to a configured model provider, or a [local model server](/guides/local-models).
+* [Node.js](https://nodejs.org/), matching `^22.22.2 || ^24.15.0 || >=26.0.0`. Download a supported LTS release from the official Node.js site. In plain terms: Node 22.22.2 or newer within 22.x, Node 24.15.0 or newer within 24.x, or Node 26 and later.
+* npm, included with a standard Node.js installation. You do not need pnpm to install the published CLI.
+* A terminal and access to a configured model provider, or a [local model server](/guides/local-models). Never used a terminal? Start with [Start from zero](/terminal-basics).
 * Git if you want to use repository and [worktree](/guides/worktrees) workflows.
 
 ## Install for your platform
@@ -21,7 +21,7 @@ Install the `agent-afk` npm package to get the `afk` command. It runs on macOS, 
 <Step>
 ### Check Node.js
 
-Use a supported Node.js installation, then verify it in your terminal:
+Download and install a supported LTS release from [nodejs.org](https://nodejs.org/), then verify it in your terminal:
 
 ```bash
 node --version
@@ -71,17 +71,15 @@ If global installation fails with a permissions error, use a Node installation w
 
 <Steps>
 <Step>
-### Choose native Windows or WSL2
+### Use native Windows
 
-For native Windows, install a supported Windows Node.js version and Git for Windows. Open a fresh Windows Terminal or PowerShell session after installation. afk prefers Git Bash for agent shell commands, with PowerShell as a fallback when Git Bash is unavailable. Git Bash is preferable because agent commands commonly use POSIX syntax.
+Native Windows is the recommended path for most people. Download and install a supported LTS release of [Node.js](https://nodejs.org/) and [Git for Windows](https://git-scm.com/download/win). Accept their default installation options, then open a new Windows Terminal or PowerShell window.
 
-For WSL2, install a Linux distribution from an elevated PowerShell session:
+afk uses Git Bash for agent shell commands when it is available. It falls back to PowerShell when Git Bash is unavailable.
 
-```powershell
-wsl --install
-```
-
-Restart if prompted. Inside the WSL terminal, install a supported Linux Node.js version and follow the Linux tab. Keep projects in the WSL filesystem when possible to avoid the slower access through `/mnt/c/`.
+<Callout type="info">
+If you already use WSL2, you can install afk inside your Linux distribution instead. Install Node.js there and follow the Linux tab. WSL2 and native Windows use separate Node.js installations.
+</Callout>
 </Step>
 <Step>
 ### Install the CLI
@@ -95,7 +93,9 @@ npm install -g agent-afk
 afk --version
 ```
 
-WSL and native Windows use separate Node installations. Install afk in the environment where you intend to run it. Native background services use Windows Task Scheduler; see [Run as a service](/guides/run-as-service).
+Install afk in the environment where you intend to run it. Native background services use Windows Task Scheduler; see [Run as a service](/guides/run-as-service).
+
+If PowerShell says that running scripts is disabled when you enter `npm`, use `npm.cmd` in the commands above or follow [Microsoft's execution policy guidance](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_execution_policies).
 </Step>
 </Steps>
 
