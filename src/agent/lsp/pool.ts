@@ -34,6 +34,13 @@ import type { ServerSpec } from './server-spec.js';
  */
 export const ABANDONED_START_GRACE_MS = 1_000;
 
+/**
+ * A client exit within this long of its latest request timeout is treated as
+ * fallout of that already-counted timeout, not a new crash-loop incident. A
+ * later exit (the timeout does not kill the client) is counted.
+ */
+export const TIMEOUT_EXIT_FALLOUT_MS = 5_000;
+
 /** Default idle shutdown: 5 minutes without a request. */
 export const DEFAULT_LSP_IDLE_SHUTDOWN_MS = 300_000;
 
@@ -72,6 +79,7 @@ interface Entry {
   /** Acquirers currently waiting on `starting`. */
   waiters: number;
   abortStart: AbortController;
+  readonly guard: CrashLoopGuard;
   lastAcquiredAt: number;
   idleTimer: NodeJS.Timeout | null;
   abandonTimer: NodeJS.Timeout | null;
@@ -135,7 +143,7 @@ export class LspServerPool {
   private createEntry(key: string, spec: ServerSpec, root: string, guard: CrashLoopGuard): Entry {
     const entry: Entry = {
       key, client: null, starting: null, waiters: 0,
-      abortStart: new AbortController(), idleTimer: null, abandonTimer: null,
+      abortStart: new AbortController(), guard, idleTimer: null, abandonTimer: null,
       lastAcquiredAt: Date.now(),
     };
     this.entries.set(key, entry);
@@ -152,17 +160,19 @@ export class LspServerPool {
         }
         entry.client = client;
         entry.lastAcquiredAt = Date.now();
-        // Each timed-out request counts, but a subsequent exit of this same
-        // client is fallout from an already-counted failure, not a new incident.
-        let timedOut = false;
+        // Each timed-out request counts; an exit shortly after one is its
+        // fallout, not a new incident. A tripping timeout evicts the hung
+        // client (evict-first, so its exit is not counted again).
+        let lastTimeoutAt: number | null = null;
         client.onRequestTimeout(() => {
           if (this.entries.get(key) !== entry) return;
-          timedOut = true;
-          guard.recordCrash();
+          lastTimeoutAt = Date.now();
+          if (guard.recordCrash()) this.evict(entry);
         });
         client.onExit(() => {
           if (this.entries.get(key) === entry) {
-            if (!timedOut) guard.recordCrash();
+            const fallout = lastTimeoutAt !== null && Date.now() - lastTimeoutAt <= TIMEOUT_EXIT_FALLOUT_MS;
+            if (!fallout) guard.recordCrash();
             this.evict(entry);
           }
         });
@@ -171,8 +181,10 @@ export class LspServerPool {
       },
       (err: unknown) => {
         if (this.entries.get(key) === entry) {
-          // Initialize timeouts are counted here once per shared start, never
-          // per acquirer. Cancellation and missing binaries are not incidents.
+          // A failed shared start counts once here, never per acquirer.
+          // Cancellation and missing binaries are not incidents. A start killed
+          // by the abandon grace timer is counted there: it is evicted before
+          // its 'aborted' rejection lands here.
           const lspErr = err instanceof LspClientError ? err : null;
           if (!lspErr || (lspErr.kind !== 'spawn' && lspErr.kind !== 'aborted')) guard.recordCrash();
           this.evict(entry);
@@ -218,6 +230,9 @@ export class LspServerPool {
         entry.abandonTimer = setTimeout(() => {
           entry.abandonTimer = null;
           if (entry.starting && entry.waiters === 0 && this.entries.get(entry.key) === entry) {
+            // One incident per killed shared start: a server hung in
+            // `initialize` would otherwise respawn and burn every caller's budget.
+            entry.guard.recordCrash();
             entry.abortStart.abort();
             this.evict(entry);
           }

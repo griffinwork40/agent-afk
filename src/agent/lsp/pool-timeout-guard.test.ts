@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { LspClient, LspClientError } from './client.js';
-import { LspServerPool, poolKey } from './pool.js';
+import { LspServerPool, poolKey, TIMEOUT_EXIT_FALLOUT_MS } from './pool.js';
 import { CrashLoopGuard } from './crash-loop-guard.js';
 import { TYPESCRIPT_SERVER_DEFINITION } from './typescript-default.js';
 import { writeFakeLspServer, type FakeServerConfig } from './__test-utils__/fake-lsp-server.js';
@@ -44,6 +44,13 @@ async function timeout(client: LspClient) {
   expect(await result).toMatchObject({ kind: 'timeout' });
 }
 
+/** Real-timer timeout: a tripping timeout evicts, and dispose needs real jsonrpc I/O. */
+async function realTimeout(client: LspClient) {
+  vi.useRealTimers();
+  await expect(client.request('textDocument/definition', {}, { timeoutMs: 50 }))
+    .rejects.toMatchObject({ kind: 'timeout' });
+}
+
 describe('pooled request timeout incidents', () => {
   it('three timeouts on one warm client block the next acquisition without another spawn', async () => {
     const { pool, spec, root, guard, tick } = setup();
@@ -51,12 +58,16 @@ describe('pooled request timeout incidents', () => {
     vi.useFakeTimers();
     for (let i = 1; i <= 3; i++) {
       tick();
-      await timeout(client);
+      if (i < 3) await timeout(client); else await realTimeout(client);
       expect(guard.recentCrashes).toBe(i);
-      expect(client.alive).toBe(true);
-      if (i < 3) expect(await pool.acquire(spec, root)).toBe(client);
+      if (i < 3) {
+        expect(client.alive).toBe(true);
+        expect(await pool.acquire(spec, root)).toBe(client);
+      }
     }
     expect(guard.failed).toBe(true);
+    expect(pool.size).toBe(0);
+    await client.dispose();
     await expect(pool.acquire(spec, root)).rejects.toMatchObject({
       kind: 'exited', message: 'LSP server disabled: crash-loop guard tripped',
     });
@@ -78,6 +89,87 @@ describe('pooled request timeout incidents', () => {
     expect(guard.recentCrashes).toBe(2);
     expect(guard.failed).toBe(false);
     await next.dispose();
+  });
+
+  it('counts a later exit after the client recovered from a timeout', async () => {
+    const { pool, spec, root, guard } = setup();
+    const client = await pool.acquire(spec, root);
+    // Leave setImmediate real so the recovery request's JSON-RPC I/O completes.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    await timeout(client);
+    await expect(client.request('shutdown', null, { timeoutMs: 5_000 })).resolves.toBeNull();
+    await vi.advanceTimersByTimeAsync(TIMEOUT_EXIT_FALLOUT_MS + 1);
+    client.killSync();
+    expect(pool.size).toBe(0);
+    expect(guard.recentCrashes).toBe(2);
+    vi.useRealTimers();
+    await client.dispose();
+  });
+
+  it('evicts and disposes the hung client when a timeout trips the guard, without another incident', async () => {
+    const { pool, spec, root, guard } = setup();
+    const record = vi.spyOn(guard, 'recordCrash');
+    const client = await pool.acquire(spec, root);
+    await realTimeout(client);
+    await realTimeout(client);
+    expect(pool.size).toBe(1);
+    await realTimeout(client);
+    expect(guard.failed).toBe(true);
+    expect(pool.size).toBe(0);
+    await client.dispose();
+    expect(client.alive).toBe(false);
+    expect(record).toHaveBeenCalledTimes(3);
+  });
+
+  it('counts each start killed after every acquirer abandoned it (production start path)', async () => {
+    const { root, spec, guard } = setup({ silent: true });
+    const record = vi.spyOn(guard, 'recordCrash');
+    const starts: Array<Promise<unknown>> = [];
+    const realStart = LspClient.start.bind(LspClient);
+    vi.spyOn(LspClient, 'start').mockImplementation((...args) => {
+      const started = realStart(...args);
+      starts.push(started.catch(() => undefined));
+      return started;
+    });
+    const pool = new LspServerPool({ guardFor: () => guard, abandonedStartGraceMs: 20 });
+    pools.push(pool);
+    vi.useFakeTimers();
+    for (let i = 1; i <= 3; i++) {
+      const result = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(await result).toMatchObject({ kind: 'timeout' });
+      expect(guard.recentCrashes).toBe(i - 1);
+      expect(pool.size).toBe(1);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(pool.size).toBe(0);
+      expect(guard.recentCrashes).toBe(i);
+    }
+    expect(guard.failed).toBe(true);
+    await expect(pool.acquire(spec, root, { timeoutMs: 50 })).rejects.toMatchObject({
+      message: 'LSP server disabled: crash-loop guard tripped',
+    });
+    expect(pool.spawned).toBe(3);
+    vi.useRealTimers();
+    await Promise.all(starts);
+    expect(record).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not count an abandoned start that a new acquirer picks up within grace', async () => {
+    const { root, spec, guard } = setup({ silent: true });
+    const pool = new LspServerPool({ guardFor: () => guard, abandonedStartGraceMs: 20 });
+    pools.push(pool);
+    vi.useFakeTimers();
+    const first = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await first).toMatchObject({ kind: 'timeout' });
+    const second = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(pool.size).toBe(1);
+    expect(guard.recentCrashes).toBe(0);
+    await vi.advanceTimersByTimeAsync(40);
+    expect(await second).toMatchObject({ kind: 'timeout' });
+    expect(pool.spawned).toBe(1);
+    expect(guard.recentCrashes).toBe(0);
   });
 
   it('counts concurrent timed-out requests once each, not again on exit', async () => {
