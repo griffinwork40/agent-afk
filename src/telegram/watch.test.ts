@@ -160,8 +160,14 @@ describe('SessionWatchManager', () => {
     expect(all).toContain('👤 hello from CLI');
     expect(all).toContain('🤖 on it');
     expect(all).toContain('watch ended');
-    // Watch ended → registry cleaned up.
-    expect(manager.watching(7)).toBeUndefined();
+    // Watch ended → registry cleaned up, but not in the same tick as the final
+    // send. On `closed`, _run queues the send and breaks out of the tail, which
+    // awaits the ledger file handle's close() before _run's finally deletes the
+    // registry entry. The send lands during that await, so polling for the
+    // message and then asserting synchronously raced the cleanup.
+    await vi.waitFor(() => {
+      expect(manager.watching(7)).toBeUndefined();
+    }, { timeout: 2000 });
     // Batching: the user+assistant records (written within one debounce
     // window) must arrive in a single message, not one send per record.
     expect(sent.some((m) => m.includes('hello from CLI') && m.includes('on it'))).toBe(true);
