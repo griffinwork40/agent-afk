@@ -5,12 +5,30 @@ description: "Talk to Agent AFK, receive unattended results, and answer question
 
 The Telegram bot gives each allowed chat an agent conversation and can deliver daemon notifications. Use it when you need to work from your phone, inspect a running session, or answer a task's question while away from the terminal.
 
+## Before you start: create your Telegram bot
+
+A Telegram bot is an account operated by software rather than a person. AFK uses a bot you create to send reports to your phone and receive your messages; creating it does not move AFK onto Telegram's servers, so your computer still needs to stay on and connected.
+
+1. Open Telegram and sign in to your own Telegram account. Open [@BotFather](https://t.me/botfather), Telegram's bot for creating and managing other bots, or search for that exact username in Telegram.
+2. Send `/newbot` to BotFather, not to AFK. Follow its prompts for a name and a username for your new bot; the username must end in `bot`. See Telegram's [official bot creation instructions](https://core.telegram.org/bots/features#botfather).
+3. BotFather gives you a **bot token**, a secret string that lets software control your bot. Copy it for the terminal setup prompt below. It is not your Telegram password or your AI provider's API key.
+
+<Callout type="warn">
+Anyone with the bot token can control your bot. Paste it only into the setup command's hidden token prompt, not into an AFK conversation, a public chat, a screenshot, or a bug report.
+</Callout>
+
+Next, run `afk telegram setup` in your computer's terminal. It asks for the token unless a valid one is already configured; pasted characters stay hidden. It then asks you to send a message to your new bot in Telegram, and looks for that message to find your chat.
+
+A **chat ID** is Telegram's numeric identifier for a conversation, not the bot's username. The setup command discovers it for you after you message the bot, so you normally do not need to look it up or type it yourself.
+
+The **allowlist** is the list of chats AFK accepts messages from; chats outside it are ignored. Setup saves the discovered chat, asking you to choose if it finds more than one; select your own private chat, not an unfamiliar one.
+
 ## Set up the bot
 
 <Steps>
 <Step>
 
-Create a bot with `@BotFather` using `/newbot` and copy its token.
+Have the bot token from BotFather ready, following the walkthrough above.
 
 </Step>
 <Step>
