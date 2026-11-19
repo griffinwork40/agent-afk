@@ -20,19 +20,21 @@
  *   - No new denials or grants are introduced by this step.
  */
 
-import { describe, expect, it, afterEach } from 'vitest';
+import { describe, expect, it, afterEach, vi } from 'vitest';
 import { homedir } from 'os';
 import { join, resolve } from 'path';
 
 import { createBashRestrictionHook } from './bash-restriction-hook.js';
 import { _resetReadDenylistCacheForTests } from '../handlers/read-denylist.js';
 import { resetAfkHomeWarnLatchForTests } from '../afk-home-warn.js';
+import { safeRealpath } from '../handlers/write-denylist.js';
 import type { GrantManager } from '../grant-manager.js';
 import type { PreToolUseContext } from '../../hooks.js';
 
 const HOME = homedir();
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   _resetReadDenylistCacheForTests();
   resetAfkHomeWarnLatchForTests();
 });
@@ -249,6 +251,31 @@ describe('check2-policy equivalence: home-anchored grants drop home-dir credenti
 // ---------------------------------------------------------------------------
 
 describe('check2-policy equivalence: block message invariants', () => {
+  it.each([false, true])('distinguishes credential-floor matches from bash-only extras (headless=%s)', (headless) => {
+    vi.stubEnv('AFK_READ_DENYLIST', '');
+    _resetReadDenylistCacheForTests();
+    const context = headless ? prodHeadless : ctx;
+    const credential = hook(context('cat /etc/shadow'));
+    const extraRoot = join(HOME, 'Library', 'LaunchAgents');
+    const extra = hook(context(`cat "${extraRoot}/x.plist"`));
+    expect(credential.decision).toBe('block');
+    expect(credential.reason).toContain(`restricted path (/etc/shadow) (credential floor: ${safeRealpath('/etc/shadow')})`);
+    expect(extra.decision).toBe('block');
+    expect(extra.reason).toContain(`restricted path (${extraRoot})`);
+    expect(extra.reason).not.toContain('credential floor:');
+    expect(hook(context('cat /etc/passwd')).decision).not.toBe('block');
+  });
+
+  it.each([false, true])('retains the matched root when an operator floor is wider (headless=%s)', (headless) => {
+    vi.stubEnv('AFK_READ_DENYLIST', HOME);
+    _resetReadDenylistCacheForTests();
+    const context = headless ? prodHeadless : ctx;
+    const d = hook(context(`cat ${HOME}/.ssh/id_rsa`));
+    expect(d.decision).toBe('block');
+    expect(d.reason).toContain(`restricted path (${join(HOME, '.ssh')}) (credential floor: ${safeRealpath(HOME)})`);
+    expect(hook(context('cat /etc/passwd')).decision).not.toBe('block');
+  });
+
   it('interactive block names /allow-dir escape hatch', () => {
     const d = hook(ctx(`cat ${HOME}/.ssh/id_rsa`));
     expect(d.decision).toBe('block');
