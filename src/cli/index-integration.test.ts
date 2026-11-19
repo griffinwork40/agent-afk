@@ -1,9 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Command } from 'commander';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { join } from 'path';
 import {
   deferAfkMdSizeWarnings,
   flushDeferredAfkMdSizeWarnings,
   _resetAfkMdSizeWarnCache,
+  loadAfkMd,
+  resetAfkMdCache,
+  warnIfAfkMdOversize,
+  OVERLAY_TOKEN_WARN_THRESHOLD,
 } from './config/afk-md-tier.js';
 import { registerChatCommand } from './commands/chat.js';
 import { registerInteractiveCommand } from './commands/interactive.js';
@@ -123,66 +129,70 @@ Examples:
 
 describe('preAction hook — deferred AFK.md size warning flush', () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
+  let fixtureRoot: string;
 
   beforeEach(() => {
+    const scratch = join(process.cwd(), '.afk-scratch');
+    mkdirSync(scratch, { recursive: true });
+    fixtureRoot = mkdtempSync(join(scratch, 'preaction-warnings-'));
+    vi.stubEnv('AFK_HOME', join(fixtureRoot, 'home'));
+    resetAfkMdCache();
     _resetAfkMdSizeWarnCache();
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
   afterEach(() => {
     warnSpy.mockRestore();
+    vi.unstubAllEnvs();
+    rmSync(fixtureRoot, { recursive: true, force: true });
+    resetAfkMdCache();
     _resetAfkMdSizeWarnCache();
   });
 
-  it('flushes deferred warnings for non-interactive commands', () => {
-    // Simulate the preAction hook logic from index.ts for a non-interactive command.
-    // Note: actionName is a hardcoded literal here, so the branch is always taken
-    // and this test only exercises the flush path, not the conditional. The real
-    // end-to-end coverage of the conditional (both branches) is in the Commander
-    // round-trip test below ('preAction hook wired on a real Commander program').
-    deferAfkMdSizeWarnings();
-    const actionName: string = 'chat';
-    if (actionName !== 'interactive') flushDeferredAfkMdSizeWarnings();
-    // No messages were buffered, so warn is not called — but deferral was ended
-    // (subsequent direct calls emit immediately).
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
+  it.each(['ping', 'interactive'])('preAction preserves warning delivery for %s', (commandName) => {
+    const paths = ['startup', 'later'].map((name) => {
+      const cwd = join(fixtureRoot, name);
+      mkdirSync(cwd);
+      writeFileSync(join(cwd, 'AFK.md'), 'a'.repeat((OVERLAY_TOKEN_WARN_THRESHOLD + 500) * 4));
+      return cwd;
+    });
+    const startup = loadAfkMd(paths[0]!)!;
+    const later = loadAfkMd(paths[1]!)!;
+    expect(startup.estimatedTokens).toBeGreaterThan(OVERLAY_TOKEN_WARN_THRESHOLD);
+    expect(later.estimatedTokens).toBeGreaterThan(OVERLAY_TOKEN_WARN_THRESHOLD);
+    expect(startup.paths).not.toEqual(later.paths);
 
-  it('does NOT flush when the action command is "interactive"', () => {
-    // Simulate the preAction hook logic from index.ts for the interactive command.
-    // Note: actionName is a hardcoded literal here, so the branch is never taken
-    // and this test only verifies that deferral stays active when flush is not
-    // called. The real end-to-end conditional coverage is in the Commander
-    // round-trip test below ('preAction hook wired on a real Commander program').
     deferAfkMdSizeWarnings();
-    const actionName = 'interactive';
-    if (actionName !== 'interactive') flushDeferredAfkMdSizeWarnings();
-    // Flush was NOT called — deferral is still active, warn stays silent.
+    warnIfAfkMdOversize(startup);
     expect(warnSpy).not.toHaveBeenCalled();
-  });
 
-  it('preAction hook wired on a real Commander program calls flush for non-interactive', () => {
     const program = new Command();
     program.exitOverride();
-
-    // Register a minimal synchronous sub-command (avoids real chat I/O).
-    let actionRan = false;
-    program.command('ping').action(() => {
-      actionRan = true;
+    const action = vi.fn(() => {
+      // The hook must deliver (or retain) startup warnings BEFORE command output.
+      expect(warnSpy).toHaveBeenCalledTimes(commandName === 'ping' ? 1 : 0);
     });
-
-    let flushCalled = false;
-    // Wire the hook exactly as index.ts does it:
+    program.command('ping').action(action);
+    program.command('interactive').action(action);
+    // Wire the hook exactly as index.ts does it, with Commander supplying the name.
     program.hook('preAction', (_thisCommand, actionCommand) => {
-      if (actionCommand.name() !== 'interactive') {
-        flushCalled = true;
-        flushDeferredAfkMdSizeWarnings();
-      }
+      if (actionCommand.name() !== 'interactive') flushDeferredAfkMdSizeWarnings();
     });
+    program.parse(['node', 'afk', commandName]);
+    expect(action).toHaveBeenCalledOnce();
 
-    deferAfkMdSizeWarnings();
-    program.parse(['node', 'afk', 'ping']);
-    expect(actionRan).toBe(true);
-    expect(flushCalled).toBe(true);
+    warnIfAfkMdOversize(later);
+    if (commandName === 'ping') {
+      // Flushing ends deferral: a new path warns immediately, without another flush.
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+    } else {
+      expect(warnSpy).not.toHaveBeenCalled();
+      flushDeferredAfkMdSizeWarnings();
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+    }
+    expect(warnSpy).toHaveBeenNthCalledWith(1, expect.stringContaining(startup.paths[0]!));
+    expect(warnSpy).toHaveBeenNthCalledWith(2, expect.stringContaining(later.paths[0]!));
+    flushDeferredAfkMdSizeWarnings();
+    expect(warnSpy).toHaveBeenCalledTimes(2);
   });
 });
