@@ -272,7 +272,7 @@ describe('check2-policy equivalence: block message invariants', () => {
     const context = headless ? prodHeadless : ctx;
     const d = hook(context(`cat ${HOME}/.ssh/id_rsa`));
     expect(d.decision).toBe('block');
-    expect(d.reason).toContain(`restricted path (${join(HOME, '.ssh')}) (credential floor: ${safeRealpath(HOME)})`);
+    expect(d.reason).toContain(`restricted path (${HOME + '/.ssh'}) (credential floor: ${safeRealpath(HOME)})`);
     expect(hook(context('cat /etc/passwd')).decision).not.toBe('block');
   });
 
