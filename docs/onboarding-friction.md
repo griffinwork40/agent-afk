@@ -87,7 +87,7 @@ Nothing in this file has been observed on a real clean machine.
 | D14 | win | blocker if true | inferred | Smart App Control on new Windows 11 installs may block unsigned native files | none | Observe on a fresh image |
 | D15 | win | papercut | confirmed (line), inferred (effect) | postinstall is run as `node scripts/postinstall.mjs \|\| true`; `cmd.exe` has no `true`, so a crash in the script would fail the install | `package.json:26` | `\|\| exit 0` |
 | D16 | both | confusing | confirmed | CI never installs the package the way a user does: Windows runs from source with pnpm and smoke-tests `node dist/cli.mjs` | `.github/workflows/ci.yml:543-597` | Observation workflow |
-| D17 | mac | confusing | confirmed | `ci.yml` has no macOS runner at all | `runs-on` values in `ci.yml`: ubuntu-latest, windows-2022 | Observation workflow |
+| D17 | mac | confusing | corrected 2026-11-19 | `ci.yml` runs the test suite on `macos-latest` from source (the `test` job matrix) but never installs the package there the way a user does. An earlier version of this row wrongly said `ci.yml` had no macOS runner | `.github/workflows/ci.yml:296-312` | Observation workflow |
 | D18 | both | confusing | external, inferred | Sync and backup tools (OneDrive, iCloud) modifying `node_modules`; user folders with spaces, apostrophes, or non-ASCII characters; long paths | gemini-cli issue 27778 | Observe |
 
 ## E. First launch and sign-in
