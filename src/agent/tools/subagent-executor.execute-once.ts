@@ -10,7 +10,7 @@
 
 import { SUBAGENT_BACKGROUND_TIMEOUT_MS } from '../subagent.js';
 import type { ToolCall, ToolResult } from './types.js';
-import { resolveMaxNestingDepth } from './nesting.js';
+import { resolveChildMaxDepth } from './dispatch-preparation.js';
 import { resolveNamedAgent } from './subagent-executor.execute-once.gates.js';
 import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
 import { buildChildConfigWithoutNesting, completeChildConfigNesting, type BuildChildConfigArgs } from './subagent/child-config.js';
@@ -133,7 +133,7 @@ export async function executeOnce(
 
   // Invariant: `ctx.depth` is required — top-level callers pass explicit `0`.
   const depth = ctx.depth;
-  const maxDepth = ctx.maxDepth ?? resolveMaxNestingDepth();
+  const maxDepth = resolveChildMaxDepth(ctx.maxDepth);
 
   const identity: { origin?: TraceOrigin; actor?: TraceActor } =
     ctx.surface !== undefined

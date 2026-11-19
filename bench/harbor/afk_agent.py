@@ -106,6 +106,7 @@ class AfkAgent(BaseInstalledAgent):
         effort: str | None = None,
         max_budget_usd: str | None = None,
         afk_version: str | None = None,
+        afk_package: str | None = None,
         context_window: int | None = None,
         **kwargs: Any,
     ) -> None:
@@ -114,6 +115,9 @@ class AfkAgent(BaseInstalledAgent):
         self._effort = effort
         self._max_budget_usd = max_budget_usd
         self._afk_version = afk_version  # None → latest
+        self._afk_package = Path(afk_package).resolve() if afk_package else None
+        if self._afk_package and afk_version:
+            raise ValueError("afk_package and afk_version are mutually exclusive")
         self._context_window = validate_context_window(context_window)
         # Accumulated from stream-json for populate_context_post_run
         self._last_done_metadata: dict[str, Any] | None = None
@@ -145,13 +149,17 @@ class AfkAgent(BaseInstalledAgent):
         )
 
         pkg = f"agent-afk@{self._afk_version}" if self._afk_version else "agent-afk"
+        if self._afk_package:
+            # Setup has its own Harbor timer; upload/install is not agent execution.
+            await environment.upload_file(self._afk_package, "/tmp/afk-under-test.tgz")
+            pkg = "/tmp/afk-under-test.tgz"
 
         await self.exec_as_agent(
             environment,
             command=(
                 "set -euo pipefail; "
                 + nvm_node_install_snippet()
-                + f" && npm install -g {pkg}"
+                + f" && npm install -g {shlex.quote(pkg)}"
                 + " && afk --version"
             ),
         )
@@ -207,8 +215,8 @@ class AfkAgent(BaseInstalledAgent):
         await self.exec_as_agent(
             environment,
             command=(
-                'export NVM_DIR="$HOME/.nvm" && '
-                '. "$NVM_DIR/nvm.sh" 2>/dev/null || true && '
+                'set -o pipefail; export NVM_DIR="$HOME/.nvm"; '
+                '. "$NVM_DIR/nvm.sh" 2>/dev/null || true; '
                 f'printf "%s" "${instruction_var}" | '
                 f"afk chat --format stream-json {cli_flags}"
                 f" 2>&1 | tee {log_path}"
