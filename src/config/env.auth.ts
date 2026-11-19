@@ -167,6 +167,13 @@ export const AUTH_ENV_REGISTRY = [
     secret: true,
   },
   {
+    name: 'AFK_ARTIFACT_SESSION_LIMIT',
+    description: 'Maximum number of artifacts the artifact_publish tool may register per session. Prevents unbounded storage growth in autonomous loops. Default: 50.',
+    type: 'string',
+    required: false,
+    category: 'misc',
+  },
+  {
     name: 'AFK_IMAGE_SESSION_LIMIT',
     description: 'Maximum number of images the image_generate tool may produce per session. Prevents runaway spend in autonomous loops. Default: 10.',
     type: 'string',
