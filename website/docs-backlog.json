@@ -63,6 +63,12 @@
     },
     {
       "kind": "command",
+      "name": "afk schedule health",
+      "reason": "New subcommand added in #5146 (daemon failure-streak escalation). Exits non-zero when any enabled task has N or more consecutive failures; exits 0 when all tasks are healthy. Full guide pending.",
+      "added": "2026-11-19"
+    },
+    {
+      "kind": "command",
       "name": "afk trace export-otlp",
       "reason": "Listed only in the generated CLI reference; no hand-written guide covers converting a sealed witness trace to OTLP/JSON yet.",
       "added": "2026-11-12"

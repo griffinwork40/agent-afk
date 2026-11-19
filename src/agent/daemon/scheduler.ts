@@ -43,12 +43,12 @@ import {
   executePullTick,
   fireOnTaskComplete,
   type PullTickContext,
-  type FireOnTaskCompleteOptions,
 } from './scheduler.pull-tick.js';
 import { errorMessage } from '../../utils/errors.js';
 import { makeCwdErrorRecord, snapshotInFlightTasks, makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
 import { ensureTelemetrySink, probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
+import { FailureStreakTracker, applyStreakLogic } from './scheduler.failure-streak.js';
 import { evaluateRunAtGate, applyAutoDisable, warnMalformedDate } from './scheduler.runat-gate.js';
 import { overlapKeyOf } from './handoff-resume-context.js';
 
@@ -178,6 +178,23 @@ export interface TelemetryRecord extends GateRecoveryFields, ModelFallbackFields
    * into retries (`maxAttempts > 1`); absent = single attempt, as before.
    */
   attempts?: number;
+  /**
+   * Whether a notification was sent for this run, and what kind (#5146).
+   * - `'failure'`      — regular per-failure notice (notifyOn: 'failure' or 'always').
+   * - `'escalation'`   — first streak-threshold alert.
+   * - `'re-escalation'`— periodic reminder for an ongoing streak.
+   * - `'recovery'`     — task recovered after a streak.
+   * - `'none'`         — notification was due but suppressed (e.g. by notifyOn: 'never').
+   * Absent when no notification decision was made (e.g. skipped runs, pre-threshold
+   * failures, or tasks with no onTaskComplete callback configured).
+   */
+  notifySent?: 'failure' | 'escalation' | 're-escalation' | 'recovery' | 'none';
+  /**
+   * ISO timestamp of the first failure in the current consecutive-failure streak.
+   * Only present on telemetry records for failures that are part of an active streak
+   * (i.e. count >= 2). Absent on the first failure and on successes/skips (#5146).
+   */
+  failingSince?: string;
 }
 
 export interface TaskCompletionDetails {
@@ -236,6 +253,8 @@ export class CronScheduler {
   private readonly overlapAlerts = new OverlapAlertLatch();
   /** One Telegram alert per daemon process for a non-writable telemetry file. */
   private readonly telemetryAlerts = new TelemetryAlertLatch();
+  /** Per-task consecutive-failure streak tracker (#5146). Read by `afk schedule health`. */
+  readonly failureStreaks = new FailureStreakTracker();
   /** Aborted by `stop()` so an in-progress retry backoff ends promptly (#3243). */
   private shutdownController = new AbortController();
   // TODO(#337-hook): hook-driven dequeue path will share isDequeuing mutex
@@ -619,13 +638,10 @@ export class CronScheduler {
     return this.options.telemetryPath ?? getTelemetryPath();
   }
 
-  private writeTelemetry(
-    record: TelemetryRecord,
-    task?: ScheduledTask,
-    details?: TaskCompletionDetails,
-  ): void {
-    // Persist doneUnverified (#2307): only written when true; absent = not unverified.
-    const persistedRecord: TelemetryRecord = details?.doneUnverified === true ? { ...record, doneUnverified: true } : record;
+  private writeTelemetry(record: TelemetryRecord, task?: ScheduledTask, details?: TaskCompletionDetails): void {
+    // doneUnverified (#2307): only written when true. applyStreakLogic (#5146): stamps notifySent/failingSince.
+    const doneRec: TelemetryRecord = details?.doneUnverified === true ? { ...record, doneUnverified: true } : record;
+    const { persistedRecord, effectiveTask, effectiveDetails } = applyStreakLogic(this.failureStreaks, task, doneRec, details, this.options.onTaskComplete !== undefined);
     try {
       appendFileSync(this.telemetryPath(), `${JSON.stringify(persistedRecord)}\n`, 'utf-8');
     } catch (err) {
@@ -636,7 +652,7 @@ export class CronScheduler {
     }
     // Contract: persistedRecord is passed unconditionally — if appendFileSync
     // threw above, the record may not be on disk (see CronSchedulerOptions.onTaskComplete).
-    const opts: FireOnTaskCompleteOptions = { onTaskComplete: this.options.onTaskComplete };
-    fireOnTaskComplete(persistedRecord, opts, task, details);
+    fireOnTaskComplete(persistedRecord, { onTaskComplete: this.options.onTaskComplete }, effectiveTask, effectiveDetails);
   }
+
 }

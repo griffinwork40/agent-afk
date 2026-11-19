@@ -241,6 +241,12 @@ export interface ScheduledTaskConfig {
   /** Backoff base (ms) between retry attempts; threaded to `ScheduledTask.retryDelayMs`. */
   retryDelayMs?: number;
   /**
+   * Consecutive-failure count before the scheduler sends an escalation alert.
+   * Default 3. Set to 1 to alert on the first failure. See issue #5146.
+   * Threaded to `ScheduledTask.failureStreakThreshold`.
+   */
+  failureStreakThreshold?: number;
+  /**
    * One-shot fire time (ISO 8601). When set, the task fires once at or after
    * this instant and is automatically disabled afterward. Mutually exclusive
    * with a recurring `cron` expression — use one or the other, not both.
@@ -471,7 +477,9 @@ export function getSchedule(id: string, path?: string): ScheduledTaskConfig | un
 }
 
 /** Patchable fields for `updateSchedule`. Excludes `id` and `createdAt`. */
-export type SchedulePatch = Partial<Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt' | 'cwd' | 'runAt' | 'expiresAt'>> & {
+export type SchedulePatch = Partial<Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt' | 'cwd' | 'runAt' | 'expiresAt' | 'failureStreakThreshold'>> & {
+  /** Set or clear the per-task streak threshold. Pass null to clear (fall back to default 3). */
+  failureStreakThreshold?: number | null;
   /** Set a new directory path, or pass `null`/`""` to clear the existing one. */
   cwd?: string | null;
   /** Set or clear the one-shot fire time. Pass `null` to clear. */
@@ -521,6 +529,7 @@ export function updateSchedule(
       ...(patch.notifyChat !== undefined ? { notifyChat: patch.notifyChat } : {}),
       ...(patch.maxAttempts !== undefined ? { maxAttempts: patch.maxAttempts } : {}),
       ...(patch.retryDelayMs !== undefined ? { retryDelayMs: patch.retryDelayMs } : {}),
+      ...(patch.failureStreakThreshold !== undefined && patch.failureStreakThreshold !== null ? { failureStreakThreshold: patch.failureStreakThreshold } : {}),
       ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
       ...(patch.cwd !== undefined && patch.cwd !== null ? { cwd: patch.cwd } : {}),
       ...(patch.runAt !== undefined && patch.runAt !== null ? { runAt: patch.runAt } : {}),
@@ -533,6 +542,8 @@ export function updateSchedule(
     // runAt/expiresAt: null means "clear" — remove the field entirely.
     if (patch.runAt === null) delete updated.runAt;
     if (patch.expiresAt === null) delete updated.expiresAt;
+    // failureStreakThreshold: null means "clear" — fall back to default.
+    if (patch.failureStreakThreshold === null) delete updated.failureStreakThreshold;
     schedules[idx] = updated;
     saveSchedules(schedules, storePath);
     return updated;
@@ -605,6 +616,7 @@ export function toScheduledTask(config: ScheduledTaskConfig): ScheduledTask {
     ...(config.notifyChat !== undefined ? { notifyChat: config.notifyChat } : {}),
     ...(config.maxAttempts !== undefined ? { maxAttempts: config.maxAttempts } : {}),
     ...(config.retryDelayMs !== undefined ? { retryDelayMs: config.retryDelayMs } : {}),
+    ...(config.failureStreakThreshold !== undefined ? { failureStreakThreshold: config.failureStreakThreshold } : {}),
     ...(config.cwd !== undefined ? { cwd: expandCwd(config.cwd) } : {}),
     ...(config.runAt !== undefined ? { runAt: config.runAt } : {}),
     ...(config.expiresAt !== undefined ? { expiresAt: config.expiresAt } : {}),

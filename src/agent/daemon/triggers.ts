@@ -132,6 +132,13 @@ export interface ScheduledTask {
    * cron fire of that task is skipped while its resume is in flight (#1416).
    */
   overlapKey?: string;
+  /**
+   * Number of consecutive failures (error or blocked) before the scheduler
+   * sends an escalation alert. Default: 3. Set to 1 to alert on the very first
+   * failure. Must be a positive integer.
+   * See: scheduler.failure-streak.ts, issue #5146.
+   */
+  failureStreakThreshold?: number;
 }
 
 /**
