@@ -54,6 +54,11 @@ describe('processInlineEvent — model-fallback notice', () => {
       expect.any(String),
       'Switched to claude-haiku',
     );
+    // sendMessage must have been called with the correct chatId and notice text.
+    const sendMessage = ctx.telegram.sendMessage as ReturnType<typeof vi.fn>;
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(sendMessage.mock.calls[0]![0]).toBe(999);
+    expect(sendMessage.mock.calls[0]![1]).toBe('Switched to claude-haiku');
   });
 
   it('F2: logs and skips send when routeFromCtx returns undefined', async () => {

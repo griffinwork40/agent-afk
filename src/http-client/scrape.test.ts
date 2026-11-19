@@ -280,6 +280,39 @@ describe('scrapeToMarkdown — content-type handling', () => {
       // extractable or supported-image branches.
     ).rejects.toThrow(/For \.pdf.*extract_document/);
   });
+
+  it('strips Content-Type parameters before classifying binary content', async () => {
+    // A server can send `application/pdf; charset=utf-8` — the bare type
+    // must still be classified as extractable after stripping the parameter.
+    const fetchFn = vi.fn(async () =>
+      makeResponse({ contentType: 'application/pdf; charset=utf-8', body: '%PDF-1.7…' }),
+    );
+
+    await expect(
+      scrapeToMarkdown('https://example.com/doc.pdf', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        timeoutMs: 5000,
+        signal: freshSignal(),
+        lookupFn: publicLookup,
+      }),
+    ).rejects.toThrow(/extract_document/);
+  });
+
+  it('classifies binary content case-insensitively', async () => {
+    // RFC 2045 says media types are case-insensitive; some servers capitalise.
+    const fetchFn = vi.fn(async () =>
+      makeResponse({ contentType: 'Image/PNG', body: '\x89PNG…' }),
+    );
+
+    await expect(
+      scrapeToMarkdown('https://example.com/photo.PNG', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        timeoutMs: 5000,
+        signal: freshSignal(),
+        lookupFn: publicLookup,
+      }),
+    ).rejects.toThrow(/view_image/);
+  });
 });
 
 describe('scrapeToMarkdown — cancellation', () => {
