@@ -65,6 +65,12 @@ export function sidecarPredatesWindow(
   const startedAt = debug ? performance.now() : 0;
   try {
     const mtime = statSync(join(sessionsDir, `${sessionId}.json`)).mtimeMs;
+    // recordDebugStat is called before the skip check so the timing reflects the
+    // full per-loop cost (stat + bookkeeping) regardless of whether the session
+    // is ultimately skipped. The result is only logged when skip is true because
+    // non-skipped sessions don't contribute to the "[session-prescreen] skip"
+    // log line, but the counter and total-ms accumulators still advance — this
+    // is intentional and not dead code.
     const timing = debug ? recordDebugStat(startedAt) : undefined;
     const skip = mtime < cutoffMs;
     if (debug && skip) {
