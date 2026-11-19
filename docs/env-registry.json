@@ -19,6 +19,13 @@
       "category": "mcp"
     },
     {
+      "name": "AFK_ARTIFACT_SESSION_LIMIT",
+      "description": "Maximum number of artifacts the artifact_publish tool may register per session. Prevents unbounded storage growth in autonomous loops. Default: 50.",
+      "type": "string",
+      "required": false,
+      "category": "misc"
+    },
+    {
       "name": "AFK_AUTO_ROUTING",
       "description": "Auto-route bare slash inputs to matching skills. Applies to interactive, chat, and telegram surfaces. The afk web surface also inherits the interactive value (autoRouting.interactive), so this setting covers web sessions too.",
       "type": "boolean",
@@ -141,8 +148,8 @@
       "description": "Set to 1 to enable closed-router credential rotation on subscription-limit 429s. When set, afk shells out to `closed-router rotate --once --json` before entering the multi-hour park loop. On a successful rotation the turn is replayed with the new credential. When all accounts are exhausted (`all-hot`), the existing park behavior applies. Requires `closed-router` to be on PATH. Default: unset (disabled).",
       "type": "boolean",
       "required": false,
-      "category": "auth",
-      "secret": true
+      "example": "1",
+      "category": "misc"
     },
     {
       "name": "AFK_COMPACT_KEEP_LAST_TURNS",

@@ -45,6 +45,7 @@
 import type { Writable } from 'node:stream';
 import { env } from '../config/env.js';
 import { hardWrapToWidth } from './wrap.js';
+import { displayWidth } from './display.js';
 import { cup, ERASE_LINE, SYNC_START, SYNC_END, CURSOR_SHOW } from './cup-frame-renderer.escapes.js';
 import { CupCursorTracker } from './cup-frame-renderer.cursor.js';
 import { CupWriteBatcher } from './cup-frame-renderer.batcher.js';
@@ -187,11 +188,11 @@ export class CupFrameRenderer {
     // Compute where the frame top lands (grows upward from bottomRow).
     const newTopRow = Math.max(1, bottomRow - lineCount + 1);
 
-    // Build output: erase previous frame + write new frame, all via CUP.
+    // Build output: paint over the frame, then retire uncovered old rows via CUP.
     this.batcher.beginFrame();
 
-    // Erase the previous frame's rows. Covers cases where the new frame is
-    // shorter than the previous (rows that would otherwise be stale on screen).
+    // Invariant: retire the previous frame's uncovered rows AFTER painting.
+    // This covers rows that would otherwise be stale when the frame moves.
     //
     // Two bounds limit the erase:
     //   1. `effectiveEraseBottom` (the erase ceiling) prevents erasing rows
@@ -214,20 +215,30 @@ export class CupFrameRenderer {
     // footprint without touching the footer band.
     const eraseTop = this.cursor.previousTopRow;
     const effectiveEraseBottom = this.cursor.consumeEraseBottomOverride() ?? bottomRow;
+    // tmux 3.6a ignores mode 2026 and splits large writes: paint text BEFORE
+    // erasing its tail, so split-write prefixes never blank surviving rows.
+    // hardWrapToWidth bounds physical rows by display cells. At full width the
+    // cursor has pending wrap; EL0 there can erase the last (possibly wide) glyph.
+    // Do not reset SGR: unclosed/cross-row styles must continue onto later text.
+    // Their erased tails intentionally use the ENDING background, not the old
+    // erase-first STARTING background; style-closed rows remain cell-identical.
+    // Blank rows (including shrink pads) still get EL0 from column 1, clearing
+    // any external committed-band paint in the footprint without a row cache.
+    for (let i = 0; i < lineCount; i++) {
+      const row = newTopRow + i;
+      const line = frameLines[i] ?? '';
+      const tail = displayWidth(line) < width ? '\x1b[K' : '';
+      this.batcher.append(cup(row, 1) + line + tail);
+    }
+
+    // Retire only uncovered old rows, with the same ceiling and one-shot override.
     if (this.cursor.previousLineCount > 0) {
       for (let i = 0; i < this.cursor.previousLineCount; i++) {
         const row = eraseTop + i;
         if (row > effectiveEraseBottom) break;
+        if (row >= newTopRow && row < newTopRow + lineCount) continue;
         this.batcher.append(cup(row, 1) + ERASE_LINE);
       }
-    }
-
-    // Write new frame lines via CUP. The last content line lands at bottomRow.
-    // frameLines may be padded at the top with blank rows (shrink case) — those
-    // blank rows overwrite the previously-occupied upper rows without content.
-    for (let i = 0; i < lineCount; i++) {
-      const row = newTopRow + i;
-      this.batcher.append(cup(row, 1) + ERASE_LINE + (frameLines[i] ?? ''));
     }
 
     // Leave cursor parked at the last content row, column 1 (matches where a

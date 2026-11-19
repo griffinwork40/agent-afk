@@ -863,6 +863,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_ARTIFACT_SESSION_LIMIT",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_AUTO_ROUTING",
       "source": "src/config/env.daemon.ts"
     },
@@ -4724,6 +4729,11 @@
     {
       "kind": "tool",
       "name": "artifact_list",
+      "source": "src/agent/tools/schemas.artifact.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "artifact_publish",
       "source": "src/agent/tools/schemas.artifact.ts"
     },
     {

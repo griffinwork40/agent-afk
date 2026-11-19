@@ -1,17 +1,60 @@
 #!/bin/sh
-# pre-push hook — runs pnpm check:audits before every push.
+# pre-push hook — guards direct main pushes, then runs pnpm check:audits.
 # Tracked at scripts/git-hooks/pre-push; installed into .git/hooks by
 # scripts/install-pre-push-hook.mjs (runs on pnpm install via prepare).
 #
-# Fail-open: if the environment looks broken (node_modules missing, node/pnpm
-# unavailable, or this checkout lacks a check:audits script) this hook exits 0
-# so developers are never hard-blocked.
-#
-# Bypass: git push --no-verify
+# Only audits fail open for missing dependencies/tools or a broken environment.
+# The main guard needs only git and POSIX utilities and runs first.
+# Human override for main: AFK_ALLOW_MAIN_PUSH=1 (audits still run).
+# Bypass the entire hook: git push --no-verify
 
 toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$toplevel" || exit 1
 
-cd "$toplevel"
+refuse_main() {
+  echo "pre-push: refusing direct push to main; open a PR instead. Only chore(release): or docs(changelog): commits are allowed. Human override: AFK_ALLOW_MAIN_PUSH=1 git push" >&2
+  exit 1
+}
+
+# Consume stdin once for both the main guard and deletion-only audit shortcut.
+# Git fields: <local-ref> <local-sha> <remote-ref> <remote-sha>.
+# Strip CR for CRLF clients; read treats fields as data, never shell code.
+push_stdin=$(cat | tr -d '\r')
+zero=0000000000000000000000000000000000000000
+all_deletions=1
+found_any=0
+if [ -n "$push_stdin" ]; then
+  while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+    [ -z "$local_sha" ] && continue
+    found_any=1
+    [ "$local_sha" = "$zero" ] && continue
+    all_deletions=0
+    if [ "$remote_ref" = refs/heads/main ] && [ "${AFK_ALLOW_MAIN_PUSH:-}" != 1 ]; then
+      # New remote main: inspect the entire reachable history, not an invalid
+      # zero..HEAD range. Include all parents (no --first-parent/--no-merges).
+      range=$local_sha
+      [ "$remote_sha" = "$zero" ] || range="$remote_sha..$local_sha"
+      commits=$(git -c log.showSignature=false log --no-show-signature --format='%H %s' "$range" --) || refuse_main
+      if [ -n "$commits" ]; then
+        while IFS=' ' read -r commit subject; do
+          case "$subject" in
+            'chore(release):'*|'docs(changelog):'*) ;;
+            *) refuse_main ;;
+          esac
+        done <<COMMITS_END
+$commits
+COMMITS_END
+      fi
+    fi
+  done <<PUSH_STDIN_END
+$push_stdin
+PUSH_STDIN_END
+fi
+
+# No refs pushed (empty stdin) or all deletions — nothing to audit.
+if [ "$found_any" -eq 0 ] || [ "$all_deletions" -eq 1 ]; then
+  exit 0
+fi
 
 # Fail-open: node_modules absent.
 if [ ! -d node_modules ]; then
@@ -34,37 +77,6 @@ fi
 # Fail-open: pnpm not on PATH.
 if ! command -v pnpm >/dev/null 2>&1; then
   echo "pre-push: pnpm not found on PATH — skipping audit gates" >&2
-  exit 0
-fi
-
-# If every pushed ref is a deletion (local sha is all zeros), skip.
-# Git pre-push stdin fields are: <local-ref> <local-sha> <remote-ref> <remote-sha>.
-# Strip \r before the read loop so the deletion-skip check works on CRLF git
-# clients under POSIX dash/ash (dash's `read -r` does not strip \r before
-# field splitting). Use a temporary variable + printf to avoid the empty-stdin
-# ambiguity that a plain heredoc $var expansion would introduce.
-push_stdin=$(cat | tr -d '\r')
-all_deletions=1
-found_any=0
-if [ -n "$push_stdin" ]; then
-  while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
-    [ -z "$local_sha" ] && continue
-    found_any=1
-    case "$local_sha" in
-      0000000000000000000000000000000000000000) ;;
-      *) all_deletions=0 ;;
-    esac
-  # Unquoted heredoc delimiter is intentional: $push_stdin must expand here.
-  # Primary safety boundary: `IFS=' ' read -r` splits on spaces only with no
-  # eval, so each field is consumed as a plain string regardless of content.
-  # Secondary: git refs cannot contain '$' or backticks, so no injection risk.
-  done <<PUSH_STDIN_END
-$push_stdin
-PUSH_STDIN_END
-fi
-
-# No refs pushed (empty stdin) or all deletions — nothing to check.
-if [ "$found_any" -eq 0 ] || [ "$all_deletions" -eq 1 ]; then
   exit 0
 fi
 

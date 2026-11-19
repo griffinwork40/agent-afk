@@ -250,10 +250,13 @@ describe('D8 continuation through the agent executor', () => {
     const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
     const chainId = first.continuation!.chainId;
     const chain = registry.get(chainId)!;
-    expect(chain.settling).toBeDefined(); // flush is still held — settling must be set
-    expect(chain.inFlight).toBe(true);
-    // Release the flush so settling can complete, then issue the continuation.
-    releaseFlush();
+    try {
+      expect(chain.settling).toBeDefined(); // flush is still held — settling must be set
+      expect(chain.inFlight).toBe(true);
+    } finally {
+      // Release the flush so settling can complete, then issue the continuation.
+      releaseFlush();
+    }
     const second = await run({ prompt: 'immediately', continuation_chain_id: chainId });
     expect(second.isError, second.content).not.toBe(true);
     expect(delayed).toBeGreaterThan(0);
