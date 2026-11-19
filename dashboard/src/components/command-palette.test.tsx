@@ -1,7 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { CommandPalette, SUMMARY_CAP, getRecentCommands, recordRecentCommand } from './command-palette';
-import { apiFetch } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn(), ApiError: class extends Error {} }));
 // Mock fetchCommands at the composer module level so the module-level cache
