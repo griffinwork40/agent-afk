@@ -34,7 +34,7 @@ if [ -n "$push_stdin" ]; then
       # zero..HEAD range. Include all parents (no --first-parent/--no-merges).
       range=$local_sha
       [ "$remote_sha" = "$zero" ] || range="$remote_sha..$local_sha"
-      commits=$(git log --format='%H %s' "$range" --) || refuse_main
+      commits=$(git -c log.showSignature=false log --no-show-signature --format='%H %s' "$range" --) || refuse_main
       if [ -n "$commits" ]; then
         while IFS=' ' read -r commit subject; do
           case "$subject" in

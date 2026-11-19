@@ -289,6 +289,78 @@ describe('scripts/git-hooks/pre-push', () => {
     }
   });
 
+  it('log.showSignature=true in repo config does not cause false refusal of a chore(release): push to main', () => {
+    // History: regression guard for the log.showSignature bug reported in the
+    // Codex review thread on scripts/git-hooks/pre-push line 37.
+    // With log.showSignature=true, git writes signature-verification output
+    // (e.g. "No signature") to stdout before each %H %s record.  Without
+    // --no-show-signature the loop reads that line as a subject, the *) arm
+    // calls refuse_main, and a valid chore(release): push is incorrectly
+    // refused.  The fix adds -c log.showSignature=false and
+    // --no-show-signature so the machine-parsed git log is immune to that
+    // config regardless of which flag the installed git version honours.
+    //
+    // We write a commit object by hand (git hash-object -t commit -w --stdin)
+    // carrying a gpgsig header that contains a minimal SSH signature armor
+    // block.  git reports on gpgsig headers even when no key material is
+    // present, triggering the showSignature output without needing ssh-keygen
+    // or any pre-existing key on the runner.
+    const result = runHook('', { setup(dir) {
+      // Establish a base commit already "on remote".
+      const base = commit(dir, 'feat: already on remote');
+
+      // Enable log.showSignature in the repo so git log pollutes stdout.
+      git(dir, 'config', 'log.showSignature', 'true');
+
+      // Build a raw commit object with a gpgsig header.  git hash-object
+      // accepts the binary commit format on stdin and writes it to the
+      // object store.  The gpgsig value is an SSH armor block; it need not
+      // be cryptographically valid — git reports "No signature" / parse
+      // errors to stdout either way, which is what triggers the bug.
+      const treeHash = git(dir, 'rev-parse', `${base}^{tree}`);
+      const authorLine = 'author AFK Agent <agent@agentafk.com> 1700000000 +0000';
+      const committerLine = 'committer AFK Agent <agent@agentafk.com> 1700000000 +0000';
+      const subject = 'chore(release): v99';
+      // Minimal SSH signature armor (not cryptographically valid — only the
+      // header/footer matter for git's showSignature output path).
+      const sigArmor = [
+        '-----BEGIN SSH SIGNATURE-----',
+        'AAAAB3NzaC1yc2EAAAADAQABAAAAgQC0FAKE==',
+        '-----END SSH SIGNATURE-----',
+      ].join('\n');
+      // gpgsig value lines after the first must be space-indented per the
+      // git commit-object format.
+      const gpgsigLines = sigArmor.split('\n').join('\n ');
+      const rawCommit = [
+        `tree ${treeHash}`,
+        `parent ${base}`,
+        authorLine,
+        committerLine,
+        `gpgsig ${gpgsigLines}`,
+        '',
+        subject,
+        '',
+      ].join('\n');
+
+      const signedSha = execFileSync(
+        'git',
+        ['-C', dir, 'hash-object', '-t', 'commit', '-w', '--stdin'],
+        { input: rawCommit, encoding: 'utf8' },
+      ).trim();
+
+      // Point HEAD at the hand-crafted commit.
+      git(dir, 'update-ref', 'HEAD', signedSha);
+
+      return mainUpdate(signedSha, base);
+    } });
+    try {
+      // The push must succeed (exit 0): the hook must not refuse a
+      // chore(release): commit just because log.showSignature is set.
+      expect(result.status).toBe(0);
+      expect(result.stderr).not.toContain(refusal);
+    } finally { cleanup(result); }
+  });
+
   it('blocks when check:audits exits with a signal code >= 3', () => {
     // pnpm terminated by a signal (or any non-zero exit >= 3 that is not the
     // "all gates broken" sentinel of 2) must still block the push — exit 1.
