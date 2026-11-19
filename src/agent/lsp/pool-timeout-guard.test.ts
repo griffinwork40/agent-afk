@@ -125,7 +125,7 @@ describe('pooled request timeout incidents', () => {
     expect(record).toHaveBeenCalledTimes(3);
   });
 
-  it('counts each start killed after every acquirer abandoned it (production start path)', async () => {
+  it('never counts a start killed after every acquirer timed out', async () => {
     const { root, spec, guard } = setup({ silent: true });
     const record = vi.spyOn(guard, 'recordCrash');
     const starts: Array<Promise<unknown>> = [];
@@ -142,20 +142,22 @@ describe('pooled request timeout incidents', () => {
       const result = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
       await vi.advanceTimersByTimeAsync(50);
       expect(await result).toMatchObject({ kind: 'timeout' });
-      expect(guard.recentCrashes).toBe(i - 1);
+      expect(guard.recentCrashes).toBe(0);
       expect(pool.size).toBe(1);
       await vi.advanceTimersByTimeAsync(20);
       expect(pool.size).toBe(0);
-      expect(guard.recentCrashes).toBe(i);
+      expect(guard.recentCrashes).toBe(0);
     }
-    expect(guard.failed).toBe(true);
-    await expect(pool.acquire(spec, root, { timeoutMs: 50 })).rejects.toMatchObject({
-      message: 'LSP server disabled: crash-loop guard tripped',
-    });
-    expect(pool.spawned).toBe(3);
+    expect(guard.failed).toBe(false);
+    // A 4th acquire should still be able to spawn (guard not tripped).
+    const fourth = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await fourth).toMatchObject({ kind: 'timeout' });
+    expect(pool.spawned).toBe(4);
+    await vi.advanceTimersByTimeAsync(20);
     vi.useRealTimers();
     await Promise.all(starts);
-    expect(record).toHaveBeenCalledTimes(3);
+    expect(record).not.toHaveBeenCalled();
   });
 
   it('three starts abandoned by abort (never timed out) leave the guard clean and allow a fresh start', async () => {
@@ -194,7 +196,7 @@ describe('pooled request timeout incidents', () => {
     await Promise.all(starts);
   });
 
-  it('one start with one timeout acquirer and one aborted acquirer records exactly one incident after grace', async () => {
+  it('one start with one timeout acquirer and one aborted acquirer records zero incidents after grace', async () => {
     const { root, spec, guard } = setup({ silent: true });
     const starts: Array<Promise<unknown>> = [];
     const realStart = LspClient.start.bind(LspClient);
@@ -222,9 +224,9 @@ describe('pooled request timeout incidents', () => {
     expect(pool.size).toBe(1);
     expect(guard.recentCrashes).toBe(0);
     await vi.advanceTimersByTimeAsync(20);
-    // Grace timer fired: hadTimeout is true, so exactly one incident.
+    // Grace timer fired: start was caller-abandoned, so zero incidents.
     expect(pool.size).toBe(0);
-    expect(guard.recentCrashes).toBe(1);
+    expect(guard.recentCrashes).toBe(0);
     expect(pool.spawned).toBe(1);
     vi.useRealTimers();
     await Promise.all(starts);
@@ -310,7 +312,10 @@ describe('pooled request timeout incidents', () => {
     vi.useFakeTimers();
     await timeout(client);
     await timeout(client);
-    await timeout(client);
+    // Third timeout trips the guard: evicts the entry. Use realTimeout so the
+    // evicted client is fully disposed before afterEach removes the temp root.
+    await realTimeout(client);
+    await client.dispose();
     expect(guard.failed).toBe(true);
     const otherRoot = mkdtempSync(path.join(os.tmpdir(), 'afk-lsp-other-root-'));
     roots.push(otherRoot);
@@ -361,5 +366,66 @@ describe('pooled request timeout incidents', () => {
       .rejects.toMatchObject({ kind: 'response' });
     await expect(client.request('shutdown', null, { timeoutMs: 5_000 })).resolves.toBeNull();
     expect(guard.recentCrashes).toBe(0);
+  });
+
+  it('a server whose start outlives three short-budget acquires is still usable by a later longer-budget acquire', async () => {
+    // Regression: a healthy server with a ~3s cold start must not be disabled
+    // by three diagnostics calls (short timeoutMs) before it has warmed up.
+    //
+    // Setup: shared root/key, guard with injectable clock.
+    const { root, spec, guard } = setup({ silent: true });
+    // A second fixture server that responds normally (for the 4th start).
+    const { spec: realSpec } = setup();  // uses hangRequests:true default, but responds to initialize
+
+    // startClient: starts 1-3 hang (never-settling promise that rejects when
+    // aborted externally); start 4 uses the real responding server script.
+    let startCount = 0;
+    const hangAborts: AbortController[] = [];
+    const pool = new LspServerPool({
+      guardFor: () => guard,
+      abandonedStartGraceMs: 20,
+      startClient: (_serverSpec, cwd) => {
+        startCount++;
+        if (startCount <= 3) {
+          const ac = new AbortController();
+          hangAborts.push(ac);
+          return new Promise<LspClient>((_, reject) => {
+            if (ac.signal.aborted) { reject(new LspClientError('aborted', 'Aborted')); return; }
+            ac.signal.addEventListener('abort', () =>
+              reject(new LspClientError('aborted', 'Aborted')), { once: true });
+          });
+        }
+        // 4th: use the real responding server (realSpec has the responding script).
+        return LspClient.start(realSpec, cwd);
+      },
+    });
+    pools.push(pool);
+
+    vi.useFakeTimers();
+    // Three acquires, each with a short budget, each abandoned by deadline.
+    for (let i = 1; i <= 3; i++) {
+      const result = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(await result).toMatchObject({ kind: 'timeout' });
+      expect(guard.recentCrashes).toBe(0);
+      expect(pool.size).toBe(1); // still in grace
+      await vi.advanceTimersByTimeAsync(20); // fire grace timer -> abort + evict
+      // Settle the hanging start promise so it doesn't block disposeAll.
+      hangAborts[i - 1]!.abort();
+      expect(pool.size).toBe(0);
+      expect(guard.recentCrashes).toBe(0);
+    }
+    expect(guard.failed).toBe(false);
+
+    // Switch to real timers for the 4th acquire against the real responding server.
+    vi.useRealTimers();
+    const client = await pool.acquire(spec, root, { timeoutMs: 5_000 });
+    expect(client.alive).toBe(true);
+    expect(guard.failed).toBe(false);
+    expect(guard.recentCrashes).toBe(0);
+    expect(pool.spawned).toBe(4);
+
+    // Clean up: dispose live client before afterEach removes the root dir.
+    await client.dispose();
   });
 });

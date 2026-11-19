@@ -7,7 +7,9 @@
  *     for the remainder of the session and silently degrade (skip LSP, fall
  *     back to grep/regex). No restart attempts after the guard trips.
  *   - A slow server (request timeout counted as one crash) counts toward
- *     the guard.
+ *     the guard. The client's own initialize deadline also counts.
+ *   - A start abandoned by its callers (every acquirer timed out or aborted)
+ *     does NOT count — callers' patience is not server health.
  *   - A missing binary (not installed, not on PATH) is NOT a crash and does
  *     NOT count toward the guard.
  *

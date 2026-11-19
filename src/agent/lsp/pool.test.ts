@@ -123,10 +123,12 @@ describe('LspServerPool', () => {
 
   it('rejects (never hangs) when the server crashes on start', async () => {
     const { spec } = setup({ crashOnStart: true });
-    const pool = newPool();
+    const guard = new CrashLoopGuard({ now: () => Date.now() });
+    const pool = newPool({ guardFor: () => guard });
     const err = await pool.acquire(spec, tempDir, { timeoutMs: 3000 }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(LspClientError);
     expect(pool.size).toBe(0);
+    expect(guard.recentCrashes).toBe(1);
   }, 10_000);
 
   it('rejects with spawn when the binary does not exist', async () => {
