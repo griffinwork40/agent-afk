@@ -2,6 +2,7 @@ import { palette } from './palette.js';
 import { getEnvConfigPath } from '../paths.js';
 import { upsertEnvVar } from '../utils/envFile.js';
 import { promptSecret } from '../utils/prompt-secret.js';
+import { guidedToken } from './auth-wizard.guided.js';
 
 /**
  * Re-export the surface-agnostic `.env` upsert primitive. The canonical home
@@ -28,7 +29,7 @@ export function promptToken(): Promise<string> {
  * @param token - Optional pre-supplied token; if omitted, the user is prompted.
  */
 export async function runAuthWizard(token?: string): Promise<void> {
-  const inputToken = token ?? (await promptToken());
+  const inputToken = token ?? (await guidedToken(promptToken));
   if (!inputToken) {
     console.error(palette.error('No token provided. Nothing saved.'));
     process.exit(1);
@@ -49,5 +50,5 @@ export async function runAuthWizard(token?: string): Promise<void> {
   upsertEnvVar(envPath, envVarName, inputToken, keysToRemove);
 
   console.log(palette.success(`✓ Saved ${envVarName} to ${envPath}`));
-  console.log(palette.meta('Restart any running afk daemon to pick up the new token.'));
+  console.log(palette.success('Signed in. Type afk chat "hello" to get started.'));
 }
