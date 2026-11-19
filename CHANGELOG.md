@@ -17,6 +17,7 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 - add artifact_publish model tool with path/content auth, lineage validation, and quota admission (381df43f9)
 
 ### Fixed
+- paint the TUI live frame over itself so split writes never blank rows (#5106) (dad8b9055)
 - refuse pid 1 so a process-group kill can never become kill(-1) (#5097) (478e0b799)
 - route bash check-2 credential-floor decision through decidePathAccess (511a1f2c1)
 - require plain literal flags for destructive-git exemptions (d807f3e7a)
