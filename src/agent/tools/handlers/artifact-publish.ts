@@ -16,7 +16,8 @@
  *     authorization is required because the model is supplying bytes directly.
  *
  * Quota admission:
- *   - Per-session publish cap: AFK_ARTIFACT_SESSION_LIMIT (default 50).
+ *   - Per-actor session cap: AFK_ARTIFACT_SESSION_LIMIT (default 50).
+ *     Calls without a session ID share a process-wide fallback allowance.
  *   - If the cap is reached, the handler returns isError:true without writing.
  *
  * Lineage validation:
@@ -43,6 +44,8 @@ const DEFAULT_SESSION_LIMIT = 50;
 const INLINE_CONTENT_MAX_BYTES = 64 * 1024;
 /** Upper bound on metadata string fields to prevent index bloat. */
 const META_STRING_MAX = 256;
+const TAG_COUNT_MAX = 16;
+const PROCESS_QUOTA_KEY = '\0artifact_publish:no-session';
 
 // ---------------------------------------------------------------------------
 // Per-factory session quota counter
@@ -63,15 +66,21 @@ const publishInput = z.object({
   /** Existing filesystem path to register. Mutually exclusive with `content`. */
   path: z.string().max(4096).optional(),
   /** Inline UTF-8 string content to register. Mutually exclusive with `path`. */
-  content: z.string().max(INLINE_CONTENT_MAX_BYTES).optional(),
-  /** MIME type. Required for inline content; inferred from extension for paths. */
+  content: z.string().max(INLINE_CONTENT_MAX_BYTES).refine(
+    (value) => Buffer.byteLength(value, 'utf8') <= INLINE_CONTENT_MAX_BYTES,
+    { message: 'Inline content must not exceed 64 KiB of UTF-8 bytes' },
+  ).optional(),
+  /** MIME type. Defaults to application/octet-stream for inline content. */
   media_type: z.string().max(128).optional(),
   /** Retention policy: `permanent`, `session` (default), or `ttl:<ms>`. */
   retention: z.string().regex(retentionPattern).max(64).optional(),
   /** Stable IDs of input artifacts this was derived from (lineage). */
   inputs: z.array(z.string().regex(artifactIdPattern).max(38)).max(16).optional(),
   /** Free-form key/value tags (bounded). */
-  tags: z.record(z.string(), z.string().max(META_STRING_MAX)).optional(),
+  tags: z.record(z.string().max(META_STRING_MAX), z.string().max(META_STRING_MAX)).refine(
+    (tags) => Object.keys(tags).length <= TAG_COUNT_MAX,
+    { message: 'At most 16 tags may be supplied' },
+  ).optional(),
 }).refine(
   (d) => (d.path !== undefined) !== (d.content !== undefined),
   { message: 'Exactly one of path or content must be supplied' },
@@ -111,13 +120,15 @@ export function createArtifactPublishHandler(
   opts: ArtifactPublishHandlerOptions = {},
 ): ToolHandler {
   return async (input, signal, context: ToolHandlerContext | undefined) => {
+    let quotaKey: string | undefined;
+    let published = false;
     try {
       signal.throwIfAborted();
 
       // 1. Parse and validate input.
       const params = publishInput.parse(input);
 
-      // 2. Quota admission: check per-session cap before any I/O.
+      // 2. Reserve quota synchronously before any await; release on every failure.
       const sessionId = context?.sessionId;
       const limitStr = env.AFK_ARTIFACT_SESSION_LIMIT;
       const parsedLimit = parseInt(limitStr ?? '', 10);
@@ -125,17 +136,17 @@ export function createArtifactPublishHandler(
         Number.isFinite(parsedLimit) && parsedLimit > 0
           ? parsedLimit
           : DEFAULT_SESSION_LIMIT;
-      if (sessionId !== undefined) {
-        const count = publishCounter.get(sessionId);
-        if (count >= limit) {
-          return {
-            content:
-              `artifact_publish: per-session publish cap reached (${limit}). ` +
-              `Set AFK_ARTIFACT_SESSION_LIMIT to increase the cap or use fewer publishes per session.`,
-            isError: true,
-          };
-        }
+      const key = sessionId ?? PROCESS_QUOTA_KEY;
+      if (publishCounter.get(key) >= limit) {
+        return {
+          content:
+            `artifact_publish: per-session publish cap reached (${limit}). ` +
+            `Set AFK_ARTIFACT_SESSION_LIMIT to increase the cap or use fewer publishes per session.`,
+          isError: true,
+        };
       }
+      publishCounter.increment(key);
+      quotaKey = key;
 
       // 3. Resolve and authorize path inputs.
       let resolvedPath: string | undefined;
@@ -158,35 +169,27 @@ export function createArtifactPublishHandler(
         }
       }
 
-      // 4. Optimistic quota increment before the write (matches image_generate pattern).
-      if (sessionId !== undefined) publishCounter.increment(sessionId);
-
-      // 5. Register the artifact.  Wrap in try/catch; undo the counter on failure.
-      let record;
-      try {
-        record = await artifactPut(
-          {
-            ...(resolvedPath !== undefined
-              ? { path: resolvedPath }
-              : { content: params.content! }),
-            media_type: params.media_type,
-            retention: params.retention as 'permanent' | 'session' | `ttl:${number}` | undefined,
-            inputs: params.inputs,
-            tags: params.tags,
-            producer: {
-              session_id: sessionId,
-              tool_name: 'artifact_publish',
-            },
+      // 4. Register the artifact; the finally block releases failed reservations.
+      const record = await artifactPut(
+        {
+          ...(resolvedPath !== undefined
+            ? { path: resolvedPath }
+            : { content: params.content! }),
+          media_type: params.media_type,
+          retention: params.retention as 'permanent' | 'session' | `ttl:${number}` | undefined,
+          inputs: params.inputs,
+          tags: params.tags,
+          producer: {
+            session_id: sessionId,
+            tool_name: 'artifact_publish',
           },
-          opts.storeDir,
-          opts.indexPath,
-        );
-      } catch (err) {
-        if (sessionId !== undefined) publishCounter.decrement(sessionId);
-        throw err;
-      }
+        },
+        opts.storeDir,
+        opts.indexPath,
+      );
+      published = true;
 
-      // 6. Return bounded metadata only (no arbitrary tags or full lineage).
+      // 5. Return bounded metadata only (no arbitrary tags or full lineage).
       return {
         content: JSON.stringify({
           id: record.id,
@@ -201,6 +204,8 @@ export function createArtifactPublishHandler(
       };
     } catch (err) {
       return { content: safePublishError(err), isError: true };
+    } finally {
+      if (quotaKey !== undefined && !published) publishCounter.decrement(quotaKey);
     }
   };
 }
