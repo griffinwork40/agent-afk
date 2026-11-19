@@ -113,7 +113,22 @@ describe('sweep — .afk-scratch/ probe path (item 4)', () => {
   it('preserves a scratch-only tree when scratchDisposable opt-in is absent', async () => {
     const wtPath = join(afkWorktreesDir, 'afk-scratch-no-optin');
     await fs.mkdir(wtPath, { recursive: true });
-    // No .afk-worktree-meta.json — absent meta means no opt-in.
+    // Meta present but scratchDisposable omitted — this is what "no opt-in"
+    // means.  createdAt is 20 days in the past so the tree clears the
+    // MIN_EMPTY_AGE_MS gate and classifyCandidate returns 'empty', causing
+    // probeCandidate to actually invoke probeNonRebuildableIgnoredFiles.
+    // Without this age, the tree gets verdict 'active' and the probe is never
+    // reached, making both assertions vacuously pass regardless of whether
+    // .afk-scratch/ is treated as non-rebuildable.
+    await fs.writeFile(
+      join(wtPath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'agent',
+        createdAt: new Date(Date.now() - 86_400_000 * 20).toISOString(),
+        baseSha: 'base123',
+        baseBranch: 'main',
+      }),
+    );
     const porcelainOut =
       `${worktreeBlock({ path: repoRoot, head: 'base123' })}\n\n` +
       `${worktreeBlock({ path: wtPath, head: 'base123', branch: 'refs/heads/afk/scratch-no-optin' })}\n`;
