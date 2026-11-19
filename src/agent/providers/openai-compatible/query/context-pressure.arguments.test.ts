@@ -95,15 +95,14 @@ describe('boundPressureArguments edge cases', () => {
     expect(result.preview).toBe('');
   });
 
-  it('leaves arguments unchanged when they already fit within a zero budget envelope', () => {
+  it('replaces tiny arguments with a parseable marker under a zero budget', () => {
     const tiny = '{}';
     const turns: OpenAIMessage[] = [call(tiny)];
-    // With budget=0 the envelope check (byteLength <= 0) is false for any non-empty
-    // turn array, so bounding fires, BUT the tiny argument fits within `each` (0).
-    // Verify no crash and the result is valid JSON.
-    boundPressureArguments(turns, 0, 0);
-    // tiny fits in `each=0`? No — byteLength('{}') > 0, so it gets a marker.
+    // budget=0 means the envelope check (byteLength <= 0) is false for any non-empty
+    // turn array, so bounding fires. byteLength('{}') > 0, so the tiny argument
+    // exceeds each=0 and gets replaced with a marker.
     // The important invariant: turns[0] is still a valid parseable message.
+    boundPressureArguments(turns, 0, 0);
     expect(() => JSON.parse(args(turns[0]!))).not.toThrow();
   });
 });

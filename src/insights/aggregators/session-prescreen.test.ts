@@ -109,7 +109,9 @@ describe('sidecarPredatesWindow', () => {
     const last = vi.mocked(debugLog).mock.calls[2][1] as {
       statCount: number; totalStatMs: number;
     };
-    expect(last.statCount).toBe(first.statCount + 3);
+    // Use a delta assertion so the test stays correct even if an earlier test
+    // increments the module-level counter (e.g. if DEBUG is enabled upstream).
+    expect(last.statCount - first.statCount).toBe(3);
     expect(last.totalStatMs).toBeGreaterThanOrEqual(first.totalStatMs);
   });
 

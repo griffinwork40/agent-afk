@@ -1,0 +1,28 @@
+{
+  "name": "terminal-bench-nightly-v1",
+  "harbor_version": "0.23.0",
+  "dataset": "terminal-bench@2.0",
+  "task_repository": "https://github.com/laude-institute/terminal-bench-2.git",
+  "task_commit": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+  "tasks": [
+    "break-filter-js-from-html",
+    "build-cython-ext",
+    "cancel-async-tasks",
+    "fix-git",
+    "git-multibranch",
+    "log-summary-date-ranges",
+    "merge-diff-arc-agi-task",
+    "nginx-request-logging",
+    "openssl-selfsigned-cert",
+    "write-compressor"
+  ],
+  "model": "anthropic/claude-haiku-4-5-20251001",
+  "concurrency": 2,
+  "agent_timeout_sec": 900,
+  "setup_timeout_sec": 600,
+  "verifier_timeout_sec": 180,
+  "build_timeout_sec": 600,
+  "max_turns": 100,
+  "max_budget_usd": "2.00",
+  "variant": "full"
+}

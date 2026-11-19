@@ -7,13 +7,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { resolveSecretEnvName } from './events.js';
 
-// resolveWebhookPort and resolveGithubInterval are not exported; test them
-// indirectly via the module's internal helpers by re-exporting for test use.
-// Since they call process.exit on bad input we need to intercept that.
-
-// Dynamically import the module under test so we can spy on process.exit.
-import * as eventsModule from './events.js';
-
 // ---------------------------------------------------------------------------
 // resolveWebhookPort — via re-implemented inline to match production logic
 // ---------------------------------------------------------------------------

@@ -33,7 +33,8 @@ describe('killProcessGroup', () => {
     expect(() => killer.emit('error', new Error('taskkill unavailable'))).not.toThrow();
   });
 
-  it.each([0, -5])('does nothing when pid is %s', (pid) => {
+  // pid 1 matters most: kill(-1) signals every process the caller may signal.
+  it.each([0, 1, -1, -5, 1.5, Number.NaN])('does nothing when pid is %s', (pid) => {
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
     const launch = vi.fn();
     killProcessGroup(pid, 'SIGKILL', { platform: 'win32', spawn: launch as typeof spawn });

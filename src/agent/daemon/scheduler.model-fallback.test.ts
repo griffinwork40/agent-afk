@@ -72,7 +72,7 @@ describe('scheduled task fallback diagnostics', () => {
     expect(ctx.idleDetector.decrement).toHaveBeenCalledOnce();
   });
 
-  it.each([undefined, '', 123])('omits absent/invalid fallback metadata (%s)', async (text) => {
+  it.each([undefined, null, '', 123])('omits absent/invalid fallback metadata (%s)', async (text) => {
     const { ctx } = makeContext([fakeSession(text)]);
     const record = await executeAgentTask(ctx, task, 'cron');
     expect(record.status).toBe('success');

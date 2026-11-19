@@ -24,9 +24,9 @@ export function boundPressureArguments(turns: OpenAIMessage[], appendedAt: numbe
       if (Buffer.byteLength(JSON.stringify(original)) <= each) return call;
       const marker = { _truncated: `[Context pressure: arguments truncated for final synthesis; original size ${Buffer.byteLength(original)} UTF-8 bytes; full arguments are journaled.]`, preview: '' };
       // Account for BOTH JSON encodings: the argument object and the wire string.
-      // A control code point can occupy up to 6 bytes in UTF-8 (e.g. a surrogate
-      // pair), and each byte becomes a two-character \uXXXX escape sequence (6
-      // chars × 2 bytes UTF-8 each) on the second JSON.stringify pass → 12 bytes.
+      // Worst case: a control char such as U+0000 becomes \u0000 (6 chars) on the
+      // first JSON.stringify, then \\u0000 (7 chars) on the second pass.
+      // 12 is a conservative ceiling that holds for all code points.
       const overhead = Buffer.byteLength(JSON.stringify(JSON.stringify(marker)));
       const count = Math.min(1024, Math.floor(Math.max(0, each - overhead) / 12));
       if (count > 0) marker.preview = truncate(original, count);
