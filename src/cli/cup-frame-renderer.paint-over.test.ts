@@ -136,7 +136,7 @@ describe('paint-over hazards and old-order equivalence', () => {
   });
 
   it('exhaustively compares style-closed row pairs, including attributes, widths and blank tails', async () => {
-    const variants = ['', 'x', 'longer old tail', ' '.repeat(16), 'x'.repeat(16),
+    const variants = ['', 'x', 'a\tb', 'longer old tail', ' '.repeat(16), 'x'.repeat(16),
       'x'.repeat(17), '界'.repeat(8), 'a'.repeat(15) + '界',
       '\x1b[41mred\x1b[49m', '\x1b[48;2;1;2;3mRGB\x1b[49m',
       '\x1b[1;2;3;4;5;7;8;9;53mstyled\x1b[0m',
@@ -155,6 +155,45 @@ describe('paint-over hazards and old-order equivalence', () => {
         }
       }
     } finally { actual.dispose(); reference.dispose(); }
+  });
+
+  it.each([
+    ['a\x1b[5Cb', 'ab'], ['a\x1b[8Gb', 'ab'], ['abc\rX', 'abcX'],
+    ['abc\x08X', 'abcX'], ['abc\x1b[2DX', 'abcX'], ['abc\x1b[1GX', 'abcX'],
+    ['a\x00\x07\x0b\x0c\x7f\x85b', 'ab'],
+    ['a\x1b]0;title\x07b', 'ab'], ['a\x1b]8;;https://example.com\x1b\\b\x1b]8;;\x1b\\', 'ab'],
+    ['a\x1bPpayload\x1b\\b', 'ab'], ['a\x1b(0b', 'ab'], ['a\x9b5Cb', 'ab'],
+    ['a\x1b[?25lb', 'ab'], ['a\x1b[2Kb', 'ab'],
+    ['a\x1b]0;unterminated', 'a'], ['a\x1bPunterminated', 'a'],
+    ['a\x1b]0;title\x1b[5Cpayload\x07b', 'ab'],
+    ['a\x1bPdata\x1b[31mpayload\x1b\\b', 'ab'],
+    ['a\x9d0;title\x9cb', 'ab'], ['a\x90payload\x9cb', 'ab'],
+    ['a\tb', hardWrapToWidth('a\tb', 16)],
+    ['\x1b[31mred\x1b[39m', '\x1b[31mred\x1b[39m'],
+    ['\x9b31mred\x9b39m', '\x1b[31mred\x1b[39m'],
+    ['\x1b[38:2::1:2:3mRGB\x1b[0m', '\x1b[38:2::1:2:3mRGB\x1b[0m'],
+  ])('strips cursor/control escapes while preserving printable rows and SGR: %j', async (input, expected) => {
+    const { render } = setup(16, 8);
+    const term = terminal(16, 8), reference = terminal(16, 8);
+    try {
+      await write(term, render('long old tail', 6));
+      const out = render(input, 6);
+      expect(out).toContain(cup(6) + expected + '\x1b[K');
+      await write(term, out);
+      await write(reference, oldRenderer(16)(expected, 6));
+      expect(cells(term)).toEqual(cells(reference));
+    } finally { term.dispose(); reference.dispose(); }
+  });
+
+  it('sanitizes before shared wrap/measurement, preserving newlines and CRLF', async () => {
+    const { renderer, render } = setup(4, 8);
+    const input = 'ab\x1b[5Ccd\r\n\x1b[31m12\x08' + '34\x1b[39m\n';
+    expect(renderer.measure(input, 6)).toEqual({ topRow: 5, lineCount: 2 });
+    const term = terminal(4, 8);
+    try {
+      await write(term, render(input, 6));
+      expect(textRows(term).slice(4, 6)).toEqual(['abcd', '1234']);
+    } finally { term.dispose(); }
   });
 
   it.each(['1234567890123456', '12345678901234界', '界'.repeat(8)])(
