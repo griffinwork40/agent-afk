@@ -26,7 +26,7 @@
 
 import { execFile } from 'node:child_process';
 import { mkdirSync, readFileSync, appendFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { getAfkStateDir, getTelemetryPath } from '../../paths.js';
 import { enqueue } from './queue-store.js';
@@ -125,11 +125,14 @@ export interface GithubPollerTickRecord {
   skipped: number;
   /** Set when one or more event-type fetches failed. */
   fetchError?: string;
+  /** Set when processing or persisting the tick failed (also logged by tick). */
+  tickError?: string;
 }
 
 function writePollTelemetry(record: GithubPollerTickRecord, telemetryPath?: string): void {
-  const path = telemetryPath ?? getTelemetryPath();
   try {
+    const path = telemetryPath ?? getTelemetryPath();
+    mkdirSync(dirname(path), { recursive: true });
     appendFileSync(path, JSON.stringify(record) + '\n', 'utf-8');
   } catch {
     // Telemetry write failures must never crash the poller.
@@ -382,68 +385,73 @@ export class GithubEventPoller {
   }
 
   private async _poll(): Promise<void> {
-    const seen = loadSeen(this.stateDir);
     let dirty = false;
     let totalFetched = 0;
     let totalEnqueued = 0;
     let totalSkipped = 0;
     const fetchErrors: string[] = [];
+    let tickError: string | undefined;
 
-    for (const eventType of this.events) {
-      let candidates: Array<{ id: string; summary: string }>;
-      try {
-        candidates = await this._fetch(eventType);
-      } catch (err) {
-        const msg = errorMessage(err);
-        fetchErrors.push(`${eventType}: ${msg}`);
-        // eslint-disable-next-line no-console
-        console.error(
-          `[github-event-poller] fetch error for ${eventType}: ${msg}`,
-        );
-        continue;
-      }
-
-      totalFetched += candidates.length;
-      for (const { id, summary } of candidates) {
-        if (seen.has(id)) {
-          totalSkipped++;
+    try {
+      const seen = loadSeen(this.stateDir);
+      for (const eventType of this.events) {
+        let candidates: Array<{ id: string; summary: string }>;
+        try {
+          candidates = await this._fetch(eventType);
+        } catch (err) {
+          const msg = errorMessage(err);
+          fetchErrors.push(`${eventType}: ${msg}`);
+          // eslint-disable-next-line no-console
+          console.error(
+            `[github-event-poller] fetch error for ${eventType}: ${msg}`,
+          );
           continue;
         }
-        seen.add(id);
-        dirty = true;
-        totalEnqueued++;
 
-        const command = renderCommand(
-          this.commandTemplate,
-          eventType,
-          this.repo,
-          id,
-          summary,
-        );
-        enqueue(command, {}, this.queueDir);
-        // eslint-disable-next-line no-console
-        console.log(`[github-event-poller] enqueued task for event ${id}`);
+        totalFetched += candidates.length;
+        for (const { id, summary } of candidates) {
+          if (seen.has(id)) {
+            totalSkipped++;
+            continue;
+          }
+          const command = renderCommand(
+            this.commandTemplate,
+            eventType,
+            this.repo,
+            id,
+            summary,
+          );
+          enqueue(command, {}, this.queueDir);
+          totalEnqueued++;
+          seen.add(id);
+          dirty = true;
+          // eslint-disable-next-line no-console
+          console.log(`[github-event-poller] enqueued task for event ${id}`);
+        }
       }
-    }
 
-    if (dirty) {
-      const pruned = _pruneSeen(seen);
-      saveSeen(this.stateDir, pruned);
+      if (dirty) {
+        const pruned = _pruneSeen(seen);
+        saveSeen(this.stateDir, pruned);
+      }
+    } catch (err) {
+      tickError = errorMessage(err);
+      throw err;
+    } finally {
+      // Attempt exactly one record, including partial progress on failed ticks.
+      const record: GithubPollerTickRecord = {
+        timestamp: new Date().toISOString(),
+        surface: 'github-event-poller',
+        repo: this.repo,
+        events: this.events,
+        fetched: totalFetched,
+        enqueued: totalEnqueued,
+        skipped: totalSkipped,
+        ...(fetchErrors.length > 0 ? { fetchError: fetchErrors.join('; ') } : {}),
+        ...(tickError !== undefined ? { tickError } : {}),
+      };
+      writePollTelemetry(record, this.telemetryPath);
     }
-
-    // Emit one structured telemetry record per tick so operators can observe
-    // poller activity in forge-telemetry.jsonl (#4039).
-    const record: GithubPollerTickRecord = {
-      timestamp: new Date().toISOString(),
-      surface: 'github-event-poller',
-      repo: this.repo,
-      events: this.events,
-      fetched: totalFetched,
-      enqueued: totalEnqueued,
-      skipped: totalSkipped,
-      ...(fetchErrors.length > 0 ? { fetchError: fetchErrors.join('; ') } : {}),
-    };
-    writePollTelemetry(record, this.telemetryPath);
   }
 
   private async _fetch(
