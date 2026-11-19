@@ -16,7 +16,8 @@ jobs:
   observe:
     name: Observe ${{ matrix.os }} Node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    # Two Windows installs can each consume their 15-minute observation timeout.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

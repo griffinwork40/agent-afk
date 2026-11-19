@@ -24,6 +24,28 @@ describe('advisory onboarding observation workflow', () => {
     expect(read('.github/workflows/ci.yml')).not.toMatch(/onboarding-observe|scripts\/onboarding/);
   });
 
+  it('keeps the ledger complete and its statuses honest', () => {
+    const ledger = read('docs/onboarding-friction.md');
+    const counts: Record<string, number> = { A: 7, B: 4, C: 5, D: 18, E: 16, F: 14, G: 3, H: 5, I: 7, J: 11 };
+    const ids = [...ledger.matchAll(/^\| ([A-J]\d+) \|/gm)].map(match => match[1]);
+    const expected = Object.entries(counts).flatMap(([stage, count]) =>
+      Array.from({ length: count }, (_, index) => `${stage}${index + 1}`));
+    expect(ids).toEqual(expected);
+    expect(ledger).toContain('Nothing here has been observed on a real clean machine yet.');
+    expect(ledger).toMatch(/\| D5 \|[^\n]+\| unresolved \|/);
+    expect(ledger).toMatch(/\| A7 \|[^\n]+\| blind spot \|/);
+  });
+
+  it('does not change execution policy or request credentials', () => {
+    const driver = read('scripts/onboarding/observe.mjs');
+    const windows = read('scripts/onboarding/observe-windows.ps1');
+    expect(driver + windows).not.toMatch(/Set-ExecutionPolicy|ExecutionPolicy Bypass|afk(?:\.cmd)? login|afk(?:\.cmd)? chat/);
+    expect(driver).toContain('child.stdin.end()');
+    expect(driver).toContain('900000');
+    expect(windows).toContain('$info.EnvironmentVariables.Clear()');
+    expect(driver).toContain('if (infrastructureError) process.exitCode = 1');
+  });
+
   it('covers both platforms and supported and unsupported Node majors', () => {
     const workflow = read('.github/workflows/onboarding-observe.yml');
     expect(workflow).toContain('workflow_dispatch:');

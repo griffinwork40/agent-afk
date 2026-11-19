@@ -7,12 +7,13 @@ const windows = process.platform === 'win32';
 const log = resolve(process.argv[2]);
 const shell = process.argv[3];
 const summary = [];
+let infrastructureError = false;
 mkdirSync(dirname(log), { recursive: true });
 const args = command => windows
   ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-    `$ErrorActionPreference = 'Stop'; try { ${command}; if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE } } catch { Write-Output $_; exit 1 }`]
+    `$ErrorActionPreference = 'Continue'; ${command}; $ok = $?; if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }; if (!$ok) { exit 1 }`]
   : ['-c', command];
-writeFileSync(log, `Onboarding observation\nStarted: ${new Date().toISOString()}\nPublished npm latest, not this checkout. Closed stdin, isolated AFK home.\nOutput streams merged in arrival order; no output truncation.\n`);
+appendFileSync(log, `Onboarding observation\nStarted: ${new Date().toISOString()}\nPublished npm latest, not this checkout. Closed stdin, isolated AFK home.\nOutput streams merged in arrival order; no output truncation.\n`);
 
 async function step(label, command, timeout = 60000) {
   const started = Date.now();
@@ -29,7 +30,10 @@ async function step(label, command, timeout = 60000) {
       if (windows) spawnSync('taskkill.exe', ['/pid', String(child.pid), '/T', '/F']);
       else { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* Already exited. */ } }
     }, timeout);
-    child.on('error', error => appendFileSync(log, `\nSpawn error: ${error.message}\n`));
+    child.on('error', error => {
+      infrastructureError = true;
+      appendFileSync(log, `\nObservation infrastructure spawn error: ${error.message}\n`);
+    });
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       resolveResult({ code, signal, timedOut });
@@ -60,11 +64,13 @@ await step('Fresh shell PATH discovery (D3 D4)', windows
   ? 'Get-Command afk,afk.cmd -ErrorAction SilentlyContinue | Select-Object Name,Source; where.exe afk'
   : '/bin/zsh -lic \'command -v afk; print -r -- "$PATH"\'');
 // Keychain is account-scoped, not HOME-scoped. Do not refresh a real token.
-const keychainPresent = !windows && spawnSync('/usr/bin/security',
-  ['find-generic-password', '-s', 'Claude Code-credentials'], { stdio: 'ignore' }).status === 0;
-if (keychainPresent) {
-  appendFileSync(log, '\nSkipped afk launches: existing Claude Code Keychain entry. Use a fresh macOS account.\n');
-  summary.push('| afk launches | skipped | 0s | existing Keychain entry |');
+const keychain = !windows ? spawnSync('/usr/bin/security',
+  ['find-generic-password', '-s', 'Claude Code-credentials'], { stdio: 'ignore', timeout: 5000 }) : undefined;
+// security exits 44 for item-not-found. Any other result is unsafe or unknown.
+const skipLaunch = keychain !== undefined && keychain.status !== 44;
+if (skipLaunch) {
+  appendFileSync(log, `\nSkipped afk launches: Claude Code Keychain entry present or check inconclusive (exit ${keychain.status}). Use a fresh macOS account.\n`);
+  summary.push('| afk launches | skipped | 0s | Keychain present or inconclusive |');
 } else {
   await step('afk version', 'afk --version');
   await step('afk doctor (J1 J2 J3 J6)', 'afk doctor');
@@ -78,3 +84,4 @@ if (keychainPresent) {
 }
 writeFileSync(`${log}.summary.md`, `## Onboarding observation\n\nHosted runners are not retail clean machines. Nonzero exits are findings, not job failures. Read the full log before drawing conclusions.\n\n| Step | Exit | Duration | Result |\n| --- | --- | --- | --- |\n${summary.join('\n')}\n\nNo credential, model message, service, update, or policy change was attempted.\n`);
 console.log(`Observation complete: ${log}`);
+if (infrastructureError) process.exitCode = 1;

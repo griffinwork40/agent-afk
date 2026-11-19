@@ -18,6 +18,7 @@ fi
 sandbox=$(mktemp -d "$(dirname -- "$log")/.onboarding-home-XXXXXX") || exit 1
 # Preserve actual PATH and the installer's default npm prefix. HOME isolates
 # credentials and afk state, not global installation permissions.
+cd "$sandbox" || exit 1
 env -i PATH="$PATH" HOME="$sandbox" AFK_HOME="$sandbox/.afk" \
   XDG_CONFIG_HOME="$sandbox/.config" NPM_CONFIG_USERCONFIG="$sandbox/.npmrc" \
   SHELL="${SHELL:-/bin/zsh}" LANG="${LANG:-en_US.UTF-8}" NO_COLOR=1 \
