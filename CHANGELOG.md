@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.360.0] - 2026-11-19
+
 ### Added
 - track nightly Harbor behaviour and paired regression alerts (44d3a0387)
 - add artifact_publish model tool with path/content auth, lineage validation, and quota admission (381df43f9)
