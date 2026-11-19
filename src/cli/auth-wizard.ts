@@ -1,7 +1,7 @@
 import { palette } from './palette.js';
 import { getEnvConfigPath } from '../paths.js';
 import { upsertEnvVar } from '../utils/envFile.js';
-import { promptSecret } from '../utils/prompt-secret.js';
+import { promptAuthSecret } from './auth-wizard.prompt.js';
 import { guidedToken } from './auth-wizard.guided.js';
 
 /**
@@ -18,7 +18,7 @@ export { upsertEnvVar };
  * the token is never written to the terminal, scrollback, or session logs.
  */
 export function promptToken(): Promise<string> {
-  return promptSecret('Anthropic API key or OAuth token: ');
+  return promptAuthSecret('Anthropic API key or OAuth token: ');
 }
 
 /**

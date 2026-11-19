@@ -1,5 +1,5 @@
 import { env } from '../config/env.js';
-import { promptSecret } from '../utils/prompt-secret.js';
+import { promptAuthSecret } from './auth-wizard.prompt.js';
 import { UsageLimitError } from '../utils/errors.js';
 import { classifyError } from './errors/classifier.js';
 import { palette } from './palette.js';
@@ -26,7 +26,7 @@ function credentialWarning(token: string): string | undefined {
 
 async function confirmSave(question: string): Promise<boolean> {
   // Reuse the no-echo reader so an accidental second paste never echoes a key.
-  const answer = await promptSecret(`${question} Type yes to confirm (input hidden): `);
+  const answer = await promptAuthSecret(`${question} Type yes to confirm (input hidden): `);
   return answer.toLowerCase() === 'yes';
 }
 
