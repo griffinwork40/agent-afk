@@ -111,3 +111,39 @@ def test_tracking_issue_reuses_closed(tmp_path):
         assert any('reopen' in call for call in calls)
         assert any('comment' in call for call in calls)
         assert not any(call[:3] == ('gh', 'issue', 'create') for call in calls)
+
+
+def test_tracking_issue_uses_newest_when_multiple(tmp_path):
+    """gh returns newest first; issues[0] must be selected, not issues[-1]."""
+    with patch('bench.harbor.nightly_publish.command') as command:
+        # Two issues: newest (99, OPEN) first, oldest (1, CLOSED) last
+        command.side_effect = [
+            '',
+            '[{"number":99,"state":"OPEN"},{"number":1,"state":"CLOSED"}]',
+            '',
+        ]
+        report_issue('regression', 'owner/repo', tmp_path / 'issue.md')
+        calls = [call.args for call in command.call_args_list]
+        # Must comment on issue 99 (newest), not reopen/comment on 1 (oldest)
+        assert any('99' in str(call) and 'comment' in call for call in calls)
+        assert not any('reopen' in call for call in calls)
+
+
+def test_publish_duplicate_no_double_alert(tmp_path):
+    """Publishing the same record twice must not trigger regression the second time."""
+    remote = tmp_path / 'remote.git'
+    subprocess.run(['git', 'init', '--bare', str(remote)], check=True, capture_output=True)
+    job = tmp_path / 'job'
+    for name in SPEC['tasks']:
+        trial = job / name
+        trial.mkdir(parents=True)
+        (trial / 'result.json').write_text(json.dumps(dict(task_name=name,
+            verifier_result={'rewards': {'reward': 1}})))
+    meta = dict(date='2026-11-18', sha='a'*40, afk_version='5.359.0', run_id='dup-1',
+                run_url='https://github.com/test/actions/runs/1', event='schedule')
+    record = build_record(job, SPEC, meta)
+    _, decision1 = publish(record, str(remote), tmp_path / 'first')
+    # Second publish with the same run_id must not alert
+    _, decision2 = publish(record, str(remote), tmp_path / 'second')
+    assert decision2['alert'] is False
+    assert decision2['reason'] == 'Already recorded'
