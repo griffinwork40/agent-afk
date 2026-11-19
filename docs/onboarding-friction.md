@@ -212,3 +212,33 @@ macOS:
 8. With Node 20 installed instead: run `npm install -g agent-afk` and `afk --version`. Record the exact output. (C4)
 
 Both, with a real person who has never used a terminal: hand them only the README link, say nothing, and log every stall with a timestamp.
+
+## Dated hosted-runner observations
+
+Original research statuses above are unchanged. These are not retail clean-machine
+results. The first run predates the driver's working-directory isolation fix, so
+repeat against the final revision before generalizing.
+
+### 2026-11-19: macOS 15, unsupported Node 20 (C4, D3, D5, D7, E1, J3)
+
+Source: [observation run 44582325558](https://github.com/griffinwork40/agent-afk/actions/runs/44582325558),
+artifact `onboarding-macos-15-node-20`, files `macos.log` and
+`macos.log.summary.md`. Node v20.20.2, npm 10.8.2, published agent-afk 5.360.0.
+Commands ran through a POSIX shell with closed stdin and an isolated AFK home.
+
+- `npm install -g agent-afk`: exit 0 in 45.58 seconds. Output included
+  `npm warn EBADENGINE`, a deprecated prebuild-install warning, funding text,
+  and 231 added packages. This is not evidence that Node 20 is supported (C4, D7).
+- A fresh zsh login child found afk on the inherited hosted-runner PATH, exit 0
+  in 0.07 seconds. This does not test the official Node installer PATH or EACCES
+  scenario, and does not establish whether a postinstall hint appeared (D2-D5).
+- `afk --version`: exit 1 in 2.19 seconds; `afk doctor`: exit 1 in 1.38 seconds;
+  bare `afk`: exit 1 in 1.55 seconds; `afk --help`: exit 1 in 1.15 seconds.
+  All four printed the same no-Anthropic-credential message directing the user
+  to login. No interactive prompt or model call occurred. The early auth gate
+  prevented version/help/doctor output; this does not reproduce J1 or doctor
+  checks, and is not proof of an unsupported-runtime startup crash (E1, J3).
+
+The job remained advisory despite these exits. Recheck on supported Node versions
+and a real machine before proposing a runtime fix. Workflow artifacts expire after
+30 days; preserve sanitized logs with any later issue that relies on them.
