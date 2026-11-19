@@ -1,6 +1,7 @@
 // Durable streak snapshots shared by the scheduler and schedule health/list.
 import { openSync, readSync, fstatSync, closeSync } from 'node:fs';
 import type { TelemetryRecord } from './scheduler.js';
+import { isValidIsoDate } from '../../utils/iso-date.js';
 
 /** Persisted consecutive-failure state; exact: false makes count a lower bound. */
 export interface StreakSnapshot {
@@ -23,6 +24,9 @@ export interface StreakHistory {
 
 /** Maximum bytes read per history lookup, including any partial oldest line. */
 export const STREAK_HISTORY_BYTE_CAP = 2 * 1024 * 1024;
+
+/** Maximum oldest complete lines examined for a usable lifetime boundary. */
+export const STREAK_HISTORY_BOUNDARY_LINE_CAP = 256;
 
 /** Create an independent, exact empty streak for a known fresh history or success boundary. */
 export const emptyStreak = (): StreakSnapshot => ({
@@ -50,13 +54,45 @@ function isSnapshot(value: unknown): value is StreakSnapshot {
     && (s['count'] === 0 || typeof s['failingSince'] === 'string');
 }
 
+function windowCoversLifetime(oldestLines: string[], createdAt: unknown): boolean {
+  if (!isValidIsoDate(createdAt) || !createdAt.includes('T')) return false;
+  for (const line of oldestLines) {
+    let row: unknown;
+    try {
+      row = JSON.parse(Buffer.from(line, 'latin1').toString('utf8'));
+    } catch {
+      continue;
+    }
+    if (row === null || typeof row !== 'object') continue;
+    const r = row as Record<string, unknown>;
+    const timestamp = r['recordType'] === 'notification-delivery' ? r['settledAt'] : r['triggeredAt'];
+    if (!isValidIsoDate(timestamp) || !timestamp.includes('T')) continue;
+    let completedAt = Date.parse(timestamp);
+    if (r['recordType'] !== 'notification-delivery') {
+      const duration = r['durationMs'];
+      if (!isRunRecord(row) || typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0) {
+        continue;
+      }
+      completedAt += duration;
+    }
+    if (!Number.isFinite(completedAt)) continue;
+    // A usable completion/settlement bounds earlier appended rows, even after unusable lines.
+    // A task created strictly after that completion cannot have run before this row.
+    // All later rows are in the fully scanned window, so an absent task has exact empty history.
+    // Use the oldest usable boundary within the line cap; equality remains conservative.
+    return Date.parse(createdAt) > completedAt;
+  }
+  return false;
+}
+
 /**
- * Seek backwards up to STREAK_HISTORY_BYTE_CAP, parsing only candidate task lines.
+ * Seek backwards up to STREAK_HISTORY_BYTE_CAP, parsing only candidate task lines
+ * and, for an absent task with createdAt, a bounded prefix of complete window lines.
  * Stop at the newest snapshot or success; only legacy history needs replay.
- * A capped scan without a boundary is inexact, even if no recent runs were found.
+ * A cap is inexact unless the empty window covers the task's whole lifetime.
  * Missing files mean no runs; unreadable files are explicitly indeterminate.
  */
-export function readStreakHistory(path: string, taskId: string): StreakHistory {
+export function readStreakHistory(path: string, taskId: string, createdAt?: string): StreakHistory {
   const legacy: TelemetryRecord[] = [];
   const taskNeedle = JSON.stringify(taskId);
   let fd: number | undefined;
@@ -67,6 +103,7 @@ export function readStreakHistory(path: string, taskId: string): StreakHistory {
     let pos = fstatSync(fd).size;
     const stopAt = Math.max(0, pos - STREAK_HISTORY_BYTE_CAP);
     let suffix = '';
+    let oldestLines: string[] = [];
     while (pos > stopAt) {
       const size = Math.min(pos - stopAt, 65536);
       pos -= size;
@@ -80,8 +117,10 @@ export function readStreakHistory(path: string, taskId: string): StreakHistory {
       // latin1 preserves split UTF-8 bytes until a complete line is assembled.
       const lines = (buf.toString('latin1') + suffix).split('\n');
       suffix = pos > 0 ? (lines.shift() ?? '') : '';
+      oldestLines = lines.concat(oldestLines).slice(0, STREAK_HISTORY_BOUNDARY_LINE_CAP);
       for (let i = lines.length - 1; i >= 0; i--) {
-        const line = Buffer.from(lines[i] ?? '', 'latin1').toString('utf8');
+        const rawLine = lines[i] ?? '';
+        const line = Buffer.from(rawLine, 'latin1').toString('utf8');
         if (!line.includes(taskNeedle)) continue;
         let row: unknown;
         try {
@@ -98,8 +137,9 @@ export function readStreakHistory(path: string, taskId: string): StreakHistory {
         legacy.push(row);
       }
     }
-    // A cap or legacy rows without a success/snapshot boundary leave a lower bound.
-    if (stopAt > 0 || legacy.length > 0) base = { ...base, exact: false };
+    const exactEmptyWindow = stopAt > 0 && lastStatus === undefined && windowCoversLifetime(oldestLines, createdAt);
+    // Legacy rows still need their own success/snapshot boundary.
+    if ((stopAt > 0 && !exactEmptyWindow) || legacy.length > 0) base = { ...base, exact: false };
     return replayLegacy(base, legacy, lastStatus);
   } catch (err) {
     const missing = (err as NodeJS.ErrnoException).code === 'ENOENT';

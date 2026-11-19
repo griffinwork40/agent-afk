@@ -3,8 +3,8 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Command } from 'commander';
-import { addSchedule } from '../../agent/daemon/schedule-store.js';
-import { getTelemetryPath } from '../../paths.js';
+import { addSchedule, loadSchedules } from '../../agent/daemon/schedule-store.js';
+import { getSchedulesPath, getTelemetryPath } from '../../paths.js';
 import { registerScheduleCommand } from './schedule.js';
 import { emptyStreak, STREAK_HISTORY_BYTE_CAP } from '../../agent/daemon/scheduler.streak-history.js';
 let dir: string;
@@ -61,10 +61,13 @@ describe('fixture-backed schedule health and list', () => {
   });
   it('reports no recent runs rather than no runs yet when older history exceeds the cap', async () => {
     const id = task();
+    writeFileSync(getSchedulesPath(), JSON.stringify(loadSchedules().map((s) => ({
+      ...s, createdAt: '2025-12-31T00:00:00Z',
+    }))));
     fixture([
       record(id, 'success', 1),
       ...Array.from({ length: Math.ceil(STREAK_HISTORY_BYTE_CAP / 1024) }, () =>
-        record('other', 'success', 2, { responseExcerpt: 'x'.repeat(1024) })),
+        record('other', 'success', 2, { durationMs: 0, responseExcerpt: 'x'.repeat(1024) })),
     ]);
     await command('health');
     expect(process.exitCode).toBe(1);
@@ -75,6 +78,46 @@ describe('fixture-backed schedule health and list', () => {
     expect(output()).toContain('no recent runs found | >=0');
     expect(output()).not.toContain('no runs yet');
   });
+  it.each([
+    ['2026-01-03T00:00:00Z', 0, true],
+    ['2026-01-01T00:00:00Z', 0, false],
+    [undefined, 0, false],
+    ['malformed', 0, false],
+    ['2026-01-03T00:00:00Z', 2 * 86400000, false],
+  ])('checks an absent task created at %s against completed history (%i ms)', async (createdAt, durationMs, exact) => {
+    const id = task();
+    writeFileSync(getSchedulesPath(), JSON.stringify(loadSchedules().map((s) => ({ ...s, createdAt }))));
+    fixture(Array.from({ length: Math.ceil(STREAK_HISTORY_BYTE_CAP / 1024) }, () =>
+      record('other', 'success', 2, { durationMs, responseExcerpt: 'x'.repeat(1024) })));
+    process.exitCode = 0;
+    await command('health');
+    expect(process.exitCode).toBe(exact ? 0 : 1);
+    expect(output()).toContain(exact
+      ? `${id} (Fixture), threshold 3: no runs yet`
+      : 'no recent runs found (indeterminate; history boundary unavailable)');
+    expect(output()).not.toContain(exact ? 'indeterminate' : 'no runs yet');
+    log.mockClear();
+    await command('list');
+    expect(output()).toContain(exact ? 'no runs yet | 0' : 'no recent runs found | >=0');
+  });
+
+  it('reports no runs yet after poller ticks and a usable completion boundary', async () => {
+    const id = task();
+    writeFileSync(getSchedulesPath(), JSON.stringify(loadSchedules().map((s) => ({
+      ...s, createdAt: '2026-01-03T00:00:00Z',
+    }))));
+    const tick = JSON.stringify({ surface: 'github-event-poller', timestamp: '2025-01-01T00:00:00Z' });
+    const boundary = JSON.stringify(record('other', 'success', 1, { durationMs: 86400000 }));
+    const ending = `${`${tick}\n`.repeat(4)}${boundary}\n`;
+    const prefix = `${'x'.repeat(STREAK_HISTORY_BYTE_CAP - Buffer.byteLength(ending))}\n`;
+    writeFileSync(getTelemetryPath(), prefix + ending);
+    process.exitCode = 0;
+    await command('health');
+    expect(process.exitCode).toBe(0);
+    expect(output()).toContain(`${id} (Fixture), threshold 3: no runs yet`);
+    expect(output()).not.toContain('indeterminate');
+  });
+
   it('prints capped failure counts as lower bounds in health and list', async () => {
     const id = task(2);
     fixture([

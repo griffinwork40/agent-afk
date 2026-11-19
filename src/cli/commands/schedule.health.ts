@@ -18,7 +18,7 @@ export function runHealthCommand(fallback = DEFAULT_FAILURE_STREAK_THRESHOLD): v
   const schedules = loadSchedules().filter((s) => s.enabled);
   let unhealthy = 0;
   for (const task of schedules) {
-    const { snapshot: s, hasRuns } = readStreakHistory(getTelemetryPath(), task.id);
+    const { snapshot: s, hasRuns } = readStreakHistory(getTelemetryPath(), task.id, task.createdAt);
     const threshold = task.failureStreakThreshold ?? fallback;
     const prefix = `${task.id} (${task.name}), threshold ${threshold}: `;
     if (!hasRuns) {
@@ -60,7 +60,7 @@ export function printScheduleList(schedules: ReturnType<typeof loadSchedules>, t
   console.log(palette.heading(header));
   console.log(palette.dim('-'.repeat(header.length)));
   for (const task of schedules) {
-    const { snapshot: s, hasRuns, lastStatus } = readStreakHistory(telemetryPath, task.id);
+    const { snapshot: s, hasRuns, lastStatus } = readStreakHistory(telemetryPath, task.id, task.createdAt);
     const status = !hasRuns
       ? (s.exact ? 'no runs yet' : 'no recent runs found')
       : lastStatus ?? 'indeterminate';

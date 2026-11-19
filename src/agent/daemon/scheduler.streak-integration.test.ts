@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentSession } from '../session/agent-session.js';
 import type { TelemetryRecord, TaskCompletionDetails } from './scheduler.js';
 import { readTelemetryHistory } from './telemetry-reader.js';
-import { readStreakHistory } from './scheduler.streak-history.js';
+import { readStreakHistory, STREAK_HISTORY_BYTE_CAP } from './scheduler.streak-history.js';
+import { addSchedule, toScheduledTask } from './schedule-store.js';
 import { enqueue } from './queue-store.js';
 
 vi.mock('node-cron', () => ({ schedule: vi.fn(() => ({ stop() {}, destroy() {} })) }));
@@ -44,6 +45,22 @@ function rows(): Array<Record<string, unknown>> {
   return readFileSync(path, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 describe('durable scheduler streak integration', () => {
+  it('stamps a new schedule\'s first failure as exact even when telemetry exceeds the cap', async () => {
+    mkdirSync(join(dir, 'agent-framework'), { recursive: true });
+    const config = addSchedule({ name: 'New task', command: 'test', cron: '* * * * *', enabled: true });
+    const padding = JSON.stringify({
+      taskId: 'other', status: 'success', triggeredAt: '2020-01-01T00:00:00Z', durationMs: 0,
+      responseExcerpt: 'x'.repeat(1024),
+    });
+    writeFileSync(path, `${padding}\n`.repeat(Math.ceil(STREAK_HISTORY_BYTE_CAP / 1024)));
+    const s = scheduler();
+    s.register(toScheduledTask(config));
+    await s.tick(config.id);
+    const history = await readTelemetryHistory(path, { taskId: config.id, limit: 1 }) as TelemetryRecord[];
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ status: 'error', failureStreak: { count: 1, exact: true } });
+  });
+
   it('runs synthetic pull queue tasks without hydration or per-id tracker state', async () => {
     const cb = vi.fn();
     const s = scheduler(cb);

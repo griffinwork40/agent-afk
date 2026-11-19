@@ -7,6 +7,7 @@ import type { TelemetryRecord, TaskCompletionDetails } from './scheduler.js';
 import type { ScheduledTask } from './triggers.js';
 import { emptyStreak, readStreakHistory, type StreakSnapshot } from './scheduler.streak-history.js';
 import { notificationDecision } from './scheduler.notification.js';
+import { getSchedule } from './schedule-store.js';
 
 /** Default consecutive failures before the first escalation decision. */
 export const DEFAULT_FAILURE_STREAK_THRESHOLD = 3;
@@ -81,7 +82,14 @@ export class FailureStreakTracker {
   hydrate(taskId: string, telemetryPath: string): void {
     if (this.hydrated.has(taskId)) return;
     this.hydrated.add(taskId);
-    this.streaks.set(taskId, readStreakHistory(telemetryPath, taskId).snapshot);
+    // ScheduledTask omits createdAt; one store lookup avoids widening registration/HTTP shapes.
+    let createdAt: string | undefined;
+    try {
+      createdAt = getSchedule(taskId)?.createdAt;
+    } catch {
+      // An unavailable schedule store must not turn an unknown history into an exact one.
+    }
+    this.streaks.set(taskId, readStreakHistory(telemetryPath, taskId, createdAt).snapshot);
   }
 
   /** Release both cached history and streak state when a task is unregistered. */

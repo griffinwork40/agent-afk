@@ -2,13 +2,23 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readStreakHistory, emptyStreak, STREAK_HISTORY_BYTE_CAP } from './scheduler.streak-history.js';
+import {
+  readStreakHistory, emptyStreak, STREAK_HISTORY_BYTE_CAP, STREAK_HISTORY_BOUNDARY_LINE_CAP,
+} from './scheduler.streak-history.js';
 import { FailureStreakTracker } from './scheduler.failure-streak.js';
 import type { TelemetryRecord } from './scheduler.js';
 let dir: string;
 let path: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'streak-history-')); path = join(dir, 'telemetry.jsonl'); });
-afterEach(() => { vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }); });
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'streak-history-'));
+  path = join(dir, 'telemetry.jsonl');
+  vi.stubEnv('AFK_HOME', dir);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  rmSync(dir, { recursive: true, force: true });
+});
 function row(status: TelemetryRecord['status'], n: number, extra: Partial<TelemetryRecord> = {}): TelemetryRecord {
   return { taskId: 't', command: 'x', trigger: 'cron', status, triggeredAt: `date-${n}`, durationMs: 0, ...extra };
 }
@@ -38,6 +48,88 @@ describe('streak hydration and legacy fallback', () => {
     expect(readStreakHistory(path, 't')).toMatchObject({
       hasRuns: false,
       snapshot: { count: 0, exact: false },
+    });
+  });
+
+  it.each([
+    ['2026-01-03T00:00:00Z', true],
+    ['2026-01-01T00:00:00Z', false],
+    ['2026-01-02T00:00:00Z', false],
+    [undefined, false],
+    ['not-a-date', false],
+    ['2026-02-30T00:00:00Z', false],
+  ])('uses the lifetime boundary for an absent task created at %s', (createdAt, exact) => {
+    const padding = row('success', 0, {
+      taskId: 'other', triggeredAt: '2026-01-02T00:00:00Z', responseExcerpt: 'x'.repeat(1024),
+    });
+    write(Array.from({ length: Math.ceil(STREAK_HISTORY_BYTE_CAP / 1024) }, () => padding));
+    const parse = vi.spyOn(JSON, 'parse');
+    expect(readStreakHistory(path, 't', createdAt)).toMatchObject({
+      hasRuns: false, snapshot: { count: 0, exact },
+    });
+    expect(parse.mock.calls.length).toBeLessThanOrEqual(1);
+  });
+
+  it.each([
+    [{ triggeredAt: '2026-01-01T00:00:00Z', durationMs: 2 * 86400000 }, false],
+    [{ triggeredAt: '2026-01-01T00:00:00Z', durationMs: undefined }, false],
+    [{ triggeredAt: '2026-01-01T00:00:00Z', durationMs: -1 }, false],
+    [{ triggeredAt: 'invalid', durationMs: 0 }, false],
+    [{ recordType: 'notification-delivery', settledAt: '2026-01-03T00:00:00Z' }, false],
+    [{ recordType: 'notification-delivery', settledAt: '2026-01-01T00:00:00Z' }, true],
+  ])('uses completion/settlement rather than trigger time: %j', (extra, exact) => {
+    const boundary = row('success', 0, {
+      taskId: 'other', triggeredAt: '2025-01-01T00:00:00Z', responseExcerpt: 'x'.repeat(1024), ...extra,
+    });
+    write(Array.from({ length: Math.ceil(STREAK_HISTORY_BYTE_CAP / 1024) }, () => boundary));
+    expect(readStreakHistory(path, 't', '2026-01-02T00:00:00Z')).toMatchObject({
+      hasRuns: false, snapshot: { exact },
+    });
+  });
+
+  it.each([
+    ['2026-01-03T00:00:00Z', true],
+    ['2026-01-01T00:00:00Z', false],
+  ])('skips poller ticks before a usable boundary for a task created at %s', (createdAt, exact) => {
+    const tick = JSON.stringify({ surface: 'github-event-poller', timestamp: '2025-01-01T00:00:00Z' });
+    const boundary = row('success', 0, {
+      taskId: 'other', triggeredAt: '2026-01-01T00:00:00Z', durationMs: 86400000,
+    });
+    const ending = `${`${tick}\n`.repeat(4)}${JSON.stringify(boundary)}\n`;
+    const prefix = `${'x'.repeat(STREAK_HISTORY_BYTE_CAP - Buffer.byteLength(ending))}\n`;
+    writeFileSync(path, prefix + ending);
+    expect(readStreakHistory(path, 't', createdAt)).toMatchObject({
+      hasRuns: false, snapshot: { count: 0, exact },
+    });
+  });
+
+  it('stays inexact when no examined line has a usable completion time', () => {
+    const tick = JSON.stringify({ surface: 'github-event-poller', timestamp: '2025-01-01T00:00:00Z' });
+    const missingDuration = JSON.stringify(row('success', 0, {
+      taskId: 'other', triggeredAt: '2025-01-01T00:00:00Z', durationMs: undefined,
+    }));
+    const boundary = JSON.stringify(row('success', 0, {
+      taskId: 'other', triggeredAt: '2025-01-01T00:00:00Z',
+    }));
+    const unusable = [tick, 'malformed', missingDuration];
+    const lines = Array.from({ length: STREAK_HISTORY_BOUNDARY_LINE_CAP }, (_, n) => unusable[n % 3]);
+    const ending = `${lines.join('\n')}\n${boundary}\n`;
+    const prefix = `${'x'.repeat(STREAK_HISTORY_BYTE_CAP - Buffer.byteLength(ending))}\n`;
+    writeFileSync(path, prefix + ending);
+    const parse = vi.spyOn(JSON, 'parse');
+    expect(readStreakHistory(path, 't', '2026-01-02T00:00:00Z')).toMatchObject({
+      hasRuns: false, snapshot: { exact: false },
+    });
+    expect(parse.mock.calls.length).toBe(STREAK_HISTORY_BOUNDARY_LINE_CAP);
+  });
+
+  it('skips a malformed oldest line and uses the following run completion', () => {
+    const later = row('success', 0, { taskId: 'other', triggeredAt: '2026-01-01T00:00:00Z' });
+    const ending = `unparseable\n${JSON.stringify(later)}\n`;
+    const prefix = `${'x'.repeat(STREAK_HISTORY_BYTE_CAP - Buffer.byteLength(ending))}\n`;
+    writeFileSync(path, prefix + ending);
+    expect(readStreakHistory(path, 't', '2026-01-02T00:00:00Z')).toMatchObject({
+      hasRuns: false, snapshot: { exact: true },
     });
   });
 
