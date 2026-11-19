@@ -11,9 +11,9 @@
  * sessions the browser starts.
  */
 
-import { AnthropicDirectProvider } from '../agent/providers/index.js';
+import type { AnthropicDirectProvider } from '../agent/providers/index.js';
+import { webProviderWiring } from './session-owner.provider.js';
 import { wireExecutors, type WiredExecutors } from '../agent/session/wire-executors.js';
-import { topLevelSurfaceAllowedTools } from '../agent/tools/top-level-allowlist.js';
 import { assembleSystemPrompt } from '../agent/routing-directive.js';
 import { createDefaultTraceWriter, type CreatedTraceWriter } from '../agent/trace/factory.js';
 import { BackgroundAgentRegistry } from '../agent/background-registry.js';
@@ -40,6 +40,7 @@ import type { FastModeController } from '../agent/fast-mode.js';
 /** Everything `SessionOwner.create` needs beyond the base `AgentConfig`. */
 export interface WebSessionWiring {
   provider: AnthropicDirectProvider;
+  providerFactory?: AgentConfig['providerFactory'];
   executors: WiredExecutors;
   traceWriter: TraceWriter | undefined;
   /** Merged system prompt (base + routing directive + end-of-turn). */
@@ -123,16 +124,9 @@ export async function wireWebSession(
   });
 
   // -- 7. Provider (with executors + MCP) ------------------------------------
-  const allowedTools = topLevelSurfaceAllowedTools(mcpManager?.getMcpToolWireNames() ?? []);
-  const provider = new AnthropicDirectProvider({
-    permissions: { allowedTools },
-    subagentExecutor: executors.subagentExecutor,
-    skillExecutor: executors.skillExecutor,
-    composeExecutor: executors.composeExecutor,
-    ...(mcpManager !== undefined ? { mcpManager } : {}),
-    workspaceStore,
+  const providerWiring = webProviderWiring({
+    model, executors, mcpManager, workspaceStore,
     ...(opts.fastModeController !== undefined ? { fastModeController: opts.fastModeController } : {}),
-    surface: 'web',
   });
 
   // -- 8. System prompt (base + routing directive + end-of-turn) --------------
@@ -157,7 +151,7 @@ export async function wireWebSession(
     () => executors.rootManager.getPendingChildTerminalWrites();
 
   const wiring: WebSessionWiring = {
-    provider,
+    ...providerWiring,
     executors,
     traceWriter,
     systemPrompt,
