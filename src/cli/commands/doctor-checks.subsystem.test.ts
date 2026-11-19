@@ -7,6 +7,9 @@ import {
   checkWitnessDir,
 } from './doctor-checks.subsystem.js';
 import { constants } from 'fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 // ---------------------------------------------------------------------------
 // checkMemoryStore
@@ -183,8 +186,12 @@ describe('checkNodeVersion', () => {
   });
 
   it('reads package.json from a percent-encoded module URL path', async () => {
+    // Built per platform: a bare `file:///fake%20install/...` is not an absolute
+    // file URL on Windows, where a drive letter is required.
+    const moduleUrl = pathToFileURL(join(tmpdir(), 'fake install', 'dist', 'cli.mjs')).href;
+    expect(moduleUrl).toContain('fake%20install');
     const result = await checkNodeVersion({
-      moduleUrl: 'file:///fake%20install/dist/cli.mjs',
+      moduleUrl,
       currentVersion: 'v22.22.2',
       readPackageFile: async (path) => {
         expect(path).toContain('fake install');
