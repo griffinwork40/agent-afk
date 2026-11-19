@@ -458,6 +458,11 @@
     },
     {
       "kind": "command",
+      "name": "afk schedule health",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "command",
       "name": "afk schedule list",
       "source": "src/cli/commands/schedule.ts"
     },
@@ -3688,6 +3693,11 @@
     },
     {
       "kind": "flag",
+      "name": "afk schedule add --failure-streak-threshold",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
       "name": "afk schedule add --help",
       "source": "src/cli/commands/schedule.ts"
     },
@@ -3714,6 +3724,16 @@
     {
       "kind": "flag",
       "name": "afk schedule enable --help",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule health --help",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule health --threshold",
       "source": "src/cli/commands/schedule.ts"
     },
     {

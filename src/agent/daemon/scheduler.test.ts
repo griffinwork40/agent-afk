@@ -359,7 +359,7 @@ describe('CronScheduler telemetry — errorMessage redaction', () => {
     expect(record.responseExcerpt).not.toContain(tail);
     expect(onTaskComplete).toHaveBeenCalledOnce();
     const [callbackRecord, details] = onTaskComplete.mock.calls[0]!;
-    expect(callbackRecord).toBe(record);
+    expect(callbackRecord).toMatchObject(record);
     expect(details?.responseText).toContain(tail);
     expect(details?.responseText).toContain('REDACTED');
     expect(details?.responseText).not.toContain(rawSecret);
@@ -522,7 +522,7 @@ describe('CronScheduler — "Done" verification (doneUnverified)', () => {
     await scheduler.tick('t');
     await scheduler.stop();
     const line = readFileSync(telemetryPath, 'utf-8').trim();
-    const written = JSON.parse(line) as { status: string; doneUnverified?: boolean };
+    const written = JSON.parse(line.split('\n')[0]!) as { status: string; doneUnverified?: boolean };
     expect(written.status).toBe('success');          // status unchanged (backward compat)
     expect(written.doneUnverified).toBe(true);       // new field persisted
   });
@@ -539,7 +539,7 @@ describe('CronScheduler — "Done" verification (doneUnverified)', () => {
     await scheduler.tick('t');
     await scheduler.stop();
     const line = readFileSync(telemetryPath, 'utf-8').trim();
-    const written = JSON.parse(line) as { status: string; doneUnverified?: boolean };
+    const written = JSON.parse(line.split('\n')[0]!) as { status: string; doneUnverified?: boolean };
     expect(written.status).toBe('success');
     expect(written.doneUnverified).toBeUndefined();  // absent when verified
   });
@@ -555,7 +555,7 @@ describe('CronScheduler — "Done" verification (doneUnverified)', () => {
     await scheduler.tick('t');
     await scheduler.stop();
     const line = readFileSync(telemetryPath, 'utf-8').trim();
-    const written = JSON.parse(line) as { status: string; doneUnverified?: boolean };
+    const written = JSON.parse(line.split('\n')[0]!) as { status: string; doneUnverified?: boolean };
     expect(written.status).toBe('success');
     expect(written.doneUnverified).toBeUndefined();
   });

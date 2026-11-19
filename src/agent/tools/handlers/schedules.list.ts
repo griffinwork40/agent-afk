@@ -33,6 +33,7 @@ export const listSchedulesHandler: ToolHandler = async (input, _signal) => {
         trigger: s.trigger,
         enabled: s.enabled,
         notifyOn: s.notifyOn,
+        ...(s.failureStreakThreshold !== undefined ? { failureStreakThreshold: s.failureStreakThreshold } : {}),
         ...(s.maxAttempts !== undefined ? { maxAttempts: s.maxAttempts } : {}),
         ...(s.retryDelayMs !== undefined ? { retryDelayMs: s.retryDelayMs } : {}),
         ...(s.cwd !== undefined ? { cwd: s.cwd } : {}),

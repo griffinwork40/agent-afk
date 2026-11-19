@@ -118,6 +118,25 @@ describe('routes.schedules', () => {
   });
 
   describe('handleCreateSchedule', () => {
+    it('passes a configured threshold into create and PATCH (null clears)', async () => {
+      const create = makeRes();
+      await handleCreateSchedule(create.res, { name: 'Streak', command: '/x', cron: '* * * * *', failureStreakThreshold: 7 });
+      expect(create.json().status).toBe(201);
+      expect(addSchedule).toHaveBeenCalledWith(expect.objectContaining({ failureStreakThreshold: 7 }));
+      const patch = makeRes();
+      await handleUpdateSchedule(patch.res, 'nightly-forge', { failureStreakThreshold: null });
+      expect(patch.json().status).toBe(200);
+      expect(updateSchedule).toHaveBeenCalledWith('nightly-forge', expect.objectContaining({ failureStreakThreshold: null }));
+    });
+    it.each([0, -1, 1.5, '3'])('rejects invalid streak threshold %s on both routes', async (failureStreakThreshold) => {
+      const create = makeRes();
+      await handleCreateSchedule(create.res, { name: 'Bad', command: '/x', cron: '* * * * *', failureStreakThreshold });
+      expect(create.json().status).toBe(400);
+      const patch = makeRes();
+      await handleUpdateSchedule(patch.res, 'nightly-forge', { failureStreakThreshold });
+      expect(patch.json().status).toBe(400);
+      expect(addSchedule).not.toHaveBeenCalled(); expect(updateSchedule).not.toHaveBeenCalled();
+    });
     it('creates a schedule with valid input', async () => {
       const { res, json } = makeRes();
       await handleCreateSchedule(res, {

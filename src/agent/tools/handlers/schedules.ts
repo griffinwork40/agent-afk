@@ -14,6 +14,7 @@
  * @module agent/tools/handlers/schedules
  */
 
+import { parseFailureStreakThreshold } from '../../daemon/failure-streak-threshold.js';
 import type { ToolHandler } from '../types.js';
 import {
   addSchedule,
@@ -74,6 +75,8 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
     };
   }
 
+  const streak = parseFailureStreakThreshold(obj);
+  if (!streak.ok) return { content: `Invalid input: ${streak.error}`, isError: true };
   const retry = parseTaskRetryFields(obj);
   if (!retry.ok) return { content: `Invalid input: ${retry.error}`, isError: true };
 
@@ -131,6 +134,7 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
     ...(resolvedRunAt !== undefined ? { runAt: resolvedRunAt } : {}),
     ...(resolvedExpiresAt !== undefined ? { expiresAt: resolvedExpiresAt } : {}),
     ...retry.value,
+    ...streak.value,
     enabled: typeof obj['enabled'] === 'boolean' ? obj['enabled'] : true,
   });
 
@@ -148,6 +152,7 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
         notifyOn: config.notifyOn,
         ...(config.notifyChat !== undefined ? { notifyChat: config.notifyChat } : {}),
         ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
+        ...(config.failureStreakThreshold !== undefined ? { failureStreakThreshold: config.failureStreakThreshold } : {}),
         ...(config.maxAttempts !== undefined ? { maxAttempts: config.maxAttempts } : {}),
         ...(config.retryDelayMs !== undefined ? { retryDelayMs: config.retryDelayMs } : {}),
         ...(config.runAt !== undefined ? { runAt: config.runAt } : {}),
@@ -231,6 +236,8 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
     };
   }
 
+  const streak = parseFailureStreakThreshold(obj, true);
+  if (!streak.ok) return { content: `Invalid input: ${streak.error}`, isError: true };
   const retry = parseTaskRetryFields(obj);
   if (!retry.ok) return { content: `Invalid input: ${retry.error}`, isError: true };
 
@@ -298,7 +305,7 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
   if (resolvedCwd !== undefined) patch.cwd = resolvedCwd;
   if (patchRunAt !== undefined) patch.runAt = patchRunAt;
   if (patchExpiresAt !== undefined) patch.expiresAt = patchExpiresAt;
-  Object.assign(patch, retry.value);
+  Object.assign(patch, retry.value, streak.value);
 
   const updated = updateSchedule(taskId, patch);
   if (!updated) {
