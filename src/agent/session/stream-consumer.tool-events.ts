@@ -25,6 +25,13 @@ export interface ToolEventAccumulator {
   /** toolUseId -> flattened input captured at `tool.use.start`. */
   _pendingToolInputs?: Map<string, string>;
   /**
+   * toolUseId -> raw JSON-serialized tool input (from `extractRawToolInput`).
+   * Populated only for tools that carry whitelisted raw fields (e.g. `patch_apply`
+   * with its `dry_run` boolean). Used by Done-evidence classification to detect
+   * dry-run previews that write nothing.
+   */
+  _pendingToolInputsRaw?: Map<string, string>;
+  /**
    * Every tool call that reported output this turn, successful AND failed, with
    * its real input text. This is what Done-evidence classification reads:
    * `isVerificationCommand` needs the bash command text to recognize
@@ -39,6 +46,9 @@ export function recordToolUseStart(acc: ToolEventAccumulator, event: ToolUseStar
   // Pending events carry placeholder input; the settled start event follows.
   if (event.pending || !event.toolName) return;
   (acc._pendingToolInputs ??= new Map()).set(event.toolUseId, event.toolInput);
+  if (event.toolInputRaw !== undefined) {
+    (acc._pendingToolInputsRaw ??= new Map()).set(event.toolUseId, event.toolInputRaw);
+  }
 }
 
 /**
@@ -49,11 +59,13 @@ export function recordToolUseStart(acc: ToolEventAccumulator, event: ToolUseStar
 export function recordToolOutput(acc: ToolEventAccumulator, event: ToolOutputEvent): void {
   if (!event.toolName) return;
   const isError = event.isError === true;
+  const inputRaw = acc._pendingToolInputsRaw?.get(event.toolUseId);
   (acc._turnToolEvents ??= []).push({
     toolName: event.toolName,
     // '' when the input was never captured (unknown id): classifies as a
     // non-verification call, the conservative direction.
     input: acc._pendingToolInputs?.get(event.toolUseId) ?? '',
+    ...(inputRaw !== undefined ? { inputRaw } : {}),
     isError,
   });
   if (!isError) (acc._successfulToolNames ??= []).push(event.toolName);

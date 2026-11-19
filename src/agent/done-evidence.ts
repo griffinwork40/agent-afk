@@ -34,7 +34,33 @@ export interface ToolEventMin {
   toolName: string;
   /** Flattened bash command string (used by `isVerificationCommand`). */
   input: string;
+  /**
+   * JSON-serialized raw tool input (from `extractRawToolInput`). Present for
+   * `patch_apply` events so the dry-run guard can read the `dry_run` boolean
+   * without relying on the lossy flattened `input` summary string.
+   */
+  inputRaw?: string;
   isError?: boolean;
+}
+
+/**
+ * True when a `patch_apply` event is a dry-run preview (writes nothing).
+ * Parses the JSON `inputRaw` field if present; falls back to `false` (treats
+ * as a real write) when the field is absent or unparseable — the conservative
+ * direction (a real write is always counted, a spurious dry-run skip is safe).
+ */
+function isPatchApplyDryRun(e: ToolEventMin): boolean {
+  if (!e.inputRaw) return false;
+  try {
+    const parsed: unknown = JSON.parse(e.inputRaw);
+    return (
+      parsed !== null &&
+      typeof parsed === 'object' &&
+      (parsed as Record<string, unknown>)['dry_run'] === true
+    );
+  } catch {
+    return false;
+  }
 }
 
 // Contract: tools whose SUCCESSFUL invocation is observable corroboration that
@@ -44,15 +70,23 @@ export interface ToolEventMin {
 // deliberately do NOT count: reading is not doing. Delegation tools
 // (agent/compose/skill) also do NOT count: a subagent's internal write/command
 // streams to the CHILD session and never reaches the parent's tool events.
-// Extend this set rather than loosening the success check.
+// `patch_apply` with `dry_run: true` writes nothing and must not count — the
+// dry-run check in classifyDoneEvidence gates on inputRaw before treating a
+// patch_apply event as a mutation. Extend this set rather than loosening the
+// success check.
 export const DONE_EVIDENCE_TOOLS: ReadonlySet<string> = new Set([
   'write_file',
   'edit_file',
   'bash',
+  'patch_apply',
 ]);
 
 /** Tools whose successful invocation constitutes a code mutation. */
-const CODE_MUTATION_TOOLS: ReadonlySet<string> = new Set(['write_file', 'edit_file']);
+const CODE_MUTATION_TOOLS: ReadonlySet<string> = new Set([
+  'write_file',
+  'edit_file',
+  'patch_apply',
+]);
 
 /**
  * High-confidence verification command patterns. A bash command whose
@@ -125,6 +159,8 @@ export function classifyDoneEvidence(
     if (e.isError === true) continue; // failed calls do not count
 
     if (CODE_MUTATION_TOOLS.has(e.toolName)) {
+      // patch_apply with dry_run: true writes nothing — skip it.
+      if (e.toolName === 'patch_apply' && isPatchApplyDryRun(e)) continue;
       lastMutationIndex = i;
     } else if (e.toolName === 'bash') {
       // Verification check takes priority: a command that matches a verification
@@ -176,7 +212,10 @@ export function classifyDoneEvidence(
  */
 export function doneHasCorroboratingEvidence(toolEvents: readonly ToolEventMin[]): boolean {
   const hasAnyEvidence = toolEvents.some(
-    (e) => e.isError !== true && DONE_EVIDENCE_TOOLS.has(e.toolName),
+    (e) =>
+      e.isError !== true &&
+      DONE_EVIDENCE_TOOLS.has(e.toolName) &&
+      !(e.toolName === 'patch_apply' && isPatchApplyDryRun(e)),
   );
   if (!hasAnyEvidence) return false;
   return classifyDoneEvidence(toolEvents) !== 'unverified';
