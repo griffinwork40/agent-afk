@@ -181,6 +181,7 @@ export class SessionOwner {
       hookRegistry: registry,
       permissionMode: this.options.permissionMode ?? 'default',
       provider: wiring.provider,
+      ...(wiring.providerFactory !== undefined ? { providerFactory: wiring.providerFactory } : {}),
       drainSubagents: wiring.drainSubagents,
       getPendingChildTerminalWrites: wiring.getPendingChildTerminalWrites,
       getPendingChildBillingStreams: wiring.getPendingChildBillingStreams,
