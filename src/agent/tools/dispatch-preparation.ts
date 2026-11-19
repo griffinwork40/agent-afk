@@ -103,3 +103,50 @@ export function prepareDispatchModel(input: DispatchModelPreparationInput): Prep
 export function resolveChildMaxDepth(ctxMaxDepth: number | undefined): number {
   return ctxMaxDepth ?? resolveMaxNestingDepth();
 }
+
+/**
+ * Caller-supplied root overrides from an agent or compose dispatch input.
+ * All three fields are optional; a field being absent is distinct from it
+ * being present with an empty array (`exactOptionalPropertyTypes` care).
+ */
+export interface RootOverrideInput {
+  /** Working-directory override. When present, forwarded verbatim as `AgentConfig.cwd`. */
+  cwd?: string;
+  /** Write-root pins. When present, forwarded verbatim as `AgentConfig.writeRoots`. */
+  writeRoots?: string[];
+  /**
+   * Additive extra read roots. Forwarded as `AgentConfig.extraReadRoots` (the ADDITIVE
+   * field — the fork composes with its inherited read scope rather than replacing it).
+   * Named `readRoots` on both caller inputs; renamed here to signal the forwarding
+   * intent and prevent accidental confusion with `AgentConfig.readRoots` (the
+   * PINNING field used by `afk farm`).
+   */
+  readRoots?: string[];
+}
+
+// Contract: applyRootOverrides is the single assembly point for a child's
+// read/write scope. Any future change — validation, normalization, audit
+// logging — belongs here so both callers pick it up automatically.
+//
+// The returned object uses exactOptionalPropertyTypes-compatible conditional
+// spreads: absent input fields produce absent output fields (not
+// undefined-valued keys), preserving the "key absent vs key present with
+// undefined" distinction required by AgentConfig.
+//
+// Callers (both security-adjacent — they shape the child's filesystem access):
+//   - buildBaseChildConfig in subagent/child-config.helpers.ts (agent-tool path)
+//   - buildComposeDagNode in compose-executor.node-build.ts (compose path)
+//
+// Parity invariant: the returned object must be strictly identical for the
+// same input regardless of which caller invokes it. Tests in
+// dispatch-preparation.test.ts assert this for absent fields, explicitly
+// empty arrays, and additive read roots.
+export function applyRootOverrides(
+  input: RootOverrideInput,
+): { cwd?: string; writeRoots?: string[]; extraReadRoots?: string[] } {
+  return {
+    ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+    ...(input.writeRoots !== undefined ? { writeRoots: input.writeRoots } : {}),
+    ...(input.readRoots !== undefined ? { extraReadRoots: input.readRoots } : {}),
+  };
+}

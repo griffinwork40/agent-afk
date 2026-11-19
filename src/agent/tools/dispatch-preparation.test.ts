@@ -6,7 +6,7 @@ vi.mock('../auth/credential-resolver.js', () => ({
 
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import { defaultTierModelFallback } from '../subagent/resolve-child-model.js';
-import { prepareDispatchModel, resolveChildMaxDepth, type DispatchCredentialPolicy } from './dispatch-preparation.js';
+import { prepareDispatchModel, resolveChildMaxDepth, applyRootOverrides, type DispatchCredentialPolicy } from './dispatch-preparation.js';
 import { buildChildConfigWithoutNesting, type BuildChildConfigArgs } from './subagent/child-config.js';
 import { buildComposeDagNode, type BuildComposeDagNodeArgs } from './compose-executor.node-build.js';
 import type { SubagentDAGNode } from '../dag-subagent.js';
@@ -214,5 +214,127 @@ describe('resolveChildMaxDepth (#4042 Stage 3 — shared depth preparation)', ()
     const composeExplicit = resolveChildMaxDepth(2);
     expect(agentExplicit).toBe(composeExplicit);
     vi.unstubAllEnvs();
+  });
+});
+
+describe('applyRootOverrides (#4042 Stage 3 — shared root-override helper)', () => {
+  it('returns an empty object when all three fields are absent', () => {
+    const result = applyRootOverrides({});
+    expect(result).toEqual({});
+    // Strict key-absence check: no undefined-valued keys on the result.
+    expect(Object.keys(result)).toEqual([]);
+  });
+
+  it('forwards cwd when present, omits it when absent', () => {
+    expect(applyRootOverrides({ cwd: '/workspace/foo' })).toEqual({ cwd: '/workspace/foo' });
+    const noKey = applyRootOverrides({});
+    expect('cwd' in noKey).toBe(false);
+  });
+
+  it('forwards writeRoots verbatim when present, omits key when absent', () => {
+    expect(applyRootOverrides({ writeRoots: ['/workspace'] })).toEqual({ writeRoots: ['/workspace'] });
+    expect(applyRootOverrides({ writeRoots: [] })).toEqual({ writeRoots: [] });
+    const noKey = applyRootOverrides({});
+    expect('writeRoots' in noKey).toBe(false);
+  });
+
+  it('maps readRoots to extraReadRoots (additive rename), omits key when absent', () => {
+    const result = applyRootOverrides({ readRoots: ['/extra/a', '/extra/b'] });
+    expect(result).toEqual({ extraReadRoots: ['/extra/a', '/extra/b'] });
+    expect('readRoots' in result).toBe(false);
+    // Explicitly empty array: key must be present (empty vs absent is meaningful).
+    const empty = applyRootOverrides({ readRoots: [] });
+    expect(empty).toEqual({ extraReadRoots: [] });
+    expect('extraReadRoots' in empty).toBe(true);
+    // Absent: key must not appear.
+    const absent = applyRootOverrides({});
+    expect('extraReadRoots' in absent).toBe(false);
+  });
+
+  it('all three fields together produce the correct merged object', () => {
+    const result = applyRootOverrides({
+      cwd: '/workspace/feature',
+      writeRoots: ['/workspace/feature'],
+      readRoots: ['/workspace/shared'],
+    });
+    expect(result).toEqual({
+      cwd: '/workspace/feature',
+      writeRoots: ['/workspace/feature'],
+      extraReadRoots: ['/workspace/shared'],
+    });
+  });
+
+  it('agent and compose callers produce identical results for the same input (parity)', async () => {
+    // Drive the agent-tool path via buildChildConfigWithoutNesting and the
+    // compose path via buildComposeDagNode. Assert the root-override fields
+    // land identically on both fork configs.
+    const resolver = vi.fn(() => 'key');
+    const cwd = '/workspace/parity';
+    const writeRoots = ['/workspace/parity'];
+    const readRoots = ['/workspace/shared'];
+
+    const agentResult = buildChildConfigWithoutNesting({
+      ...agentArgs('sonnet', resolver),
+      parsed: {
+        prompt: 'inspect dispatch', model: 'sonnet',
+        max_turns: 0, max_turns_explicit: false,
+        max_tool_use_iterations: 0, max_tool_use_iterations_explicit: false,
+        id_prefix: 'test', mode: 'foreground',
+        cwd, writeRoots, readRoots,
+      },
+    });
+    expect(agentResult.childConfig.cwd).toBe(cwd);
+    expect(agentResult.childConfig.writeRoots).toEqual(writeRoots);
+    expect(agentResult.childConfig.extraReadRoots).toEqual(readRoots);
+
+    const composeResult = await (async () => {
+      const r = await buildComposeDagNode({
+        node: { id: 'parity', prompt: 'inspect dispatch', model: 'sonnet', cwd, writeRoots, readRoots },
+        index: 0, resolvedAgent: {}, totalNodes: 1, composeToolUseId: 'compose-parity',
+        ctx: {
+          parentSession: { sessionId: 'parent', abortSignal: new AbortController().signal },
+          defaultSubagentModel: 'sonnet', defaultModel: 'opus', systemPrompt: 'worker',
+          apiKey: 'sk-ant-parent', resolveApiKeyForModel: resolver,
+        },
+        currentCwd: undefined, nodeReadRoots: undefined, maxToolRoundsPerNode: undefined,
+        depth: 0, maxDepth: 0,
+      });
+      if ('attachmentError' in r || 'usageBlocked' in r) throw new Error('unexpected sentinel');
+      return r;
+    })();
+    expect(composeResult.cwd).toBe(cwd);
+    expect(composeResult.writeRoots).toEqual(writeRoots);
+    expect(composeResult.extraReadRoots).toEqual(readRoots);
+
+    // Parity: the root-override fields are identical on both paths.
+    expect(agentResult.childConfig.cwd).toBe(composeResult.cwd);
+    expect(agentResult.childConfig.writeRoots).toEqual(composeResult.writeRoots);
+    expect(agentResult.childConfig.extraReadRoots).toEqual(composeResult.extraReadRoots);
+  });
+
+  it('absent fields on agent path produce absent keys on fork config (not undefined-valued)', () => {
+    const result = buildChildConfigWithoutNesting(agentArgs('sonnet', () => 'key'));
+    // None of the root-override fields were set on agentArgs' parsed object.
+    expect('cwd' in result.childConfig).toBe(false);
+    expect('writeRoots' in result.childConfig).toBe(false);
+    expect('extraReadRoots' in result.childConfig).toBe(false);
+  });
+
+  it('absent fields on compose path produce absent keys on DAG node (not undefined-valued)', async () => {
+    const r = await buildComposeDagNode({
+      node: { id: 'absent', prompt: 'inspect dispatch', model: 'sonnet' },
+      index: 0, resolvedAgent: {}, totalNodes: 1, composeToolUseId: 'compose-absent',
+      ctx: {
+        parentSession: { sessionId: 'parent', abortSignal: new AbortController().signal },
+        defaultSubagentModel: 'sonnet', defaultModel: 'opus', systemPrompt: 'worker',
+        apiKey: 'sk-ant-parent', resolveApiKeyForModel: () => 'key',
+      },
+      currentCwd: undefined, nodeReadRoots: undefined, maxToolRoundsPerNode: undefined,
+      depth: 0, maxDepth: 0,
+    });
+    if ('attachmentError' in r || 'usageBlocked' in r) throw new Error('unexpected sentinel');
+    expect('cwd' in r).toBe(false);
+    expect('writeRoots' in r).toBe(false);
+    expect('extraReadRoots' in r).toBe(false);
   });
 });

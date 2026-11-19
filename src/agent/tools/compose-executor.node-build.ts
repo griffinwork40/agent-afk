@@ -10,7 +10,7 @@
 import type { SubagentDAGNode } from '../dag-subagent.js';
 import type { ComposeNodeInput } from './compose-input-parse.js';
 import { defaultTierModelFallback } from '../subagent/resolve-child-model.js';
-import { prepareDispatchModel } from './dispatch-preparation.js';
+import { prepareDispatchModel, applyRootOverrides } from './dispatch-preparation.js';
 import { resolveChildBudgets } from './subagent/child-config.helpers.js';
 import { resolveComposeNodeProvider } from './compose-node-provider.js';
 import {
@@ -214,19 +214,17 @@ export async function buildComposeDagNode(args: BuildComposeDagNodeArgs): Promis
         ...(effectiveMaxTurns > 0 ? { maxTurns: effectiveMaxTurns } : {}),
       };
     })(),
-    // Per-node filesystem overrides: cwd, extraReadRoots, writeRoots. When
-    // set on the node, they refine the fork's scope. extraReadRoots is
-    // forwarded as the ADDITIVE field (AgentConfig.extraReadRoots) so the
-    // fork COMPOSES with its inherited read scope rather than pinning it
-    // (the readRoots pin path used by afk farm). writeRoots pins exactly.
+    // Per-node filesystem overrides: cwd, extraReadRoots, writeRoots.
+    // applyRootOverrides (dispatch-preparation.ts) is the shared assembly
+    // point for both the agent-tool and compose paths (#4042 Stage 3).
+    // extraReadRoots is the ADDITIVE field (composes with inherited scope
+    // rather than pinning it). writeRoots and cwd pin exactly.
     // The downstream validateDagNodeRoots (dag-subagent.ts) enforces
     // breadth guards (isTooBroadRoot / ungatedSensitiveRoot) on all four
     // root fields including extraReadRoots. parseNodePaths (compose-input-parse.ts)
     // also applies isReadDenied to readRoots entries at parse time, matching
     // the agent tool path's step (b).
-    ...(n.cwd !== undefined ? { cwd: n.cwd } : {}),
-    ...(n.readRoots !== undefined ? { extraReadRoots: n.readRoots } : {}),
-    ...(n.writeRoots !== undefined ? { writeRoots: n.writeRoots } : {}),
+    ...applyRootOverrides(n),
     // Per-node isolation: thread through so dag-subagent creates a fresh
     // managed worktree for nodes that declare isolation:"worktree". Only
     // forwarded when present and not "none" — "none" is the default and
