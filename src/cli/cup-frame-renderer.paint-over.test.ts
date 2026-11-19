@@ -75,19 +75,36 @@ for (const height of [12, 25]) {
       const after = textRows(term);
       const surviving = before.flatMap((s, i) => s.trim() && after[i]?.trim() ? [i] : []);
       expect(surviving).toHaveLength(height);
+      // Replay the repaint one byte per write into ONE terminal. The parser is
+      // a streaming state machine (it carries split escapes and split UTF-8
+      // across writes), so the screen after N single-byte writes is the screen
+      // after one N-byte prefix. All writes are queued up front and each is
+      // inspected in its own completion callback, which xterm runs right after
+      // parsing that chunk and before the next one. Awaiting each write
+      // instead costs one timer tick per byte, which timed out on the Windows
+      // CI runner (coarse timers); the old-order run below would report zero
+      // blank prefixes if the callbacks ever stopped observing mid-stream state.
+      term.reset();
+      await write(term, prior);
       let blankPrefixes = 0;
       let first = '';
-      for (let end = 0; end <= repaint.byteLength; end++) {
-        term.reset();
-        await write(term, prior);
-        if (end > 0) await write(term, repaint.subarray(0, end));
-        const rows = textRows(term);
-        const blank = surviving.filter((r) => !rows[r]?.trim());
-        if (blank.length) { blankPrefixes++; first ||= `byte ${end}, blank rows ${blank.map((r) => r + 1)}`; }
-      }
-      expect(blankPrefixes, `${repaint.byteLength + 1} prefixes; first: ${first}`).toBe(0);
+      let checked = 0;
+      await new Promise<void>((resolve) => {
+        for (let end = 1; end <= repaint.byteLength; end++) {
+          term.write(repaint.subarray(end - 1, end), () => {
+            checked++;
+            const rows = textRows(term);
+            const blank = surviving.filter((r) => !rows[r]?.trim());
+            if (blank.length) { blankPrefixes++; first ||= `byte ${end}, blank rows ${blank.map((r) => r + 1)}`; }
+            if (end === repaint.byteLength) resolve();
+          });
+        }
+      });
+      expect(checked).toBe(repaint.byteLength);
+      expect(textRows(term)).toEqual(after);
+      expect(blankPrefixes, `${repaint.byteLength} prefixes; first: ${first}`).toBe(0);
     } finally { term.dispose(); }
-  }, 120_000);
+  }, 30_000);
 }
 
 describe('paint-over hazards and old-order equivalence', () => {
