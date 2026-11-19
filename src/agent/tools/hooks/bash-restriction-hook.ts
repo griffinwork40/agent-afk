@@ -92,11 +92,8 @@ import type { HookContext, HookDecision } from '../../hooks.js';
 import {
   BUILTIN_READ_DENYLIST,
   READ_ALLOWLIST_REL,
-  getReadDenylist,
   isReadDenied,
-  parseReadDenylistEntries,
 } from '../handlers/read-denylist.js';
-import { env } from '../../../config/env.js';
 import { textMentionsPath } from '../fs-case.js';
 import { tokenizeSegments } from '../readonly-bash.tokenizer.js';
 import {
@@ -111,6 +108,7 @@ import { isProvablyReadOnly } from './bash-restriction-hook.readonly-gate.js';
 import { EXACT_REF_TAIL, scrubSshPubKeyRefs } from './bash-restriction-hook.pubkey-scrub.js';
 import { safeRealpath } from '../handlers/write-denylist.js';
 import { decidePathAccess } from '../handlers/path-policy.js';
+import { buildSensitiveRootCandidates } from './bash-restriction-hook.policy.js';
 
 /**
  * Interpreter denylist regex. Matches `<interpreter> -<flag>` where flag is
@@ -852,23 +850,6 @@ export function builtinBashSensitiveRoots(): readonly string[] {
 }
 
 /**
- * Operator `AFK_READ_DENYLIST` entries exactly as spelled, to sit alongside the
- * symlink-RESOLVED forms `getReadDenylist()` returns. A shell command normally
- * names the symlink (`~/.afk/config`), not its target, and this scanner is
- * lexical — so both spellings have to be candidates.
- *
- * Invariant: the parse itself is `read-denylist.ts`'s
- * {@link parseReadDenylistEntries}, NOT a local copy. This function used to
- * re-implement it and the two drifted immediately: neither expanded a leading
- * `~`, so the tilde-spelled form the docs recommend resolved to a literal
- * `./~/…` and protected nothing on either surface (PR #734 review, MAJOR 1).
- * Only the post-parse step differs — resolved there, as-spelled here.
- */
-function readDenylistExtrasAsSpelled(): string[] {
-  return parseReadDenylistEntries(env.AFK_READ_DENYLIST);
-}
-
-/**
  * Add the `/etc` ↔ `/private/etc` twin of every candidate that has one.
  *
  * Invariant: this scan is LEXICAL, so a root is only enforced in the spellings
@@ -940,14 +921,7 @@ export function deriveRestrictedSubstrings(grants: {
   readRoots: string[];
   writeRoots: string[];
 }): string[] {
-  const candidates = [
-    ...new Set([
-      ...builtinBashSensitiveRoots(),
-      ...getReadDenylist(),
-      ...readDenylistExtrasAsSpelled(),
-      ...relocatedAfkSensitiveRoots(),
-    ]),
-  ];
+  const candidates = buildSensitiveRootCandidates();
 
   const granted = new Set([
     ...(grants.resolveBase !== undefined ? [grants.resolveBase] : []),
@@ -1032,12 +1006,5 @@ export function deriveRestrictedSubstrings(grants: {
  * plant an MCP server. Those files are therefore blocked in headless bash.
  */
 function headlessRestrictedSubstrings(): string[] {
-  return [
-    ...new Set([
-      ...builtinBashSensitiveRoots(),
-      ...getReadDenylist(),
-      ...readDenylistExtrasAsSpelled(),
-      ...relocatedAfkSensitiveRoots(),
-    ]),
-  ];
+  return buildSensitiveRootCandidates();
 }
