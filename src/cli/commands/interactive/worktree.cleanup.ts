@@ -80,7 +80,17 @@ export async function runWorktreeCleanup(params: WorktreeCleanupParams): Promise
   // Re-ensure the shared excludes before the dirty check, so a tree made before
   // the meta-file entry existed reads clean for that file. Scratch stays
   // protected by the ignored-file probe unless this tree has its own opt-in.
-  await ensureAfkExcludes(execFile, currentPath);
+  const excludesOk = await ensureAfkExcludes(execFile, currentPath);
+  if (!excludesOk) {
+    // The write failed — the meta file or scratch dir may still appear dirty,
+    // so warn here rather than leaving the user to wonder why the worktree was
+    // kept. The subsequent dirty-check is still run: if the tree is otherwise
+    // clean, git will have cached the patterns from an earlier successful write.
+    console.warn(palette.warning(
+      `Worktree cleanup: could not write afk exclude entries for ${currentPath}. ` +
+      `If the worktree is preserved, this may be why.`,
+    ));
+  }
   let status: { stdout: string; stderr: string };
   let ignoredProbeEarly: Awaited<ReturnType<typeof probeNonRebuildableIgnoredFiles>> | undefined;
   try {

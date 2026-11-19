@@ -167,6 +167,53 @@ describe('ensureAfkExcludes', () => {
     expect(excludeHasMetaEntry('.afk-worktree-meta.json\r\n')).toBe(true);
     expect(excludeHasMetaEntry('# .afk-worktree-meta.json\n')).toBe(false);
   });
+
+  // ---- Finding 1 regression tests (issue #5045) ----
+
+  it('does NOT treat a leading-space line as a match (git sees the space as part of the pattern)', () => {
+    // " /.afk-worktree-meta.json" trims to the pattern but git rejects it.
+    expect(excludeHasMetaEntry(` ${AFK_META_EXCLUDE_PATTERN}\n`)).toBe(false);
+    expect(excludeHasScratchEntry(` ${AFK_SCRATCH_EXCLUDE_PATTERN}\n`)).toBe(false);
+    // The unanchored spellings with leading spaces are equally invalid.
+    expect(excludeHasMetaEntry(' .afk-worktree-meta.json\n')).toBe(false);
+    expect(excludeHasScratchEntry(' .afk-scratch/\n')).toBe(false);
+  });
+
+  it('treats an entry as absent when a later negation undoes it', () => {
+    // Pattern followed by its negation: the negation wins.
+    expect(excludeHasMetaEntry(`${AFK_META_EXCLUDE_PATTERN}\n!${AFK_META_EXCLUDE_PATTERN}\n`)).toBe(false);
+    expect(excludeHasScratchEntry(`${AFK_SCRATCH_EXCLUDE_PATTERN}\n!${AFK_SCRATCH_EXCLUDE_PATTERN}\n`)).toBe(false);
+    // Unanchored form negated by negation of anchored form.
+    expect(excludeHasMetaEntry(`.afk-worktree-meta.json\n!${AFK_META_EXCLUDE_PATTERN}\n`)).toBe(false);
+    // Negation before the pattern: the pattern wins (last line wins).
+    expect(excludeHasMetaEntry(`!${AFK_META_EXCLUDE_PATTERN}\n${AFK_META_EXCLUDE_PATTERN}\n`)).toBe(true);
+  });
+
+  it('ensureAfkExcludes appends when a leading-space line was the only "match"', async () => {
+    // A file that has the pattern with a leading space — previously accepted, now rejected.
+    await fs.writeFile(
+      join(repo, '.git', 'info', 'exclude'),
+      `# existing\n /.afk-worktree-meta.json\n /.afk-scratch/\n`,
+    );
+    expect(await ensureAfkExcludes(execFile, repo)).toBe(true);
+    const content = await readExclude();
+    // The correct anchored patterns must now be present.
+    expect(content.split('\n')).toContain(AFK_META_EXCLUDE_PATTERN);
+    expect(content.split('\n')).toContain(AFK_SCRATCH_EXCLUDE_PATTERN);
+  });
+
+  it('ensureAfkExcludes appends when a negation undoes the entry', async () => {
+    // Pattern is there but negated — must be re-added.
+    await fs.writeFile(
+      join(repo, '.git', 'info', 'exclude'),
+      `${AFK_META_EXCLUDE_PATTERN}\n!${AFK_META_EXCLUDE_PATTERN}\n`,
+    );
+    expect(await ensureAfkExcludes(execFile, repo)).toBe(true);
+    // After re-append the final occurrence is positive, so git honours it.
+    const lines = (await readExclude()).split('\n');
+    const lastMeta = [...lines].reverse().find((l) => l === AFK_META_EXCLUDE_PATTERN || l === `!${AFK_META_EXCLUDE_PATTERN}`);
+    expect(lastMeta).toBe(AFK_META_EXCLUDE_PATTERN);
+  });
 });
 
 describe('teardown in a repo that does NOT gitignore the meta file', () => {

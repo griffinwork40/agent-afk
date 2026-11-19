@@ -345,7 +345,17 @@ export async function removeManagedWorktreeGuarded(
     // existed (or whose create-time write failed) then stop reading dirty for
     // that file alone. Does not opt older trees into disposable scratch: the
     // probe still requires their own creation-time metadata.
-    await ensureAfkExcludes(execFile, worktreePath);
+    const excludesOk = await ensureAfkExcludes(execFile, worktreePath);
+    if (!excludesOk) {
+      // The write failed — the meta file or scratch dir may still appear dirty,
+      // so warn here rather than leaving the user to wonder why the worktree was
+      // kept. The subsequent dirty-check is still run: if the tree is otherwise
+      // clean, git will have cached the patterns from an earlier successful write.
+      console.warn(
+        `[worktree] Warning: could not write afk exclude entries for ${worktreePath}. ` +
+        `If the worktree is kept, this may be why.`,
+      );
+    }
     if (await isManagedWorktreeDirty(execFile, worktreePath)) {
       return { removed: false, reason: 'dirty' };
     }
