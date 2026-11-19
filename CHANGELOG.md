@@ -12,6 +12,47 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- track nightly Harbor behaviour and paired regression alerts (44d3a0387)
+- add artifact_publish model tool with path/content auth, lineage validation, and quota admission (381df43f9)
+
+### Fixed
+- refuse pid 1 so a process-group kill can never become kill(-1) (#5097) (478e0b799)
+- route bash check-2 credential-floor decision through decidePathAccess (511a1f2c1)
+- require plain literal flags for destructive-git exemptions (d807f3e7a)
+- address destructive-git advisory findings (1e9b21aad)
+- pass --on-limit to closed-router on 429 rotation (aec7a556c)
+- reclassify AFK_CLOSED_ROUTER from auth secret to misc flag (dd334850e)
+- harden subscription overage attribution (3423f781b)
+- address advisory findings from webhook receiver review (8c4a94e54)
+- emit denial_circuit_breaker_tripped session_phase event when breaker trips (#5093) (21c1bea69)
+- emit structured telemetry per github-event-poller tick (#4039) (429cbcdb9)
+- preserve tick telemetry on processing failures (4c0d83532)
+- feed errorClusters into tool-failure-density proposal text (39c008e44)
+- sanitize rendered error cluster labels and samples (f5cd87fdb)
+- cover subagent env activation and warning delivery (d2484e930)
+- update built-in handler count for artifact_publish (ef7d4b5c2)
+- extract resolveChildMaxDepth shared helper (Stage 3 depth step) (#5092) (749387fe4)
+- pin wind-down sentinel exclusion via constants with design rationale (#5095) (4b08040eb)
+- move delivered log to success path and add null metadata test case (533174322)
+- tighten non-call palette detection, move displaced import, document scanner limits (8f0d406e5)
+- aggregate required CI checks and guard direct main pushes (#5084) (8ae38acba)
+- verify advisory findings from 2026-10-23 PR triage, all fixed on HEAD (c59370837)
+- correct unicode escape notation and test title in context-pressure comments (da854598d)
+- correct UTF-8 comment derivation and contradictory test comments (cb3aa226a)
+- correct LSP exit cleanup retry span comment (796592f91)
+- document unconditional stat recording and use delta assertions (d208f0975)
+- harden crash-notifier test isolation in daemon tests (e0e3fe9a6)
+- wrap continuation-run settling assertions in try/finally (cbc0b0f0f)
+- match process.once listener signature in events test mock (#5078) (be750384d)
+- remove unused eventsModule import in events test (0841a2fad)
+- add 12-byte comment and zero/negative budget edge case tests (3df06fb20)
+
+### Changed
+- bump string-width from 8.3.0 to 9.0.0 (f548da150)
+- cover cost-present turn-count-absent path in accumulator (d1ef4763a)
+- strengthen closed-router rotation guard and replay client tests (8afae399e)
+
 ## [5.359.0] - 2026-11-18
 
 ### Added
