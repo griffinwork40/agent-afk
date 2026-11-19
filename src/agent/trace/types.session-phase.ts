@@ -300,6 +300,17 @@ export type SessionPhaseName =
   | 'compose_leaf_tools_stripped'
   /** Hook-block repeat breaker trip (#3736). metadata: { tool, count, fork }. */
   | 'hook_block_repeat_tripped'
+  /**
+   * Denial circuit breaker trip (#3849). Emitted exactly once when a forked
+   * sub-agent accumulates {@link DENIAL_CIRCUIT_BREAKER_THRESHOLD} consecutive
+   * path-approval containment read denials with no successful tool call in
+   * between, and the breaker aborts the fork fast.
+   * `metadata`: `{ count, fork, deniedPaths }` where `count` is the total
+   * consecutive denials at trip time, `fork` is always `true` (only forks
+   * trip this breaker), and `deniedPaths` is a comma-separated list of the
+   * distinct denied path strings accumulated so far.
+   */
+  | 'denial_circuit_breaker_tripped'
   // Per-endpoint concurrency semaphore wait (#3886). Emitted when a model
   // request queued behind the semaphore and the wait was non-zero. A single
   // event (no paired start); `durationMs` is the queue wait in ms. `metadata`

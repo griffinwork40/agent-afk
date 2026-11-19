@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { InMemoryTraceWriter } from '../trace/writer.js';
 import { SessionToolDispatcher } from './dispatcher.js';
 import { builtinToolSchemas } from './schemas.js';
 import type { ToolCall, ToolHandler } from './types.js';
@@ -324,5 +325,92 @@ describe('denial circuit breaker — dispatcher integration', () => {
         expect(r.failureClass).toBe(HOOK_BLOCK_REPEAT_FAILURE_CLASS);
       }
     }
+  });
+});
+
+// ---- Trace event emission (#3849) ----------------------------------------
+
+/** Make a fork dispatcher wired with an InMemoryTraceWriter. */
+function makeForkDispatcherWithWriter(blockTools: ReadonlySet<string>): {
+  dispatcher: SessionToolDispatcher;
+  writer: InMemoryTraceWriter;
+} {
+  const writer = new InMemoryTraceWriter();
+  const dispatcher = new SessionToolDispatcher({
+    handlers: new Map<string, ToolHandler>([['echo', echoHandler()]]),
+    schemas: [...builtinToolSchemas],
+    permissions: { allowedTools: ['echo', 'read_file', 'list_directory', 'glob', 'grep'] },
+    hookRegistry: blockingHook(blockTools),
+    parentSessionId: PARENT,
+    traceWriter: writer,
+  });
+  return { dispatcher, writer };
+}
+
+describe('denial circuit breaker — trace event emission (#3849)', () => {
+  it('emits denial_circuit_breaker_tripped session_phase event exactly at threshold', async () => {
+    const { dispatcher, writer } = makeForkDispatcherWithWriter(new Set(['read_file']));
+
+    // N-1 denials: no trip event yet.
+    for (let i = 1; i < DENIAL_CIRCUIT_BREAKER_THRESHOLD; i++) {
+      await dispatcher.execute(readCall(i));
+    }
+    const beforeTrip = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'denial_circuit_breaker_tripped',
+    );
+    expect(beforeTrip).toHaveLength(0);
+
+    // The Nth denial trips the breaker and emits the event.
+    await dispatcher.execute(readCall(DENIAL_CIRCUIT_BREAKER_THRESHOLD));
+    const tripEvents = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'denial_circuit_breaker_tripped',
+    );
+    expect(tripEvents).toHaveLength(1);
+  });
+
+  it('trip event metadata carries count, fork=true, and deniedPaths', async () => {
+    const { dispatcher, writer } = makeForkDispatcherWithWriter(new Set(['read_file']));
+
+    for (let i = 1; i <= DENIAL_CIRCUIT_BREAKER_THRESHOLD; i++) {
+      await dispatcher.execute(readCall(i));
+    }
+
+    const tripEvents = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'denial_circuit_breaker_tripped',
+    );
+    expect(tripEvents).toHaveLength(1);
+    const meta = (tripEvents[0]!.payload as { metadata?: Record<string, string | number | boolean> }).metadata ?? {};
+    expect(meta['count']).toBe(DENIAL_CIRCUIT_BREAKER_THRESHOLD);
+    expect(meta['fork']).toBe(true);
+    // deniedPaths is a comma-separated string of the accumulated distinct paths.
+    expect(typeof meta['deniedPaths']).toBe('string');
+    expect((meta['deniedPaths'] as string)).toContain('/out-of-scope/file-1.ts');
+  });
+
+  it('emits exactly ONE trip event even when more denials follow', async () => {
+    const { dispatcher, writer } = makeForkDispatcherWithWriter(new Set(['read_file']));
+
+    // Trip the breaker, then fire two more denials past threshold.
+    for (let i = 1; i <= DENIAL_CIRCUIT_BREAKER_THRESHOLD + 2; i++) {
+      await dispatcher.execute(readCall(i));
+    }
+
+    const tripEvents = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'denial_circuit_breaker_tripped',
+    );
+    expect(tripEvents).toHaveLength(1);
+  });
+
+  it('emits trip event on the parallel batch path too', async () => {
+    const { dispatcher, writer } = makeForkDispatcherWithWriter(new Set(['read_file']));
+
+    // Fire exactly threshold calls in one executeBatch.
+    const calls = Array.from({ length: DENIAL_CIRCUIT_BREAKER_THRESHOLD }, (_, i) => readCall(i + 1));
+    await dispatcher.executeBatch(calls);
+
+    const tripEvents = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'denial_circuit_breaker_tripped',
+    );
+    expect(tripEvents).toHaveLength(1);
   });
 });
