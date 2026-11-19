@@ -95,7 +95,7 @@ describe('boundPressureArguments edge cases', () => {
     expect(result.preview).toBe('');
   });
 
-  it('leaves arguments unchanged when they already fit within a zero budget envelope', () => {
+  it('replaces tiny arguments with a parseable marker under a zero budget', () => {
     const tiny = '{}';
     const turns: OpenAIMessage[] = [call(tiny)];
     // budget=0 means the envelope check (byteLength <= 0) is false for any non-empty
