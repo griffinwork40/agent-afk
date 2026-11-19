@@ -242,3 +242,42 @@ Commands ran through a POSIX shell with closed stdin and an isolated AFK home.
 The job remained advisory despite these exits. Recheck on supported Node versions
 and a real machine before proposing a runtime fix. Workflow artifacts expire after
 30 days; preserve sanitized logs with any later issue that relies on them.
+
+### 2026-11-19: supported Node on macOS 15 and Windows Server 2022 (D5, D7, D11, J1, J3, J6, new J12)
+
+Source: [observation run 44582325558](https://github.com/griffinwork40/agent-afk/actions/runs/44582325558),
+artifacts `onboarding-macos-15-node-24` (Node v24.22.2, npm 11.19.1) and
+`onboarding-windows-2022-node-22` (Node v22.23.4, npm 10.9.9, Windows PowerShell 5.1),
+published agent-afk 5.360.0, closed stdin, isolated AFK home. Hosted runners, not
+retail machines.
+
+- **D5, observed on npm 11.19.1.** A plain `npm install -g agent-afk` exited 0 but
+  did not run afk's postinstall. npm printed
+  `npm warn install-scripts 1 package has install scripts not yet covered by allowScripts`
+  and suggested `npm install -g --allow-scripts=agent-afk`. So the PATH hint in
+  `scripts/postinstall.mjs` cannot appear for a newcomer on this npm, and the
+  warning itself is one more thing to misread. On npm 10.9.9 (Node 22) no such
+  warning appeared.
+- **D7, observed.** The install took 15.46 seconds on macOS and 181.30 seconds on
+  Windows, with no output until the end.
+- **D11, not testable here.** The Windows runner reports
+  `LocalMachine Unrestricted`, so `npm` and `afk` ran as typed. A retail machine
+  is still needed.
+- **J1, observed on Windows.** `afk doctor` on a correct install printed
+  `⚠ Node.js version  — v22.23.4 (engines.node not found in package.json)`.
+  The same check passed on macOS. Fix proposed in pull request 5148.
+- **J12 (new), observed on both systems.** On a brand-new home directory
+  `afk doctor` printed `⚠ Memory Store (SQLite)` with
+  `Fix: Unable to open memory store: Cannot open database because the directory does not exist`.
+  A first-time user is told to run doctor right after installing, sees a warning,
+  and is given no action. Fix proposed in pull request 5148.
+- **J3 and J6, observed.** With no credential, doctor ended with
+  `Summary: 12 passed  ·  3 warned  ·  1 failed` on macOS (11, 4, 1 on Windows)
+  and exit code 1. There is no plain statement of what to do next.
+- **Git removed from PATH on Windows.** Doctor output was identical with and
+  without Git. Doctor does not check for Git, and the agent shell fallback (F12)
+  cannot be observed without a credential.
+- **Node 20 follow-up (C4).** On the unsupported runtime every command, including
+  `afk --version` and `afk --help`, printed the no-credential message. On supported
+  Node the same two commands work without a credential. The cause is not yet
+  diagnosed; the effect is that a user on the wrong Node is sent to sign in.
