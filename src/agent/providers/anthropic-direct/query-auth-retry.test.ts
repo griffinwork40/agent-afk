@@ -868,6 +868,91 @@ describe('AnthropicDirectProvider — auth_retry_outcome trace phase', () => {
     // The replay error must still surface to the caller.
     expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
   });
+
+  it('TurnStreamRunner.runStream .return() path: emitSessionPhase fires before terminal yield', async () => {
+    // Regression guard for PR #5029 fix: buffered events must be emitted BEFORE
+    // the terminal yield so that TurnStreamRunner.runStream's `break` on
+    // done/error (which calls .return() on the generator) cannot skip them.
+    //
+    // Strategy: drain the generator manually — consuming events until the
+    // terminal `error` event, then call .return() to simulate what
+    // TurnStreamRunner.runStream does. Assert that auth_retry_outcome was
+    // already emitted to the trace writer before .return() was called.
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      // Both the initial call and the replay throw 401 (replay-failed path).
+      throw make401Error();
+    });
+
+    const traceWriter = new InMemoryTraceWriter();
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('test'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', traceWriter },
+    });
+    (query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } })
+      .retry.tokenRefresher = vi.fn(async () =>
+        new MockAnthropic({ authToken: 'sk-ant-oat01-fresh' }) as unknown as Anthropic,
+      );
+
+    // Simulate TurnStreamRunner.runStream: iterate until the terminal event,
+    // then break and call .return() — never draining past the terminal yield.
+    const iter = query[Symbol.asyncIterator]();
+    let terminalSeen = false;
+    while (true) {
+      const result = await iter.next();
+      if (result.done) break;
+      const ev = result.value;
+      if (ev.type === 'error' || ev.type === 'turn.completed') {
+        terminalSeen = true;
+        // This is the .return() call that TurnStreamRunner.runStream makes
+        // after breaking on the terminal event — abandon the generator.
+        await iter.return?.();
+        break;
+      }
+    }
+
+    expect(terminalSeen).toBe(true);
+
+    // Flush any microtask-queued trace writes (emitSessionPhase is void-async).
+    await new Promise((r) => setTimeout(r, 0));
+
+    // auth_retry_outcome MUST be present even though we called .return() after
+    // the terminal event. The buffering in auth-retry-tier.ts ensures the phase
+    // is emitted before the terminal yield, not after.
+    const phases = collectPhases(traceWriter);
+    const outcome = phases.find((p) => p.phase === 'auth_retry_outcome');
+    expect(outcome).toBeDefined();
+    expect(outcome?.metadata?.['outcome']).toBe('replay-failed');
+    expect(outcome?.metadata?.['status']).toBe(401);
+  });
+
+  it('403 + refresher returns null → emits auth_retry_outcome(refresh-null, 403)', async () => {
+    // Coverage for the isRefreshablePermissionDenied branch: a 403 in OAuth
+    // mode with a refresher wired that returns null must emit the same
+    // auth_retry_outcome trace event as the 401 path, but with status 403.
+    const err403 = new Error('Permission denied');
+    (err403 as unknown as { status: number }).status = 403;
+    messagesCreateMock.mockImplementation(() => { throw err403; });
+
+    const traceWriter = new InMemoryTraceWriter();
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('test'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', traceWriter },
+    });
+    (query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } })
+      .retry.tokenRefresher = vi.fn(async () => null);
+
+    await collect(query);
+
+    const phases = collectPhases(traceWriter);
+    const outcome = phases.find((p) => p.phase === 'auth_retry_outcome');
+    expect(outcome).toBeDefined();
+    expect(outcome?.metadata?.['outcome']).toBe('refresh-null');
+    expect(outcome?.metadata?.['status']).toBe(403);
+  });
 });
 
 // ---------------------------------------------------------------------------
