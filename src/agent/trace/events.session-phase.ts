@@ -104,8 +104,9 @@ export const SessionPhaseNameSchema = z.enum([
   'orphan_repair',
   // Server dropped thinking blocks via `input_transformations` (drop_block beta).
   // Emitted per drop-bearing frame (message_start and message_delta paths).
-  // metadata: { droppedCount, source }. See SessionPhaseName JSDoc in
-  // types.session-phase.ts.
+  // metadata: { droppedCount, source, reason_<code>: count, ... } (flat scalar
+  // tallies). Independent of the session console notice; no paths or content.
+  // See SessionPhaseName JSDoc in types.session-phase.ts.
   'thinking_block_dropped',
   // Background process lifecycle. See SessionPhaseName JSDoc in
   // types.session-phase.ts for the full contract.

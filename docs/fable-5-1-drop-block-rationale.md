@@ -1,107 +1,125 @@
-# Fable 5.1 `drop_block` rationale
+# Fable 5.1 / 5.2 `drop_block` rationale
 
 ## Context
 
-Claude Fable 5.1 introduces *prefix-bound thinking*: every thinking block in
-an assistant turn is cryptographically tied to the exact prefix of messages that
-preceded it.  If the prefix changes — even a single byte — the server refuses
-the thinking block with HTTP 400 `invalid thinking block signature`.
+On Claude Fable 5.1 and 5.2, preserved thinking binds each returned thinking
+block to what preceded it: `system`, `tools`, and every earlier message,
+including content before the block in its own message. Each block is compared
+with its own recorded prefix, not with the previous request. The check compares
+parsed content, not JSON formatting or key order. Changing, inserting, moving,
+or deleting earlier content can invalidate subsequent thinking. Leaving a gap
+in the sequence of thinking blocks can also fail the check.
 
-AFK mutates prefixes in several well-known ways:
+There are separate model and account bindings: a model can read only compatible
+models' thinking, and Fable 5.2 thinking is usable only in its producing account
+or a linked account. Incompatible model/account blocks are dropped without an
+error. Changing `model` is not itself a *prefix* change.
 
-- **Tool-result injection**: `tool_result` blocks are appended after every
-  `tool_use` assistant turn, changing the subsequent message prefix.
-- **Prompt-cache stamps**: `cache_control: { ttl: '1h' }` breakpoints are
-  cloned-and-stamped onto the last content block before each `messages.create`
-  call (non-mutating in-flight, but the cache marker changes the hash seen by
-  the model at the NEXT turn).
-- **Session restore**: a session resumed from disk carries signed thinking from
-  an earlier process; the restored prefix is functionally identical but the
-  server's internal binding may no longer match.
+Without an explicit policy, a prefix failure can return HTTP 400
+`The block is bound to a different conversation` (always on Fable 5.2; possibly
+on Fable 5.1). With `drop_block`, the server drops failing blocks and the request
+continues. Blocks left in stored history may be reported again on later requests.
+
+Verified prefix-changing operations in AFK include:
+
+- **Environment date rollover**: `query-system.ts` calls
+  `refreshEnvironmentDate` on the user system prompt before building the request.
+  A changed date changes `system`; merely rebuilding identical content does not.
+- **Permission-mode addenda**: `query-system.ts` adds plan/autonomous instructions
+  according to the current mode. Switching modes can change `system`.
+- **Plan-mode tool availability**: `query-turn-driver.ts` filters out
+  `exit_plan_mode` outside plan mode, changing the request's `tools` on a mode switch.
+- **Client-side compaction**: `compact.ts` supplies a summary preamble to the
+  shared compaction core, replacing older messages. Microcompaction in
+  `shared/compaction.ts` replaces older tool-result content with placeholders.
+  Either can change the prefix of thinking retained after the edited content.
+  This is different from server-side compaction/context editing, which changes
+  what the model reads rather than the sent prefix.
+
+Appending a new tool-result message after a thinking block does **not** change
+that block's prefix. `cache_control` markers are excluded from the comparison.
+Restoring identical content in a new process or session does not itself fail the
+prefix check; the check is about content, not session IDs.
+
+Sources: [Preserved thinking](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking)
+and [Prefix checks](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking/prefix-checks).
 
 ## Decision: explicit `drop_block` over append-only rewrite
 
-Two policy choices exist once a prefix mismatch is detected:
+AFK retains the explicit `drop_block` decision rather than redesigning system,
+tool, and history composition to be append-only. The
+`thinking-binding-controls-2026-08-01` beta header and
+`thinking.block_binding.prefix_mismatch_behavior: 'drop_block'` are sent on
+eligible requests. The same handling applies to Fable 5.2.
 
 | Policy | Mechanism | Trade-off |
 |---|---|---|
-| `drop_block` | Server drops the invalidated thinking block; the model answers that turn without it | Minimal: one console.warn; prior reasoning unavailable for the dropped turn |
-| Append-only history | AFK never mutates message history — impossible given tool-result injection | Would require a full architectural rewrite of the tool-use loop |
+| `drop_block` | Server drops invalidated thinking; the request continues without it | Keeps the current harness architecture; prior reasoning is unavailable on the affected request |
+| Append-only | Freeze `system` and `tools`, preserve earlier messages, append updates | Avoids prefix invalidation but requires redesign of mode changes, environment updates, and client-side compaction |
 
-AFK opts into `drop_block` via the `thinking-binding-controls-2026-08-01` beta
-header.  This is the correct choice because:
-
-1. AFK's tool-result injection is load-bearing — eliminating it would require
-   rewriting the loop in loop.ts and all retry tiers.
-2. Dropped blocks are not billed and the model answers from its current context.
-   Prior reasoning is unavailable for the affected turn; blocks still in history
-   that the current model can read remain usable.
-3. The drop is *observable*: the server populates
-   `message.input_transformations` in the SSE `message_start` frame, which
-   AFK surfaces as a bounded `console.warn` (structural metadata only — block
-   count and index positions; no thinking text or secrets cross the log).
+Dropped blocks are not billed as input, but dropping can invalidate prompt
+caching from the first affected block and require more output tokens. Continuing
+normally does not mean the reasoning loss is prevented or quality is unchanged;
+evaluations are needed to assess that trade-off. AFK does not remove blocks
+from stored history, so compatible blocks may remain usable on future requests.
 
 ## Wire shape
 
-```
-// SSE message_start frame (documented in the Anthropic preserved-thinking API reference)
-// Real field names: type:'thinking_dropped', path:'messages.N.content.M'
-{
-  type: 'message_start',
-  message: {
-    ...
-    input_transformations: [
-      { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' }
-    ]
-  }
-}
+```js
+// message_start.message.input_transformations
+[
+  { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' }
+]
 ```
 
-Known `reason` values: `prefix_binding_mismatch`, `model_binding_mismatch`,
-`organization_binding_mismatch`. Unknown `type` or `reason` values are ignored
-(forward-compat per spec). `thinking_mismatch_allowed` entries are NOT drops —
-they mean the block failed the prefix check but was allowed through on an older
-account; AFK does not warn for them.
+`message_delta` can also report transformations after a server-side fallback.
+Known reasons are `prefix_binding_mismatch`, `model_binding_mismatch`, and
+`organization_binding_mismatch`. `thinking_mismatch_allowed` means a prefix
+check failed but the block reached the model; it is **not** a drop. AFK ignores
+unknown transformation types. Unknown drop reasons still count as drops.
 
 ## Implementation
 
-- **`input-transformations.ts`**: `warnOnDroppedThinkingBlocks()` — safe helper called at
-  `message_start` and `message_delta`; logs drop count + reason category
-  breakdown only. `path` values are never logged.
-- **`auth.ts`**: `THINKING_BINDING_CONTROLS_BETA_HEADER` constant; wired into
-  `buildRequestHeaders` as the `thinkingBindingControls` optional flag.
-- **`loop/round-request.ts`**: `buildRoundParams` merges `block_binding:
-  { prefix_mismatch_behavior: 'drop_block' }` into the `thinking` param when
-  `thinkingBlockBinding` is set.
-- **`request-types.ts`**: `thinkingBlockBinding` typed on `RunTurnInput` and
-  `AnthropicMessagesCreateParams`.
+- **`input-transformations.ts`**: shared filtering and per-reason tallying for
+  every drop-bearing frame. One `console.warn` notice per session ID is retained
+  in a process-local FIFO set of at most 4096 IDs. After eviction, a revisited
+  session can receive another notice. There is no process-wide warning cap.
+  The line explains the reason in plain words with searchable raw codes, says
+  AFK continued normally and no action is needed, and directs further omissions
+  to the trace. No paths, thinking text, or signatures are logged.
+- **Trace metadata** is flat and scalar, matching `session_phase` typing:
+  `{ droppedCount: 2, source: 'message_start', reason_prefix_binding_mismatch: 2 }`.
+  Each nonzero reason gets a numeric `reason_<code>` field, so witness `where`
+  filters can match `payload.metadata.reason_prefix_binding_mismatch` directly.
+  Future reason identifiers matching `[a-z][a-z0-9_]{0,127}` are preserved;
+  malformed or missing reasons become `unknown_reason` (keeping output one line).
+- **`translate.ts`**: retains per-stream console deduplication and the
+  `message_delta` fallback. Every drop-bearing frame emits a
+  `thinking_block_dropped` trace event, including the already-warned path and
+  streams after the session's console notice. Start/delta counts are per-frame,
+  not distinct-block totals across frames.
+- **`auth.ts`**, **`loop/round-request.ts`**, and **`query-runtime.ts`** retain
+  existing beta/policy wiring. No request-building or history behavior changes.
+
+The notice remains console-only, not a ProviderEvent notice: Telegram and daemon
+operators do not receive that console line through their normal notice surfaces.
+This observability change does not prevent thinking loss or change model support.
 
 ## Tests
 
-- `translate.test.ts` — fifteen `input_transformations` cases: `prefix_binding_mismatch`,
-  `model_binding_mismatch`, `organization_binding_mismatch`, multi-drop mixed reasons,
-  `thinking_mismatch_allowed` (no warn), unknown type (no warn), unknown reason (warn
-  as `unknown_reason`), absent field, empty array, warn cap at 10 with cap note,
-  `message_delta` fallback path, stream continues after drop, malformed entries skipped.
-- `auth.test.ts` — five cases: oauth + active, api-key + active, oauth + inactive,
-  api-key + inactive (empty object), oauth + both effort and thinkingBindingControls.
-- `loop/round-request.test.ts` — three `buildRoundParams` cases: block_binding wired,
-  block_binding absent for non-Fable, thinking omitted entirely.
+- `translate.input-transformations.test.ts`: same session across streams (one
+  line, separate traces with reasons), independent sessions, more than ten
+  sessions, bounded FIFO eviction, both drop-bearing frames including the
+  already-warned path, delta-only fallback, mixed/unknown reasons, exact wording,
+  scalar witness filtering, malformed entries, ignored types/non-drops, and
+  normal turn completion. `translate.test.ts` keeps the remaining translator tests.
+- `auth.test.ts` and `loop/round-request.test.ts` cover existing beta header and
+  `block_binding` request wiring.
+- `query-wiring.characterization.test.ts` covers the provider wiring. Appending
+  a tool result is not evidence of a mutated prefix and is not treated as such.
 
-## History mutated-prefix representative test
+## Compatibility boundary
 
-The `query-wiring.characterization.test.ts` exercises a real `prepareTurnRequest`
-→ `buildRoundParams` path with `thinkingBlockBinding` set, verifying that the
-beta header is forwarded in both oauth and api-key modes.  This covers the
-"AFK mutates prefixes" scenario: the characterization test represents a history
-that has already been mutated (tool_result appended) and asserts the drop_block
-policy is wired end-to-end.
-
-## Fable 5 backward compatibility
-
-Fable 5 (`claude-fable-5`) supports `{type: 'enabled'}` extended thinking with
-explicit `budget_tokens`; it is NOT adaptive-only.  The drop_block feature is
-Fable-5.1-specific (adaptive thinking always on).  The `thinkingBlockBinding`
-flag is optional on `RunTurnInput` and is only set when the provider detects
-Fable 5.1; Fable 5 paths leave it unset, so no `block_binding` field reaches
-the wire and no thinking-binding-controls beta is requested.
+`query-runtime.ts` enables the policy for Fable 5.1 and 5.2 on the direct endpoint.
+Other model paths are unchanged. This is AFK's current integration boundary,
+not a claim that the upstream preserved-thinking feature supports only those models.
