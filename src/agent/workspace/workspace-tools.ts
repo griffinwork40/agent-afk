@@ -94,6 +94,14 @@ export const workspacePublishTool: AnthropicToolDef = {
         enum: ['supports', 'contradicts', 'depends_on', 'supersedes'],
         description: 'Relationship to the entries listed in relates_to.',
       },
+      artifact_id: {
+        type: 'string',
+        pattern: '^art_[0-9a-f]{32}$',
+        description:
+          'Optional stable artifact ID (`art_<32hex>`) linking this entry to a registered ' +
+          'artifact in the content-addressed registry. Use when the entry describes or was ' +
+          'produced by a specific artifact_publish result.',
+      },
     },
     required: ['type', 'content'],
   },
@@ -213,6 +221,7 @@ export function createWorkspaceHandlers(
         agent_id: agentId,
         relates_to: parsed.relates_to,
         relation_type: parsed.relation_type,
+        artifact_id: parsed.artifact_id,
       };
       const id = store.publish(entry);
       return { content: JSON.stringify({ published: true, id }) };
@@ -257,6 +266,7 @@ function formatEntry(entry: WorkspaceEntry): Record<string, unknown> {
     relates_to: entry.relates_to !== null ? JSON.parse(entry.relates_to) : null,
     relation_type: entry.relation_type,
     created_at: entry.created_at,
+    artifact_id: entry.artifact_id ?? null,
   };
 }
 
@@ -284,6 +294,9 @@ const VALID_RELATION_TYPES = new Set([
   'supersedes',
 ]);
 
+/** Artifact ID format: `art_` followed by exactly 32 lowercase hex characters. */
+const ARTIFACT_ID_PATTERN = /^art_[0-9a-f]{32}$/;
+
 interface ParsedPublishInput {
   type: WorkspacePublishInput['type'];
   content: string;
@@ -292,6 +305,7 @@ interface ParsedPublishInput {
   confidence?: number;
   relates_to?: number[];
   relation_type?: WorkspaceRelationType;
+  artifact_id?: string;
 }
 
 // ── Query input parsing ──────────────────────────────────────────────────────
@@ -382,6 +396,12 @@ function parsePublishInput(input: unknown): ParsedPublishInput {
       ? (relationTypeRaw as WorkspaceRelationType)
       : undefined;
 
+  const artifactIdRaw = raw['artifact_id'];
+  const artifact_id =
+    typeof artifactIdRaw === 'string' && ARTIFACT_ID_PATTERN.test(artifactIdRaw)
+      ? artifactIdRaw
+      : undefined;
+
   return {
     type: type as WorkspacePublishInput['type'],
     content,
@@ -390,5 +410,6 @@ function parsePublishInput(input: unknown): ParsedPublishInput {
     confidence,
     relates_to,
     relation_type,
+    artifact_id,
   };
 }
