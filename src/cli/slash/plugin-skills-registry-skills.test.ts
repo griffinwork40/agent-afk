@@ -201,7 +201,8 @@ describe('registry skills in registerPluginSkills', () => {
 
     // The namespaced form is reachable and carries the authored hint.
     expect(lookup('/user:mint')?.hint).toBe('Only when the user owns this.');
-    // The user skill is never recorded as shadowing itself.
+    // No collision: the namespaced registration path never writes a bare-slot
+    // collision entry, so a user skill claiming `user:mint` does not shadow itself.
     expect(state.collisions.filter((c) => isRegistrySource(c.source))).toEqual([]);
   });
 

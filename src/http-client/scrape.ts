@@ -174,7 +174,9 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     if (res.ok) {
       if (BINARY_RE.test(contentType)) {
         const ct = (contentType.split(';')[0] ?? contentType).trim();
-        const isExtractable = /application\/(pdf|zip)|\.docx|\.xlsx|\.pptx/i.test(ct);
+        // ct is the bare MIME type (parameters stripped above), so file-extension
+        // alternatives like \.docx would never match; test only real MIME types.
+        const isExtractable = /application\/(pdf|zip)/i.test(ct);
         // view_image supports only .png, .jpg/.jpeg, .gif, .webp — mirroring
         // the MIME_MAP in src/agent/tools/handlers/view-image.ts. Other image/*
         // types (svg+xml, avif, tiff, bmp, …) fall through to the generic branch.

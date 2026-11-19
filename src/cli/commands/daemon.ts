@@ -98,7 +98,10 @@ export function formatTaskCompletion(
   if (record.gateRecoveryNote) lines.push(record.gateRecoveryNote);
   if (record.modelFallbackNote) lines.push(record.modelFallbackNote);
   if (record.skipReason) lines.push(`skipReason=${record.skipReason}`);
-  if (record.errorMessage) lines.push(`error: ${record.errorMessage.slice(0, 400)}`);
+  if (record.errorMessage) {
+    const msg = record.errorMessage;
+    lines.push(`error: ${msg.length > 400 ? `${msg.slice(0, 400)}… [truncated]` : msg}`);
+  }
   if (hasOutput) {
     lines.push('', responseText as string);
   }
