@@ -12,7 +12,9 @@
  * @module agent/daemon/scheduler
  */
 
-import { appendFileSync } from 'node:fs';
+import { writeRunTelemetry } from './scheduler.telemetry.js';
+import type { CompletionCallback, NotificationDecision } from './scheduler.notification.js';
+import type { StreakSnapshot } from './scheduler.streak-history.js';
 import * as cron from 'node-cron';
 import { IdleDetector } from './idle-detector.js';
 import { recoverDaemonQueues } from './pull-recovery.js';
@@ -44,11 +46,10 @@ import {
   fireOnTaskComplete,
   type PullTickContext,
 } from './scheduler.pull-tick.js';
-import { errorMessage } from '../../utils/errors.js';
 import { makeCwdErrorRecord, snapshotInFlightTasks, makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
 import { ensureTelemetrySink, probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
-import { FailureStreakTracker, applyStreakLogic } from './scheduler.failure-streak.js';
+import { FailureStreakTracker } from './scheduler.failure-streak.js';
 import { evaluateRunAtGate, applyAutoDisable, warnMalformedDate } from './scheduler.runat-gate.js';
 import { overlapKeyOf } from './handoff-resume-context.js';
 
@@ -80,7 +81,7 @@ export interface SchedulerOptions {
    * record may not have been persisted to the telemetry file. Callers that require
    * durability guarantees must verify the write independently.
    */
-  onTaskComplete?: (record: TelemetryRecord, details?: TaskCompletionDetails) => void | Promise<void>;
+  onTaskComplete?: CompletionCallback;
   /**
    * Poll interval (ms) for the pull-trigger queue. When > 0, `startPullLoop()`
    * will set up a `setInterval` that dequeues one task per tick when idle.
@@ -152,6 +153,9 @@ export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
 type TelemetryStatus = 'success' | 'error' | 'skipped' | 'blocked';
 
 export interface TelemetryRecord extends GateRecoveryFields, ModelFallbackFields {
+  runId?: string;
+  failureStreak?: StreakSnapshot;
+  notificationDecision?: NotificationDecision;
   taskId: string;
   command: string;
   trigger: TelemetryTrigger;
@@ -178,22 +182,11 @@ export interface TelemetryRecord extends GateRecoveryFields, ModelFallbackFields
    * into retries (`maxAttempts > 1`); absent = single attempt, as before.
    */
   attempts?: number;
-  /**
-   * Whether a notification was sent for this run, and what kind (#5146).
-   * - `'failure'`      — regular per-failure notice (notifyOn: 'failure' or 'always').
-   * - `'escalation'`   — first streak-threshold alert.
-   * - `'re-escalation'`— periodic reminder for an ongoing streak.
-   * - `'recovery'`     — task recovered after a streak.
-   * - `'none'`         — notification was due but suppressed (e.g. by notifyOn: 'never').
-   * Absent when no notification decision was made (e.g. skipped runs, pre-threshold
-   * failures, or tasks with no onTaskComplete callback configured).
+  /** Legacy decision marker, read for migration only; never proof of delivery.
+   * New run rows use notificationDecision and separate notification-delivery rows.
    */
   notifySent?: 'failure' | 'escalation' | 're-escalation' | 'recovery' | 'none';
-  /**
-   * ISO timestamp of the first failure in the current consecutive-failure streak.
-   * Only present on telemetry records for failures that are part of an active streak
-   * (i.e. count >= 2). Absent on the first failure and on successes/skips (#5146).
-   */
+  /** Compatibility alias for failureStreak.failingSince, including first failures and skips. */
   failingSince?: string;
 }
 
@@ -302,6 +295,7 @@ export class CronScheduler {
       void Promise.resolve(entry.cronTask.destroy()).catch(() => undefined);
     }
     this.registry.delete(taskId);
+    this.failureStreaks.forget(taskId);
   }
 
   list(): ScheduledTask[] {
@@ -639,20 +633,8 @@ export class CronScheduler {
   }
 
   private writeTelemetry(record: TelemetryRecord, task?: ScheduledTask, details?: TaskCompletionDetails): void {
-    // doneUnverified (#2307): only written when true. applyStreakLogic (#5146): stamps notifySent/failingSince.
-    const doneRec: TelemetryRecord = details?.doneUnverified === true ? { ...record, doneUnverified: true } : record;
-    const { persistedRecord, effectiveTask, effectiveDetails } = applyStreakLogic(this.failureStreaks, task, doneRec, details, this.options.onTaskComplete !== undefined);
-    try {
-      appendFileSync(this.telemetryPath(), `${JSON.stringify(persistedRecord)}\n`, 'utf-8');
-    } catch (err) {
-      // Telemetry write failure must not crash the daemon or suppress the
-      // completion push — log and fall through so fireOnTaskComplete still runs.
-      // eslint-disable-next-line no-console
-      console.error(`[daemon] telemetry write failed: ${errorMessage(err)}`);
-    }
-    // Contract: persistedRecord is passed unconditionally — if appendFileSync
-    // threw above, the record may not be on disk (see CronSchedulerOptions.onTaskComplete).
-    fireOnTaskComplete(persistedRecord, { onTaskComplete: this.options.onTaskComplete }, effectiveTask, effectiveDetails);
+    writeRunTelemetry(this.telemetryPath(), this.failureStreaks, this.options.onTaskComplete, record, task, details);
+    if (!this.registry.has(record.taskId)) this.failureStreaks.forget(record.taskId);
   }
 
 }

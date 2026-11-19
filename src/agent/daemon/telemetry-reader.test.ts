@@ -54,6 +54,13 @@ describe('readTelemetryHistory', () => {
     expect(await readTelemetryHistory(telemetryPath, { taskId: 't' })).toEqual([legacy, recovered]);
   });
 
+  it('excludes delivery records before applying the history limit', async () => {
+    const run = { taskId: 't', status: 'error', triggeredAt: '2026-01-01', failureStreak: { count: 1 } };
+    const delivery = { recordType: 'notification-delivery', taskId: 't', triggeredAt: '2026-01-01', outcome: 'failed' };
+    writeFileSync(telemetryPath, [run, delivery].map((r) => JSON.stringify(r)).join('\n') + '\n');
+    expect(await readTelemetryHistory(telemetryPath, { taskId: 't', limit: 1 })).toEqual([run]);
+  });
+
   // ── ENOENT ────────────────────────────────────────────────────────────────
 
   it('returns [] when the file does not exist', async () => {

@@ -21,6 +21,7 @@ import { redactInlineSecrets } from '../session/prompt-dump.js';
 import type { ScheduledTask } from './triggers.js';
 import type { TelemetryRecord, TaskCompletionDetails } from './scheduler.js';
 import { errorMessage } from '../../utils/errors.js';
+import { dispatchCompletion, type CompletionCallback } from './scheduler.notification.js';
 
 // ─── Context interface ────────────────────────────────────────────────────────
 
@@ -167,7 +168,8 @@ export interface FireOnTaskCompleteOptions {
    * callback still fires with that record — the record may not be on disk.
    * Callers that require durability guarantees must verify the write independently.
    */
-  onTaskComplete?: (record: TelemetryRecord, details?: TaskCompletionDetails) => void | Promise<void>;
+  onTaskComplete?: CompletionCallback;
+  telemetryPath?: string;
 }
 
 /**
@@ -185,41 +187,6 @@ export function fireOnTaskComplete(
   task?: ScheduledTask,
   details?: TaskCompletionDetails,
 ): void {
-  const cb = options.onTaskComplete;
-  if (!cb) return;
-  // notifyOn filter — only applies when the triggering task is known
-  if (task !== undefined) {
-    if (task.notifyOn === 'never') return;
-    // 'blocked' means a gate block without a trustworthy declared recovery.
-    // Recovered success retains gateBlocks but is not a failure (#3756).
-    if (task.notifyOn === 'failure' && record.status !== 'error' && record.status !== 'blocked') return;
-    // 'always' or undefined (legacy behavior) falls through
-  }
-  // Thread the task's explicit chat target (if any) onto the details so the
-  // injected callback can route the push. Merged here — rather than at every
-  // writeTelemetry call site — because this is the single funnel every
-  // completion path flows through, and the scheduler must not resolve/validate
-  // the target itself (layering: no src/cli import). An explicit
-  // details.notifyChat (should never happen today) is preserved.
-  const effectiveDetails: TaskCompletionDetails | undefined =
-    task?.notifyChat !== undefined
-      ? { ...(details ?? {}), notifyChat: details?.notifyChat ?? task.notifyChat }
-      : details;
-  // Fire-and-forget. Notification callbacks must not block telemetry
-  // writes or crash the scheduler — every error is swallowed and logged.
-  try {
-    const result = cb(record, effectiveDetails);
-    if (result instanceof Promise) {
-      void result.catch((err: unknown) => {
-        const msg = errorMessage(err);
-        // eslint-disable-next-line no-console
-        console.error(`[daemon] onTaskComplete callback failed: ${msg}`);
-      });
-    }
-  } catch (err) {
-    const msg = errorMessage(err);
-    // eslint-disable-next-line no-console
-    console.error(`[daemon] onTaskComplete callback failed: ${msg}`);
-  }
+  dispatchCompletion(record, options.onTaskComplete, task, details, options.telemetryPath);
 }
 

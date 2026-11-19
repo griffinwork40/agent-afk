@@ -17,6 +17,7 @@
  * @module agent/daemon/schedule-store
  */
 
+import { assertFailureStreakThreshold } from './failure-streak-threshold.js';
 import {
   closeSync,
   existsSync,
@@ -421,6 +422,7 @@ export function addSchedule(
   config: Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt'>,
   path?: string,
 ): ScheduledTaskConfig {
+  assertFailureStreakThreshold(config.failureStreakThreshold);
   if (config.runAt !== undefined && !isValidIsoDate(config.runAt)) {
     throw new Error(`addSchedule: runAt must be a valid ISO 8601 date string, got: ${String(config.runAt)}`);
   }
@@ -506,6 +508,7 @@ export function updateSchedule(
   patch: SchedulePatch,
   path?: string,
 ): ScheduledTaskConfig | undefined {
+  assertFailureStreakThreshold(patch.failureStreakThreshold === null ? undefined : patch.failureStreakThreshold);
   if (patch.runAt !== undefined && patch.runAt !== null && !isValidIsoDate(patch.runAt)) {
     throw new Error(`updateSchedule: runAt must be a valid ISO 8601 date string, got: ${String(patch.runAt)}`);
   }

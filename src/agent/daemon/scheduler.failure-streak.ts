@@ -1,67 +1,30 @@
-/**
- * Consecutive-failure streak tracker for the daemon scheduler.
- *
- * Tracks per-task run outcomes in memory and fires:
- *   - ONE escalation alert when a task reaches its failure-streak threshold
- *     (default 3 consecutive failures).  Subsequent failures in the same
- *     streak are silent so a daily notice from a noisy channel is not repeated
- *     indefinitely.
- *   - ONE "recovered" alert when the task next succeeds after the threshold
- *     was breached.
- *
- * "Failed" means `status === 'error' || status === 'blocked'` — matching the
- * issue's definition.  `status === 'skipped'` does NOT count toward the streak
- * (a budget-gate skip or overlap skip is not an execution failure).
- *
- * Invariant: daemon-process state only.  A daemon restart resets all counters,
- * which is acceptable and preferable to adding more I/O to the hot path; the
- * streak will re-escalate within `threshold` more failures after restart.
- *
- * Modelled after `OverlapAlertLatch` and `BudgetAlertLatch`.
- *
- * @module agent/daemon/scheduler.failure-streak
- */
-
+// Consecutive failures retain ordinary per-failure notices. Streak events add
+// one escalation, periodic re-escalation, and one recovery decision per episode.
+// Snapshots survive restart; exactly-once is not guaranteed across a crash
+// between append and delivery. Delivery is a separate, asynchronous fact.
 import { redactInlineSecrets } from '../session/prompt-dump.js';
-import type { TelemetryRecord, TelemetryTrigger, TaskCompletionDetails } from './scheduler.js';
+import type { TelemetryRecord, TaskCompletionDetails } from './scheduler.js';
 import type { ScheduledTask } from './triggers.js';
+import { emptyStreak, readStreakHistory, type StreakSnapshot } from './scheduler.streak-history.js';
+import { notificationDecision } from './scheduler.notification.js';
 
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-/** Default consecutive-failure count that triggers an escalation alert. */
+/** Default consecutive failures before the first escalation decision. */
 export const DEFAULT_FAILURE_STREAK_THRESHOLD = 3;
 
-/** Re-escalation interval: after the initial alert, re-alert every N failures. */
+/** Further failures between reminder decisions after the first escalation. */
 export const REESCALATION_INTERVAL = 10;
 
-// ─── Per-task streak state ────────────────────────────────────────────────────
-
-interface StreakState {
-  /** Current consecutive-failure count. */
-  count: number;
-  /** ISO timestamp of the first failure in the current streak. */
-  failingSince: string;
-  /** True once the threshold alert has been sent for this streak episode. */
-  escalated: boolean;
-  /** Number of additional failures since the initial escalation. */
-  extraFailures: number;
-  /** Redacted last error line from the most recent failure. */
-  lastError: string | undefined;
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/**
- * Whether a telemetry record counts as a "failure" for streak purposes.
- * Both `error` and `blocked` count; `skipped` and `success` do not.
- */
+/** Both execution errors and unrecovered gate blocks advance the streak. */
 export function isFailureStatus(status: TelemetryRecord['status']): boolean {
   return status === 'error' || status === 'blocked';
 }
 
-/**
- * Plain-text escalation message for the first alert of a streak episode.
- */
+function label(taskId: string, taskName: string | undefined, cron: string | undefined): string {
+  const name = taskName !== undefined ? `"${taskName}" (${taskId})` : `"${taskId}"`;
+  return `${name}${cron !== undefined ? ` (cron: ${cron})` : ''}`;
+}
+
+/** Describe the initial escalation without promising notification delivery or silence. */
 export function formatStreakEscalation(
   taskId: string,
   taskName: string | undefined,
@@ -70,20 +33,12 @@ export function formatStreakEscalation(
   lastError: string | undefined,
   cron: string | undefined,
 ): string {
-  const label = taskName !== undefined ? `"${taskName}" (${taskId})` : `"${taskId}"`;
-  const cronNote = cron !== undefined ? ` (cron: ${cron})` : '';
-  const errorNote = lastError !== undefined ? `\nLast error: ${lastError}` : '';
-  return (
-    `[daemon] Task ${label}${cronNote} has failed ${count} runs in a row.\n` +
-    `Failing since: ${failingSince}${errorNote}\n` +
-    `Further failures for this task are logged to telemetry without alerts ` +
-    `until it recovers or reaches the re-escalation interval.`
-  );
+  return `[daemon] Task ${label(taskId, taskName, cron)} has failed ${count} runs in a row.\n`
+    + `Failing since: ${failingSince}${lastError !== undefined ? `\nLast error: ${lastError}` : ''}\n`
+    + 'Ordinary failure notices continue according to the task notification policy; streak reminders are periodic.';
 }
 
-/**
- * Plain-text re-escalation message for continued failures after the initial alert.
- */
+/** Describe a periodic reminder that an escalated streak is still failing. */
 export function formatStreakReEscalation(
   taskId: string,
   taskName: string | undefined,
@@ -92,18 +47,11 @@ export function formatStreakReEscalation(
   lastError: string | undefined,
   cron: string | undefined,
 ): string {
-  const label = taskName !== undefined ? `"${taskName}" (${taskId})` : `"${taskId}"`;
-  const cronNote = cron !== undefined ? ` (cron: ${cron})` : '';
-  const errorNote = lastError !== undefined ? `\nLast error: ${lastError}` : '';
-  return (
-    `[daemon] Task ${label}${cronNote} is STILL failing — ${count} consecutive failures.\n` +
-    `Failing since: ${failingSince}${errorNote}`
-  );
+  return `[daemon] Task ${label(taskId, taskName, cron)} is STILL failing — ${count} consecutive failures.\n`
+    + `Failing since: ${failingSince}${lastError !== undefined ? `\nLast error: ${lastError}` : ''}`;
 }
 
-/**
- * Plain-text recovery message sent after a streak is cleared by a success.
- */
+/** Describe recovery from a previously escalated streak. */
 export function formatStreakRecovery(
   taskId: string,
   taskName: string | undefined,
@@ -111,286 +59,131 @@ export function formatStreakRecovery(
   failingSince: string,
   cron: string | undefined,
 ): string {
-  const label = taskName !== undefined ? `"${taskName}" (${taskId})` : `"${taskId}"`;
-  const cronNote = cron !== undefined ? ` (cron: ${cron})` : '';
-  return (
-    `[daemon] Task ${label}${cronNote} has recovered after ${streakCount} consecutive failure(s).\n` +
-    `Was failing since: ${failingSince}`
-  );
+  return `[daemon] Task ${label(taskId, taskName, cron)} has recovered after ${streakCount} consecutive failure(s).\n`
+    + `Was failing since: ${failingSince}`;
 }
 
-// ─── Main tracker class ───────────────────────────────────────────────────────
+/** Transition chosen for this run, independent of notification policy or delivery. */
+export type StreakActionKind = 'none' | 'escalate' | 're-escalate' | 'recover';
 
-/**
- * Per-daemon-process failure-streak tracker.
- *
- * Call `record()` after every task completion.  It returns the notification
- * action to take — `'escalate'`, `'re-escalate'`, `'recover'`, or `'none'`
- * — together with the message text.  The scheduler wires this into
- * `writeTelemetry` to override `notifyOn` exactly once per streak/recovery
- * event, then threads the text as `details.responseText`.
- */
+/** A streak transition and optional replacement notification text. */
+export interface StreakAction {
+  action: StreakActionKind;
+  message?: string;
+}
+
+/** Cached recurring-task state; callers must forget unregistered tasks and exclude synthetic runs. */
 export class FailureStreakTracker {
-  private readonly streaks = new Map<string, StreakState>();
+  private readonly streaks = new Map<string, StreakSnapshot>();
+  private readonly hydrated = new Set<string>();
 
-  /**
-   * Process a completed run record.
-   *
-   * Returns the notification action and message for this run:
-   *   - `'none'`        — no streak action needed.
-   *   - `'escalate'`    — first alert for a new streak above threshold.
-   *   - `'re-escalate'` — reminder for an ongoing streak every REESCALATION_INTERVAL.
-   *   - `'recover'`     — streak cleared by a success (threshold was previously breached).
-   *
-   * @param taskId     Stable task identifier.
-   * @param task       ScheduledTask (for label, cron) — may be undefined for synthetic tasks.
-   * @param record     The telemetry record just produced.
-   * @param threshold  Failure count that triggers escalation (default: DEFAULT_FAILURE_STREAK_THRESHOLD).
-   */
+  /** Load bounded durable history once per recurring task, including empty history. */
+  hydrate(taskId: string, telemetryPath: string): void {
+    if (this.hydrated.has(taskId)) return;
+    this.hydrated.add(taskId);
+    this.streaks.set(taskId, readStreakHistory(telemetryPath, taskId).snapshot);
+  }
+
+  /** Release both cached history and streak state when a task is unregistered. */
+  forget(taskId: string): void {
+    this.streaks.delete(taskId);
+    this.hydrated.delete(taskId);
+  }
+
+  /** Advance a recurring task's streak; skips preserve it and success resets it. */
   record(
     taskId: string,
     task: ScheduledTask | undefined,
     record: TelemetryRecord,
     threshold: number = DEFAULT_FAILURE_STREAK_THRESHOLD,
   ): StreakAction {
-    const isFailure = isFailureStatus(record.status);
-
-    if (!isFailure) {
-      // Skipped runs (overlap, budget-over, telemetry-unwritable, etc.) neither
-      // increment nor reset the streak — they are not genuine execution outcomes.
-      if (record.status === 'skipped') return { action: 'none' };
-
-      // Success: clears streak. Sends recovery if threshold was previously breached.
-      const existing = this.streaks.get(taskId);
-      if (existing !== undefined && existing.escalated) {
-        const { count, failingSince } = existing;
-        this.streaks.delete(taskId);
-        const msg = formatStreakRecovery(
-          taskId, task?.name, count, failingSince, task?.cronExpression,
-        );
-        return { action: 'recover', message: msg };
-      }
-      // Clear streak even if it hadn't escalated yet.
-      if (existing !== undefined) this.streaks.delete(taskId);
-      return { action: 'none' };
+    const state = this.streaks.get(taskId) ?? emptyStreak();
+    this.streaks.set(taskId, state);
+    if (record.status === 'skipped') return { action: 'none' };
+    if (!isFailureStatus(record.status)) {
+      this.streaks.set(taskId, emptyStreak());
+      return state.escalated
+        ? {
+          action: 'recover',
+          message: formatStreakRecovery(
+            taskId, task?.name, state.count, state.failingSince ?? '', task?.cronExpression,
+          ),
+        }
+        : { action: 'none' };
     }
-
-    // Failure: increment or start streak.
-    const existing = this.streaks.get(taskId);
-    const redactedError = record.errorMessage !== undefined
+    state.count++;
+    state.failingSince ??= record.triggeredAt;
+    state.lastError = record.errorMessage !== undefined
       ? redactInlineSecrets(record.errorMessage).slice(0, 200)
       : undefined;
-
-    if (existing === undefined) {
-      // First failure — start a new streak.
-      const state: StreakState = {
-        count: 1,
-        failingSince: record.triggeredAt,
-        escalated: false,
-        extraFailures: 0,
-        lastError: redactedError,
-      };
-      this.streaks.set(taskId, state);
-      // Check threshold immediately (threshold === 1 means alert on first failure).
-      if (state.count >= threshold) {
-        state.escalated = true;
-        const msg = formatStreakEscalation(
+    if (!state.escalated && state.count >= threshold) {
+      state.escalated = true;
+      return {
+        action: 'escalate',
+        message: formatStreakEscalation(
           taskId, task?.name, state.count, state.failingSince, state.lastError, task?.cronExpression,
-        );
-        return { action: 'escalate', message: msg };
-      }
-      return { action: 'none' };
+        ),
+      };
     }
-
-    // Existing streak — increment.
-    existing.count += 1;
-    existing.lastError = redactedError;
-
-    if (!existing.escalated) {
-      if (existing.count >= threshold) {
-        existing.escalated = true;
-        const msg = formatStreakEscalation(
-          taskId, task?.name, existing.count, existing.failingSince, existing.lastError, task?.cronExpression,
-        );
-        return { action: 'escalate', message: msg };
-      }
-      return { action: 'none' };
-    }
-
-    // Already escalated — check for re-escalation.
-    existing.extraFailures += 1;
-    if (existing.extraFailures % REESCALATION_INTERVAL === 0) {
-      const msg = formatStreakReEscalation(
-        taskId, task?.name, existing.count, existing.failingSince, existing.lastError, task?.cronExpression,
-      );
-      return { action: 're-escalate', message: msg };
+    if (state.escalated && ++state.extraFailures % REESCALATION_INTERVAL === 0) {
+      return {
+        action: 're-escalate',
+        message: formatStreakReEscalation(
+          taskId, task?.name, state.count, state.failingSince, state.lastError, task?.cronExpression,
+        ),
+      };
     }
     return { action: 'none' };
   }
 
-  /**
-   * Return the current streak state for a task, or `undefined` when there is
-   * no active streak.  Used by `afk schedule health` and `schedule list`.
-   */
-  getStreak(taskId: string): Readonly<StreakState> | undefined {
-    return this.streaks.get(taskId);
+  /** Inspect a live failure streak, or undefined for an empty/unknown task. */
+  getStreak(taskId: string): Readonly<StreakSnapshot> | undefined {
+    const state = this.streaks.get(taskId);
+    return state?.count ? state : undefined;
   }
 
-  /**
-   * Enumerate all tasks currently in an active streak at or above `threshold`.
-   * Returns entries in insertion order (oldest streak first).
-   */
-  listBreachedStreaks(threshold: number = DEFAULT_FAILURE_STREAK_THRESHOLD): Array<{
+  /** Return a detached snapshot suitable for stamping on a run row. */
+  snapshot(taskId: string): StreakSnapshot {
+    return { ...(this.streaks.get(taskId) ?? emptyStreak()) };
+  }
+
+  /** List cached streaks meeting a threshold, without treating decisions as deliveries. */
+  listBreachedStreaks(threshold = DEFAULT_FAILURE_STREAK_THRESHOLD): Array<{
     taskId: string;
     count: number;
     failingSince: string;
     lastError: string | undefined;
   }> {
-    const result: Array<{ taskId: string; count: number; failingSince: string; lastError: string | undefined }> = [];
-    for (const [taskId, state] of this.streaks) {
-      if (state.count >= threshold) {
-        result.push({ taskId, count: state.count, failingSince: state.failingSince, lastError: state.lastError });
-      }
-    }
-    return result;
+    return [...this.streaks]
+      .filter(([, s]) => s.count >= threshold)
+      .map(([taskId, s]) => ({
+        taskId,
+        count: s.count,
+        failingSince: s.failingSince ?? '',
+        lastError: s.lastError,
+      }));
   }
 
-  /** Exposed for tests: reset all streak state. */
+  /** Clear all process-local state for tests. */
   _reset(): void {
     this.streaks.clear();
+    this.hydrated.clear();
   }
 }
 
-// ─── Action type ─────────────────────────────────────────────────────────────
-
-export type StreakActionKind = 'none' | 'escalate' | 're-escalate' | 'recover';
-
-export interface StreakAction {
-  action: StreakActionKind;
-  /** Formatted message text; absent when action is 'none'. */
-  message?: string;
-}
-
-// ─── Telemetry helpers ────────────────────────────────────────────────────────
-
-/**
- * Build a streak-escalation telemetry record for a failed run that just
- * tripped the threshold. The record is identical to the original run record
- * except it carries a `notifySent` marker so the telemetry history shows
- * whether (and what kind of) notification was sent.
- */
-export function withNotifySent(
-  record: TelemetryRecord,
-  kind: 'escalation' | 're-escalation' | 'recovery' | 'failure',
-): TelemetryRecord {
-  return { ...record, notifySent: kind };
-}
-
-// ─── TelemetryRecord extension ────────────────────────────────────────────────
-// (Declaration merging via augmentation is not used; we extend the core type
-// directly because TelemetryRecord is defined in scheduler.ts. The field is
-// added there as an optional field so the import chain stays clean.)
-//
-// This module re-exports the helper only. The field is declared in scheduler.ts.
-
-/**
- * Compute the per-task failure-streak threshold.
- *
- * Order of precedence:
- *   1. `task.failureStreakThreshold` (per-task override)
- *   2. `DEFAULT_FAILURE_STREAK_THRESHOLD` (3)
- */
+/** Resolve a recurring task's configured threshold, falling back to the daemon default. */
 export function resolveThreshold(task: ScheduledTask | undefined): number {
-  if (task !== undefined && typeof task.failureStreakThreshold === 'number') {
-    return Math.max(1, task.failureStreakThreshold);
-  }
-  return DEFAULT_FAILURE_STREAK_THRESHOLD;
+  return Math.max(1, task?.failureStreakThreshold ?? DEFAULT_FAILURE_STREAK_THRESHOLD);
 }
 
-// ─── Health snapshot ──────────────────────────────────────────────────────────
-
-/** A single row in the `afk schedule health` output. */
-export interface HealthRow {
-  taskId: string;
-  taskName: string | undefined;
-  streakCount: number;
-  failingSince: string;
-  lastError: string | undefined;
-  threshold: number;
-}
-
-/**
- * Build the health snapshot: tasks whose current streak meets or exceeds their
- * configured threshold.  Returns an empty array when all tasks are healthy.
- *
- * @param tracker    The scheduler's shared FailureStreakTracker instance.
- * @param tasks      Registered tasks (used to look up per-task thresholds and names).
- * @param threshold  Default threshold (overridden per-task by failureStreakThreshold).
- */
-export function buildHealthSnapshot(
-  tracker: FailureStreakTracker,
-  tasks: readonly ScheduledTask[],
-  threshold: number = DEFAULT_FAILURE_STREAK_THRESHOLD,
-): HealthRow[] {
-  const taskMap = new Map<string, ScheduledTask>(tasks.map((t) => [t.taskId, t]));
-  const rows: HealthRow[] = [];
-  const breached = tracker.listBreachedStreaks(1); // get all, filter by per-task threshold below
-  for (const { taskId, count, failingSince, lastError } of breached) {
-    const task = taskMap.get(taskId);
-    const effectiveThreshold = resolveThreshold(task) ?? threshold;
-    if (count >= effectiveThreshold) {
-      rows.push({
-        taskId,
-        taskName: task?.name,
-        streakCount: count,
-        failingSince,
-        lastError,
-        threshold: effectiveThreshold,
-      });
-    }
-  }
-  return rows;
-}
-
-/**
- * Fake trigger value used only as a placeholder when constructing synthetic
- * telemetry records (e.g. for the streak-recovery notification path). The
- * real trigger is always taken from the original run record.
- */
-export const STREAK_PLACEHOLDER_TRIGGER: TelemetryTrigger = 'cron';
-
-// ─── writeTelemetry streak integration ───────────────────────────────────────
-
-/**
- * Result of applying streak logic to a telemetry record.
- *
- * Returned by {@link applyStreakLogic} and consumed by
- * `CronScheduler.writeTelemetry` to decide:
- *   - which record to persist (may carry `notifySent` / `failingSince`),
- *   - which task shape to pass to `fireOnTaskComplete` (may override notifyOn),
- *   - which details to pass (may carry the alert text as `responseText`).
- */
+/** Durable run plus notification inputs; a decision does not imply delivery. */
 export interface StreakApplicationResult {
   persistedRecord: TelemetryRecord;
   effectiveTask: ScheduledTask | undefined;
   effectiveDetails: TaskCompletionDetails | undefined;
 }
 
-/**
- * Apply failure-streak logic to one telemetry record inside `writeTelemetry`.
- *
- * Extracted from `CronScheduler.writeTelemetry` so the scheduler stays within
- * the 350-code-line ceiling (#5146).  Behaviour is identical to the inline
- * version; the only change is that `tracker`, `task`, `record`, `details`, and
- * `hasCallback` are now explicit parameters rather than captured from the class.
- *
- * @param tracker      The scheduler's shared `FailureStreakTracker`.
- * @param task         The `ScheduledTask` for this run (may be undefined for
- *                     synthetic pull tasks).
- * @param record       The telemetry record as constructed before this call.
- * @param details      Existing `TaskCompletionDetails` (may be undefined).
- * @param hasCallback  True when `SchedulerOptions.onTaskComplete` is defined.
- */
+/** Apply recurring-task streak transitions and stamp the notification decision. */
 export function applyStreakLogic(
   tracker: FailureStreakTracker,
   task: ScheduledTask | undefined,
@@ -398,48 +191,34 @@ export function applyStreakLogic(
   details: TaskCompletionDetails | undefined,
   hasCallback: boolean,
 ): StreakApplicationResult {
-  // Skipped runs never count toward the streak.
-  if (record.status === 'skipped' || task === undefined) {
-    return { persistedRecord: record, effectiveTask: task, effectiveDetails: details };
-  }
-
-  const threshold = resolveThreshold(task);
-  const streakAction = tracker.record(task.taskId, task, record, threshold);
-
-  let persistedRecord = record;
-
-  // Annotate failingSince onto runs that are part of an active streak (count >= 2).
-  const streakState = tracker.getStreak(task.taskId);
-  if (streakState !== undefined && streakState.count >= 2) {
-    persistedRecord = { ...persistedRecord, failingSince: streakState.failingSince };
-  }
-
-  if (streakAction.action !== 'none' && streakAction.message !== undefined) {
-    // Streak event: override notifyOn to 'always' so the alert fires regardless
-    // of the task's normal notification policy, and thread the formatted message
-    // as responseText so the push formatter can render it.
-    const effectiveTask: ScheduledTask = { ...task, notifyOn: 'always' as const };
-    const effectiveDetails: TaskCompletionDetails = {
-      ...(details ?? {}),
-      responseText: streakAction.message,
+  const action = tracker.record(record.taskId, task, record, resolveThreshold(task));
+  const failureStreak = tracker.snapshot(record.taskId);
+  const effectiveTask = action.action !== 'none' && task !== undefined && task.notifyOn !== 'never'
+    ? { ...task, notifyOn: 'always' as const }
+    : task;
+  let effectiveDetails = details;
+  if (action.message !== undefined) {
+    effectiveDetails = { ...details, responseText: action.message };
+  } else if (isFailureStatus(record.status) && failureStreak.escalated) {
+    const diagnostic = details?.responseText ?? record.responseExcerpt ?? record.errorMessage ?? '';
+    effectiveDetails = {
+      ...details,
+      responseText: `Failure ${failureStreak.count} in a row, failing since ${failureStreak.failingSince}.\n`
+        + diagnostic,
     };
-    const sentKind: TelemetryRecord['notifySent'] =
-      streakAction.action === 'escalate' ? 'escalation'
-      : streakAction.action === 're-escalate' ? 're-escalation'
-      : 'recovery';
-    persistedRecord = withNotifySent(persistedRecord, sentKind);
-    return { persistedRecord, effectiveTask, effectiveDetails };
   }
-
-  // No streak event. Record whether the per-run notification will fire.
-  if (task.notifyOn !== undefined && hasCallback) {
-    const wouldNotify = task.notifyOn !== 'never'
-      && (task.notifyOn === 'always' || record.status === 'error' || record.status === 'blocked');
-    persistedRecord = wouldNotify
-      ? withNotifySent(persistedRecord, 'failure')
-      : { ...persistedRecord, notifySent: 'none' as const };
-  }
-  return { persistedRecord, effectiveTask: task, effectiveDetails: details };
+  const kind = action.action === 'escalate' ? 'escalation'
+    : action.action === 're-escalate' ? 're-escalation'
+    : action.action === 'recover' ? 'recovery'
+    : isFailureStatus(record.status) ? 'failure' : 'completion';
+  return {
+    persistedRecord: {
+      ...record,
+      failureStreak,
+      ...(failureStreak.failingSince !== undefined ? { failingSince: failureStreak.failingSince } : {}),
+      notificationDecision: notificationDecision(record, effectiveTask, hasCallback, kind),
+    },
+    effectiveTask,
+    effectiveDetails,
+  };
 }
-
-

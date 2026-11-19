@@ -4,7 +4,7 @@
  * "Done when" items tested here (issue #5146):
  *   1. N consecutive failures produce exactly one escalation message.
  *   2. A subsequent success produces exactly one recovery message and resets streak.
- *   3. A failed notification delivery is recorded (notifySent field) rather than thrown.
+ *   3. Delivery integration is covered in scheduler.streak-integration.test.ts.
  *   4. `blocked` status counts the same as `error` toward the streak.
  *   5. `skipped` status does NOT count toward the streak.
  *
@@ -76,7 +76,7 @@ describe('FailureStreakTracker', () => {
     const result = tracker.record('t1', task, makeRecord('error'));
     expect(result.action).toBe('escalate');
     expect(result.message).toContain('3 runs in a row');
-    // Fourth failure is silent
+    // Fourth failure has no new escalation; ordinary notices continue
     const r4 = tracker.record('t1', task, makeRecord('error'));
     expect(r4.action).toBe('none');
   });
@@ -208,20 +208,20 @@ describe('applyStreakLogic', () => {
     tracker = new FailureStreakTracker();
   });
 
-  it('skipped records are passed through unchanged (no streak update)', () => {
+  it('skipped records get a decision without advancing the streak', () => {
     const record = makeRecord('skipped', { skipReason: 'overlap' });
     const { persistedRecord, effectiveTask } = applyStreakLogic(tracker, task, record, undefined, true);
-    expect(persistedRecord.notifySent).toBeUndefined();
+    expect(persistedRecord.notificationDecision?.state).toBe('not-due');
     expect(effectiveTask).toBe(task);
   });
 
-  it('stamps notifySent: "failure" on error records before threshold (notifyOn: failure)', () => {
+  it('stamps decision: "failure" on error records before threshold (notifyOn: failure)', () => {
     const record = makeRecord('error');
     const { persistedRecord } = applyStreakLogic(tracker, task, record, undefined, true);
-    expect(persistedRecord.notifySent).toBe('failure');
+    expect(persistedRecord.notificationDecision).toEqual({ state: 'due', kind: 'failure' });
   });
 
-  it('stamps notifySent: "escalation" on the threshold-breach run', () => {
+  it('stamps decision: "escalation" on the threshold-breach run', () => {
     // Pre-fill streak to threshold - 1
     for (let i = 0; i < DEFAULT_FAILURE_STREAK_THRESHOLD - 1; i++) {
       applyStreakLogic(tracker, task, makeRecord('error'), undefined, true);
@@ -229,39 +229,39 @@ describe('applyStreakLogic', () => {
     const { persistedRecord, effectiveTask, effectiveDetails } = applyStreakLogic(
       tracker, task, makeRecord('error'), undefined, true,
     );
-    expect(persistedRecord.notifySent).toBe('escalation');
+    expect(persistedRecord.notificationDecision).toEqual({ state: 'due', kind: 'escalation' });
     expect(effectiveTask?.notifyOn).toBe('always');
     expect(effectiveDetails?.responseText).toContain('runs in a row');
   });
 
-  it('stamps notifySent: "recovery" on the first success after escalation', () => {
+  it('stamps decision: "recovery" on the first success after escalation', () => {
     for (let i = 0; i < DEFAULT_FAILURE_STREAK_THRESHOLD; i++) {
       applyStreakLogic(tracker, task, makeRecord('error'), undefined, true);
     }
     const { persistedRecord, effectiveTask } = applyStreakLogic(
       tracker, task, makeRecord('success'), undefined, true,
     );
-    expect(persistedRecord.notifySent).toBe('recovery');
+    expect(persistedRecord.notificationDecision).toEqual({ state: 'due', kind: 'recovery' });
     expect(effectiveTask?.notifyOn).toBe('always');
   });
 
-  it('stamps failingSince on the second consecutive failure', () => {
-    // First failure — no failingSince yet (streak count is 1, not >= 2)
+  it('stamps failingSince from the first consecutive failure', () => {
+    // First failure already carries the durable streak start.
     const r1 = applyStreakLogic(tracker, task, makeRecord('error'), undefined, true);
-    expect(r1.persistedRecord.failingSince).toBeUndefined();
+    expect(r1.persistedRecord.failingSince).toBeDefined();
     // Second failure — failingSince should appear
     const r2 = applyStreakLogic(tracker, task, makeRecord('error'), undefined, true);
     expect(r2.persistedRecord.failingSince).toBeDefined();
   });
 
-  it('records notifySent: "none" when notifyOn is never and no streak event', () => {
+  it('records policy suppression when notifyOn is never', () => {
     const neverTask = makeTask({ notifyOn: 'never' });
     const { persistedRecord } = applyStreakLogic(tracker, neverTask, makeRecord('error'), undefined, true);
-    expect(persistedRecord.notifySent).toBe('none');
+    expect(persistedRecord.notificationDecision).toEqual({ state: 'suppressed', kind: 'failure', reason: 'policy-never' });
   });
 
-  it('no notifySent when no callback configured', () => {
+  it('due decision when no callback configured', () => {
     const { persistedRecord } = applyStreakLogic(tracker, task, makeRecord('error'), undefined, false);
-    expect(persistedRecord.notifySent).toBeUndefined();
+    expect(persistedRecord.notificationDecision).toEqual({ state: 'due', kind: 'failure', reason: 'no-callback' });
   });
 });

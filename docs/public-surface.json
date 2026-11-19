@@ -3693,6 +3693,11 @@
     },
     {
       "kind": "flag",
+      "name": "afk schedule add --failure-streak-threshold",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
       "name": "afk schedule add --help",
       "source": "src/cli/commands/schedule.ts"
     },

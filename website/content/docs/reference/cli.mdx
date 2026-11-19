@@ -1411,6 +1411,7 @@ Guide: [scheduling](/guides/scheduling)
 | `--executor <type>` | agent \| shell (default: agent) | `"agent"` |
 | `--trigger <mode>` | cron \| sessionstart \| both | `"cron"` |
 | `--notify <when>` | failure \| always \| never | `"failure"` |
+| `--failure-streak-threshold <n>` | Consecutive failures before escalation (positive integer; default 3) |  |
 | `--cwd <path>` | Per-task working directory (absolute path or ~/…) |  |
 | `--disabled` | Add in disabled state | `false` |
 | `-h, --help` | display help for command |  |
@@ -1522,7 +1523,7 @@ Guide: [scheduling](/guides/scheduling)
 
 | Flags | Description | Default |
 | --- | --- | --- |
-| `--threshold <n>` | Streak threshold (default 3) | `"3"` |
+| `--threshold <n>` | Fallback streak threshold (default 3) | `"3"` |
 | `-h, --help` | display help for command |  |
 
 ## `afk bg`

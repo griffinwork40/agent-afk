@@ -11,6 +11,7 @@
  * @module agent/daemon
  */
 
+import { parseFailureStreakThreshold } from './daemon/failure-streak-threshold.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { unlinkSync, readFileSync } from 'node:fs';
 import { atomicWriteFile } from '../utils/atomic-write.js';
@@ -25,7 +26,7 @@ import { acquireDaemonLock } from './daemon-instance.lock.js';
 import { startOAuthRefreshTimer, DEFAULT_OAUTH_REFRESH_INTERVAL_MS } from './daemon.oauth-timer.js';
 import { errorMessage } from '../utils/errors.js';
 import { validateScheduleCwd } from './daemon/cwd-validator.js';
-import { getSchedule, toScheduledTask } from './daemon/schedule-store.js';
+import { isShellExecutorTrusted } from './daemon.shell-trust.js';
 import { parseTaskRetryFields, type TaskRetryFields } from './daemon/task-retry.js';
 import { parseTaskRequestTime } from './daemon/task-request-time.js';
 import { registerTasksWithQuarantine } from './daemon.startup-register.js';
@@ -326,58 +327,16 @@ function isValidNotifyOn(v: unknown): v is ScheduledTask['notifyOn'] {
   return v === 'failure' || v === 'always' || v === 'never';
 }
 
-/** Parameters for {@link isShellExecutorTrusted}. */
-interface ShellTrustParams {
-  taskId: string;
-  command: string;
-  cronExpression: string | undefined;
-  trigger: TriggerMode | undefined;
-  notifyOn: ScheduledTask['notifyOn'];
-  notifyChat: number | string | undefined;
-  cwd: string | undefined;
-  maxAttempts: number | undefined;
-  retryDelayMs: number | undefined;
-  runAt: string | undefined;
-  expiresAt: string | undefined;
-}
-
 /**
- * Returns true when a shell-executor POST /tasks request can be trusted —
- * i.e. the payload matches an enabled shell entry already persisted in the
- * schedule store. Extracted to keep handleRequestAsync under the 200-line ceiling.
- */
-function isShellExecutorTrusted(params: ShellTrustParams): boolean {
-  const storedConfig = getSchedule(params.taskId);
-  if (!storedConfig || !storedConfig.enabled || storedConfig.executor !== 'shell') return false;
-  const canonical = toScheduledTask(storedConfig);
-  // Normalize notifyOn to the effective default ('failure') so an omitted field
-  // in the store entry and an omitted field in the request compare equal. A bare
-  // === between two optional values would reject a valid sync when one side is
-  // undefined and the other is 'failure' (the canonical default).
-  const canonicalNotifyOn: ScheduledTask['notifyOn'] = canonical.notifyOn ?? 'failure';
-  return (
-    canonical.command === params.command &&
-    canonical.cronExpression === (params.runAt !== undefined ? undefined : params.cronExpression) &&
-    (canonical.trigger ?? 'cron') === (params.trigger ?? 'cron') &&
-    canonicalNotifyOn === params.notifyOn &&
-    canonical.notifyChat === params.notifyChat &&
-    canonical.cwd === params.cwd &&
-    canonical.maxAttempts === params.maxAttempts &&
-    canonical.retryDelayMs === params.retryDelayMs &&
-    canonical.runAt === params.runAt &&
-    canonical.expiresAt === params.expiresAt
-  );
-}
-
-/**
- * Validate the optional retry fields (#3243) with the same bounds as the
+ * Validate retry and streak-threshold fields with the same bounds as the
  * tool/web surfaces. Writes a 400 and returns null on rejection.
  */
-function parseRetryOr400(obj: Record<string, unknown>, res: ServerResponse): TaskRetryFields | null {
+function parseTaskOptionsOr400(obj: Record<string, unknown>, res: ServerResponse): (TaskRetryFields & { failureStreakThreshold?: number }) | null {
   const retry = parseTaskRetryFields(obj);
-  if (retry.ok) return retry.value;
+  const streak = parseFailureStreakThreshold(obj);
+  if (retry.ok && streak.ok) return { ...retry.value, ...streak.value };
   res.writeHead(400, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ error: retry.error }));
+  res.end(JSON.stringify({ error: !retry.ok ? retry.error : !streak.ok ? streak.error : 'Invalid task options' }));
   return null;
 }
 
@@ -449,7 +408,7 @@ async function handleRequestAsync(
       }
       cwd = cwdResult.resolved;
     }
-    const retry = parseRetryOr400(obj, res);
+    const retry = parseTaskOptionsOr400(obj, res);
     if (retry === null) return;
     const notifyChatRaw = obj['notifyChat'];
     const executorRaw = obj['executor'];
@@ -500,8 +459,7 @@ async function handleRequestAsync(
           notifyChat:
             typeof notifyChatRaw === 'number' || typeof notifyChatRaw === 'string' ? notifyChatRaw : undefined,
           cwd,
-          maxAttempts: retry.maxAttempts,
-          retryDelayMs: retry.retryDelayMs,
+          ...retry,
           runAt: time.runAt,
           expiresAt: time.expiresAt,
         });

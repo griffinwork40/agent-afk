@@ -24,95 +24,7 @@ import { getTelemetryPath } from '../../paths.js';
 import { trySyncToDaemon, SYNC_FAILED_NOTE } from '../../agent/daemon/http-client.js';
 import { palette } from '../palette.js';
 import { DEFAULT_FAILURE_STREAK_THRESHOLD } from '../../agent/daemon/scheduler.failure-streak.js';
-
-/** Extract the last-run status and failing-since from recent telemetry. */
-async function getLastRunInfo(
-  taskId: string,
-  telemetryPath: string,
-): Promise<{ status: string; failingSince?: string } | undefined> {
-  const records = await readTelemetryHistory(telemetryPath, { taskId, limit: 1 });
-  const last = records[0];
-  if (!last || typeof last !== 'object') return undefined;
-  const r = last as Record<string, unknown>;
-  const status = typeof r['status'] === 'string' ? r['status'] : undefined;
-  const failingSince = typeof r['failingSince'] === 'string' ? r['failingSince'] : undefined;
-  if (status === undefined) return undefined;
-  return { status, ...(failingSince !== undefined ? { failingSince } : {}) };
-}
-
-/**
- * Print the schedule list as an ASCII table with last-run status (#5146).
- * Adds a CWD column only when at least one task has a per-task cwd.
- */
-async function printScheduleList(
-  schedules: ReturnType<typeof loadSchedules>,
-  telemetryPath: string,
-): Promise<void> {
-  if (schedules.length === 0) {
-    console.log(palette.dim('No scheduled tasks.'));
-    return;
-  }
-  // Fetch last-run info for all tasks in parallel (best-effort; errors → undefined).
-  const lastRunMap = new Map<string, { status: string; failingSince?: string } | undefined>();
-  await Promise.all(
-    schedules.map(async (s) => {
-      const info = await getLastRunInfo(s.id, telemetryPath).catch(() => undefined);
-      lastRunMap.set(s.id, info);
-    }),
-  );
-  const hasCwd = schedules.some((s) => s.cwd !== undefined);
-  const header = hasCwd
-    ? 'ID                   | NAME                           | CRON            | ENABLED | LAST STATUS   | FAILING SINCE        | CWD'
-    : 'ID                   | NAME                           | CRON            | ENABLED | LAST STATUS   | FAILING SINCE';
-  console.log(palette.heading(header));
-  console.log(palette.dim('-'.repeat(header.length)));
-  for (const s of schedules) {
-    const info = lastRunMap.get(s.id);
-    const statusStr = (info?.status ?? '—').padEnd(13);
-    const failStr = (info?.failingSince !== undefined ? info.failingSince.slice(0, 20) : '').padEnd(20);
-    const row = [s.id.padEnd(20), s.name.padEnd(30), s.cron.padEnd(15), String(s.enabled).padEnd(7), statusStr, failStr];
-    if (hasCwd) row.push(s.cwd ?? '');
-    const line = row.join(' | ');
-    // Highlight rows with an active failure streak (#5146).
-    console.log(info?.failingSince !== undefined ? palette.warning(line) : palette.dim(line));
-  }
-}
-
-/** Body of `afk schedule health` (#5146). Extracted to stay within 200-line function ceiling. */
-async function runHealthCommand(threshold: number): Promise<void> {
-  const effectiveThreshold = Math.max(1, threshold);
-  const schedules = loadSchedules();
-  const telemetryPath = getTelemetryPath();
-  const breached: Array<{ id: string; name: string; count: number; failingSince: string; lastError?: string }> = [];
-  await Promise.all(schedules.filter((s) => s.enabled).map(async (s) => {
-    const records = await readTelemetryHistory(telemetryPath, { taskId: s.id, limit: 50 }).catch(() => []);
-    let streak = 0;
-    let failingSince = '';
-    let lastError: string | undefined;
-    for (let i = records.length - 1; i >= 0; i--) {
-      const r = records[i] as Record<string, unknown>;
-      const st = r['status'];
-      if (st === 'error' || st === 'blocked') {
-        streak++;
-        if (!failingSince) failingSince = typeof r['triggeredAt'] === 'string' ? r['triggeredAt'] : '';
-        if (!lastError && typeof r['errorMessage'] === 'string') lastError = r['errorMessage'];
-      } else if (st !== 'skipped') {
-        break;
-      }
-    }
-    if (streak >= effectiveThreshold) breached.push({ id: s.id, name: s.name, count: streak, failingSince, lastError });
-  }));
-  if (breached.length === 0) {
-    console.log(palette.success(`✅ All enabled tasks healthy (threshold: ${effectiveThreshold}).`));
-    return;
-  }
-  console.log(palette.warning(`⚠️  ${breached.length} task(s) in failure streak (threshold: ${effectiveThreshold}):`));
-  for (const b of breached) {
-    console.log(palette.error(`  ${b.id} (${b.name}): ${b.count} consecutive failures since ${b.failingSince}`));
-    if (b.lastError) console.log(palette.dim(`    Last error: ${b.lastError.slice(0, 120)}`));
-  }
-  process.exitCode = 1;
-}
+import { printScheduleList, runHealthCommand, positiveThreshold } from './schedule.health.js';
 
 export function registerScheduleCommand(program: Command): void {
   const schedule = program.command('schedule').description('Manage scheduled daemon tasks');
@@ -127,6 +39,7 @@ export function registerScheduleCommand(program: Command): void {
     .option('--executor <type>', 'agent | shell (default: agent)', 'agent')
     .option('--trigger <mode>', 'cron | sessionstart | both', 'cron')
     .option('--notify <when>', 'failure | always | never', 'failure')
+    .option('--failure-streak-threshold <n>', 'Consecutive failures before escalation (positive integer; default 3)')
     .option('--cwd <path>', 'Per-task working directory (absolute path or ~/…)')
     .option('--disabled', 'Add in disabled state', false)
     .action(
@@ -138,6 +51,7 @@ export function registerScheduleCommand(program: Command): void {
         trigger: string;
         notify: string;
         cwd?: string;
+        failureStreakThreshold?: string;
         disabled: boolean;
       }) => {
         try {
@@ -157,7 +71,9 @@ export function registerScheduleCommand(program: Command): void {
             }
             resolvedCwd = cwdResult.resolved;
           }
+          const failureStreakThreshold = opts.failureStreakThreshold !== undefined ? positiveThreshold(opts.failureStreakThreshold) : undefined;
           const config = addSchedule({
+            ...(failureStreakThreshold !== undefined ? { failureStreakThreshold } : {}),
             name: opts.name,
             command: opts.command,
             cron: opts.cron,
@@ -179,6 +95,7 @@ export function registerScheduleCommand(program: Command): void {
                 ...(config.executor !== undefined ? { executor: config.executor } : {}),
                 trigger: config.trigger,
                 notifyOn: config.notifyOn,
+                ...(config.failureStreakThreshold !== undefined ? { failureStreakThreshold: config.failureStreakThreshold } : {}),
                 ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
               })
             : await trySyncToDaemon('DELETE', `/tasks/${config.id}`);
@@ -277,10 +194,10 @@ export function registerScheduleCommand(program: Command): void {
   schedule
     .command('health')
     .description('Show tasks in a consecutive-failure streak; exits non-zero when any breach the threshold')
-    .option('--threshold <n>', `Streak threshold (default ${DEFAULT_FAILURE_STREAK_THRESHOLD})`, String(DEFAULT_FAILURE_STREAK_THRESHOLD))
+    .option('--threshold <n>', `Fallback streak threshold (default ${DEFAULT_FAILURE_STREAK_THRESHOLD})`, String(DEFAULT_FAILURE_STREAK_THRESHOLD))
     .action(async (opts: { threshold: string }) => {
       try {
-        await runHealthCommand(parseInt(opts.threshold, 10) || DEFAULT_FAILURE_STREAK_THRESHOLD);
+        runHealthCommand(positiveThreshold(opts.threshold));
       } catch (err) {
         handleCommandError(err);
       }
