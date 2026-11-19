@@ -5,6 +5,8 @@ description: "Install afk, authenticate with a model provider, and start a usefu
 
 Use this path to ask afk a useful question about a project without changing files. You need a supported Node.js version, npm, and access to a model provider. This example uses an Anthropic API key or an existing Claude credential.
 
+Never used a terminal? Follow [Start from zero](/terminal-basics) first.
+
 <Steps>
 <Step>
 ### Install
@@ -27,7 +29,9 @@ Supported Node.js versions are `^22.22.2 || ^24.15.0 || >=26.0.0`. For platform 
 afk login
 ```
 
-On an unconfigured install, this checks for an existing Anthropic credential. If none is found, it prompts for an Anthropic API key or OAuth token without displaying what you type, then saves it in `~/.afk/config/afk.env`.
+On an unconfigured install, this checks for an existing Anthropic credential. If none is found, it prompts for an Anthropic API key or OAuth token without displaying what you type, then saves it in `~/.afk/config/afk.env`. Pasted keys do not appear on screen. Get an Anthropic API key from the [Anthropic Console](https://console.anthropic.com/).
+
+Anthropic bills for API usage. afk itself is free and open source. Read [Usage and cost](/guides/usage-and-cost) before you begin.
 
 `afk login` does not open a browser OAuth flow. If you already use Claude Code, afk can reuse a supported credential from `claude login`. For OpenAI, other providers, or local models, follow [API keys and authentication](/configuration/api-keys) instead.
 </Step>
@@ -35,7 +39,7 @@ On an unconfigured install, this checks for an existing Anthropic credential. If
 <Step>
 ### Open your project and ask a bounded question
 
-In your terminal, change into the project you want afk to inspect. Then run:
+In your terminal, change into the project folder you want afk to inspect. A project folder is a folder holding related files, such as a website or app. If you have no project yet, choose or make an empty folder for a safe first conversation. For example, use `mkdir afk-practice` once to make a folder, then `cd afk-practice` to enter it. Then run:
 
 ```bash
 afk --permission-mode default "Explain what this project does and where its main entry points are. Do not modify files or run installation commands."

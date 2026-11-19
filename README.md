@@ -24,8 +24,15 @@ Open source. Runs locally. Works with any model provider, including local models
 ```bash
 npm install -g agent-afk    # Node 22.22.2–22.x, 24.15–24.x, or 26+ (23.x and 25.x excluded)
 afk login                   # authenticate (auto-detects Claude Code / Codex creds)
-afk doctor                  # verify everything works
-afk chat "hello"             # first real conversation
+afk chat "hello"            # first real conversation
+```
+
+Never used a terminal? Start here: [docs.agentafk.com/terminal-basics](https://docs.agentafk.com/terminal-basics)
+
+Optional next steps:
+
+```bash
+afk doctor
 
 # Preview a behaviour change before applying it
 afk whatif --append "Always ask a clarifying question before using tools." --verify
