@@ -152,10 +152,17 @@ export class LspServerPool {
         }
         entry.client = client;
         entry.lastAcquiredAt = Date.now();
+        // Each timed-out request counts, but a subsequent exit of this same
+        // client is fallout from an already-counted failure, not a new incident.
+        let timedOut = false;
+        client.onRequestTimeout(() => {
+          if (this.entries.get(key) !== entry) return;
+          timedOut = true;
+          guard.recordCrash();
+        });
         client.onExit(() => {
           if (this.entries.get(key) === entry) {
-            // Count every unexpected exit (crash/signal) toward the loop guard.
-            guard.recordCrash();
+            if (!timedOut) guard.recordCrash();
             this.evict(entry);
           }
         });
@@ -164,9 +171,10 @@ export class LspServerPool {
       },
       (err: unknown) => {
         if (this.entries.get(key) === entry) {
-          // A spawn-failure (missing binary) must NOT count; only real crashes do.
+          // Initialize timeouts are counted here once per shared start, never
+          // per acquirer. Cancellation and missing binaries are not incidents.
           const lspErr = err instanceof LspClientError ? err : null;
-          if (!lspErr || lspErr.kind !== 'spawn') guard.recordCrash();
+          if (!lspErr || (lspErr.kind !== 'spawn' && lspErr.kind !== 'aborted')) guard.recordCrash();
           this.evict(entry);
         }
         throw err instanceof LspClientError ? err : new LspClientError('spawn', 'Failed to spawn LSP server');

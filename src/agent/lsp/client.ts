@@ -69,6 +69,7 @@ export class LspClient {
   readonly diagnostics = new DiagnosticsStore();
   private dead = false;
   private readonly exitListeners = new Set<() => void>();
+  private readonly timeoutListeners = new Set<() => void>();
   private readonly deathWaiters = new Set<(err: LspClientError) => void>();
   private inFlight = 0;
   private lastActivity = Date.now();
@@ -205,6 +206,12 @@ export class LspClient {
     return () => this.exitListeners.delete(cb);
   }
 
+  /** Subscribe to requests whose deadline wins (not aborts or process death). */
+  onRequestTimeout(cb: () => void): () => void {
+    this.timeoutListeners.add(cb);
+    return () => this.timeoutListeners.delete(cb);
+  }
+
   /** Send a request. Rejects with `LspClientError`; never hangs past timeout/abort/death. */
   async request<R = unknown>(method: string, params: unknown, opts: RequestOptions = {}): Promise<R> {
     if (this.dead) throw new LspClientError('exited', 'LSP server exited before responding');
@@ -240,7 +247,16 @@ export class LspClient {
       try {
         return await Promise.race([response, guard]);
       } catch (err) {
-        if (err instanceof LspClientError) throw err;
+        if (err instanceof LspClientError) {
+          // Report only the winning outcome, once per request. A timer firing
+          // after abort/death/response must not manufacture another incident.
+          if (err.kind === 'timeout') {
+            for (const cb of this.timeoutListeners) {
+              try { cb(); } catch { /* observers cannot change the request outcome */ }
+            }
+          }
+          throw err;
+        }
         throw new LspClientError('response', 'LSP server returned an error');
       }
     } finally {
