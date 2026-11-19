@@ -28,7 +28,12 @@ export function renderGuardrailFalsePositives(agg: InsightAggregates): string {
   if (!gfp) return '';
 
   const ruleEntries = Object.entries(gfp.byRule ?? {}).sort((a, b) => b[1] - a[1]);
-  if (gfp.totalTrips === 0 && ruleEntries.length === 0 && (gfp.denialBreakerTaggedFailures ?? 0) === 0) return '';
+  if (
+    gfp.totalTrips === 0 &&
+    ruleEntries.length === 0 &&
+    (gfp.denialBreakerTaggedFailures ?? 0) === 0 &&
+    gfp.denialBreakerTripEpisodes === null
+  ) return '';
   const ruleTable = ruleEntries.length > 0
     ? `<h3>Blocks by Rule ID</h3>
     <table class="data-table"><thead><tr><th>Rule ID</th><th>Block Count</th></tr></thead><tbody>${
@@ -39,10 +44,21 @@ export function renderGuardrailFalsePositives(agg: InsightAggregates): string {
     <p class="caption">Per-rule counts from <code>hook_decision</code> events with <code>ruleId</code> set. Only rules that have fired appear. Hooks that predate #3849 emit no <code>ruleId</code> and are not shown here.</p>`
     : `<p class="caption">No ruleId-tagged block events found in this window. Hooks must set <code>ruleId</code> on their result for per-rule breakdown (see #3849).</p>`;
 
-  const denialRow = (gfp.denialBreakerTaggedFailures ?? 0) > 0
+  const denialTaggedRow = (gfp.denialBreakerTaggedFailures ?? 0) > 0
     ? `<div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(gfp.denialBreakerTaggedFailures))}</div><div class="metric-label">Denial-Breaker Tagged Failures</div>
-      <p class="caption">Completed tool-call error rows tagged <code>denial-breaker</code>, not distinct breaker trip episodes.</p></div>`
+      <p class="caption">Completed tool-call error rows tagged <code>denial-breaker</code>. Multiple rows may belong to one episode.</p></div>`
     : '';
+
+  // Episode count: three states — null means traces predate #5093 (unknown),
+  // 0 means #5093+ traces present but no trips fired, >0 is the episode count.
+  const episodeVal =
+    gfp.denialBreakerTripEpisodes === null ? 'unknown' : safeNum(gfp.denialBreakerTripEpisodes);
+  const episodeCaption =
+    gfp.denialBreakerTripEpisodes === null
+      ? 'Traces in this window predate the <code>denial_circuit_breaker_tripped</code> event (added in PR #5093). Episode count is unknown.'
+      : 'Distinct breaker trip episodes. The emitter fires exactly once per trip, so this is the true episode count.';
+  const denialEpisodeRow = `<div class="metric-card"><div class="metric-val">${htmlEscape(episodeVal)}</div><div class="metric-label">Denial-Breaker Trip Episodes</div>
+    <p class="caption">${episodeCaption}</p></div>`;
 
   return `
   <section id="guardrail-false-positives">
@@ -54,7 +70,8 @@ export function renderGuardrailFalsePositives(agg: InsightAggregates): string {
       <div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(gfp.totalPreToolUseBlocks))}</div><div class="metric-label">Total PreToolUse Blocks</div></div>
       <div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(gfp.sessionsWithTrips))}</div><div class="metric-label">Sessions with Trips</div></div>
       <div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(gfp.sessionsScanned))}</div><div class="metric-label">Sessions Scanned</div></div>
-      ${denialRow}
+      ${denialEpisodeRow}
+      ${denialTaggedRow}
     </div>
     <p class="caption">Hook-block-repeat meta-guard — a high FP rate suggests the threshold may be too aggressive.</p>
     ${ruleTable}

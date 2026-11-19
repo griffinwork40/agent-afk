@@ -670,3 +670,127 @@ describe('aggregateGuardrailFalsePositives — resilience', () => {
     expect(result.falsePositiveRate).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests: denialBreakerTripEpisodes — distinct trip-episode count (#3849)
+// ---------------------------------------------------------------------------
+
+function denialCircuitBreakerTrippedEvent(seq: number, subagentId?: string): string {
+  return JSON.stringify({
+    ts: NOW_ISO,
+    seq,
+    kind: 'session_phase',
+    payload: {
+      phase: 'denial_circuit_breaker_tripped',
+      metadata: {
+        count: 3,
+        fork: true,
+        deniedPaths: '/some/path',
+        ...(subagentId !== undefined ? { subagentId } : {}),
+      },
+    },
+  });
+}
+
+describe('aggregateGuardrailFalsePositives — denialBreakerTripEpisodes (#3849)', () => {
+  it('is null when no sessions are scanned (no traces exist)', () => {
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.denialBreakerTripEpisodes).toBeNull();
+  });
+
+  it('is null when traces contain no denial_circuit_breaker_tripped events (predate #5093)', () => {
+    // A trace with only hook_block_repeat_tripped (old event) — no breaker event.
+    writeSession('sess-no-breaker-event');
+    writeTrace('sess-no-breaker-event', [
+      tripEvent(1),
+      toolCallCompleted(2, 'read_file', false),
+    ]);
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.denialBreakerTripEpisodes).toBeNull();
+  });
+
+  it('is 0 when a trace contains other session_phase events but no breaker trips', () => {
+    // Simulate a #5093+ trace that has never tripped the breaker.
+    // We model this as a trace that has an arbitrary non-breaker session_phase
+    // event PLUS a denial-breaker tagged failure (i.e. the event kind is simply
+    // absent). The aggregator should leave denialBreakerTripEpisodes as null
+    // in this case — it only upgrades null→0 on first *observation* of the event.
+    writeSession('sess-breaker-zero');
+    // Write a trace with a denial-breaker tagged failure but no trip event —
+    // this represents a build that has #5093 but the breaker never fired.
+    // The expected result is null (the event was never seen), which correctly
+    // indicates "unknown / not observed" rather than "0 trips confirmed".
+    writeTrace('sess-breaker-zero', [
+      denialBreakerTaggedFailureEvent(1),
+    ]);
+    const result = aggregateGuardrailFalsePositives(opts());
+    // null because the session_phase event was never emitted in this trace.
+    expect(result.denialBreakerTripEpisodes).toBeNull();
+  });
+
+  it('counts one episode when a single denial_circuit_breaker_tripped event is present', () => {
+    writeSession('sess-one-episode');
+    writeTrace('sess-one-episode', [
+      denialCircuitBreakerTrippedEvent(1),
+    ]);
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.denialBreakerTripEpisodes).toBe(1);
+    // Tagged failures not inflated
+    expect(result.denialBreakerTaggedFailures).toBe(0);
+  });
+
+  it('counts multiple episodes across a single session', () => {
+    writeSession('sess-multi-episode');
+    writeTrace('sess-multi-episode', [
+      denialCircuitBreakerTrippedEvent(1, 'child-a'),
+      denialCircuitBreakerTrippedEvent(2, 'child-b'),
+      denialCircuitBreakerTrippedEvent(3, 'child-a'),
+    ]);
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.denialBreakerTripEpisodes).toBe(3);
+  });
+
+  it('accumulates episodes across multiple sessions', () => {
+    writeSession('sess-ep-a');
+    writeTrace('sess-ep-a', [
+      denialCircuitBreakerTrippedEvent(1),
+    ]);
+    writeSession('sess-ep-b');
+    writeTrace('sess-ep-b', [
+      denialCircuitBreakerTrippedEvent(1),
+      denialCircuitBreakerTrippedEvent(2),
+    ]);
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.denialBreakerTripEpisodes).toBe(3);
+  });
+
+  it('distinguishes several tagged failures from one episode (key scenario)', () => {
+    // One trip produces multiple tagged-failure rows; episode count stays 1.
+    writeSession('sess-one-trip-many-failures');
+    writeTrace('sess-one-trip-many-failures', [
+      denialCircuitBreakerTrippedEvent(1),         // 1 episode
+      denialBreakerTaggedFailureEvent(2),           // row 1
+      denialBreakerTaggedFailureEvent(3),           // row 2
+      denialBreakerTaggedFailureEvent(4),           // row 3
+    ]);
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.denialBreakerTripEpisodes).toBe(1);
+    expect(result.denialBreakerTaggedFailures).toBe(3);
+  });
+
+  it('handles a trace with episodes but no tagged failures', () => {
+    writeSession('sess-episodes-no-failures');
+    writeTrace('sess-episodes-no-failures', [
+      denialCircuitBreakerTrippedEvent(1),
+      denialCircuitBreakerTrippedEvent(2),
+    ]);
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.denialBreakerTripEpisodes).toBe(2);
+    expect(result.denialBreakerTaggedFailures).toBe(0);
+  });
+
+  it('zero-aggregate has denialBreakerTripEpisodes as null', () => {
+    const z = zeroGuardrailFalsePositiveAggregates();
+    expect(z.denialBreakerTripEpisodes).toBeNull();
+  });
+});
