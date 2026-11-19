@@ -891,4 +891,59 @@ describe('CupFrameRenderer — no trailing-\\n scroll', () => {
     // Shrink: 5 → 2 lines. lineCount > rawLineCount (padding prepended).
     expect(() => renderer.render('p\nq', 20)).not.toThrow();
   });
+
+  // -------------------------------------------------------------------------
+  // Regression: full-width decision uses wrap-ansi's string-width, not
+  // display.ts's string-width 9.0.0.
+  //
+  // string-width 9.0.0 (used by displayWidth) rates lone regional indicators
+  // (e.g. U+1F1FA) as width 2, while wrap-ansi 10.0.2 resolves string-width
+  // 8.3.0 internally and rates them as width 1. A row that is one cell short
+  // of full-width by the wrap measure but full-width by 9.0.0 must still
+  // receive an EL0 — otherwise the stale cell at the last column survives.
+  // -------------------------------------------------------------------------
+  it('appends EL0 for a row one cell short of full width (lone regional indicator)', () => {
+    // Terminal width = 12. A lone regional indicator (U+1F1FA) is width 1 by
+    // wrap-ansi/8.3.0 and width 2 by string-width 9.0.0.
+    // "xxxxxxxxxx🇺" is 11 cells wide (10 ASCII + 1 lone regional by 8.3.0),
+    // so it is NOT full-width and must get EL0 appended.
+    // Before the fix, displayWidth returned 12 (>= width), so tail was ''.
+    const stream = makeMockStream(true, 12, 24);
+    const allWrites = collectWrites(stream);
+    const renderer = new CupFrameRenderer(stream);
+
+    const loneRegional = '\u{1F1FA}'; // U+1F1FA, width 1 by 8.3.0, 2 by 9.0.0
+    const line = 'x'.repeat(10) + loneRegional; // 11 cells by 8.3.0
+
+    // Render a prior frame so there is a stale cell to erase.
+    renderer.render('x'.repeat(12), 23); // full-width prior line
+    void allWrites();
+
+    const chunks: string[] = [];
+    (stream as NodeJS.ReadWriteStream).on('data', (c: unknown) => chunks.push(String(c)));
+    renderer.render(line, 23);
+    const out = chunks.join('');
+
+    // The line is NOT full-width by wrap-ansi's measure, so EL0 (\x1b[K)
+    // must appear after the line content to erase the stale last cell.
+    expect(out).toContain(line + '\x1b[K');
+  });
+
+  it('does NOT append EL0 for a row exactly at full width (lone regional at col 12)', () => {
+    // "xxxxxxxxxxx🇺" is 12 cells wide (11 ASCII + 1 lone regional by 8.3.0),
+    // exactly full-width — cursor is in pending-wrap state, EL0 must NOT appear.
+    const stream = makeMockStream(true, 12, 24);
+    const allWrites = collectWrites(stream);
+    const renderer = new CupFrameRenderer(stream);
+
+    const loneRegional = '\u{1F1FA}';
+    const line = 'x'.repeat(11) + loneRegional; // 12 cells by 8.3.0
+
+    renderer.render(line, 23);
+    const out = allWrites();
+
+    // Full-width line: EL0 must NOT be appended (pending-wrap risk).
+    expect(out).not.toContain(line + '\x1b[K');
+    expect(out).toContain(line);
+  });
 });
