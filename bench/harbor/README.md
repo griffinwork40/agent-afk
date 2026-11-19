@@ -242,6 +242,85 @@ uv pip install --python /Users/griffinlong/.local/share/uv/tools/harbor/bin/pyth
 
 Tests do not require Docker or an API key — they exercise pure Python logic only.
 
+## Nightly eval
+
+**Nightly Harbor Eval** (`.github/workflows/nightly-harbor-eval.yml`) runs at
+03:23 UTC, or manually via Actions → Nightly Harbor Eval → Run workflow on
+`main`. Forks and non-main dispatches do no work; PR events never trigger it.
+
+**Enable:** Settings → Secrets and variables → Actions → New repository secret →
+name **`CLAUDE_CODE_OAUTH_TOKEN`**, paste a valid Claude Code OAuth token, save.
+Alternatively add **`ANTHROPIC_API_KEY`**. Missing both fails the credential job
+visibly; no benchmark is claimed. Tokens are only forwarded to the eval job and
+trial containers, never to the history publisher. Keep credentials current;
+auth/setup/verifier failures fail the run and are excluded from comparisons.
+
+The sole protocol declaration is [`nightly.json`](nightly.json): ten literal
+Terminal-Bench 2.0 task names, immutable task-repository commit, dated Haiku 4.5
+model, full framework, concurrency two, 100 turns and $2 budget per task. Harbor
+0.23 selects tasks using `DatasetConfig.task_names` (CLI equivalent: repeat
+`--include-task-name NAME` / `-i NAME`); this is not a random `--n-tasks` sample.
+The workflow builds and packs the **checked-out commit**, then uploads that
+local tarball into each container using the adapter's `afk_package` kwarg.
+There is no npm-latest fallback for the nightly.
+
+Agent execution gets 900 seconds, separately from 600-second installation and
+pinned 600-second environment build limits; verification gets 180 seconds.
+Expected runtime is roughly 45–100 minutes, with a 180-minute job ceiling for
+infrastructure delays. This is a time-limited smoke metric, not the official
+Terminal-Bench leaderboard. Haiku reduces recurring cost; estimate $0.50–$5 per
+night, with a configured $20 aggregate task budget (not a billing guarantee:
+in-flight requests, delegation, and provider accounting can overshoot). OAuth
+usage consumes subscription allowance instead of necessarily billing API dollars.
+
+Each real run appends a sanitized JSONL record to
+[`harbor-results:history.jsonl`](https://github.com/griffinwork40/agent-afk/blob/harbor-results/history.jsonl)
+(the branch is created by the first run). No workflow pushes to `main`. Records
+include UTC date, source SHA, afk version, model/protocol, per-task reward and
+error class, and all-task mean. Missing trials/rewards count as zero and mark
+the run invalid, never disappear from the denominator. Timeout trials retain
+the verifier reward, including a pass achieved before the agent was stopped.
+Raw Harbor logs/configs are **not uploaded** because they may contain secrets.
+The sanitized record artifact is retained 30 days; branch history is durable.
+Job summaries contain the per-task table and regression decision.
+
+**Signal:** one tracking issue labelled `nightly-eval-regression` is created or
+reopened/commented only on a meaningful drop. Require ten valid **scheduled**
+UTC dates at the identical protocol fingerprint; compare the latest three-night
+per-task means against the preceding seven. Alert only for an overall drop of
+at least **20 percentage points AND one-sided paired sign-flip p ≤ 0.01**.
+Manual runs are recorded but cannot alter the baseline or alarm; a first run
+cannot alarm. A model/task/timeout/protocol change starts a new warmup. Errors
+outside `AgentTimeoutError` are infrastructure-invalid and visibly fail rather
+than producing a misleading behavioural alarm. At n=10 and p≈0.6, single-night
+standard error is ≈15.5pp; windows avoid reacting to ordinary single-night noise.
+The nominal ≤1% per-comparison false-positive interpretation requires independent,
+symmetric task deltas: correlated tasks, temporal drift, overlapping daily windows
+and repeated testing mean **no guaranteed annual false-alarm rate**. Sparse
+regressions affecting only a few tasks may not trigger; inspect the summary too.
+
+The local `s10-afk-full` evidence is gitignored, **not committed**. Its five
+execution timeouts were 900s (three tasks), 1200s (HTML filter), and 3600s
+(corewars), not installation time: for example, `gpt2-codegolf` setup finished
+at 01:42:01 and execution ran until 01:57:01. Stream logs show continuing agent
+work, not setup. They do not prove whether model latency, tool time, or looping
+was the dominant cause. The nightly deliberately bounds agent time, separates
+installation, avoids the one-hour corewars task and expensive ML/data tasks,
+and does not assert that longer timeouts would fix the agent.
+
+Offline checks (no model calls):
+
+```bash
+python -m pytest bench/harbor/ -q
+# With a built pnpm-pack tarball and the pinned task checkout:
+PYTHONPATH=. python -m bench.harbor.nightly_run --prepare-only \
+  --package /path/to/agent-afk.tgz --tasks /path/to/terminal-bench --output /tmp/eval
+```
+
+The first default-branch run must confirm hosted Docker/image availability,
+credential/model acceptance, observed runtime/spend, and the GITHUB_TOKEN's
+permission to create/update `harbor-results` and the tracking issue.
+
 ## Job output layout
 
 Harbor writes results to `bench/harbor/jobs/<job-name>/` (gitignored). Each trial:
