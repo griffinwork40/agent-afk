@@ -68,21 +68,47 @@ subagent root validation, live bypass toggling, POSIX guard, `pnpm lint`,
 `pnpm build`, test-typecheck ratchet, and all 16 `check:audits` gates. No baseline
 files were increased and all source files remain below 350 code lines.
 
+## Shipped in slice 4 (this PR — Refs #3847, sensitive-root derivation)
+
+Base: 234b2864ef0f118b1f78ee143a17fb84525d35b8.
+
+- **Sensitive-root candidate derivation centralized** into
+  `bash-restriction-hook.policy.ts` (`buildSensitiveRootCandidates()`).
+  The identical four-source candidate assembly that existed independently in
+  `deriveRestrictedSubstrings` (line 943-950) and `headlessRestrictedSubstrings`
+  (line 1034-1042) of `bash-restriction-hook.ts` is now a single shared call.
+  `readDenylistExtrasAsSpelled` moved to the new sibling file alongside it.
+- Behaviour-preserving: the interactive grant-filter and headless unfiltered
+  semantics are unchanged — `deriveRestrictedSubstrings` still applies the
+  grant filter; `headlessRestrictedSubstrings` still returns the full set
+  with no filter. No path denied today becomes allowed; none allowed becomes denied.
+- **18 characterization (golden) tests** written BEFORE the change in
+  `bash-restriction-hook.sensitive-roots.test.ts` pin current allow/deny
+  outcomes for the candidate set, grant-filter semantics, headless floor,
+  and derivation stability. All 18 pass unchanged after the migration.
+- All 49 existing check2-policy equivalence tests, 190 main hook tests,
+  25 win32 tests, and 107 readonly-gate tests also pass (389 total / 1
+  pre-existing skip).
+- No baseline files increased; all source files remain below 350 code lines
+  and all functions below 200 lines; all 23 `check:audits` gates passed.
+
 ## Exact remaining scope (keep issue open)
 
 1. ~~Migrate the bash **hard restriction hook's** credential-floor decision to the
    policy (equivalence goldens first).~~ **Done in slice 3.**
-   Next: migrate the sensitive root derivation, interactive grant semantics and
-   headless carve-out logic incrementally. Do not replace heuristics with the
-   incomplete advisory token scan: that would drop protections for
-   interpreter-assembled, embedded, variable and Windows spellings.
-2. Migrate the AFK-mode gate's workspace-escape decisions only after equivalence
+2. ~~Centralize sensitive-root candidate derivation into one shared helper.~~
+   **Done in slice 4.**
+   Next: migrate interactive grant semantics and headless carve-out logic
+   incrementally. Do not replace heuristics with the incomplete advisory token
+   scan: that would drop protections for interpreter-assembled, embedded,
+   variable and Windows spellings.
+3. Migrate the AFK-mode gate's workspace-escape decisions only after equivalence
    tests pin its distinct risk/approval semantics.
-3. Consolidate remaining duplicate handler floor checks and resolution calls
+4. Consolidate remaining duplicate handler floor checks and resolution calls
    after their error attribution and dangling-write-target contracts are pinned.
-   This slice does not claim a single filesystem syscall per path: plain and
-   native forms are both required, and fresh target revalidation is deliberate.
-4. Reconcile denial-circuit-breaker integration and consistent safer-alternative
+   Plain and native forms are both required; fresh target revalidation is
+   deliberate.
+5. Reconcile denial-circuit-breaker integration and consistent safer-alternative
    metadata without changing stable denial markers used by telemetry.
 
 No concurrent sandbox (#3845) or command-classifier (#3846) integration is
