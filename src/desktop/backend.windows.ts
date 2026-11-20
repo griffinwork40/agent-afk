@@ -28,9 +28,14 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile } from 'node:fs/promises';
+import { readFile, unlink, chmod } from 'node:fs/promises';
 import { DesktopBackendError } from './types.js';
-import type { DesktopBackend, DesktopScreenshotInput, DesktopScreenshotResult } from './types.js';
+import type {
+  DesktopBackend,
+  DesktopScreenshotInput,
+  DesktopScreenshotResult,
+  DesktopScreenshotAborted,
+} from './types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -43,18 +48,33 @@ const execFileAsync = promisify(execFile);
  * either numeric literals or a path validated by the caller — no shell
  * metacharacter injection is possible through template replacement on
  * those types.
+ *
+ * The script rejects an out-of-range display index with a structured error
+ * line (`ERROR:DISPLAY_NOT_FOUND`) so the backend can surface a clear message.
+ * The region is applied relative to the selected display's origin (not in
+ * virtual-desktop coordinates) so a region on a secondary monitor captures
+ * the correct pixels.
+ *
+ * The script emits a structured result line:
+ *   OK:<displayIndex>:<displayX>,<displayY>,<displayW>,<displayH>:<captureW>x<captureH>
+ * so the backend can verify which display and bounds were actually used.
  */
 const CAPTURE_SCRIPT_TEMPLATE = `
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $screens = [System.Windows.Forms.Screen]::AllScreens
 $idx = __DISPLAY_INDEX__
-if ($idx -ge $screens.Length) { $idx = 0 }
+if ($idx -lt 0 -or $idx -ge $screens.Length) {
+  Write-Output "ERROR:DISPLAY_NOT_FOUND:$($screens.Length)"
+  exit 1
+}
 $screen = $screens[$idx]
 $useRegion = __USE_REGION__
 if ($useRegion) {
-  $x = __X__; $y = __Y__; $w = __W__; $h = __H__
-  $bounds = [System.Drawing.Rectangle]::new($x, $y, $w, $h)
+  $rx = __X__; $ry = __Y__; $rw = __W__; $rh = __H__
+  $absX = $screen.Bounds.X + $rx
+  $absY = $screen.Bounds.Y + $ry
+  $bounds = [System.Drawing.Rectangle]::new($absX, $absY, $rw, $rh)
 } else {
   $bounds = $screen.Bounds
 }
@@ -64,7 +84,7 @@ $g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
 $g.Dispose()
 $bmp.Save('__SIDECAR_PATH__', [System.Drawing.Imaging.ImageFormat]::Png)
 $bmp.Dispose()
-Write-Output "$($bounds.Width)x$($bounds.Height)"
+Write-Output "OK:$($idx):$($screen.Bounds.X),$($screen.Bounds.Y),$($screen.Bounds.Width),$($screen.Bounds.Height):$($bounds.Width)x$($bounds.Height)"
 `.trim();
 
 /** Build the PowerShell capture script with concrete values substituted. */
@@ -106,7 +126,12 @@ class WindowsDesktopBackend implements DesktopBackend {
   async screenshot(
     input: DesktopScreenshotInput,
     sidecarPath: string,
-  ): Promise<DesktopScreenshotResult> {
+  ): Promise<DesktopScreenshotResult | DesktopScreenshotAborted> {
+    // Check the signal before spawning anything.
+    if (input.signal?.aborted) {
+      return { aborted: true, reason: String(input.signal.reason ?? 'aborted') };
+    }
+
     const script = buildScript(input, sidecarPath);
     const displayIndex = input.displayIndex ?? 0;
 
@@ -115,10 +140,16 @@ class WindowsDesktopBackend implements DesktopBackend {
       const result = await execFileAsync(
         'powershell',
         ['-NonInteractive', '-NoProfile', '-Command', script],
-        { timeout: 20_000 },
+        { timeout: 20_000, signal: input.signal },
       );
       stdout = result.stdout.trim();
     } catch (err) {
+      // Check abort first.
+      if (input.signal?.aborted) {
+        await unlink(sidecarPath).catch(() => undefined);
+        return { aborted: true, reason: String(input.signal.reason ?? 'aborted') };
+      }
+      await unlink(sidecarPath).catch(() => undefined);
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('UnauthorizedAccess') || msg.includes('Access is denied')) {
         throw new DesktopBackendError(
@@ -134,10 +165,31 @@ class WindowsDesktopBackend implements DesktopBackend {
       );
     }
 
+    // Parse the script's structured result line.
+    // Expected: OK:<idx>:<x>,<y>,<w>,<h>:<captureW>x<captureH>
+    // Error:    ERROR:DISPLAY_NOT_FOUND:<count>
+    if (stdout.startsWith('ERROR:DISPLAY_NOT_FOUND:')) {
+      await unlink(sidecarPath).catch(() => undefined);
+      const count = stdout.split(':')[2] ?? '?';
+      throw new DesktopBackendError(
+        `Display index ${displayIndex} is out of range. ` +
+        `This machine has ${count} display(s) (0-based indices 0..${Number(count) - 1}).`,
+        'DISPLAY_NOT_FOUND',
+      );
+    }
+
+    // Parse OK line to get the display actually used and its bounds.
+    // OK:<idx>:<dispX>,<dispY>,<dispW>,<dispH>:<captureW>x<captureH>
+    const okMatch = /^OK:(\d+):(-?\d+),(-?\d+),(\d+),(\d+):(\d+)x(\d+)$/.exec(stdout);
+    const actualDisplayIndex = okMatch ? parseInt(okMatch[1]!, 10) : displayIndex;
+    const captureLogicalW = okMatch ? parseInt(okMatch[6]!, 10) : undefined;
+    const captureLogicalH = okMatch ? parseInt(okMatch[7]!, 10) : undefined;
+
     let buf: Buffer;
     try {
       buf = await readFile(sidecarPath);
     } catch (err) {
+      await unlink(sidecarPath).catch(() => undefined);
       const msg = err instanceof Error ? err.message : String(err);
       throw new DesktopBackendError(
         `PowerShell ran but sidecar PNG is unreadable: ${msg}`,
@@ -145,17 +197,24 @@ class WindowsDesktopBackend implements DesktopBackend {
       );
     }
 
+    if (buf.length < 24) {
+      await unlink(sidecarPath).catch(() => undefined);
+      throw new DesktopBackendError(
+        'PowerShell produced an empty or truncated PNG (fewer than 24 bytes).',
+        'CAPTURE_FAILED',
+      );
+    }
+
+    // Restrict permissions: owner-only read/write.
+    // On Windows chmod is a no-op via Node's fs.chmod — harmless.
+    await chmod(sidecarPath, 0o600).catch(() => undefined);
+
     const { width, height } = readPngDimensions(buf);
 
-    // Try to parse logical dimensions from the script's stdout ("WxH").
-    let logicalWidth = width;
-    let logicalHeight = height;
-    const match = /^(\d+)x(\d+)$/.exec(stdout);
-    if (match) {
-      logicalWidth = parseInt(match[1]!, 10);
-      logicalHeight = parseInt(match[2]!, 10);
-    }
-    const scaleFactor = logicalWidth > 0 ? width / logicalWidth : 1;
+    // Logical dimensions from the script output; fall back to physical pixels.
+    const logicalWidth = captureLogicalW ?? width;
+    const logicalHeight = captureLogicalH ?? height;
+    const scaleFactor: number | null = logicalWidth > 0 ? width / logicalWidth : null;
 
     return {
       path: sidecarPath,
@@ -163,7 +222,7 @@ class WindowsDesktopBackend implements DesktopBackend {
       width,
       height,
       scaleFactor,
-      displayIndex,
+      displayIndex: actualDisplayIndex,
       logicalWidth,
       logicalHeight,
       dataBase64: buf.toString('base64'),

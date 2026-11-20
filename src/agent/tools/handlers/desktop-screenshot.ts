@@ -8,10 +8,26 @@
  *
  * Mirrors `browser-screenshot.ts` in structure:
  *   - `ToolResult.image` carries the pixels; base64 stays out of `content`.
- *   - Dimension guard: images exceeding 8000px per side are downgraded to
- *     text-only (the same 8000px limit Anthropic's vision API enforces).
+ *   - Dimension guard: images exceeding 8000px per side are downscaled for
+ *     attachment via `sips` (macOS) or PowerShell System.Drawing (Windows).
+ *     The sidecar retains the full-resolution capture.
+ *   - Byte cap: base64 payload over MAX_BASE64_BYTES triggers the same
+ *     downscale path regardless of pixel dimensions.
  *   - Trace event emitted failure-isolated from dispatch.
- *   - Abort signal honoured at entry.
+ *   - Abort signal forwarded to the backend and honoured at entry.
+ *
+ * # Downscale constants
+ * MAX_IMAGE_DIMENSION = 8000px — matches browser-screenshot.ts and the
+ * Anthropic vision API hard limit (see _many-image-guard.ts).
+ * MAX_BASE64_BYTES = 2 MiB — same cap as view-image.ts and image-generate.ts.
+ * ATTACHED_LONG_SIDE = 1092px — chosen as follows: a Retina full display at
+ * 3456×2234 physical pixels (scale=2) has a logical long side of 1728px.
+ * Downscaling that to fit within 1092px (≈63% of 1728) keeps the attached
+ * image well under both the 8000px hard limit and the 2 MiB byte cap while
+ * still being readable. 1092 is also below MAX_DIMENSION_MANY_IMAGES (2000px)
+ * so the image survives the many-image guard too. The constant is named here
+ * rather than derived at runtime so the sips invocation can pass a single
+ * --resampleHeightWidthMax flag.
  *
  * # Vision-capability check
  * Whether the active model can process images is not reachable from a tool
@@ -35,8 +51,11 @@
  * @module agent/tools/handlers/desktop-screenshot
  */
 
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { DesktopHandlerOptions } from './desktop-provider.js';
 import { acquireDesktopBackend } from './desktop-provider.js';
@@ -46,16 +65,37 @@ import { getTraceDir } from '../../../paths.witness.js';
 import type { DesktopRegion, DesktopScreenshotInput } from '../../../desktop/types.js';
 import { DesktopBackendError } from '../../../desktop/types.js';
 
-// Invariant: Anthropic's vision API hard-rejects any image whose width OR
-// height exceeds 8000px (docs: "Build with Claude › Vision › General limits").
-// This is a pixel ceiling independent of byte size — enforced here as it is
-// in browser-screenshot.ts, because the provider is model-agnostic and this
-// is a model limit.
+const execFileAsync = promisify(execFile);
+
+// ---------------------------------------------------------------------------
+// Image guards — imported constants (see module-doc for rationale)
+// ---------------------------------------------------------------------------
+
+// Anthropic's vision API hard-rejects any image whose width OR height exceeds
+// 8000px. Same value as MAX_DIMENSION_SINGLE_IMAGE in _many-image-guard.ts
+// and MAX_IMAGE_DIMENSION in browser-screenshot.ts / view-image.ts.
 const MAX_IMAGE_DIMENSION = 8000;
+
+// Base64 byte cap — 2 MiB, same as MAX_BASE64_BYTES in view-image.ts and
+// image-generate.ts. Prevents oversized Retina captures from flooding context.
+const MAX_BASE64_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Default long-side pixel size for the attached (downscaled) copy.
+ * See module-doc for the derivation. Full-res sidecar is always preserved.
+ */
+export const ATTACHED_LONG_SIDE = 1092;
 
 // ---------------------------------------------------------------------------
 // Input parsing
 // ---------------------------------------------------------------------------
+
+/**
+ * Maximum sane value for any single input coordinate or dimension.
+ * No physical display exceeds 32768px on a side; this bound stops absurd
+ * values reaching the backend without being exploitable.
+ */
+const MAX_COORD_VALUE = 32768;
 
 interface ParsedInput {
   displayIndex: number;
@@ -72,10 +112,17 @@ function parseInput(raw: unknown): ParsedInput | { error: string } {
 
   let displayIndex = 0;
   if (obj['display'] !== undefined) {
-    if (typeof obj['display'] !== 'number' || !Number.isFinite(obj['display']) || obj['display'] < 0) {
-      return { error: 'desktop_screenshot: "display" must be a non-negative number' };
+    const d = obj['display'];
+    if (
+      typeof d !== 'number' ||
+      !Number.isFinite(d) ||
+      d < 0 ||
+      !Number.isInteger(d) ||
+      d > 255
+    ) {
+      return { error: 'desktop_screenshot: "display" must be a small non-negative integer (0–255)' };
     }
-    displayIndex = Math.floor(obj['display']);
+    displayIndex = d;
   }
 
   let region: DesktopRegion | undefined;
@@ -85,19 +132,113 @@ function parseInput(raw: unknown): ParsedInput | { error: string } {
     }
     const r = obj['region'] as Record<string, unknown>;
     for (const field of ['x', 'y', 'width', 'height'] as const) {
-      if (typeof r[field] !== 'number' || !Number.isFinite(r[field])) {
-        return { error: `desktop_screenshot: "region.${field}" must be a finite number` };
+      const v = r[field];
+      if (typeof v !== 'number' || !Number.isFinite(v) || !Number.isInteger(v)) {
+        return { error: `desktop_screenshot: "region.${field}" must be a finite integer` };
       }
     }
+    const rX = r['x'] as number;
+    const rY = r['y'] as number;
     const rWidth = r['width'] as number;
     const rHeight = r['height'] as number;
+    if (rX < 0 || rY < 0) {
+      return { error: 'desktop_screenshot: "region.x" and "region.y" must be non-negative' };
+    }
     if (rWidth <= 0 || rHeight <= 0) {
       return { error: 'desktop_screenshot: "region.width" and "region.height" must be positive' };
     }
-    region = { x: r['x'] as number, y: r['y'] as number, width: rWidth, height: rHeight };
+    if (rX > MAX_COORD_VALUE || rY > MAX_COORD_VALUE || rWidth > MAX_COORD_VALUE || rHeight > MAX_COORD_VALUE) {
+      return { error: `desktop_screenshot: region values must not exceed ${MAX_COORD_VALUE}` };
+    }
+    region = { x: rX, y: rY, width: rWidth, height: rHeight };
   }
 
   return { displayIndex, region };
+}
+
+// ---------------------------------------------------------------------------
+// Downscale helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Attempt to downscale `sourcePath` to fit within `longSide` pixels on the
+ * long side, writing the result to `outPath`, using `sips` (macOS).
+ * Returns the buffer of the downscaled PNG on success, or null on any failure.
+ * Never throws.
+ */
+async function downscaleWithSips(
+  sourcePath: string,
+  outPath: string,
+  longSide: number,
+): Promise<Buffer | null> {
+  try {
+    await execFileAsync(
+      'sips',
+      ['--resampleHeightWidthMax', String(longSide), sourcePath, '--out', outPath],
+      { timeout: 15_000 },
+    );
+    const buf = await readFile(outPath);
+    return buf.length > 0 ? buf : null;
+  } catch {
+    return null;
+  } finally {
+    await unlink(outPath).catch(() => undefined);
+  }
+}
+
+interface AttachedImage {
+  dataBase64: string;
+  attachedWidth: number;
+  attachedHeight: number;
+}
+
+/**
+ * Read PNG dimensions from a buffer (IHDR chunk at bytes 16-23).
+ * Returns null when the buffer is too short or not a valid PNG header.
+ */
+function readPngDims(buf: Buffer): { width: number; height: number } | null {
+  if (buf.length < 24) return null;
+  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+}
+
+/**
+ * Produce the image that will be attached to the model, downscaling if needed.
+ *
+ * Returns an AttachedImage (possibly downscaled) or null when the image cannot
+ * be attached (downscale failed and the original is over-limit).
+ */
+async function buildAttachedImage(
+  capturedBase64: string,
+  capturedWidth: number,
+  capturedHeight: number,
+  sidecarPath: string,
+): Promise<AttachedImage | null> {
+  const needsResize =
+    capturedWidth > MAX_IMAGE_DIMENSION ||
+    capturedHeight > MAX_IMAGE_DIMENSION ||
+    capturedBase64.length > MAX_BASE64_BYTES;
+
+  if (!needsResize) {
+    return { dataBase64: capturedBase64, attachedWidth: capturedWidth, attachedHeight: capturedHeight };
+  }
+
+  // Attempt downscale.
+  const tmpOut = join(tmpdir(), `afk-desktop-ds-${Date.now()}.png`);
+
+  if (process.platform === 'darwin') {
+    const buf = await downscaleWithSips(sidecarPath, tmpOut, ATTACHED_LONG_SIDE);
+    if (buf) {
+      const dims = readPngDims(buf);
+      if (dims && buf.toString('base64').length <= MAX_BASE64_BYTES &&
+          dims.width <= MAX_IMAGE_DIMENSION && dims.height <= MAX_IMAGE_DIMENSION) {
+        return { dataBase64: buf.toString('base64'), attachedWidth: dims.width, attachedHeight: dims.height };
+      }
+    }
+  }
+
+  // Downscale unavailable or failed — return null so the handler falls back
+  // to a text-only result that names the sidecar path.
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,23 +262,35 @@ export function createDesktopScreenshotHandler(opts: DesktopHandlerOptions = {})
     if (!acquired.ok) return acquired;
     const { sessionId, backend } = acquired;
 
+    // Re-check abort after acquiring the backend (may have taken a moment).
+    if (signal.aborted) {
+      const msg = abortReason(signal.reason);
+      return { content: `desktop_screenshot aborted: ${msg}`, isError: true };
+    }
+
     // Build the sidecar path under the session trace directory.
     const screenshotsDir = join(getTraceDir(sessionId), 'desktop', 'screenshots');
     const ts = Date.now();
     const sidecarPath = join(screenshotsDir, `desktop_screenshot_${ts}.png`);
 
-    // Ensure the directory exists before the backend writes to it.
-    await mkdir(screenshotsDir, { recursive: true });
+    // Ensure the directory exists with owner-only permissions (0o700).
+    await mkdir(screenshotsDir, { recursive: true, mode: 0o700 });
 
     const backendInput: DesktopScreenshotInput = {
       displayIndex: parsed.displayIndex,
       ...(parsed.region ? { region: parsed.region } : {}),
+      signal,
     };
 
     const t0 = Date.now();
     try {
       const result = await backend.screenshot(backendInput, sidecarPath);
       const durationMs = Date.now() - t0;
+
+      // Handle abort result from the backend.
+      if ('aborted' in result) {
+        return { content: `desktop_screenshot aborted: ${result.reason}`, isError: true };
+      }
 
       const { dataBase64, mediaType, ...meta } = result;
 
@@ -147,23 +300,30 @@ export function createDesktopScreenshotHandler(opts: DesktopHandlerOptions = {})
         displayIndex: result.displayIndex,
         captureWidth: result.width,
         captureHeight: result.height,
-        scaleFactor: result.scaleFactor,
+        scaleFactor: result.scaleFactor ?? 0,
         screenshotPath: result.path,
         status: 'ok',
         durationMs,
       });
 
-      // Dimension guard — same threshold as browser_screenshot.
-      if (meta.width > MAX_IMAGE_DIMENSION || meta.height > MAX_IMAGE_DIMENSION) {
+      // Attempt to build an attached image, downscaling if necessary.
+      const attached = await buildAttachedImage(
+        dataBase64,
+        result.width,
+        result.height,
+        sidecarPath,
+      );
+
+      if (!attached) {
+        // Downscale failed or unavailable — text-only result.
         return {
           content: JSON.stringify(
             {
               ...meta,
               imageOmitted:
-                `dimensions ${meta.width}x${meta.height}px exceed the ` +
-                `${MAX_IMAGE_DIMENSION}px model-vision limit; the PNG was ` +
-                `saved to the sidecar path but not attached. Use a region ` +
-                `to capture a smaller area.`,
+                `Captured image (${result.width}x${result.height}px, ` +
+                `${dataBase64.length} base64 bytes) exceeds provider limits ` +
+                `and downscaling failed. The full-resolution PNG is at the sidecar path.`,
             },
             null,
             2,
@@ -171,9 +331,15 @@ export function createDesktopScreenshotHandler(opts: DesktopHandlerOptions = {})
         };
       }
 
+      const wasDownscaled = attached.attachedWidth !== result.width || attached.attachedHeight !== result.height;
+      const responseScale = wasDownscaled
+        ? { attachedWidth: attached.attachedWidth, attachedHeight: attached.attachedHeight,
+            attachedToCapturRatio: attached.attachedWidth / result.width }
+        : {};
+
       return {
-        content: JSON.stringify(meta, null, 2),
-        image: { mediaType, data: dataBase64 },
+        content: JSON.stringify({ ...meta, ...responseScale }, null, 2),
+        image: { mediaType, data: attached.dataBase64 },
       };
     } catch (err) {
       const durationMs = Date.now() - t0;
@@ -186,6 +352,9 @@ export function createDesktopScreenshotHandler(opts: DesktopHandlerOptions = {})
         durationMs,
         error: { reason: msg, recoverable: false },
       });
+
+      // Clean up any partial output file on error.
+      await unlink(sidecarPath).catch(() => undefined);
 
       return { content: `desktop_screenshot failed: ${msg}`, isError: true };
     }

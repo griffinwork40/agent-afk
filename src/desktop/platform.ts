@@ -50,7 +50,7 @@ export async function resolveNativeBackend(): Promise<DesktopBackend> {
     }
     throw new DesktopBackendError(
       'Desktop tools are not supported on Linux in v1. ' +
-      'macOS and native Windows are supported.',
+      'macOS is supported; native Windows is not yet verified (Step 0W pending).',
       'UNSUPPORTED_PLATFORM',
     );
   }
@@ -67,7 +67,7 @@ export async function resolveNativeBackend(): Promise<DesktopBackend> {
 
   throw new DesktopBackendError(
     `Desktop tools are not supported on platform "${process.platform}". ` +
-    'macOS and native Windows are supported.',
+    'macOS is supported; native Windows is not yet verified (Step 0W pending).',
     'UNSUPPORTED_PLATFORM',
   );
 }

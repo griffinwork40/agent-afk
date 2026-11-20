@@ -54,11 +54,10 @@ export interface AcquireDesktopError {
 /** Setup instructions shown when `AFK_DESKTOP_ENABLED` is not set. */
 export const DESKTOP_SETUP_INSTRUCTIONS =
   'Desktop tools are disabled. ' +
-  'To enable, set AFK_DESKTOP_ENABLED=1 in your afk.env ' +
-  '(`afk config env set AFK_DESKTOP_ENABLED 1`). ' +
+  'The operator enables them by setting AFK_DESKTOP_ENABLED in afk.env. ' +
   'On macOS, also grant Screen Recording permission to the terminal app ' +
   'in System Settings → Privacy & Security → Screen Recording. ' +
-  'On Windows, run afk in a native interactive terminal (not WSL2).';
+  'On Windows (not yet verified), run afk in a native interactive terminal (not WSL2).';
 
 /**
  * Acquire the desktop backend for a tool handler call.

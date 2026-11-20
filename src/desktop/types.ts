@@ -35,6 +35,13 @@ export interface DesktopScreenshotInput {
    * is captured. Reported in the result so callers can map coordinates.
    */
   region?: DesktopRegion;
+  /**
+   * AbortSignal forwarded from the tool handler. The backend must pass this
+   * to the child process (via the `signal` spawn option) so an interruption
+   * terminates an in-flight capture. The backend must also check the signal
+   * before spawning and return an aborted result when it is already aborted.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -54,11 +61,14 @@ export interface DesktopScreenshotResult {
   /** Pixel height of the captured image. */
   height: number;
   /**
-   * Display scale factor (e.g. 2 on a Retina/HiDPI display). Reported for
-   * coordinate-space transparency so later tranches can map logical→physical
-   * pixels without guessing at the scale.
+   * Display scale factor (e.g. 2 on a Retina/HiDPI display), or `null` when
+   * the scale cannot be determined without a permission prompt or native API
+   * call (full-display capture on macOS when no region is supplied and
+   * `system_profiler` returns no match for the requested display).
+   * Reported for coordinate-space transparency so later tranches can map
+   * logical→physical pixels without guessing at the scale.
    */
-  scaleFactor: number;
+  scaleFactor: number | null;
   /**
    * Zero-based index of the display that was actually captured (may differ
    * from the requested index when the request was clamped to the display
@@ -79,6 +89,15 @@ export interface DesktopScreenshotResult {
   mediaType: 'image/png';
 }
 
+/**
+ * Result returned when the AbortSignal fires before or during capture.
+ * The handler must clean up any partial output file before returning this.
+ */
+export interface DesktopScreenshotAborted {
+  aborted: true;
+  reason: string;
+}
+
 // ---------------------------------------------------------------------------
 // Backend interface
 // ---------------------------------------------------------------------------
@@ -93,6 +112,10 @@ export interface DesktopBackend {
   /**
    * Capture a screenshot of the specified display / region.
    *
+   * Returns `DesktopScreenshotAborted` when the AbortSignal fires before the
+   * image bytes are available; in that case the backend must remove any
+   * partial output file.
+   *
    * Throws a `DesktopBackendError` on failure (permission denied, display out
    * of range, OS refusal, etc.). The error message is surfaced to the model
    * verbatim, so make it human-readable and actionable.
@@ -100,7 +123,7 @@ export interface DesktopBackend {
   screenshot(
     input: DesktopScreenshotInput,
     sidecarPath: string,
-  ): Promise<DesktopScreenshotResult>;
+  ): Promise<DesktopScreenshotResult | DesktopScreenshotAborted>;
 }
 
 // ---------------------------------------------------------------------------
