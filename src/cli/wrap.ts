@@ -77,3 +77,32 @@ export function hardWrapToWidth(text: string, width: number): string {
     wordWrap: false,
   });
 }
+
+/**
+ * Return `true` when `line` occupies exactly `width` display columns by
+ * wrap-ansi's internal `string-width` measure — i.e. the cursor is in
+ * pending-wrap state at the right margin after the line is painted.
+ *
+ * CupFrameRenderer uses this to decide whether to append EL0 (`\x1b[K`)
+ * after a rendered line.  It must use the SAME width library that
+ * `hardWrapToWidth` / `wrap-ansi` uses internally (currently `string-width`
+ * 8.3.0 resolved by `wrap-ansi` 10.0.2).  Using `displayWidth` from
+ * `display.ts` (which imports `string-width` 9.0.0) instead produces
+ * disagreements on some code points (lone regional indicators, digit+VS16,
+ * …): 9.0.0 rates them wider than 8.3.0, so a row that is one cell short of
+ * full-width by the wrap measure looks full-width to `displayWidth` and the
+ * EL0 is incorrectly skipped, leaving a stale cell at the last column.
+ *
+ * The predicate is: appending a one-cell ASCII sentinel and re-wrapping at
+ * `width` causes a split (`\n` appears) iff the original line is ≥ `width`
+ * cells by wrap-ansi's measure.  Lines shorter than `width` absorb the
+ * sentinel without wrapping; lines at exactly `width` or wider cause a split.
+ */
+export function isFullWidthByWrap(line: string, width: number): boolean {
+  if (!Number.isFinite(width) || width <= 0) return false;
+  return wrapAnsi(line + 'x', Math.floor(width), {
+    hard: true,
+    trim: false,
+    wordWrap: false,
+  }).includes('\n');
+}
