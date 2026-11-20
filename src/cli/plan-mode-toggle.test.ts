@@ -76,17 +76,16 @@ describe('togglePlanMode', () => {
     expect(joined).toContain('plan mode on');
   });
 
-  it('flips plan → default and emits OFF copy', async () => {
+  it('flips plan → bypassPermissions and emits OFF copy when no pre-plan mode was captured', async () => {
     const stats = makeStats({ permissionMode: 'plan' });
     const { ctx, sess, lines } = makeCtx({ stats });
 
     await togglePlanMode(ctx, false);
 
-    expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-    expect(stats.permissionMode).toBe('default');
+    expect(sess.setPermissionMode).toHaveBeenCalledWith('bypassPermissions');
+    expect(stats.permissionMode).toBe('bypassPermissions');
     const joined = lines.join('\n').toLowerCase();
     expect(joined).toContain('plan mode off');
-    expect(joined).toContain('default permissions restored');
   });
 
   it('toggles based on current mode when no explicit desired is passed', async () => {
@@ -95,8 +94,8 @@ describe('togglePlanMode', () => {
 
     await togglePlanMode(ctx);
 
-    expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-    expect(stats.permissionMode).toBe('default');
+    expect(sess.setPermissionMode).toHaveBeenCalledWith('bypassPermissions');
+    expect(stats.permissionMode).toBe('bypassPermissions');
   });
 
   it('restores the pre-plan mode (bypass) on exit instead of forcing default', async () => {
@@ -137,14 +136,14 @@ describe('togglePlanMode', () => {
     expect(joined).not.toContain('default permissions restored');
   });
 
-  it('falls back to default on exit when no pre-plan mode was captured', async () => {
+  it('falls back to bypassPermissions on exit when no pre-plan mode was captured', async () => {
     const stats = makeStats({ permissionMode: 'plan' });
     const { ctx, sess } = makeCtx({ stats }); // prePlanMode undefined
 
     await togglePlanMode(ctx, false);
 
-    expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-    expect(stats.permissionMode).toBe('default');
+    expect(sess.setPermissionMode).toHaveBeenCalledWith('bypassPermissions');
+    expect(stats.permissionMode).toBe('bypassPermissions');
   });
 
   it('entering plan flips to plan and never consults getPrePlanMode (only exit restores)', async () => {
@@ -168,7 +167,7 @@ describe('togglePlanMode', () => {
 
     await togglePlanMode(ctx, false);
 
-    expect(setPermissionMode).toHaveBeenCalledWith('default');
+    expect(setPermissionMode).toHaveBeenCalledWith('bypassPermissions');
     expect(stats.permissionMode).toBe('plan');
     expect(lines.some((l) => l.startsWith('ERROR:'))).toBe(true);
   });

@@ -3866,8 +3866,8 @@ describe('OpenAICompatibleQuery — setPermissionMode mid-session seen by next t
     let ev: IteratorResult<ProviderEvent>;
     do { ev = await iter.next(); } while (!ev.done && ev.value.type !== 'turn.completed');
 
-    // Sanity: mode starts as 'default'.
-    expect(q.currentPermissionMode).toBe('default');
+    // Sanity: mode starts as 'bypassPermissions' (normalizePermissionMode fallback).
+    expect(q.currentPermissionMode).toBe('bypassPermissions');
 
     // Switch to plan mode mid-session.
     await q.setPermissionMode('plan');

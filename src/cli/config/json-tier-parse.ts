@@ -93,6 +93,11 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
     const pm = json.permissionMode;
     if (pm === 'plan' || pm === 'autonomous' || pm === 'bypassPermissions') {
       config.permissionMode = pm;
+    } else if (pm === 'default') {
+      // eslint-disable-next-line no-console -- one-shot operator UX warning
+      console.warn(
+        '[afk] permissionMode "default" was removed. The session will run in bypassPermissions. Set "permissionMode": "plan" for a read-only session.',
+      );
     }
   }
 
