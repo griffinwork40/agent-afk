@@ -13,6 +13,7 @@ import { composeUnnamedWorkerPrompt } from '../system-prompt.js';
 import { isChildReplaySafe } from './retry-safety.js';
 import { isChildWriteCapable } from './write-capability.js';
 import { SubagentManager } from '../../subagent.js';
+import { applyRootOverrides } from '../dispatch-preparation.js';
 import type { RegisteredAgent, AgentRegistry } from '../../agents/index.js';
 import type { AgentDefinition } from '../../types/sdk-types.js';
 import type { IAgentSession } from '../../types.js';
@@ -161,9 +162,7 @@ export function buildBaseChildConfig(
     maxToolUseIterations: effectiveMaxToolUseIterations,
     depth: depth + 1,
     maxDepth,
-    ...(parsed.cwd !== undefined ? { cwd: parsed.cwd } : {}),
-    ...(parsed.writeRoots !== undefined ? { writeRoots: parsed.writeRoots } : {}),
-    ...(parsed.readRoots !== undefined ? { extraReadRoots: parsed.readRoots } : {}),
+    ...applyRootOverrides(parsed),
     ...(namedAgent === undefined && defaultConfig.skillDispatchName !== undefined
       ? { skillDispatchName: defaultConfig.skillDispatchName }
       : {}),
