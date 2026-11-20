@@ -34,12 +34,18 @@ if [ -n "$push_stdin" ]; then
       # zero..HEAD range. Include all parents (no --first-parent/--no-merges).
       range=$local_sha
       [ "$remote_sha" = "$zero" ] || range="$remote_sha..$local_sha"
-      commits=$(git -c log.showSignature=false log --no-show-signature --format='%H %s' "$range" --) || refuse_main
+      commits=$(git -c log.showSignature=false log --no-show-signature --format='%h %s' "$range" --) || {
+        printf 'pre-push: cannot inspect main push range %s; run git fetch and retry.\n' "$range" >&2
+        exit 1
+      }
       if [ -n "$commits" ]; then
         while IFS=' ' read -r commit subject; do
           case "$subject" in
             'chore(release):'*|'docs(changelog):'*) ;;
-            *) refuse_main ;;
+            *)
+              printf 'pre-push: offending commit: %s %s\n' "$commit" "$subject" >&2
+              refuse_main
+              ;;
           esac
         done <<COMMITS_END
 $commits
