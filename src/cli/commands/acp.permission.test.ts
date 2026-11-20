@@ -16,6 +16,7 @@ const display = vi.hoisted(() => ({
 vi.mock('./acp.tool-kind.js', () => display);
 
 import { createAcpPermissionGate } from './acp.permission.js';
+import { AcpPeerClosedError } from './acp.rpc-peer.js';
 import { permissionOptions, requiresAsk } from './acp.permission.policy.js';
 
 const SID = '11111111-1111-4111-8111-111111111111';
@@ -284,8 +285,16 @@ describe('ACP permission gate: failure table (section 6)', () => {
     const t = setup();
     const p = call(t.gate, 'write_file', WRITE_INPUT, 'tool-1');
     await untilAsk(t.asks);
-    t.asks[0]!.reject(new Error('ACP peer closed: eof'));
+    t.asks[0]!.reject(new AcpPeerClosedError('eof'));
     expectDeny(await p, 'peer_closed');
+  });
+
+  it('request_error: an untyped error that merely reads like a closed peer is not peer_closed', async () => {
+    const t = setup();
+    const p = call(t.gate, 'write_file', WRITE_INPUT, 'tool-1');
+    await untilAsk(t.asks);
+    t.asks[0]!.reject(new Error('ACP peer closed: eof'));
+    expectDeny(await p, 'request_error');
   });
 
   it('aborted: signal already aborted before the call, nothing is sent', async () => {

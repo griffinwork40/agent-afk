@@ -9,6 +9,7 @@ import type {
   AcpClientPeer, AcpPermissionGate, AcpPermissionOptions, PermissionOption, ToolCallStart, ToolCallUpdate,
 } from './acp.wire.js';
 import { buildPendingStart, permissionOptions, requiresAsk } from './acp.permission.policy.js';
+import { AcpPeerClosedError } from './acp.rpc-peer.js';
 
 export const PERMISSION_TIMEOUT_MS = 120_000;
 
@@ -47,8 +48,7 @@ export function classifyReply(reply: unknown, offered: readonly PermissionOption
 }
 
 function peerFailureReason(err: unknown): DenyReason {
-  const message = err instanceof Error ? err.message : '';
-  return message.startsWith('ACP peer closed') ? 'peer_closed' : 'request_error';
+  return err instanceof AcpPeerClosedError ? 'peer_closed' : 'request_error';
 }
 
 function requestToolCall(start: ToolCallStart): ToolCallUpdate {

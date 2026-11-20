@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createAcpRpcPeer } from './acp.rpc-peer.js';
+import { AcpPeerClosedError, createAcpRpcPeer } from './acp.rpc-peer.js';
 import type { RpcFrame } from './acp.wire.js';
 
 function harness(fail = false) {
@@ -74,6 +74,19 @@ describe('acp rpc peer', () => {
     await expect(peer.request('m', {})).rejects.toThrow();
     await expect(peer.notify('n', {})).rejects.toThrow();
     expect(frames).toHaveLength(1);
+  });
+
+  it('closed-peer rejections are the exported typed error, not a message convention', async () => {
+    const { peer } = harness();
+    const p = peer.request('m', {});
+    await tick();
+    peer.close('eof');
+    await expect(p).rejects.toBeInstanceOf(AcpPeerClosedError);
+    await expect(peer.request('m', {})).rejects.toBeInstanceOf(AcpPeerClosedError);
+    const failed = harness(true).peer;
+    // A write failure closes the peer, so the in-flight request is also a closed-peer rejection.
+    await expect(failed.request('first', {})).rejects.toBeInstanceOf(AcpPeerClosedError);
+    await expect(failed.request('after', {})).rejects.toBeInstanceOf(AcpPeerClosedError);
   });
 
   it('a write failure rejects the request and every pending request', async () => {
