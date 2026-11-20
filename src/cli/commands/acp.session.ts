@@ -22,6 +22,8 @@ import { getStateDatabasePath } from '../../paths.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { getApiKeyForModel, getModel, getDefaultSubagentModel } from '../shared-helpers.js';
 import type { AgentModelInput } from '../../agent/types.js';
+import type { AgentConfig } from '../../agent/types/config-types.js';
+import type { CanUseTool } from './acp.wire.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,6 +36,12 @@ export interface AcpSessionOptions {
   dangerouslySkipPermissions?: boolean;
   /** Optional working directory for the session (non-blocking extra). */
   cwd?: string;
+  /** Inject into the provider, not AgentConfig, because this provider is prebuilt. */
+  canUseTool?: CanUseTool;
+  resume?: string;
+  sessionId?: string;
+  /** Already converted from the wire stdio array to AFK's name-keyed config. */
+  mcpServers?: AgentConfig['mcpServers'];
 }
 
 /** Opaque handle returned by buildAcpSession and accepted by closeAcpSession. */
@@ -82,6 +90,7 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
     memoryStore,
     stateStore,
     surface: 'cli',
+    ...(opts.canUseTool !== undefined ? { canUseTool: opts.canUseTool } : {}),
   });
 
   await ensurePluginEntrypointsLoaded();
@@ -115,6 +124,9 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
       ).registry,
       provider,
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      ...(opts.resume !== undefined ? { resume: opts.resume } : {}),
+      ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
+      ...(opts.mcpServers !== undefined ? { mcpServers: opts.mcpServers } : {}),
     }), undefined, undefined, memoryStore),
     undefined,
   );
