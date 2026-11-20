@@ -59,6 +59,32 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
   are trusted the same way as servers named on the command line.
 - **Witness trace written per session.** Every `afk acp` session writes a
   witness trace viewable with the standard `afk trace` commands.
+- **Session `cwd` is not constrained to the server launch directory.** A
+  client may name any existing absolute directory as the session working
+  directory in `session/new`, `session/load`, or `session/resume`; it no
+  longer has to be the directory `afk acp` was started in or below it.
+- **Loading or resuming an already-open session succeeds.** If a session is
+  live and idle on the connection, `session/load` replays its history and
+  returns without creating a second handle; `session/resume` returns
+  immediately. Reopening with a different `cwd` or `mcpServers` list is
+  invalid params.
+- **Resource-not-found errors for a session carry `data.sessionId`.** When
+  `session/prompt`, `session/load`, or `session/resume` names an unknown or
+  already-closed session id, the `-32002` error response includes
+  `data: { "sessionId": "<the id from the request>" }`.
+- **The process exits promptly when the client closes its end.** On EOF the
+  server cancels and releases every live session within a bounded time and
+  then exits without waiting for stray timers.
+- **`git_read` asks before returning file content from outside the session
+  directory.** Calls that can produce file content from elsewhere in the
+  repository (such as `show`, `diff` with patches, or a revision that names
+  a blob) are asked rather than auto-allowed when no pathspec constrains
+  them to the session `cwd`.
+- **A subagent's paths are checked against its own working directory.** When
+  an `agent`, `skill`, or `compose` node is given an explicit `cwd`, the
+  approval policy resolves that child's relative or absent paths against it
+  rather than the session `cwd`. Absolute paths inside the session `cwd`
+  remain auto-allowed.
 
 ## [5.360.0] - 2026-11-19
 

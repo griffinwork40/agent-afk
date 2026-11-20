@@ -14,6 +14,23 @@ describe('ACP resource ownership', () => {
     expect(released).toEqual(['children', 'mcp', 'stores', 'trace']);
   });
 
+  it('[C2] release iterates a reversed copy, leaving the registered order intact', async () => {
+    const resources = new AcpSessionResources();
+    const order: string[] = [];
+    resources.add(() => { order.push('a'); });
+    resources.add(() => { order.push('b'); });
+    resources.add(() => { order.push('c'); });
+    // Capture the array reference before release.
+    // After release the array must still be in registration order [a, b, c].
+    const disposers = (resources as unknown as { disposers: Array<() => unknown> }).disposers;
+    const beforeRelease = [...disposers];
+    await resources.release();
+    // Released in reverse order c, b, a.
+    expect(order).toEqual(['c', 'b', 'a']);
+    // Registration order unchanged.
+    expect(disposers).toEqual(beforeRelease);
+  });
+
   it('D17: a hung owner is abandoned at its deadline and later owners still release', async () => {
     const resources = new AcpSessionResources(30);
     const released: string[] = [];

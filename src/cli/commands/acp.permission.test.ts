@@ -494,4 +494,13 @@ describe('ACP permission gate: cancelAll and late replies', () => {
     t.asks[0]!.resolve(selected('reject_once'));
     expectDeny(await p, 'rejected');
   });
+
+  it('[S10] endTurn denies every pending ask including top-level ones, with reason no_active_turn', async () => {
+    // A top-level ask pending at turn-end is denied defensively.
+    const t = setup();
+    const p = call(t.gate, 'write_file', WRITE_INPUT, 'tool-1');
+    await untilAsk(t.asks);
+    await t.gate.endTurn?.();
+    expectDeny(await p, 'no_active_turn');
+  });
 });

@@ -22,9 +22,13 @@ export async function connectAcpMcp(
   const loaded = loadMcpConfig({ cwd, ...(importedMcpConfigs.length > 0 ? { importedMcpConfigs } : {}) });
   for (const [name, config] of Object.entries(servers)) {
     loaded.mcpServers[name] = config;
-    // ACP's local stdio peer is an operator-controlled GUI, equivalent to a CLI
-    // override. These commands execute at connect time, before tool approval.
-    // Do not accidentally inherit a displaced project server's trust metadata.
+    // Client-supplied MCP servers are started at session creation time, before
+    // any tool approval, and are trusted at the 'cli' (operator) level, the same
+    // as servers named on the AFK command line with --mcp-server. The ACP model
+    // is that the local GUI client is operator-controlled: its executable paths
+    // run with the user's privileges without a prompt, matching D12 in the
+    // profile. Tools from these servers are still always asked (section 6).
+    // Do not inherit a displaced project server's trust metadata.
     loaded.serverLayers[name] = 'cli';
     delete loaded.userAllowSecretEnv[name];
   }
