@@ -21,6 +21,8 @@ export class ScriptedSession {
   private last: ResponseMetadata | null = null;
   readonly close = vi.fn(async () => { this.abort(); });
   readonly abort = vi.fn(() => { this.aborter.abort(); });
+  /** Mirrors AgentSession.interrupt: aborts the in-flight provider query (and so the tool signal). */
+  readonly interrupt = vi.fn(async () => { this.aborter.abort(); });
   constructor(readonly options: AcpSessionOptions, readonly script: GoldenScript) {}
   getSessionMetadata() { return { sessionId: this.options.sessionId ?? persistedId,
     model: 'claude-sonnet-4-5', cwd: this.options.cwd }; }
