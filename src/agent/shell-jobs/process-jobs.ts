@@ -23,6 +23,7 @@ import { randomBytes } from 'node:crypto';
 import { getProcessJobSessionDir } from '../../paths.js';
 import { ProcessLogSink } from './process-log-sink.js';
 import { launchProcess, terminateWithGrace, type LaunchedProcess, type ProcessExit } from './process-launcher.js';
+import { parseSandboxPolicy } from '../tools/handlers/bash-sandbox.js';
 import { enforceSessionQuota, scheduleProcessJobSweep } from './process-jobs.sweep.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import type { TraceSink } from '../trace/index.js';
@@ -176,10 +177,12 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
     enforceSessionQuota(this.logDir, this.opts.sessionQuotaBytes ?? DEFAULT_SESSION_QUOTA_BYTES, this.liveLogPaths());
     const logPath = path.join(this.logDir, `${id}.log`);
     const sink = new ProcessLogSink({ logPath, ...(this.opts.logCapBytes !== undefined ? { capBytes: this.opts.logCapBytes } : {}) });
+    const sandboxPolicy = parseSandboxPolicy();
     const launched = launchProcess({
       command: args.command, cwd: args.cwd, env: args.env, sink,
       ...(this.opts.closeGraceMs !== undefined ? { closeGraceMs: this.opts.closeGraceMs } : {}),
       ...(this.opts.reapGraceMs !== undefined ? { reapGraceMs: this.opts.reapGraceMs } : {}),
+      ...(sandboxPolicy !== undefined ? { sandboxPolicy } : {}),
     });
     const maxRuntimeMs = Math.min(args.maxRuntimeMs ?? DEFAULT_PROCESS_MAX_RUNTIME_MS, MAX_PROCESS_MAX_RUNTIME_MS);
     const job: InternalJob = {

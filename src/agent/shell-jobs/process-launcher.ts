@@ -33,6 +33,8 @@ import { killProcessGroup } from '../../utils/kill-process-group.js';
 import { resolveShell } from '../../utils/resolve-shell.js';
 import { errorMessage } from '../../utils/errors.js';
 import type { ProcessLogSink } from './process-log-sink.js';
+import { buildSandboxedCommand, sandboxDescription, type SandboxPolicy } from '../tools/handlers/bash-sandbox.js';
+import { debugLog } from '../../utils/debug.js';
 
 export interface ProcessExit {
   /** Leader exit code; null when the leader died by signal or never spawned. */
@@ -54,6 +56,14 @@ export interface LaunchOptions {
   closeGraceMs?: number;
   /** Wait between SIGTERM and SIGKILL when reaping survivors. Default 2000 ms. */
   reapGraceMs?: number;
+  /**
+   * OS-level sandbox policy for the spawned process. When set, the command is
+   * wrapped via {@link buildSandboxedCommand} (same mechanism as the foreground
+   * bash path). Fail-closed: if the sandbox is unavailable the spawn throws
+   * rather than falling back to an unsandboxed run. When omitted, no sandbox
+   * is applied (existing behaviour).
+   */
+  sandboxPolicy?: SandboxPolicy;
 }
 
 export interface LaunchedProcess {
@@ -72,13 +82,32 @@ const DEFAULT_CLOSE_GRACE_MS = 2_000;
 const DEFAULT_REAP_GRACE_MS = 2_000;
 
 function spawnLeader(opts: LaunchOptions): ChildProcess {
-  const shellResolution = resolveShell();
   const base = {
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
     env: opts.env,
     ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
   };
+
+  // ── Sandbox path ─────────────────────────────────────────────────────────
+  // When a sandbox policy is provided, wrap the command in an OS-level sandbox
+  // using the same mechanism as the foreground bash path. Fail-closed: if the
+  // sandbox is unavailable, buildSandboxedCommand throws instead of falling
+  // back to an unsandboxed run.
+  if (opts.sandboxPolicy !== undefined && opts.sandboxPolicy !== 'off') {
+    const effectiveCwd = opts.cwd ?? process.cwd();
+    const childTemp = opts.env['TMPDIR'] || opts.env['TMP'] || opts.env['TEMP'] || '/tmp';
+    const sandboxed = buildSandboxedCommand(opts.command, opts.sandboxPolicy, effectiveCwd, childTemp);
+    debugLog(
+      `[process-launcher] sandbox spawn: ${sandboxDescription(opts.sandboxPolicy)}` +
+        ` backend=${sandboxed.shell} policy=${opts.sandboxPolicy}` +
+        ` cwd=${effectiveCwd} temp=${childTemp}`,
+    );
+    return spawn(sandboxed.shell, [...sandboxed.args, sandboxed.command], base);
+  }
+
+  // ── Unsandboxed path (default) ────────────────────────────────────────────
+  const shellResolution = resolveShell();
   return shellResolution.shell === true
     ? spawn(opts.command, { shell: true, ...base })
     : spawn(shellResolution.shell, [...(shellResolution.args ?? []), opts.command], base);
