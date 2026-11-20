@@ -197,7 +197,9 @@ describe('emitReplayUpdates', () => {
     await emitReplayUpdates('acp-id', 'afk-id', { request: vi.fn(), notify });
 
     expect(notify).toHaveBeenCalledTimes(2);
-    const [first, second] = notify.mock.calls as Array<[string, { sessionId: string; update: SessionUpdate }]>;
+    const calls = notify.mock.calls as Array<[string, { sessionId: string; update: SessionUpdate }]>;
+    const first = calls[0]!;
+    const second = calls[1]!;
     expect(first[0]).toBe('session/update');
     expect(first[1].sessionId).toBe('acp-id');
     expect(first[1].update.sessionUpdate).toBe('user_message_chunk');

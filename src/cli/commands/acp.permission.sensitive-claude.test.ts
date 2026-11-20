@@ -6,14 +6,16 @@
  * scans <cwd>/.claude/agents/).  All assertions should PASS on current code.
  */
 
+import os from 'node:os';
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { sensitiveMarker, AGENT_MARKER } from './acp.permission.sensitive.js';
 
-const BASE = '/workspace/session';
+// A real absolute base, so the same test is valid on Windows.
+const BASE = path.resolve(os.tmpdir(), 'acp-claude-ws');
 const p = path.posix;
 
-describe('redteam5: .claude segment coverage in sensitiveMarker', () => {
+describe('.claude path segments are sensitive write targets', () => {
   it('.claude/agents/ path is AGENT_MARKER', () => {
     expect(sensitiveMarker('.claude/agents/research.md', BASE, p)).toBe(AGENT_MARKER);
   });
