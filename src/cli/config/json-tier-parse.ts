@@ -94,10 +94,8 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
     const pm = json.permissionMode;
     if (pm === 'plan' || pm === 'bypassPermissions') {
       config.permissionMode = pm;
-    } else if (pm === 'default') {
-      warnPermissionModeRemoval();
-    } else if (pm === 'autonomous') {
-      warnPermissionModeRemoval();
+    } else if (pm === 'default' || pm === 'autonomous') {
+      warnPermissionModeRemoval(pm);
     }
   }
 
