@@ -51,6 +51,7 @@ function makeEntry(seq: number): WorkspaceEntry {
     relation_type: null,
     created_at: '2026-09-07T00:00:00Z',
     seq,
+    artifact_id: null,
   };
 }
 

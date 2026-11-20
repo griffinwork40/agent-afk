@@ -246,6 +246,85 @@ describe('createWorkspaceHandlers', () => {
     expect(parsed.entries.some((e) => e.agent_id === 'agent-1')).toBe(true);
   });
 
+  // ── artifact_id round-trip (#1415 item 3) ──────────────────────────────────
+
+  it('publish with valid artifact_id stores and returns the id', async () => {
+    const handlers = createWorkspaceHandlers(store, sessionId, agentId);
+    const publish = handlers.get('workspace_publish')!;
+    const validArtifactId = 'art_' + 'b'.repeat(32);
+
+    const result = await publish(
+      { type: 'artifact', content: 'Generated report.', artifact_id: validArtifactId },
+      DUMMY_SIGNAL,
+    );
+    expect(result.isError).toBeFalsy();
+
+    const entries = store.queryAll(sessionId);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.artifact_id).toBe(validArtifactId);
+  });
+
+  it('publish artifact_id survives query serialization', async () => {
+    const handlers = createWorkspaceHandlers(store, sessionId, agentId);
+    const publish = handlers.get('workspace_publish')!;
+    const query = handlers.get('workspace_query')!;
+    const validArtifactId = 'art_' + 'c'.repeat(32);
+
+    await publish(
+      { type: 'artifact', content: 'Some artifact entry.', subject: 'artifact test', artifact_id: validArtifactId },
+      DUMMY_SIGNAL,
+    );
+
+    const result = await query({ query: 'artifact test' }, DUMMY_SIGNAL);
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content as string) as {
+      entries: { artifact_id: string | null }[];
+    };
+    expect(parsed.entries[0]!.artifact_id).toBe(validArtifactId);
+  });
+
+  it('malformed artifact_id is silently ignored (field stored as null)', async () => {
+    const handlers = createWorkspaceHandlers(store, sessionId, agentId);
+    const publish = handlers.get('workspace_publish')!;
+
+    // Invalid: uppercase letters not allowed in art_<32hex>
+    const result = await publish(
+      { type: 'finding', content: 'Has bad id.', artifact_id: 'art_ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ' },
+      DUMMY_SIGNAL,
+    );
+    expect(result.isError).toBeFalsy();
+
+    const entries = store.queryAll(sessionId);
+    expect(entries[0]!.artifact_id).toBeNull();
+  });
+
+  it('malformed artifact_id (wrong prefix) is silently ignored', async () => {
+    const handlers = createWorkspaceHandlers(store, sessionId, agentId);
+    const publish = handlers.get('workspace_publish')!;
+
+    const result = await publish(
+      { type: 'finding', content: 'Bad prefix.', artifact_id: 'artifact_' + 'a'.repeat(32) },
+      DUMMY_SIGNAL,
+    );
+    expect(result.isError).toBeFalsy();
+    const entries = store.queryAll(sessionId);
+    expect(entries[0]!.artifact_id).toBeNull();
+  });
+
+  it('publish without artifact_id stores null', async () => {
+    const handlers = createWorkspaceHandlers(store, sessionId, agentId);
+    const publish = handlers.get('workspace_publish')!;
+    const query = handlers.get('workspace_query')!;
+
+    await publish({ type: 'finding', content: 'No artifact here.', subject: 'no artifact' }, DUMMY_SIGNAL);
+
+    const result = await query({ query: 'no artifact' }, DUMMY_SIGNAL);
+    const parsed = JSON.parse(result.content as string) as {
+      entries: { artifact_id: string | null }[];
+    };
+    expect(parsed.entries[0]!.artifact_id).toBeNull();
+  });
+
   it('query parses evidence JSON back to arrays', async () => {
     const handlers = createWorkspaceHandlers(store, sessionId, agentId);
     const publish = handlers.get('workspace_publish')!;
