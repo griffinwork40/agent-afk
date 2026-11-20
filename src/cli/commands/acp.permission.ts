@@ -13,6 +13,7 @@ import { buildPendingStart, outsideTargets, permissionOptions, requiresAsk } fro
 import type { ChildToolOrigin } from '../../agent/tools/nesting.can-use-tool.js';
 import { childPrefix } from './acp.permission.labels.js';
 import { dependsOnCallerCwd, relocatesChildren } from './acp.permission.paths.js';
+import { grantFits } from './acp.permission.grants.js';
 import { AcpPeerClosedError } from './acp.rpc-peer.js';
 
 export const PERMISSION_TIMEOUT_MS = 120_000;
@@ -148,11 +149,13 @@ async function askClient(
   st.pending.add(ask);
   try {
     const outside = outsideTargets(toolName, input, st.opts.cwd, who.child?.cwd).length > 0;
+    // D18: "Always allow" only for a listed tool whose every argument and location is known and inside.
+    const grantable = !outside && grantFits(toolName, input, st.opts.cwd, who.child?.cwd);
     const start = buildPendingStart(toolUseID, toolName, input, st.opts.cwd, who.child?.prefix ?? '', who.child?.cwd);
     try { await st.opts.emitToolCall(start); } catch { return denyResult('request_error'); }
     const early = interrupted(signal, ask);
     if (early) return denyResult(early);
-    const offered = permissionOptions(toolName, outside);
+    const offered = permissionOptions(toolName, !grantable);
     const params = { sessionId: st.sessionId, toolCall: requestToolCall(start), options: offered };
     const settled = await awaitReply(st.peer, params, signal, ask);
     if (settled.kind === 'deny') return denyResult(settled.reason);
@@ -177,7 +180,7 @@ async function askClient(
     // while grantCovers (in decide) recomputes outsideTargets on the NEW call's
     // input. The two checks operate on different inputs on purpose: a grant earned
     // for an inside-cwd call must not cover a later call that targets outside.
-    if (decision === 'allow_always' && !outside) st.granted.add(toolName);
+    if (decision === 'allow_always' && grantable) st.granted.add(toolName);
     return allow();
   } finally {
     st.pending.delete(ask);
@@ -188,9 +191,14 @@ function turnLive(st: GateState): boolean {
   try { return st.opts.turnActive === undefined || st.opts.turnActive() === true; } catch { return false; }
 }
 
-/** A remembered grant covers this call only when it targets nothing outside the cwd (D11). */
+/**
+ * A remembered grant covers this call only when the tool is on the grant list,
+ * every argument is one that entry knows and every location is inside the cwd
+ * (D11, D18). The generic outside scan is checked too, so either can refuse.
+ */
 function grantCovers(st: GateState, name: string, input: Record<string, unknown>, callerCwd?: string): boolean {
-  return name.length > 0 && st.granted.has(name) && outsideTargets(name, input, st.opts.cwd, callerCwd).length === 0;
+  return name.length > 0 && st.granted.has(name) && grantFits(name, input, st.opts.cwd, callerCwd)
+    && outsideTargets(name, input, st.opts.cwd, callerCwd).length === 0;
 }
 
 async function decide(
@@ -216,6 +224,8 @@ async function decide(
   const child = who.child;
   const run = (async () => {
     const result = wellFormed(await askClient(st, name, input, signal, toolUseID.length > 0 ? cardId : '', who));
+    // D19: a child that delegates into another directory relocates its own children too.
+    if (result.behavior === 'allow' && relocatesChildren(name, input, child.cwd ?? st.opts.cwd)) st.childCwdUnknown = true;
     await closeChildCard(st, cardId, name, input, result, child);
     return result;
   })();

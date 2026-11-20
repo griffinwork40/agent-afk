@@ -10,6 +10,7 @@ import { toolKind, toolLocations, toolTitle } from './acp.tool-kind.js';
 import { boundedRawInput, boundStartDisplay } from './acp.translate.bounds.js';
 import { outsidePaths } from './acp.permission.paths.js';
 import { delegationSuffix } from './acp.permission.labels.js';
+import { isGrantable } from './acp.permission.grants.js';
 
 /** Known read/search tools auto-allowed with approvals on (profile section 5/6 tables). */
 const AUTO_ALLOW = new Set<string>([
@@ -48,12 +49,13 @@ export function requiresAsk(toolName: string, input: Record<string, unknown>, cw
 }
 
 /**
- * Options in profile order. allow_always is never offered for bash, a missing
- * name, a delegation tool, or a call that targets a path outside the cwd (D11).
+ * Options in profile order. allow_always is offered only for a tool on the
+ * grant list (D18), and never for a call that targets a path outside the cwd
+ * or is otherwise not covered by that list entry (D11; the caller passes true).
  */
 export function permissionOptions(toolName: string, outside = false): PermissionOption[] {
   const options: PermissionOption[] = [{ optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' }];
-  if (toolName.length > 0 && toolName !== 'bash' && !DELEGATION.has(toolName) && !outside) {
+  if (isGrantable(toolName) && toolName !== 'bash' && !DELEGATION.has(toolName) && !outside) {
     options.push({ optionId: 'allow_always', name: `Always allow ${toolName} in this session`, kind: 'allow_always' });
   }
   options.push({ optionId: 'reject_once', name: 'Reject', kind: 'reject_once' });

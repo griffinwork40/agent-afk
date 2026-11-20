@@ -1,11 +1,11 @@
 /**
- * RED TEAM (R2): a remembered "Always allow <tool>" grant covers calls whose
+ * Regression guard for red team R2 break 1 (D18): a remembered "Always allow <tool>" grant covers calls whose
  * path argument is not under a name the lexical scan knows. Every one of
  * these tools reads or writes the file named by the argument (no containment
  * in an ACP session: bypassPermissions), so after one inside-cwd approval the
  * same tool silently reads/writes/uploads anything on disk.
  *
- * Asserts the SAFE behaviour; FAILS on afk/acp-v1 bc8ac988d.
+ * Asserts the SAFE behaviour; failed on afk/acp-v1 bc8ac988d before D18.
  */
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -42,22 +42,32 @@ const CASES: Array<[string, Record<string, unknown>, Record<string, unknown>]> =
   ['worktree', { action: 'create', name: 'a' }, { action: 'create', name: 'a', repo: path.resolve('/home/victim/other-repo') }],
 ];
 
-describe('redteam: remembered grant vs. unscanned path arguments', () => {
+describe('D18: remembered grants vs. tool-specific path arguments', () => {
   for (const [tool, inside, outside] of CASES) {
     it(`${tool}: the outside argument is seen as an outside target`, () => {
       expect(outsideTargets(tool, outside, CWD).length).toBeGreaterThan(0);
     });
 
+    // Adapted for D18: these tools are not on the grant list, so "Always allow" is no
+    // longer offered even for an inside call. A client that answers allow_always anyway
+    // is denied (unknown_option) and nothing is remembered; after an allow_once the
+    // outside call is still asked. The safety assertion (asked again) is unchanged.
     it(`${tool}: an "Always allow" given for an inside call does not silently cover an outside one`, async () => {
       const { gate, asks } = setup();
       const ac = new AbortController();
-      const first = gate.canUseTool(tool, inside, { signal: ac.signal, toolUseID: 'c1' });
+      const forged = gate.canUseTool(tool, inside, { signal: ac.signal, toolUseID: 'c0' });
       await flush();
       expect(asks.length).toBe(1);
       const offered = (asks[0]!.params.options as Array<{ optionId: string }>).map((o) => o.optionId);
-      expect(offered).toContain('allow_always');
+      expect(offered).not.toContain('allow_always');
       asks[0]!.resolve({ outcome: { outcome: 'selected', optionId: 'allow_always' } });
+      expect(await forged).toMatchObject({ behavior: 'deny', message: 'Permission denied: unknown_option' });
+      const first = gate.canUseTool(tool, inside, { signal: ac.signal, toolUseID: 'c1' });
+      await flush();
+      expect(asks.length, `${tool} inside call ran without asking after a forged allow_always`).toBe(2);
+      asks[1]!.resolve({ outcome: { outcome: 'selected', optionId: 'allow_once' } });
       expect((await first).behavior).toBe('allow');
+      asks.shift();
 
       const second = gate.canUseTool(tool, outside, { signal: ac.signal, toolUseID: 'c2' });
       await flush();
