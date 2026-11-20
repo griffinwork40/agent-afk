@@ -33,7 +33,7 @@ For the fastest availability check, ask the agent to call `get_runtime_state` wi
 | `wait_for` | Wait for a URL, file, PID, or command. | R, S, D |
 | `test_run` | Run a detected test suite. | R, S, D |
 | **Desktop computer-use** | | |
-| `desktop_screenshot` | Capture the host desktop display or a region. | R, S, D; requires `AFK_DESKTOP_ENABLED=1`; macOS and native Windows only |
+| `desktop_screenshot` | Capture the host desktop display or a region. Absent from tool list until operator sets `AFK_DESKTOP_ENABLED`. | R, S, D; macOS supported; native Windows not yet verified (Step 0W pending) |
 | **Browser and web** | | |
 | `browser_open` | Open a managed browser tab. | R, S, D |
 | `browser_observe` | Read the current page state. | R, S, D |
@@ -414,31 +414,31 @@ No parameters.
 
 ## Desktop computer-use
 
-Desktop tools capture and control the host machine's graphical desktop. They are **off by default** and require `AFK_DESKTOP_ENABLED=1`.
+Desktop tools capture and control the host machine's graphical desktop. They are **off by default** and absent from the model's tool list until the operator sets `AFK_DESKTOP_ENABLED`. When disabled, `desktop_screenshot` is not offered to the model at all (not just refused at call time).
 
 **Supported platforms (Tranche 1):**
 - **macOS** — uses the system `screencapture` binary. The process responsible for the terminal session must hold Screen Recording permission (System Settings → Privacy & Security → Screen Recording). Grant it once; no permission is automated.
-- **Windows (native only, UNVERIFIED — Step 0W pending)** — uses a PowerShell/.NET child process. WSL2 is not supported. Whether Windows daemon/service contexts can reach the interactive desktop is unknown until Step 0W.
+- **Windows (native only, NOT YET VERIFIED — Step 0W pending)** — uses a PowerShell/.NET child process. WSL2 is not supported. Whether Windows daemon/service contexts can reach the interactive desktop is unknown until Step 0W produces a written verdict.
 - **Linux** — not supported in v1.
 
 Desktop tools are **excluded from forked child agents** (integration-risk I1). Any delegation of desktop capability must be explicit and single-owner.
 
 ### `desktop_screenshot`
 
-Capture a PNG screenshot of the host desktop and return it as a viewable image. The PNG is also written as a sidecar under `~/.afk/state/witness/<sessionId>/desktop/screenshots/`.
+Capture a PNG screenshot of the host desktop and return it as a viewable image. The PNG is also written as a sidecar under `~/.afk/state/witness/<sessionId>/desktop/screenshots/` with mode `0600` (owner-only).
 
-The result text is `{ path, bytes, width, height, scaleFactor, displayIndex, logicalWidth, logicalHeight }` — the scale factor and logical dimensions are reported for coordinate-space transparency so later tranches can map logical→physical pixels.
+The result text is `{ path, bytes, width, height, scaleFactor, displayIndex, logicalWidth, logicalHeight }` — the scale factor (or `null` when it cannot be determined) and logical dimensions are reported for coordinate-space transparency so later tranches can map logical→physical pixels.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `display` | number | | Zero-based display index. 0 = primary display. Default: 0. |
+| `display` | integer | | Zero-based display index (0–255). 0 = primary display. Default: 0. |
 | `region` | object | | Partial capture in logical pixels. When omitted, the full display is captured. |
-| `region.x` | number | (when region set) | Left edge in logical pixels. |
-| `region.y` | number | (when region set) | Top edge in logical pixels. |
-| `region.width` | number | (when region set) | Width in logical pixels (must be positive). |
-| `region.height` | number | (when region set) | Height in logical pixels (must be positive). |
+| `region.x` | integer | (when region set) | Left edge in logical pixels (non-negative). |
+| `region.y` | integer | (when region set) | Top edge in logical pixels (non-negative). |
+| `region.width` | integer | (when region set) | Width in logical pixels (positive, max 32768). |
+| `region.height` | integer | (when region set) | Height in logical pixels (positive, max 32768). |
 
-Images exceeding 8000 px per side are saved to the sidecar path but not attached to the tool result (the same limit as `browser_screenshot`). Use `region` to capture a smaller area.
+Images exceeding 8000 px per side or 2 MiB base64 are automatically downscaled before attachment (using `sips` on macOS, PowerShell System.Drawing on Windows). The full-resolution PNG is always preserved as the sidecar. The result reports both the captured dimensions and the attached dimensions when downscaling occurred, plus the ratio between them (for coordinate mapping). If downscaling fails, a text-only result is returned that names the sidecar path.
 
 ---
 
