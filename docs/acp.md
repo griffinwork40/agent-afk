@@ -81,7 +81,11 @@ on the host running AFK, outside ACP. There is no authentication flow.
 ### Create a session
 
 `session/new` takes required `cwd` and `mcpServers`. `cwd` must be an absolute
-path to an existing directory at or below the server's launch directory.
+path to an existing directory. It can be anywhere: it does not have to be the
+directory `afk acp` was started from, so a client may launch AFK from any
+directory and name the project per session. Symbolic links in `cwd` are resolved
+once. The session directory is not a sandbox; the approval policy below protects
+the session.
 `mcpServers` is an array of stdio MCP entries, each with `name`, `command`
 (absolute path), `args`, and `env`. HTTP and SSE entries are rejected. An empty
 array is valid.
@@ -242,6 +246,12 @@ Asking to run a delegation tool is still asked as usual. The title no longer
 claims the subagent will act without further prompts, because in-process
 children are asked per tool call.
 
+A subagent given its own working directory has its relative paths checked
+against that directory, and it is asked when they leave the session `cwd`.
+Where the subagent's directory is not known yet (a worktree-isolated `compose`
+node), any of its calls that use a relative path or no path are asked once a
+delegation to another directory has been allowed.
+
 ## Permissions
 
 Approvals are on by default. The server sends `session/request_permission`
@@ -253,6 +263,8 @@ requires consent.
 | Read and search tools targeting a path inside `cwd` | Auto-allow |
 | Read and search tools with no filesystem path (memory, state, session listings, etc.) | Auto-allow |
 | Read and search tools targeting a path outside `cwd` | Ask, with absolute path shown |
+| `git_read` that can print file content from outside `cwd` (a revision such as `HEAD:../other/file` or an object id, patches from `show`, `diff` or `log -p` with no path inside `cwd`, `cat-file -p`) | Ask |
+| `git_read` metadata (status, branch and tag names, commit subjects, stats, file names) or content limited to paths inside `cwd` | Auto-allow |
 | `worktree` with action `list` | Auto-allow |
 | Write tools, `bash`, `test_run`, web tools, delegation tools, MCP tools, unknown tools | Ask |
 | `--dangerously-skip-permissions` | Skip the bridge entirely |
@@ -358,9 +370,17 @@ terminal `tool_call` entries. Historical tools are never re-executed.
 `session/resume` restores without replay and returns `{}`. `mcpServers` is
 optional on resume; omitting it is equivalent to an empty array.
 
-Both methods return `{"code":-32002,"message":"Resource not found"}` for unknown
-session ids, and `{"code":-32600,"message":"Invalid request"}` if the session is
-already active.
+Both methods return `{"code":-32002,"message":"Resource not found","data":{"sessionId":"<id>"}}`
+for unknown session ids.
+
+A session that is already open and idle on this connection can be loaded or
+resumed without closing it first. AFK keeps the open session (its grants, MCP
+servers and conversation): `session/load` replays its history again before
+replying, and `session/resume` replies with no replay. Reopening with a
+different `cwd` or `mcpServers` list is invalid params. If a prompt is running,
+or the session is closing or already replaying, the request is refused with
+`{"code":-32600,"message":"Invalid request"}`; a running prompt is never
+cancelled by it.
 
 ## Version negotiation
 
@@ -381,10 +401,10 @@ is invalid params (from `bad-version-negotiation.ndjson`):
 | Code | Meaning |
 |---|---|
 | `-32700` | Parse error (malformed JSON or invalid UTF-8) |
-| `-32600` | Invalid request (bad envelope, line exceeds 1 MiB, duplicate initialize, session method before initialize, duplicate active prompt) |
+| `-32600` | Invalid request (bad envelope, line exceeds 1 MiB, duplicate initialize, session method before initialize, duplicate active prompt, load or resume while a prompt is running) |
 | `-32601` | Method not found |
 | `-32602` | Invalid params (bad cwd, unsupported block type, unsupported MCP transport, nonempty additional roots, non-null system prompt) |
-| `-32002` | Resource not found (unknown session id) |
+| `-32002` | Resource not found (unknown or closed session id); `data.sessionId` repeats the id from the request |
 | `-32603` | Internal error (provider or session failure; details logged to stderr only) |
 
 There is no `-32001` cancellation error. Cancellation produces a successful
@@ -395,7 +415,11 @@ response with `stopReason: "cancelled"`.
 One JSON object per line. Stdout carries protocol frames only; diagnostics go to
 stderr. Lines over 1,048,576 bytes are discarded and reported as invalid requests.
 Empty lines are ignored. Invalid UTF-8 and invalid JSON are parse errors. EOF
-cancels and releases every live session.
+cancels and releases every live session, then the process exits. Sessions close
+concurrently; each session close is given up to 10 seconds and each MCP server
+disconnect up to 2 seconds, so a hung server cannot keep the process alive. A
+normal shutdown, including sealing each session's journal and trace, takes well
+under a second.
 
 ## Connecting a client
 
