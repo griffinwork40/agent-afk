@@ -544,15 +544,18 @@ describe('registerDaemonCrashHandlers', () => {
   });
 
   afterEach(() => {
-    expect(exitSpy).not.toHaveBeenCalled();
-    vi.clearAllTimers();
-    exitSpy.mockRestore();
-    vi.useRealTimers();
-    // Remove listeners added by registerDaemonCrashHandlers to keep process clean.
-    process.removeAllListeners('uncaughtException');
-    process.removeAllListeners('unhandledRejection');
-    _resetDaemonCrashHandlersForTest();
-    process.exitCode = undefined;
+    try {
+      expect(exitSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      exitSpy.mockRestore();
+      vi.useRealTimers();
+      // Remove listeners added by registerDaemonCrashHandlers to keep process clean.
+      process.removeAllListeners('uncaughtException');
+      process.removeAllListeners('unhandledRejection');
+      _resetDaemonCrashHandlersForTest();
+      process.exitCode = undefined;
+    }
   });
 
   it('push includes error text without in-flight tasks when none provided', () => {

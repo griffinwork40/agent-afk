@@ -235,12 +235,13 @@ describe('traceToOtlp', () => {
   // A seal-only trace where finalTurnCount is absent must emit gen_ai.usage.cost_usd
   // but must NOT emit afk.session.turn_count.
   it('seal-only with cost but no finalTurnCount: emits cost_usd, omits turn_count (#5050)', () => {
-    // Cast through unknown: finalTurnCount is intentionally absent to exercise
-    // the sealTurns===undefined branch in rootSplit (cost.ts:308).
-    const sealEvent = {
+    // finalTurnCount is intentionally absent to exercise the sealTurns===undefined
+    // branch in rootSplit (cost.ts:308). Cast lets ev() absorb the incomplete
+    // payload the same way the original double-cast did.
+    const sealEvent = ev({
       ts: '2026-01-01T00:00:01.000Z', seq: 0, kind: 'session_sealed',
       payload: { status: 'succeeded', finalCostUsd: 1.75, closedAt: '2026-01-01T00:00:01.000Z' },
-    } as unknown as TraceEvent;
+    } as unknown as EventObj);
     const [root] = allSpans(traceToOtlp([sealEvent], { sessionId: SESSION_ID }));
     expect(attr(root!, 'gen_ai.usage.cost_usd')).toBe(1.75);
     expect(attr(root!, 'afk.session.turn_count')).toBeUndefined();

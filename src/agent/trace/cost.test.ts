@@ -189,13 +189,13 @@ describe('computeSessionCost', () => {
   // NOT emit rootTurnCount — the conditional spread `...(sealTurns !== undefined
   // ? { turns: sealTurns } : {})` in rootSplit is the guard under test.
   it('seal-only with no finalTurnCount: emits rootCostUsd but omits rootTurnCount (#5050)', () => {
-    const sealNoCostNoTurns: CostEventLike = {
+    const sealCostNoTurns: CostEventLike = {
       kind: 'session_sealed',
       payload: { status: 'succeeded', finalCostUsd: 2.5, closedAt: ts },
       // Note: finalTurnCount intentionally absent
     };
     const acc = new SessionCostAccumulator();
-    acc.add(sealNoCostNoTurns);
+    acc.add(sealCostNoTurns);
     const r = acc.result();
     expect(r.rootCostUsd).toBe(2.5);
     expect(r.subagentCostUsd).toBe(0);
