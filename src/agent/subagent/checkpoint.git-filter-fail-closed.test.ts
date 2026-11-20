@@ -12,8 +12,8 @@ import {
   captureCheckpointWithin,
   type CheckpointEnumDrivers,
   type CheckpointGitExec,
-} from '../../agent/subagent/continuation-guards.js';
-import type { FilterDriverParse } from '../../agent/tools/handlers/git-read.exec-guard.js';
+} from './continuation-guards.js';
+import type { FilterDriverParse } from '../tools/handlers/git-read.exec-guard.js';
 
 const CWD = '/workspace/session';
 
