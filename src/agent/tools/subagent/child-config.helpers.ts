@@ -13,6 +13,7 @@ import { composeUnnamedWorkerPrompt } from '../system-prompt.js';
 import { isChildReplaySafe } from './retry-safety.js';
 import { isChildWriteCapable } from './write-capability.js';
 import { SubagentManager } from '../../subagent.js';
+import { agentChildOrigin } from '../nesting.can-use-tool.js';
 import type { RegisteredAgent, AgentRegistry } from '../../agents/index.js';
 import type { AgentDefinition } from '../../types/sdk-types.js';
 import type { IAgentSession } from '../../types.js';
@@ -252,6 +253,7 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
       ...(childConfig.customTools !== undefined && childConfig.customTools.length > 0
         ? { customTools: childConfig.customTools }
         : {}),
+      origin: agentChildOrigin(depth + 1, args.namedAgent?.name, args.parsed.id_prefix), // surface gate label
     });
     childConfig.provider = rebuildProvider(String(childConfig.model));
 

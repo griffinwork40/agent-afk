@@ -12,6 +12,7 @@
  */
 
 import { SubagentManager } from '../../subagent.js';
+import { skillChildOrigin } from '../nesting.can-use-tool.js';
 import { resolveChildManagerReadRoots } from '../../subagent-read-scope.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import {
@@ -297,7 +298,7 @@ export function buildForkedChildConfig(
     ...(childSkillExecutor !== undefined ? { childSkillExecutor } : {}),
     ...(childConfig.model !== undefined ? { model: childConfig.model } : {}),
     ...(effectiveAllowed !== undefined ? { allowedTools: effectiveAllowed } : {}),
-    ...(effectiveReadOnlyBash ? { readOnlyBash: true } : {}),
+    ...(effectiveReadOnlyBash ? { readOnlyBash: true } : {}), origin: skillChildOrigin(depth + 1, baseConfig.skillDispatchName),
   });
 
   return { childConfig, childManager };
