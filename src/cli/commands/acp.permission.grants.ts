@@ -8,6 +8,7 @@
  */
 import path from 'node:path';
 import { driveless, isContained, type PathFlavor } from './acp.permission.paths.js';
+import { sensitiveMarkers } from './acp.permission.sensitive.js';
 
 // Contract: each entry was written from the tool's real handler, not its name.
 //  - write_file (handlers/write-file.ts parseWriteFileInput, resolveAndContain):
@@ -75,7 +76,8 @@ function insideLocation(raw: unknown, base: string, root: string, p: PathFlavor)
 /**
  * True when a remembered grant for this tool may cover this exact call (and when
  * this call may be offered "Always allow"): the tool is listed, every argument
- * is known, and every location resolves inside `cwd`. Any doubt is false.
+ * is known, every location resolves inside `cwd`, and no location is a
+ * sensitive target (acp.permission.sensitive). Any doubt is false.
  */
 export function grantFits(
   toolName: string, input: Record<string, unknown>, cwd: string | undefined, callerCwd?: string,
@@ -90,5 +92,7 @@ export function grantFits(
   if (locations === undefined) return false;
   const root = p.resolve(cwd);
   const base = callerCwd === undefined ? root : p.resolve(callerCwd);
-  return locations.every((raw) => insideLocation(raw, base, root, p));
+  if (!locations.every((raw) => insideLocation(raw, base, root, p))) return false;
+  // Git internals and project config that runs commands are asked every time.
+  return sensitiveMarkers(toolName, input, base, p).length === 0;
 }

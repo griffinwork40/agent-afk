@@ -1,5 +1,5 @@
 /**
- * Red team round 2, finding 2: a remembered "Always allow write_file" (the
+ * Regression for profile section 6 (sensitive targets). Red team round 2, finding 2: a remembered "Always allow write_file" (the
  * only grant shape D18 permits for write_file) lets the model write both
  * `.git/config` and `.gitattributes` when the session cwd is the repository
  * root—both are lexically inside the cwd, so the grant covers them without
@@ -52,7 +52,7 @@ afterAll(() => {
   fs.rmSync(marker, { force: true });
 });
 
-describe('redteam2: write_file grant covers .git/config — clean filter RCE', () => {
+describe('sensitive targets: a write_file grant never covers git internals (clean filter RCE)', () => {
   it('grantFits must NOT cover .git/config, .gitattributes, or .git/hooks/*', () => {
     // Root of the vulnerability: grantFits calls insideLocation which uses
     // path.resolve + isContained — purely lexical. .git/config is inside cwd,
@@ -76,9 +76,14 @@ describe('redteam2: write_file grant covers .git/config — clean filter RCE', (
   });
 
   it('a granted write to .git/config + .gitattributes, then auto-allowed git_read blame, runs a shell command unasked', async () => {
-    const asks: { resolve(v: unknown): void }[] = [];
+    const asks: { resolve(v: unknown): void; params: unknown }[] = [];
     const peer: AcpClientPeer = {
-      request: (_m, _params) => new Promise((resolve) => { asks.push({ resolve }); }),
+      // The human answers the first question "always allow"; any later question is
+      // rejected (the human refuses to approve a git-internals write).
+      request: (_m, params) => new Promise((resolve) => {
+        asks.push({ resolve, params });
+        if (asks.length > 1) resolve({ outcome: { outcome: 'selected', optionId: 'reject_once' } });
+      }),
       notify: () => Promise.resolve(),
     };
     const gate = createAcpPermissionGate(peer, 'sid', {
@@ -122,6 +127,10 @@ describe('redteam2: write_file grant covers .git/config — clean filter RCE', (
     }
 
     const ran = fs.existsSync(marker);
+    // The .git/config write was asked again, without an "always allow" option.
+    const second = asks[1]?.params as { options?: { optionId: string }[]; toolCall?: { title?: string } } | undefined;
+    expect(second?.options?.map((o) => o.optionId)).toEqual(['allow_once', 'reject_once']);
+    expect(second?.toolCall?.title).toContain('(git internals)');
     // SAFE: either .git/config was asked (v2 ≠ allow), or code did not run.
     // FAILS on 0a045c5d6: v2===allow, v3===allow, ran===true, asks.length===1.
     expect(
