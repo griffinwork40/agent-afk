@@ -2,8 +2,7 @@ import { hiddenArchivedRows } from './terminal-compositor.archived-reveal.js';
 import type { CommittedBandHost } from './terminal-compositor.committed-band-commit.js';
 import type { CommitGeometry } from './terminal-compositor.commit-geometry.js';
 import type { CommitRoute } from './terminal-compositor.commit-route.js';
-import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
-import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
+import { eraseAndPaintRow, paintRowText } from './terminal-compositor.scrollback.js';
 import { clearCommittedBand } from './terminal-compositor.committed-band-commit.js';
 import { compositorBand } from './terminal-compositor.content-band.js';
 import { retainedArchivedPrefix } from './terminal-compositor.band-archived-prefix.js';
@@ -154,8 +153,11 @@ export function commitPhase3Band(
       for (let i = 0; i < painted.length; i++) {
         const row = bandTop + i;
         if (row >= newTopRow) break; // Never overwrite the live frame.
-        const line = pad && painted[i] !== '' ? pad + painted[i] : painted[i];
-        out += eraseAndPaintRow(row, line);
+        const cell = painted[i] ?? '';
+        const line = pad && cell !== '' ? pad + cell : cell;
+        // Change 2 (#4908): paint text before erasing trailing content so the
+        // intermediate state is never a blank row.
+        out += paintRowText(row, line);
       }
     } else {
       // Overflow (block taller than the above-frame region): Phase 1 already
@@ -175,14 +177,18 @@ export function commitPhase3Band(
       for (let i = startIdx; i < textLines.length; i++) {
         const row = anchorFloor + (i - startIdx);
         if (row >= newTopRow) break;
-        const line = pad && textLines[i] !== '' ? pad + textLines[i] : textLines[i];
-        out += eraseAndPaintRow(row, line);
+        const cell = textLines[i] ?? '';
+        const line = pad && cell !== '' ? pad + cell : cell;
+        // Change 2 (#4908): paint text before erasing trailing content.
+        out += paintRowText(row, line);
       }
     }
     if (out.length > 0) {
-      writeWithScrollGuard(self, () => {
-        self.stdout.write(out);
-      });
+      // Phase 3 paints exclusively via CUP+EL — no \n — so it never triggers
+      // the DECSTBM scroll region. The scroll guard is a no-op here and adds
+      // two extra DECSTBM reset/re-arm sequences inside the commit transaction,
+      // creating intermediate blank states visible to tmux 3.6a. Write directly.
+      self.stdout.write(out);
     }
     self.committedBandArchivedPrefix = retainedArchivedPrefix(self, contiguousPriorBand, run.length - capped.length);
     self.committedBand = capped;

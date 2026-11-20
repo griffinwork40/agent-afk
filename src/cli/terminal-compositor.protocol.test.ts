@@ -103,14 +103,15 @@ describe('TerminalCompositor — protocol invariants', () => {
       // immediately, regardless of how the inner write is shaped.
       expect(scrollRegion.withFullScrollRegion).toHaveBeenCalled();
       // Content reaches stdout. Armed-path commitAbove (CommittedBand.commitAbove)
-      // positions the cursor at the row above the frame and erases the line
-      // before writing the block, so the committed text appears as
-      // `CUP-to-row → EL (\x1b[2K) → text`. We pin that exact positioned
+      // positions the cursor at the row above the frame and writes the block,
+      // then erases trailing content via EL (\x1b[K — erase to end of line).
+      // Phase 3 uses paintRowText (CUP → text → EL) so the intermediate state
+      // is never a blank row (#4908 change 2). We pin that exact positioned
       // shape rather than a bare substring so the test fails if the block
       // ever stops being placed via the centralized cursor-positioned write.
       const out = writes.all();
       expect(out).toContain('COMMITTED_BLOCK');
-      expect(out).toMatch(/\x1b\[\d+;1H\x1b\[2KCOMMITTED_BLOCK/);
+      expect(out).toMatch(/\x1b\[\d+;1HCOMMITTED_BLOCK\x1b\[K/);
     });
 
     it('routes the banner-scroll newline through withFullScrollRegion (anchorRow > 1, first commit)', async () => {
@@ -174,12 +175,12 @@ describe('TerminalCompositor — protocol invariants', () => {
       writes.clear();
       c.commitAbove('NO_GUARD_BLOCK');
       // Same positioned emission shape as the guarded path — armed
-      // commitAbove writes `CUP-to-row → EL (\x1b[2K) → text`. The only
-      // difference from the guarded case is that withFullScrollRegion is
-      // never invoked (asserted implicitly: no scrollRegion was provided).
+      // commitAbove writes `CUP-to-row → text → EL (\x1b[K)` (#4908 change 2).
+      // The only difference from the guarded case is that withFullScrollRegion
+      // is never invoked (asserted implicitly: no scrollRegion was provided).
       const out = writes.all();
       expect(out).toContain('NO_GUARD_BLOCK');
-      expect(out).toMatch(/\x1b\[\d+;1H\x1b\[2KNO_GUARD_BLOCK/);
+      expect(out).toMatch(/\x1b\[\d+;1HNO_GUARD_BLOCK\x1b\[K/);
     });
   });
 
