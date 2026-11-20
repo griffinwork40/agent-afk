@@ -1,21 +1,18 @@
 /**
  * Shift+Tab permission-mode cycle for the REPL.
  *
- * `cyclePermissionMode` advances the session through a fixed ring of three
- * permission modes — `default → plan → bypassPermissions → default` — one step
- * per Shift+Tab press. It is the keyboard speed-lane that replaces the historical
- * Shift+Tab plan-toggle: instead of flipping `plan ↔ default`, it walks the ring.
- * Both onShiftTab handlers (the persistent compositor in `surface-setup.ts` and
- * the readLine fallback in `loop-iteration.ts`) call this.
+ * `cyclePermissionMode` advances the session through a two-stop ring:
+ * `plan ↔ bypassPermissions`. `default` has been removed — `bypassPermissions`
+ * is the baseline mode. Both onShiftTab handlers (the persistent compositor in
+ * `surface-setup.ts` and the readLine fallback in `loop-iteration.ts`) call this.
  *
- * Contract: `plan`/`bypass`/`default` transitions are pure `setPermissionMode`
- * flips. The plan-mode gate and the bypass allow-all are keyed off
- * `permissionMode` alone with no enter/exit machinery, so the ring sets the mode
- * directly, mirrors `stats.permissionMode` (the value the prompt + status line +
- * gate getters read), repaints, and emits per-mode copy. On a `setPermissionMode`
- * rejection (provider query handle closing/torn down) `stats.permissionMode` is
- * left unchanged and the error is surfaced — mirroring `togglePlanMode`'s
- * failure contract.
+ * Contract: `plan`/`bypass` transitions are pure `setPermissionMode` flips. The
+ * plan-mode gate and the bypass allow-all are keyed off `permissionMode` alone
+ * with no enter/exit machinery, so the ring sets the mode directly, mirrors
+ * `stats.permissionMode` (the value the prompt + status line + gate getters read),
+ * repaints, and emits per-mode copy. On a `setPermissionMode` rejection (provider
+ * query handle closing/torn down) `stats.permissionMode` is left unchanged and
+ * the error is surfaced — mirroring `togglePlanMode`'s failure contract.
  */
 
 import { palette } from './palette.js';
@@ -23,11 +20,10 @@ import type { SlashContext } from './slash/types.js';
 import { errorMessage } from '../utils/errors.js';
 
 /**
- * The Shift+Tab ring. Order is load-bearing: `default → plan` preserves the
- * historical "first press from the prompt enters plan" muscle memory, and the
- * wrap `bypassPermissions → default` keeps the cycle forward-only.
+ * The Shift+Tab ring. The ring is a two-stop toggle: `bypassPermissions ↔ plan`.
+ * `default` has been removed — `bypassPermissions` is now the baseline mode.
  */
-export const PERMISSION_CYCLE = ['default', 'plan', 'bypassPermissions'] as const;
+export const PERMISSION_CYCLE = ['plan', 'bypassPermissions'] as const;
 
 type CycleMode = (typeof PERMISSION_CYCLE)[number];
 
@@ -46,9 +42,6 @@ export function cycleCopy(mode: CycleMode): string {
           ' — path-approval prompts + containment OFF; read/write any path. ' +
             '(Does not affect ask_question.)',
         );
-    case 'default':
-      return palette.success('○ default') +
-        palette.dim(' — path containment + approval prompts restored.');
   }
 }
 
@@ -73,9 +66,9 @@ export async function cyclePermissionMode(ctx: SlashContext): Promise<void> {
   const cur = ctx.stats.permissionMode;
 
   const idx = PERMISSION_CYCLE.indexOf(cur as CycleMode);
-  // idx === -1 for any out-of-ring mode (acceptEdits/dontAsk/auto) → (−1+1)=0 →
-  // start at `default`. The modulo wraps `bypassPermissions` (last) → `default`.
-  const next = PERMISSION_CYCLE[(idx + 1) % PERMISSION_CYCLE.length] ?? 'default';
+  // idx === -1 for any out-of-ring mode (acceptEdits/dontAsk/auto/default) → (−1+1)=0 →
+  // start at `plan`. The modulo wraps `bypassPermissions` (last) → `plan`.
+  const next = PERMISSION_CYCLE[(idx + 1) % PERMISSION_CYCLE.length] ?? 'bypassPermissions';
 
   try {
     await ctx.session.current.setPermissionMode(next);

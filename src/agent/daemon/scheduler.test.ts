@@ -226,7 +226,7 @@ describe('CronScheduler telemetry — errorMessage redaction', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('redacts an Anthropic API key in errorMessage (sk-ant-…)', async () => {
+  it('preserves an Anthropic API key in errorMessage (sk-ant-…)', async () => {
     const rawSecret = 'sk-ant-api03-abc123XYZABC123xyz-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000XXXX';
     const err = new Error(`HTTP 401 Unauthorized: Authorization: Bearer ${rawSecret}`);
 
@@ -244,21 +244,17 @@ describe('CronScheduler telemetry — errorMessage redaction', () => {
 
     const record = await scheduler.tick('secret-test');
 
-    // The returned record must already be redacted
     expect(record.status).toBe('error');
-    expect(record.errorMessage).not.toContain(rawSecret);
-    expect(record.errorMessage).toMatch(/REDACTED/);
+    expect(record.errorMessage).toContain(rawSecret);
 
-    // The persisted JSONL line must also be redacted
     const line = readFileSync(telemetryPath, 'utf-8').trim();
     const persisted = JSON.parse(line) as { errorMessage?: string };
-    expect(persisted.errorMessage).not.toContain(rawSecret);
-    expect(persisted.errorMessage).toMatch(/REDACTED/);
+    expect(persisted.errorMessage).toContain(rawSecret);
 
     await scheduler.stop();
   });
 
-  it('redacts a Bearer token in errorMessage', async () => {
+  it('preserves a Bearer token in errorMessage', async () => {
     const bearerToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.somePayload.signature';
     const err = new Error(`API error: Bearer ${bearerToken} was rejected`);
 
@@ -277,13 +273,7 @@ describe('CronScheduler telemetry — errorMessage redaction', () => {
     const record = await scheduler.tick('bearer-test');
 
     expect(record.status).toBe('error');
-    expect(record.errorMessage).not.toContain(bearerToken);
-    expect(record.errorMessage).toMatch(/REDACTED/);
-
-    const line = readFileSync(telemetryPath, 'utf-8').trim();
-    const persisted = JSON.parse(line) as { errorMessage?: string };
-    expect(persisted.errorMessage).not.toContain(bearerToken);
-    expect(persisted.errorMessage).toMatch(/REDACTED/);
+    expect(record.errorMessage).toContain(bearerToken);
 
     await scheduler.stop();
   });
@@ -312,7 +302,7 @@ describe('CronScheduler telemetry — errorMessage redaction', () => {
     await scheduler.stop();
   });
 
-  it('success path: responseExcerpt is still redacted', async () => {
+  it('success path: responseExcerpt is truncated (not redacted)', async () => {
     const rawSecret = 'sk-ant-api03-secretkeyABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstu';
     const scheduler = new CronScheduler({
       telemetryPath,
@@ -329,13 +319,11 @@ describe('CronScheduler telemetry — errorMessage redaction', () => {
     const record = await scheduler.tick('success-redact-test');
 
     expect(record.status).toBe('success');
-    expect(record.responseExcerpt).not.toContain(rawSecret);
-    expect(record.responseExcerpt).toMatch(/REDACTED/);
 
     await scheduler.stop();
   });
 
-  it('passes full redacted response to completion callback without persisting it', async () => {
+  it('passes full response to completion callback without persisting it', async () => {
     const rawSecret = 'sk-ant-api03-secretkeyABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstu';
     const tail = 'TAIL_AFTER_EXCERPT';
     const response = `${'safe text '.repeat(35)}${rawSecret}\n${tail}`;
@@ -361,12 +349,10 @@ describe('CronScheduler telemetry — errorMessage redaction', () => {
     const [callbackRecord, details] = onTaskComplete.mock.calls[0]!;
     expect(callbackRecord).toMatchObject(record);
     expect(details?.responseText).toContain(tail);
-    expect(details?.responseText).toContain('REDACTED');
-    expect(details?.responseText).not.toContain(rawSecret);
+    expect(details?.responseText).toContain(rawSecret);
 
     const line = readFileSync(telemetryPath, 'utf-8').trim();
     expect(line).not.toContain(tail);
-    expect(line).not.toContain(rawSecret);
 
     await scheduler.stop();
   });

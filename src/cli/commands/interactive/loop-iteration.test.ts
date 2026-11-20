@@ -148,7 +148,7 @@ function makeCtx(overrides?: Partial<InteractiveCtx>): InteractiveCtx {
     stats: {
       totalTurns: 0,
       model: 'sonnet',
-      permissionMode: 'default',
+      permissionMode: 'bypassPermissions',
       sessionId: 'mock',
     },
     statusLine: {
@@ -162,7 +162,7 @@ function makeCtx(overrides?: Partial<InteractiveCtx>): InteractiveCtx {
     gitStatusSampler: { refresh: vi.fn(async () => {}), setOnUpdate: vi.fn(), getBranch: () => undefined, getPr: () => undefined },
     completionWriter: { fn: vi.fn(), idleFn: vi.fn() },
     replRenderer: { writeLine: vi.fn(), setCompositor: vi.fn() },
-    slashCtx: { stats: { permissionMode: 'default' } },
+    slashCtx: { stats: { permissionMode: 'bypassPermissions' } },
     rl: { close: vi.fn() },
     options: { thinkingUi: undefined },
     inputSurfaceRef: { current: null },

@@ -111,7 +111,7 @@ async function harness() {
 
   const ctx = {
     options: { maxTurns: '10' },
-    stats: { permissionMode: 'default' },
+    stats: { permissionMode: 'bypassPermissions' },
     session: {
       current: {
         waitForInitialization: async () => ({}),

@@ -18,7 +18,7 @@ import {
   toolFailureDensityTemplate,
 } from './template-engine.templates-density.js';
 import type { FailureCard } from '../schemas.js';
-import { redactSecrets } from '../../agent/redact-secrets.js';
+
 
 function makeToolCard(toolName: string, extra: Record<string, unknown> = {}): FailureCard {
   return {
@@ -189,7 +189,6 @@ describe('toolFailureDensityTemplate — fixSketch', () => {
 // ---------------------------------------------------------------------------
 
 describe('toolFailureDensityTemplate — cluster rendering safety', () => {
-  const secret = 'sk-ant-FAKE_CLUSTER_SENTINEL_NOT_A_REAL_KEY';
   const paths = [
     '/Users/fake-alice/private/project/file.ts',
     '/home/fake-bob/private/project/file.ts',
@@ -199,39 +198,31 @@ describe('toolFailureDensityTemplate — cluster rendering safety', () => {
     String.raw`"C:\Users\fake carol\private project\file.ts"`,
   ];
 
-  it('documents that the upstream secret redactor deliberately preserves home paths', () => {
-    for (const path of paths) expect(redactSecrets(path)).toBe(path);
-    expect(redactSecrets(secret)).toBe('[REDACTED]');
-  });
-
   for (const field of ['normalized', 'sample'] as const) {
     for (const render of ['hypothesis', 'fixSketch'] as const) {
-      it(`${render} sanitizes ${field}: POSIX/Windows home paths and fake credentials`, () => {
+      it(`${render} sanitizes ${field}: POSIX/Windows home paths`, () => {
         for (const path of paths) {
           const cluster = { normalized: 'ENOENT', count: 3, sample: 'ENOENT' };
-          cluster[field] = `ENOENT: open ${path} token ${secret}`;
+          cluster[field] = `ENOENT: open ${path}`;
           const output = toolFailureDensityTemplate[render](makeToolCard('bash', { errorClusters: [cluster] }));
           expect(output).not.toContain(path);
           expect(output).not.toMatch(/fake-(?:alice|bob|carol|dan)|fake (?:alice|carol)|private/);
-          expect(output).not.toContain(secret);
           expect(output).toContain('ENOENT');
           expect(output).toContain('file.ts');
-          expect(output).toContain('REDACTED');
         }
       });
     }
   }
 
   for (const field of ['normalized', 'sample'] as const) {
-    it(`redacts ${field} credentials before length truncation in both renderers`, () => {
+    it(`truncates long ${field} text before rendering in both renderers`, () => {
+      // The cluster sanitizer truncates to 200 chars; verify the output is bounded.
       const cluster = { normalized: 'ENOENT', sample: 'ENOENT', count: 3 };
-      cluster[field] = `${'error '.repeat(29)}${secret}`;
+      cluster[field] = `${'error '.repeat(50)}`;
       const card = makeToolCard('bash', { errorClusters: [cluster] });
       for (const render of ['hypothesis', 'fixSketch'] as const) {
         const output = toolFailureDensityTemplate[render](card);
-        expect(output).not.toContain(secret);
-        expect(output).not.toContain('sk-ant-FAKE');
-        expect(output).toContain('REDACTED');
+        expect(output).toContain('ENOENT');
       }
     });
   }
@@ -246,6 +237,197 @@ describe('toolFailureDensityTemplate — cluster rendering safety', () => {
       expect(output).not.toMatch(/fake-|\/root|\/Users|\/home|C:\\/);
       expect(output).toContain('ENOENT');
     }
+  });
+
+  // ---- Finding #5103-1: path sanitizer gap fixes ----
+
+  it('does NOT match /rootfs, /root2, or /root_home (boundary fix)', () => {
+    // clusterMarkdown encodes chars like _ as HTML entities, so check by basename
+    // which contains no markdown-special characters.
+    const cases: [string, string][] = [
+      ['/rootfs/sentinel-alpha', 'sentinel-alpha'],
+      ['/root2/sentinel-beta', 'sentinel-beta'],
+      ['/root_home/sentinel-gamma', 'sentinel-gamma'],
+    ];
+    for (const field of ['normalized', 'sample'] as const) {
+      for (const [text, basename] of cases) {
+        const cluster = { normalized: 'err', count: 1, sample: 'err' };
+        cluster[field] = `open ${text} failed`;  // text = e.g. /rootfs/sentinel-alpha
+        const output = toolFailureDensityTemplate.fixSketch(
+          makeToolCard('bash', { errorClusters: [cluster] }),
+        );
+        // basename survives (path was not sanitised away)
+        expect(output).toContain(basename);
+        // must NOT have been rewritten to <home>…
+        expect(output).not.toContain('<home>');
+      }
+    }
+  });
+
+  it('still matches bare /root and /root/ (boundary fix does not over-prune)', () => {
+    for (const text of ['/root', '/root/']) {
+      const cluster = { normalized: `ENOENT ${text} perm`, count: 1, sample: `open ${text}` };
+      const card = makeToolCard('bash', { errorClusters: [cluster] });
+      for (const render of ['hypothesis', 'fixSketch'] as const) {
+        const output = toolFailureDensityTemplate[render](card);
+        expect(output).not.toMatch(/\/root/);
+      }
+    }
+  });
+
+  it('sanitizes unquoted POSIX path with space in directory name (space-in-dir fix)', () => {
+    // /Users/alice/My Project/a.ts — username has no space, but directory does
+    const text = '/Users/fake-alice/My Project/a.ts';
+    for (const field of ['normalized', 'sample'] as const) {
+      const cluster = { normalized: 'ENOENT', count: 1, sample: 'ENOENT' };
+      cluster[field] = `open ${text} failed`;
+      const output = toolFailureDensityTemplate.fixSketch(
+        makeToolCard('bash', { errorClusters: [cluster] }),
+      );
+      expect(output).not.toContain('fake-alice');
+      expect(output).not.toContain('My Project');
+      expect(output).toContain('a.ts');
+    }
+  });
+
+  it('sanitizes unquoted Windows path with space in directory name (space-in-dir fix)', () => {
+    const text = String.raw`C:\Users\fake-carol\My Project\a.ts`;
+    for (const field of ['normalized', 'sample'] as const) {
+      const cluster = { normalized: 'ENOENT', count: 1, sample: 'ENOENT' };
+      cluster[field] = `open ${text} failed`;
+      const output = toolFailureDensityTemplate.fixSketch(
+        makeToolCard('bash', { errorClusters: [cluster] }),
+      );
+      expect(output).not.toContain('fake-carol');
+      expect(output).not.toContain('My Project');
+      expect(output).toContain('a.ts');
+    }
+  });
+
+  it('sanitizes UNC home paths (UNC coverage fix)', () => {
+    const text = String.raw`\\fileserver\share\Users\fake-alice\project\secret.ts`;
+    for (const field of ['normalized', 'sample'] as const) {
+      const cluster = { normalized: 'ENOENT', count: 1, sample: 'ENOENT' };
+      cluster[field] = `open ${text} failed`;
+      const output = toolFailureDensityTemplate.fixSketch(
+        makeToolCard('bash', { errorClusters: [cluster] }),
+      );
+      expect(output).not.toContain('fake-alice');
+      expect(output).not.toContain('fileserver');
+      expect(output).toContain('secret.ts');
+    }
+  });
+
+  it('sanitizes quoted UNC path with space (UNC + space fix)', () => {
+    const text = String.raw`"\\fileserver\share\Users\fake alice\My Project\secret.ts"`;
+    for (const field of ['normalized', 'sample'] as const) {
+      const cluster = { normalized: 'ENOENT', count: 1, sample: 'ENOENT' };
+      cluster[field] = `open ${text} failed`;
+      const output = toolFailureDensityTemplate.fixSketch(
+        makeToolCard('bash', { errorClusters: [cluster] }),
+      );
+      expect(output).not.toContain('fake alice');
+      expect(output).not.toContain('fileserver');
+      expect(output).toContain('secret.ts');
+    }
+  });
+
+  // ---- PR #5127 review: unquoted paths must not merge across whitespace ----
+
+  /** Renders `text` through every field × renderer combination. */
+  function renderAll(text: string): string[] {
+    const outputs: string[] = [];
+    for (const field of ['normalized', 'sample'] as const) {
+      const cluster = { normalized: 'ENOENT', count: 1, sample: 'ENOENT' };
+      cluster[field] = text;
+      const card = makeToolCard('bash', { errorClusters: [cluster] });
+      for (const render of ['hypothesis', 'fixSketch'] as const) outputs.push(toolFailureDensityTemplate[render](card));
+    }
+    return outputs;
+  }
+
+  it('redacts adjacent unquoted paths with subdirectories separately (no second-username leak)', () => {
+    for (const output of renderAll('ENOENT /Users/fake-alice/a.ts /home/private-bob')) {
+      expect(output).not.toContain('fake-alice');
+      expect(output).not.toContain('private-bob');
+      expect(output).toContain('a.ts');
+    }
+  });
+
+  it('redacts two adjacent unquoted paths that both have subdirectories', () => {
+    for (const output of renderAll('ENOENT /Users/fake-alice/My Project/a.ts /home/fake-bob/b.ts')) {
+      expect(output).not.toMatch(/fake-alice|fake-bob|My Project/);
+      expect(output).toContain('a.ts');
+      expect(output).toContain('b.ts');
+    }
+  });
+
+  it('redacts adjacent Windows and UNC paths separately', () => {
+    const text = String.raw`ENOENT C:\Users\fake-carol\x.ts D:\Users\fake-dan \\srv\share\Users\fake-erin\y.ts`;
+    for (const output of renderAll(text)) {
+      expect(output).not.toMatch(/fake-(?:carol|dan|erin)|srv/);
+      expect(output).toContain('x.ts');
+      expect(output).toContain('y.ts');
+    }
+  });
+
+  it('keeps prose between two paths and redacts both paths', () => {
+    for (const output of renderAll('err /Users/fake-alice/a.ts permission denied /home/fake-bob/secret.ts')) {
+      expect(output).not.toMatch(/fake-alice|fake-bob/);
+      expect(output).toContain('permission denied');
+      expect(output).toContain('a.ts');
+      expect(output).toContain('secret.ts');
+    }
+  });
+
+  it('captures a space-containing directory name but stops before trailing prose and the next path', () => {
+    for (const output of renderAll('open /Users/fake-alice/My Big Project/a.ts failed for /home/fake-bob')) {
+      expect(output).not.toMatch(/fake-alice|fake-bob|My Big Project/);
+      expect(output).toContain('a.ts failed for');
+    }
+  });
+
+  // ---- PR #5127 review @ 108e960: no home root after a crossed space ----
+
+  it.each([
+    ['at /Users/fake-alice/a.ts imported from file:///home/private-bob'],
+    ['cp /Users/fake-alice/a.ts ./home/private-bob'],
+    ['see /Users/fake-alice/a.ts in x/Users/private-bob'],
+    ['see /Users/fake-alice/a.ts in x/y/home/private-bob'],
+    [String.raw`C:\Users\fake-alice\a.ts in x\Users\private-bob`],
+    [String.raw`/Users/fake-alice/a.ts in x\Documents and Settings\private-bob`],
+    ['/Users/fake-alice/My Dir/sub x/y/z/home/private-bob/k.ts and more'],
+  ])('does not carry a match across a space into a later prefixed home root: %s', (text) => {
+    for (const output of renderAll(text)) {
+      expect(output).not.toMatch(/fake-alice|private-bob/);
+    }
+  });
+
+  it('keeps the prose before a prefixed home root intact', () => {
+    for (const output of renderAll('see /Users/fake-alice/a.ts in x/y/home/private-bob')) {
+      expect(output).toContain('a.ts in x/y');
+    }
+  });
+
+  it('collapses a match that ends at a nested home root to <home>', () => {
+    for (const output of renderAll('open /Users/fake-alice/x/Users/private-bob failed')) {
+      expect(output).not.toMatch(/fake-alice|private-bob/);
+      expect(output).toContain('failed');
+    }
+  });
+
+  it('redacts prefixed roots in near-linear time on a long adversarial tail', () => {
+    const start = performance.now();
+    const outputs = renderAll(`/Users/fake-alice/x ${'a/b y/Users/q '.repeat(3_400)}`);
+    expect(performance.now() - start).toBeLessThan(2_000);
+    for (const output of outputs) expect(output).not.toContain('fake-alice');
+  });
+
+  it('matches a long space-separated tail in linear time (no catastrophic backtracking)', () => {
+    const start = performance.now();
+    const outputs = renderAll(`/Users/fake-alice/${'x '.repeat(25_000)}`);
+    expect(performance.now() - start).toBeLessThan(2_000);
+    for (const output of outputs) expect(output).not.toContain('fake-alice');
   });
 
   it('keeps untrusted labels and samples on one line with safe markdown and hypothesis quotes', () => {

@@ -214,6 +214,10 @@ describe('turnWithUsageLimitRetry — closed-router rotation replay', () => {
     await drain(makeLayer());
 
     expect(tryClosedRouterRotateMock).toHaveBeenCalledTimes(1);
+    // The second runTurn call must have received the adopted client, proving the
+    // replay ran on the rotated credential and not the stale original.
+    const secondCallInput = runTurnMock.mock.calls[1]?.[0] as RunTurnInput;
+    expect(secondCallInput.client).toStrictEqual({ __adopted: true });
   });
 
   it('falls through to park when rotation returns rotated:false', async () => {

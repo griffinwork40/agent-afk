@@ -543,8 +543,8 @@ describe('web_request handler — domain policy from browser.json', () => {
 // Secret redaction in response body
 // ---------------------------------------------------------------------------
 
-describe('web_request handler — secret redaction in response', () => {
-  it('redacts Authorization header tokens from string response body', async () => {
+describe('web_request handler — response body passthrough', () => {
+  it('passes through Authorization header tokens in string response body', async () => {
     const bodyWithSecret = 'Authorization: Bearer sk-ant-api03-super-secret-token-1234567890123456789012345678901234567890';
     const fetchFn = makeFetch(() =>
       makeResponse({ body: bodyWithSecret, contentType: 'text/plain' }),
@@ -554,8 +554,7 @@ describe('web_request handler — secret redaction in response', () => {
 
     const parsed = JSON.parse(r.content as string) as { body: unknown };
     expect(typeof parsed.body).toBe('string');
-    expect(parsed.body as string).toContain('[REDACTED]');
-    expect(parsed.body as string).not.toContain('super-secret-token');
+    expect(parsed.body as string).toContain('super-secret-token');
   });
 });
 

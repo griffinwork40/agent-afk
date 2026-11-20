@@ -117,7 +117,7 @@ function makeMessages(): MessageParam[] {
 function makeState() {
   return createSessionState({
     model: 'claude-sonnet-4-5',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     userSystem: null,
     toolDispatcher: {} as unknown as ToolDispatcher,
     initialMessages: makeMessages(),

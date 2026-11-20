@@ -75,14 +75,14 @@ describe('exit_plan_mode handler', () => {
     // Handler must NOT call setPermissionMode — flip is deferred to drain time.
     expect(modeCalls).toEqual([]);
     // Seed carries both the message and the approved mode.
-    expect(seeds).toEqual([{ message: buildPlanExitPrompt(getProjectPlansDir(CWD)), mode: 'default' }]);
+    expect(seeds).toEqual([{ message: buildPlanExitPrompt(getProjectPlansDir(CWD)), mode: 'bypassPermissions' }]);
     expect(res.isError).toBeFalsy();
-    expect(res.content).toContain('mode=default');
+    expect(res.content).toContain('mode=bypassPermissions');
   });
 
   it('approve→bypass: defers mode to seed (no mid-turn flip) and seeds the same prompt', async () => {
-    installPicker(1); // second choice = approve/bypass
-    const { controls, modeCalls, seeds } = makeControls();
+    installPicker(1); // second choice = approve/bypass (3-choice layout: restore=plan, bypass, keep)
+    const { controls, modeCalls, seeds } = makeControls('plan');
     const handler = createExitPlanModeHandler(controls);
 
     const res = await handler({}, new AbortController().signal, { resolveBase: CWD });
@@ -96,8 +96,8 @@ describe('exit_plan_mode handler', () => {
   });
 
   it('keep planning: no mode flip, no seed, stays in plan', async () => {
-    installPicker(2); // third choice = keep planning
-    const { controls, modeCalls, seeds } = makeControls();
+    installPicker(2); // third choice = keep planning (3-choice layout: restore=plan, bypass, keep)
+    const { controls, modeCalls, seeds } = makeControls('plan');
     const handler = createExitPlanModeHandler(controls);
 
     const res = await handler({}, new AbortController().signal, { resolveBase: CWD });
@@ -127,7 +127,7 @@ describe('exit_plan_mode handler', () => {
 
     await handler({}, new AbortController().signal, undefined);
 
-    expect(seeds).toEqual([{ message: buildPlanExitPrompt(getProjectPlansDir(process.cwd())), mode: 'default' }]);
+    expect(seeds).toEqual([{ message: buildPlanExitPrompt(getProjectPlansDir(process.cwd())), mode: 'bypassPermissions' }]);
   });
 
   it('approve→restore: the primary choice restores the captured pre-plan mode (acceptEdits)', async () => {
@@ -218,7 +218,7 @@ describe('exit_plan_mode skips picker when user has queued message', () => {
 
     // Picker ran normally — seed is produced.
     expect(seeds).toHaveLength(1);
-    expect(res.content).toContain('mode=default');
+    expect(res.content).toContain('mode=bypassPermissions');
   });
 
   it('falls through to the picker when hasPendingUserMessage is not set', async () => {
@@ -231,7 +231,7 @@ describe('exit_plan_mode skips picker when user has queued message', () => {
 
     // Picker ran normally — seed is produced.
     expect(seeds).toHaveLength(1);
-    expect(res.content).toContain('mode=default');
+    expect(res.content).toContain('mode=bypassPermissions');
   });
 });
 
@@ -421,7 +421,7 @@ describe('exit_plan_mode visible-plan-text gate (checkPlanText)', () => {
 
     expect(message).toContain('Your plan is in the conversation above');
     expect(seeds).toHaveLength(1);
-    expect(res.content).toContain('mode=default');
+    expect(res.content).toContain('mode=bypassPermissions');
   });
 
   it('warn: still shows the picker, but with a warning instead of the "plan is above" claim', async () => {

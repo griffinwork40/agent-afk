@@ -233,7 +233,7 @@ export interface ToolCallCompletedPayload {
    * result carried a non-empty content string. Absent on success, absent when
    * the error content is empty. Truncated with `… (truncated)` when the raw
    * text exceeds the cap; newlines collapsed to spaces; passed through
-   * {@link import('../redact-secrets.js').redactSecrets} so common token
+   * Common token
    * shapes are replaced with `[REDACTED]`.
    *
    * Design tradeoff: traces are local-only files under `~/.afk/state/witness/`

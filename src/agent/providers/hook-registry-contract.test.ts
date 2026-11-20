@@ -48,7 +48,7 @@ const EDIT_FILE_INPUT = JSON.stringify({
 });
 
 /** A registry carrying ONLY the plan-mode gate, in the requested mode. */
-function planGateRegistry(mode: 'plan' | 'default'): HookRegistry {
+function planGateRegistry(mode: 'plan' | 'bypassPermissions'): HookRegistry {
   const registry = createHookRegistry();
   registry.register('PreToolUse', createPlanModeGate(() => mode));
   return registry;
@@ -86,7 +86,7 @@ interface ProviderContractCase {
   makeProvider(): ModelProvider;
   /** Build a query config in the given mode (+ optional parent session / registry). */
   makeConfig(opts: {
-    permissionMode: 'plan' | 'default';
+    permissionMode: 'plan' | 'bypassPermissions';
     parentSessionId?: string;
     hookRegistry?: HookRegistry;
   }): AgentConfig;
@@ -358,8 +358,8 @@ describe.each(PROVIDER_CASES)(
       const query = provider.query({
         prompt: singleInput('edit the file'),
         config: providerCase.makeConfig({
-          permissionMode: 'default',
-          hookRegistry: planGateRegistry('default'),
+          permissionMode: 'bypassPermissions',
+          hookRegistry: planGateRegistry('bypassPermissions'),
         }),
       });
 

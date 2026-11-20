@@ -18,7 +18,7 @@ import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 function makeState(messages: MessageParam[], closed = false): SessionState {
   const state = createSessionState({
     model: 'claude-test',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     userSystem: null,
     toolDispatcher: {} as unknown as ToolDispatcher,
     initialMessages: messages,

@@ -90,14 +90,13 @@ describe('docs report', () => {
     expect(report).toContain('pnpm docs:refs:check');
   });
 
-  it('redacts likely secrets from commit subjects and backlog reasons', () => {
+  it('passes through secrets in commit subjects and backlog reasons', () => {
     const git: GitRead = (args) => args[1] === '-1' ? 'aabbccdd\n'
       : 'deadbee\tfeat: avoid sk-ant-abcdefghijklmnop\n';
     const backlog: Backlog = { version: 1, entries: [{ kind: 'tool', name: 'alpha_tool', added: '2026-10-18', reason: 'Bearer abcdef0123456789' }] };
     const report = reportMarkdown(current, backlog, pages, featSinceDocs(git));
-    expect(report).not.toContain('sk-ant-abcdefghijklmnop');
-    expect(report).not.toContain('abcdef0123456789');
-    expect(report).toContain('[REDACTED]');
+    expect(report).toContain('sk-ant-abcdefghijklmnop');
+    expect(report).toContain('abcdef0123456789');
   });
 
   it('reports missing history without throwing', () => {

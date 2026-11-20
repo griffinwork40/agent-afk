@@ -98,7 +98,7 @@ describe('AnthropicDirectProvider — live /bypass toggle changes effective enfo
     }
   });
 
-  it('starts contained by default and /bypass on lifts containment without a restart', async () => {
+  it('starts contained in plan mode and /bypass on lifts containment without a restart', async () => {
     __setAnthropicClientFactory(emptyStreamClient());
     const provider = new AnthropicDirectProvider();
     const baseDir = mkdtempSync(path.join(tmpdir(), 'bypass-live-'));
@@ -108,11 +108,14 @@ describe('AnthropicDirectProvider — live /bypass toggle changes effective enfo
         config: {
           apiKey: 'sk-test',
           cwd: baseDir,
+          // Explicitly start in plan (contained) mode — bypassPermissions is now
+          // the baseline default, so we must be explicit to test the contained→bypass arc.
+          permissionMode: 'plan',
         } as unknown as Parameters<typeof provider.query>[0]['config'],
       });
       await q[Symbol.asyncIterator]().next();
 
-      // Default mode: contained.
+      // Plan mode: contained.
       expect(provider.getGrants().allowAll).toBe(false);
       expect(liveDispatcherAllowAll(q)).toBe(false);
 

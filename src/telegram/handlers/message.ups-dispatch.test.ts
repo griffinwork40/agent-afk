@@ -285,7 +285,7 @@ function makeSession(hookRegistry?: ReturnType<typeof createHookRegistry>): IAge
   return {
     state: 'idle',
     hookRegistry,
-    getSessionMetadata: () => ({ sessionId: 'sid-123', permissionMode: 'default' }),
+    getSessionMetadata: () => ({ sessionId: 'sid-123', permissionMode: 'bypassPermissions' }),
     sendMessageStream: vi.fn(async function* () { yield { type: 'done', metadata: {} }; }),
     sendMessage: vi.fn(),
   } as unknown as IAgentSession;

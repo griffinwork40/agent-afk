@@ -154,7 +154,7 @@ describe('editorFor', () => {
     const plan = editorFor(perm);
     expect(plan.kind).toBe('pick');
     if (plan.kind === 'pick') {
-      expect(plan.options).toEqual(['default', 'plan', 'bypassPermissions']);
+      expect(plan.options).toEqual(['plan', 'bypassPermissions']);
     }
   });
 

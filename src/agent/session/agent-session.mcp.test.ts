@@ -492,7 +492,7 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
               yield {
                 type: 'session.init',
                 info: {
-                  sessionId: 'query-counting-session', model: 'sonnet', permissionMode: 'default',
+                  sessionId: 'query-counting-session', model: 'sonnet', permissionMode: 'bypassPermissions',
                   cwd: args.config.cwd, tools: [], slashCommands: [], skills: [], plugins: [],
                   mcpServers: [], apiKeySource: 'api-key', version: 'test',
                 },
@@ -637,7 +637,7 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
           yield {
             type: 'session.init',
             info: {
-              sessionId: `${label}-session`, model: 'sonnet', permissionMode: 'default',
+              sessionId: `${label}-session`, model: 'sonnet', permissionMode: 'bypassPermissions',
               cwd: process.cwd(), tools: [], slashCommands: [], skills: [], plugins: [],
               mcpServers: [], apiKeySource: 'api-key', version: 'test',
             },
@@ -712,7 +712,7 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
           yield {
             type: 'session.init',
             info: {
-              sessionId: `${label}-session`, model: 'sonnet', permissionMode: 'default',
+              sessionId: `${label}-session`, model: 'sonnet', permissionMode: 'bypassPermissions',
               cwd: process.cwd(), tools: [], slashCommands: [], skills: [], plugins: [],
               mcpServers: [], apiKeySource: 'api-key', version: 'test',
             },
@@ -966,9 +966,8 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
     const ev = statusEvents.find((e) => e.serverName === 'leaky-server');
     expect(ev).toBeDefined();
     expect(ev?.status).toBe('disconnected');
-    // The sk-ant-* key must be replaced with [REDACTED].
-    expect(ev?.reason).toContain('[REDACTED]');
-    expect(ev?.reason).not.toContain('sk-ant-');
+    // The reason passes through unchanged.
+    expect(ev?.reason).toContain('sk-ant-');
 
     await session.close();
   });

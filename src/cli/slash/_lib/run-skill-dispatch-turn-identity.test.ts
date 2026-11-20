@@ -34,7 +34,7 @@ function fixture() {
   const line = vi.fn();
   const ctx: SlashContext = {
     session: { current: { interrupt, sendMessageStream } } as unknown as SlashContext['session'],
-    stats: { totalTurns: 0, totalCostUsd: 0, totalTokens: 0, totalDurationMs: 0, sessionStartTime: Date.now(), turnCosts: [], turnTokens: [], turns: [], model: 'sonnet', permissionMode: 'default' },
+    stats: { totalTurns: 0, totalCostUsd: 0, totalTokens: 0, totalDurationMs: 0, sessionStartTime: Date.now(), turnCosts: [], turnTokens: [], turns: [], model: 'sonnet', permissionMode: 'bypassPermissions' },
     out: { line, raw: line, info: line, error: line, warn: line, success: line },
     ui: { clearScreen: vi.fn(), repaintStatusLine: vi.fn() },
     getCompositor: () => c as unknown as TerminalCompositor,

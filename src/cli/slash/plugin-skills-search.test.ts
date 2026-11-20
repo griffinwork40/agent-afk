@@ -31,7 +31,7 @@ function makeCtx(): { ctx: SlashContext; lines: string[] } {
     stats: {
       totalTurns: 0, totalCostUsd: 0, totalTokens: 0, totalDurationMs: 0,
       sessionStartTime: Date.now(), turnCosts: [], turnTokens: [], turns: [],
-      model: 'sonnet', permissionMode: 'default',
+      model: 'sonnet', permissionMode: 'bypassPermissions',
     },
     out: {
       line: (t = '') => lines.push(t),

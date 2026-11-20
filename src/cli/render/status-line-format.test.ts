@@ -90,9 +90,12 @@ describe('formatStatusLine — basic assembly with all fields populated', () => 
     expect(out).toContain('⚡ bypass');
   });
 
-  it('renders default mode chip', () => {
+  it('renders no chip for deprecated default mode', () => {
+    // 'default' is deprecated; the status line renders no chip for it.
     const out = stripAll(formatStatusLine({ model: 'sonnet', permissionMode: 'default' }, 200));
-    expect(out).toContain('○ default');
+    expect(out).not.toContain('○ default');
+    expect(out).not.toContain('bypass');
+    expect(out).not.toContain('plan');
   });
 
   it('renders the context bar when contextPct is provided', () => {

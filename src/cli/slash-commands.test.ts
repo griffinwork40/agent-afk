@@ -29,7 +29,7 @@ function makeStats(): SessionStats {
     turnTokens: [],
     turns: [],
     model: 'sonnet',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
   };
 }
 
@@ -504,7 +504,7 @@ describe('/plan', () => {
         : null;
     }
 
-    it('/plan off while in plan mode flips to default FIRST, then seeds a save-and-implement turn', async () => {
+    it('/plan off while in plan mode flips to bypassPermissions FIRST, then seeds a save-and-implement turn', async () => {
       const sess = fakeSession();
       const stats = makeStats();
       stats.permissionMode = 'plan';
@@ -514,8 +514,8 @@ describe('/plan', () => {
 
       // The flip MUST happen before the turn so writes are permitted when the
       // seeded message runs (the model has to write the plan file + implement).
-      expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-      expect(ctx.stats.permissionMode).toBe('default');
+      expect(sess.setPermissionMode).toHaveBeenCalledWith('bypassPermissions');
+      expect(ctx.stats.permissionMode).toBe('bypassPermissions');
 
       // A submit turn is seeded.
       expect(res.handled).toBe(true);
@@ -538,8 +538,8 @@ describe('/plan', () => {
 
       const res = await dispatch('/plan', ctx);
 
-      expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-      expect(ctx.stats.permissionMode).toBe('default');
+      expect(sess.setPermissionMode).toHaveBeenCalledWith('bypassPermissions');
+      expect(ctx.stats.permissionMode).toBe('bypassPermissions');
       expect(submitKind(res)).toBe('submit');
       expect(submitMessage(res)).toContain(join('.afk', 'plans'));
     });
@@ -557,19 +557,19 @@ describe('/plan', () => {
 
       const res = await dispatch('/plan off', ctx);
 
-      expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
+      expect(sess.setPermissionMode).toHaveBeenCalledWith('bypassPermissions');
       expect(ctx.stats.permissionMode).toBe('plan');
       expect(res.result).toBe('continue');
     });
 
-    it('/plan off from default mode is a plain no-op flip (no plan to save)', async () => {
+    it('/plan off from bypassPermissions mode is a plain no-op flip (no plan to save)', async () => {
       const sess = fakeSession();
       const { ctx } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'] });
       const res = await dispatch('/plan off', ctx);
-      // togglePlanMode sets 'default' — already default, harmless, emits OFF copy.
+      // togglePlanMode sets 'bypassPermissions', already the mode, harmless, emits OFF copy.
       // No submit turn: there is no plan to save when not in plan mode.
-      expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-      expect(ctx.stats.permissionMode).toBe('default');
+      expect(sess.setPermissionMode).toHaveBeenCalledWith('bypassPermissions');
+      expect(ctx.stats.permissionMode).toBe('bypassPermissions');
       expect(res.result).toBe('continue');
     });
   });

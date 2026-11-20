@@ -60,7 +60,7 @@ function setup(configExtra: Partial<AgentConfig> = {}, buildDispatcher: () => To
     getCwd: () => currentCwd ?? LAUNCH_CWD,
     modelName: 'sonnet',
     providerName: 'anthropic-direct',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     getEnabledToolNames: () => [],
     getMcpTools: () => [] as AnthropicToolDef[],
     getMcpServerStates: () => [],

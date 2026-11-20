@@ -64,7 +64,7 @@ function stubSource(enabled: string[] = []): RuntimeStateSource {
       phaseRole: null,
       cwd: '/work',
       model: { provider: 'anthropic-direct', name: 'claude-sonnet-5' },
-      permissionMode: 'default',
+      permissionMode: 'bypassPermissions',
     }),
     getTools: () => ({ enabled, mcpServers: [] }),
     getSubagents: () => ({ active: [], backgroundJobs: [] }),

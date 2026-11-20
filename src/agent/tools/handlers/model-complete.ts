@@ -26,7 +26,6 @@ import { resolveAndContain } from './_cwd-utils.js';
 import { fsErrorToToolResult } from './_fs-error.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { env } from '../../../config/env.js';
-import { redactSecrets } from '../../redact-secrets.js';
 import { unconfiguredSlotError } from '../../session/model-slots.js';
 import {
   resolveOneShotTarget,
@@ -178,7 +177,7 @@ async function modelCompleteImpl(
     if (timeoutSignal.aborted) return fail(`timed out after ${TIMEOUT_MS / 1000}s.`);
     if (signal.aborted) return fail('aborted.');
     const detail = errorMessage(err);
-    return fail(`${target.model} (${target.provider}) failed: ${redactSecrets(detail)}`);
+    return fail(`${target.model} (${target.provider}) failed: ${detail}`);
   }
 
   const footer = `\n\n[model_complete: ${target.model} via ${target.provider}]`;

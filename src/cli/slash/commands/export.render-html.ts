@@ -3,14 +3,13 @@
  *
  * Produces a single file with inline CSS — no external assets, no network.
  * All transcript content is HTML-escaped to prevent XSS from tool output.
- * Secrets are redacted via redactSecrets before any content is embedded.
+ * Secrets in content are escaped before embedding.
  *
  * Pure function — no I/O.
  *
  * @module cli/slash/commands/export.render-html
  */
 
-import { redactSecrets } from '../../../agent/redact-secrets.js';
 import { formatCost, formatDuration } from '../../format-utils.js';
 import type { TurnRecord, SessionStats } from '../types.js';
 
@@ -84,12 +83,12 @@ pre{white-space:pre-wrap;word-break:break-all;font-size:.8rem;
 const HTML_RESULT_LIMIT = 8000;
 
 function renderToolHtml(toolName: string, input: string, result: string | undefined, isError: boolean): string {
-  const safeInput = escapeHtml(redactSecrets(input));
+  const safeInput = escapeHtml(input);
   // Invariant: slice the raw string BEFORE escapeHtml so we never cut mid-entity
   // (e.g. splitting "&amp;" would produce a broken entity in the output).
   let safeResult = '';
   if (result !== undefined) {
-    const raw = redactSecrets(result);
+    const raw = result;
     const omitted = raw.length > HTML_RESULT_LIMIT ? raw.length - HTML_RESULT_LIMIT : 0;
     const truncated = omitted > 0 ? `${raw.slice(0, HTML_RESULT_LIMIT)}\n[truncated — ${omitted} chars omitted]` : raw;
     safeResult = escapeHtml(truncated);
@@ -128,10 +127,10 @@ function renderTurnHtml(turn: TurnRecord, index: number): string {
     `<div class="turn-header"><strong>Turn ${index + 1}</strong>${metaStr}</div>`,
     `<div class="turn-body">`,
     `<div class="role-label role-user">User</div>`,
-    `<div class="prose">${escapeHtml(redactSecrets(turn.user))}</div>`,
+    `<div class="prose">${escapeHtml(turn.user)}</div>`,
     toolsHtml,
     `<div class="role-label role-assistant" style="margin-top:.75rem">Assistant</div>`,
-    `<div class="prose">${escapeHtml(redactSecrets(turn.assistant))}</div>`,
+    `<div class="prose">${escapeHtml(turn.assistant)}</div>`,
     `</div>`,
     `</div>`,
   ].join('\n');

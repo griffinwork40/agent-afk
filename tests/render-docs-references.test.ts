@@ -178,7 +178,7 @@ describe('Config reference and shared output contract', () => {
     for (const key of CONFIG_KEY_SPECS) expect(output).toContain(`| \`${key.path}\` | ${key.type} |`);
     expect(output).toContain('0 to 2');
     expect(output).toContain('1 to 1000000; integer');
-    expect(output).toContain('`default`, `plan`, `bypassPermissions`');
+    expect(output).toContain('`plan`, `bypassPermissions`');
     expect(output).toContain('Agent tier');
     expect(output).toContain('Human tier');
     expect(output).toContain('&#123; id, provider, name &#125;');

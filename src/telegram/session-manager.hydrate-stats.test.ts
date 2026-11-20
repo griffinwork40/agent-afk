@@ -44,7 +44,7 @@ function makeSidecar(overrides: Partial<Parameters<typeof saveSession>[0]> = {})
     turns: [],
     turnCosts: [],
     turnTokens: [],
-    permissionMode: 'default' as const,
+    permissionMode: 'bypassPermissions' as const,
     ...overrides,
   };
 }
@@ -273,7 +273,7 @@ describe('hydrateStatsFromStore', () => {
     const h = statsMap.get(String(CHAT_ID))!;
     expect(h.turnCosts).toEqual([]);
     expect(h.turnTokens).toEqual([]);
-    expect(h.permissionMode).toBe('default');
+    expect(h.permissionMode).toBe('bypassPermissions');
   });
 
   // -------------------------------------------------------------------------

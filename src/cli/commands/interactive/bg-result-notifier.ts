@@ -35,7 +35,6 @@ import type {
   BackgroundJob,
 } from '../../../agent/background-registry.js';
 import { extractOutputText } from '../../../agent/background-registry.result.js';
-import { redactSecrets } from '../../../agent/redact-secrets.js';
 import { env, isPlainOutputRequested } from '../../../config/env.js';
 import { formatDuration } from '../../format-utils.js';
 import { escapeXmlAttr } from './process-job-notifier.js';
@@ -124,7 +123,7 @@ function truncateBytes(text: string, maxBytes: number, jobId: string): string {
  * `buildBgResultInjection`) read the full text from disk without this filter.
  */
 export function formatBgResultBody(job: BackgroundJob): string {
-  return truncateBytes(redactSecrets(extractOutput(job)), MAX_INJECTION_BYTES, job.jobId);
+  return truncateBytes(extractOutput(job), MAX_INJECTION_BYTES, job.jobId);
 }
 
 /**

@@ -1532,6 +1532,7 @@ describe('StatusLine — active agent fan-out count', () => {
 
 
 
+
 describe('StatusLine — AFK_CENTER_CONTENT centering', () => {
   /** Wide mock stream: 200 cols, so centering (measure=100) gives a 50-col left margin. */
   function wideStream(cols = 200): MockStream {

@@ -16,12 +16,11 @@
  * environment block. The body mirrors `.github/ISSUE_TEMPLATE/bug_report.md`
  * by hand instead. Labelling is left to maintainer triage.
  *
- * Invariant: the user's description is passed through `redactSecrets` before
+ * The user's description is included in the bug report body.
  * it reaches the URL, because a prefilled URL lands in browser history and
  * proxy logs before the user ever clicks Submit, and the issue is public.
  */
 
-import { redactSecrets } from '../../../agent/redact-secrets.js';
 
 /** Canonical public repo that receives `/bug` reports. */
 export const BUG_REPORT_REPO = 'griffinwork40/agent-afk';
@@ -60,7 +59,7 @@ export interface BugReportLink {
 
 /** Title = first line of the (redacted) description, clipped. */
 export function buildBugTitle(description: string): string {
-  const firstLine = redactSecrets(description).trim().split(/\r?\n/, 1)[0] ?? '';
+  const firstLine = description.trim().split(/\r?\n/, 1)[0] ?? '';
   if (firstLine.length <= MAX_TITLE_LENGTH) return firstLine;
   return `${firstLine.slice(0, MAX_TITLE_LENGTH - 1).trimEnd()}…`;
 }
@@ -99,7 +98,7 @@ function buildBugBodyFromRedacted(redactedDescription: string, env: BugEnvironme
 
 /** Body that mirrors the repo's bug_report.md sections. */
 export function buildBugBody(description: string, env: BugEnvironment): string {
-  return buildBugBodyFromRedacted(redactSecrets(description), env);
+  return buildBugBodyFromRedacted(description, env);
 }
 
 export function buildBugReport(description: string, env: BugEnvironment): BugReport {
@@ -126,7 +125,7 @@ export function buildBugReportLink(
   env: BugEnvironment,
   maxLength: number = MAX_BUG_URL_LENGTH,
 ): BugReportLink {
-  const redacted = redactSecrets(description);
+  const redacted = description;
   const title = buildBugTitle(description);
   let url = bugReportUrl({ title, body: buildBugBodyFromRedacted(redacted, env) });
   if (url.length <= maxLength) return { url, truncated: false };

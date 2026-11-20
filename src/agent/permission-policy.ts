@@ -18,8 +18,8 @@ import type { PermissionMode } from './types/sdk-types.js';
 /**
  * True when the permission mode disables typed-file path containment and the
  * path-approval prompt (the dispatcher's `allowAll`). Only `bypassPermissions`
- * qualifies; every other mode (`default`, `plan`, `acceptEdits`, `dontAsk`,
- * `auto`) preserves containment.
+ * qualifies; every other mode (`plan`, `acceptEdits`, `dontAsk`, `auto`, and
+ * the deprecated `default`) preserves containment.
  */
 export function pathContainmentBypassed(
   mode: PermissionMode | string | undefined,

@@ -14,6 +14,13 @@
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export type PermissionMode =
+  /**
+   * @deprecated Path-containment + interactive approval prompt mode. Only
+   * retained in the type union because `src/cli/commands/acp.session.ts` still
+   * references it as a literal. The ACP peer branch (`afk/acp-contract`) will
+   * remove it. All other fallback values have been replaced with
+   * `'bypassPermissions'`.
+   */
   | 'default'
   | 'acceptEdits'
   | 'bypassPermissions'

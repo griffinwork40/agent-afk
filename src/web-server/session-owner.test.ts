@@ -594,7 +594,7 @@ describe('SessionOwner.create — enableFileCheckpointing wiring (#4271)', () =>
         return {
           close: vi.fn().mockResolvedValue(undefined),
           waitForInitialization: vi.fn().mockResolvedValue({ sessionId: 'mock-session-id' }),
-          getSessionMetadata: vi.fn().mockReturnValue({ permissionMode: 'default' }),
+          getSessionMetadata: vi.fn().mockReturnValue({ permissionMode: 'bypassPermissions' }),
           wireStopHook: vi.fn(),
           queueFrameworkContext: vi.fn(),
           sessionId: 'mock-session-id',
