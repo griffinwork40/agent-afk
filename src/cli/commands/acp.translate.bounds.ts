@@ -1,4 +1,5 @@
 import type { JsonValue, ToolCallContent, ToolCallStart } from './acp.wire.js';
+import { escapeInvisible } from './acp.tool-title.js';
 
 const RESULT_BYTES = 65536;
 // Reserve space for worst-case JSON escaping of rawOutput AND text content,
@@ -52,8 +53,13 @@ export function boundedContent(content: ToolCallContent[]): ToolCallContent[] {
 
 /** Display metadata must not bypass raw-input/result transport budgets. */
 export function boundStartDisplay(start: ToolCallStart): ToolCallStart {
-  // A title is one line: control characters and line separators become spaces.
-  start.title = start.title.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' ');
+  // A title is one line: control characters and line separators become spaces,
+  // then bidi/invisible/tag/Cf chars are replaced with visible escape notation.
+  // This second pass covers strings appended after toolTitle (e.g. D10 outside
+  // paths from buildPendingStart) which bypass oneLine's own escaping pass.
+  start.title = escapeInvisible(
+    start.title.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' '),
+  );
   if (serializedBytes(start.title) > 4096) start.title = 'Tool call';
   if (start.locations && serializedBytes(start.locations) > COLLECTION_BYTES) start.locations = [];
   return start;

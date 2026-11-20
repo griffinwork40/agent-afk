@@ -13,7 +13,7 @@ describe('legible approval card titles (profile section 5)', () => {
   it('each tool family says what is being approved', () => {
     const cases: [string, Record<string, unknown>, string][] = [
       ['bash', { command: 'rm -rf build' }, 'bash rm -rf build'],
-      ['bash', { command: 'echo a\necho b' }, 'bash echo a…'],
+      ['bash', { command: 'echo a\necho b' }, 'bash echo a (+1 more lines)…'],
       ['test_run', { file: 'src/a.test.ts' }, 'test_run src/a.test.ts'],
       ['web_request', { url: 'https://x.test/api', method: 'post' }, 'web_request POST https://x.test/api'],
       ['web_scrape', { url: 'https://x.test/' }, 'web_scrape GET https://x.test/'],

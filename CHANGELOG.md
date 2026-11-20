@@ -80,12 +80,31 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
   `(project config that runs commands)`. This closes a bypass where one
   "always allow" for `write_file` let the agent plant a git filter that a
   later auto-allowed `git_read` ran.
+- **Writes to agent instructions and definitions are always asked.** Any path
+  with an `.afk` segment (skills, agents, plugins, plans, or anything else
+  under that directory) and `AFK.md` are sensitive write targets. They are
+  asked every time, without an "always allow" option, and are never covered by
+  an earlier grant. The card title says why: `(agent instructions or
+  definitions)`. This closes a bypass where one "always allow" for
+  `write_file` let the agent rewrite its own skill files or the project
+  instruction file without a fresh question.
 - **Approval cards say what is being approved.** Titles now include the shell
   command for `bash`, method and URL for web tools, pattern and directory for
   `grep` and `glob`, server and tool for MCP tools, agent type or skill and the
   first words of the task for delegation tools, and subcommand and arguments
   for `git_read`. Titles are one line, cut with `…`; a path outside `cwd`
   stays visible. Replayed history uses the same titles.
+- **Multi-line shell commands show a line count in the approval title.** A
+  `bash` command with more than one non-empty line now shows the count of
+  further lines before the ellipsis: `bash echo hello (+2 more lines)…`. This
+  makes truncation unambiguous: the human sees that the first line is not the
+  whole command. Client implementers should display `rawInput.command` in full
+  for `execute` tool calls.
+- **Bidi and invisible characters in approval titles are made visible.** Unicode
+  direction controls, zero-width characters, the tag block, and any remaining
+  Unicode format or control character that passed the existing control-character
+  filter are replaced with visible escapes of the form `<U+XXXX>` in every
+  string a card shows. `rawInput` fields are left byte-exact.
 - **Empty message and thought chunks are no longer sent.**
 - **Permission callback semantics tightened.** A permission callback result is
   treated as allow only when it is an explicit, well-formed allow object.
