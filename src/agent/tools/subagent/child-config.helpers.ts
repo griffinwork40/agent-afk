@@ -254,7 +254,7 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
       ...(childConfig.customTools !== undefined && childConfig.customTools.length > 0
         ? { customTools: childConfig.customTools }
         : {}),
-      origin: agentChildOrigin(depth + 1, args.namedAgent?.name, args.parsed.id_prefix), // surface gate label
+      origin: agentChildOrigin(depth + 1, args.namedAgent?.name, args.parsed.id_prefix, currentCwd), // surface gate label + child cwd
     });
     childConfig.provider = rebuildProvider(String(childConfig.model));
 
@@ -264,7 +264,7 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
   // Depth-cap / no-factory child: surface gate looked up from the factory
   // (absent => undefined). Fresh callback per construction, as on the factory path.
   const capGate = (): CanUseTool | undefined =>
-    childGateFor(args.childProviderFactory, agentChildOrigin(depth + 1, args.namedAgent?.name, args.parsed.id_prefix));
+    childGateFor(args.childProviderFactory, agentChildOrigin(depth + 1, args.namedAgent?.name, args.parsed.id_prefix, currentCwd));
   const gateArg = (g: CanUseTool | undefined): [CanUseTool] | [] => (g !== undefined ? [g] : []);
   if (effectiveAllowedTools !== undefined || effectiveReadOnlyBash) {
     const rebuildProvider = (model: string): ModelProvider => buildSkillRestrictedProvider(

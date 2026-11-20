@@ -102,25 +102,29 @@ export function dependsOnCallerCwd(input: Record<string, unknown>): boolean {
  * paths where resolvable. Empty means no argument leaves the session directory
  * (a call without a path argument defaults to the cwd and is inside).
  */
-export function outsidePaths(toolName: string, input: Record<string, unknown>, cwd: string | undefined): string[] {
+export function outsidePaths(
+  toolName: string, input: Record<string, unknown>, cwd: string | undefined, callerCwd?: string,
+): string[] {
   const out: string[] = [];
   const root = usableCwd(cwd) ? path.resolve(cwd) : undefined;
-  let base = root;
+  // A forked child's relative paths resolve against its own cwd; containment is always the session cwd.
+  const caller = callerCwd === undefined ? root : usableCwd(callerCwd) ? path.resolve(callerCwd) : undefined;
+  let base = caller;
   if (toolName === 'glob' && input['path'] !== undefined) {
     const p = input['path'];
-    base = root !== undefined && typeof p === 'string' && p.length > 0 && !p.includes('\u0000') && !p.startsWith('~')
-      ? path.resolve(root, p) : undefined;
+    base = caller !== undefined && typeof p === 'string' && p.length > 0 && !p.includes('\u0000') && !p.startsWith('~')
+      ? path.resolve(caller, p) : undefined;
   }
   for (const key of PATH_KEYS) {
-    if (input[key] !== undefined) scanKey(input[key], root, root, out);
+    if (input[key] !== undefined) scanKey(input[key], caller, root, out);
   }
   if (toolName === 'glob') scanGlobPattern(input['pattern'], base, root, out);
   if (toolName === 'patch_apply' && Array.isArray(input['changes'])) {
-    for (const change of input['changes']) scanValue(isRecord(change) ? change['path'] : undefined, root, root, out);
+    for (const change of input['changes']) scanValue(isRecord(change) ? change['path'] : undefined, caller, root, out);
   }
   // compose nodes may each name their own cwd.
   if (toolName === 'compose' && Array.isArray(input['nodes'])) {
-    for (const node of input['nodes']) if (isRecord(node) && node['cwd'] !== undefined) scanValue(node['cwd'], root, root, out);
+    for (const node of input['nodes']) if (isRecord(node) && node['cwd'] !== undefined) scanValue(node['cwd'], caller, root, out);
   }
   if (toolName === 'git_read' && input['args'] !== undefined) {
     const args = input['args'];
@@ -128,6 +132,8 @@ export function outsidePaths(toolName: string, input: Record<string, unknown>, c
       out.push('(git repository relocation)');
     }
   }
-  if (toolName === 'git_read' && gitReadReachesOutside(input, root)) out.push('(git content outside the session directory)');
+  // A caller cwd outside the session cwd is outside for anything that defaults to it.
+  if (caller !== undefined && root !== undefined && !isContained(root, caller) && dependsOnCallerCwd(input)) out.push(caller);
+  if (toolName === 'git_read' && gitReadReachesOutside(input, caller)) out.push('(git content outside the session directory)');
   return [...new Set(out)];
 }

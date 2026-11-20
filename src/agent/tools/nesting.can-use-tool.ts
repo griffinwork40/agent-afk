@@ -27,6 +27,7 @@
  * @module agent/tools/nesting.can-use-tool
  */
 
+import path from 'node:path';
 import type { CanUseTool } from '../types.js';
 
 /** Which fork route built the child. */
@@ -41,6 +42,12 @@ export interface ChildToolOrigin {
   agentType?: string;
   /** Caller-chosen label: `agent` `id_prefix` or the compose node id. */
   label?: string;
+  /**
+   * The child's own working directory, absolute, set only where the builder
+   * knows it. A gate resolves the child's relative or missing paths against it;
+   * absent, the gate cannot tell what such a path refers to.
+   */
+  cwd?: string;
 }
 
 /** Returns the approval callback for one child, or `undefined` for none. */
@@ -62,17 +69,25 @@ export interface ChildGateArgs {
 }
 
 /** Origin of a skill-forked child at `depth` (its own depth). */
-export function skillChildOrigin(depth: number, skillName: string | undefined): ChildToolOrigin {
-  return { route: 'skill', depth, ...(skillName !== undefined ? { agentType: skillName } : {}) };
+export function skillChildOrigin(depth: number, skillName: string | undefined, cwd?: string): ChildToolOrigin {
+  return { route: 'skill', depth, ...(skillName !== undefined ? { agentType: skillName } : {}), ...knownCwd(cwd) };
+}
+
+/** `{ cwd }` only for an absolute directory; anything else stays unknown. */
+function knownCwd(cwd: string | undefined): { cwd: string } | Record<string, never> {
+  return typeof cwd === 'string' && cwd.length > 0 && !cwd.includes('\u0000') && path.isAbsolute(cwd) ? { cwd } : {};
 }
 
 /** Origin of an `agent`-tool child at `depth` (its own depth). */
-export function agentChildOrigin(depth: number, agentType: string | undefined, label: string | undefined): ChildToolOrigin {
+export function agentChildOrigin(
+  depth: number, agentType: string | undefined, label: string | undefined, cwd?: string,
+): ChildToolOrigin {
   return {
     route: 'agent',
     depth,
     ...(agentType !== undefined ? { agentType } : {}),
     ...(label !== undefined ? { label } : {}),
+    ...knownCwd(cwd),
   };
 }
 
@@ -126,6 +141,7 @@ export function composeNodeGated<R extends object>(
   factory: ChildCanUseToolFactory | undefined,
   node: { id: string; agent_type?: string | undefined },
   composeDepth: number,
+  cwd?: string,
 ): R | (R & { surfaceGate: CanUseTool }) {
   if (factory === undefined) return restrictions;
   const surfaceGate = factory({
@@ -133,6 +149,7 @@ export function composeNodeGated<R extends object>(
     depth: composeDepth + 1,
     ...(node.agent_type !== undefined ? { agentType: node.agent_type } : {}),
     label: node.id,
+    ...knownCwd(cwd),
   });
   return surfaceGate !== undefined ? { ...restrictions, surfaceGate } : restrictions;
 }

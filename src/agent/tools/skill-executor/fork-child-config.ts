@@ -298,7 +298,7 @@ export function buildForkedChildConfig(
     ...(childSkillExecutor !== undefined ? { childSkillExecutor } : {}),
     ...(childConfig.model !== undefined ? { model: childConfig.model } : {}),
     ...(effectiveAllowed !== undefined ? { allowedTools: effectiveAllowed } : {}),
-    ...(effectiveReadOnlyBash ? { readOnlyBash: true } : {}), origin: skillChildOrigin(depth + 1, baseConfig.skillDispatchName),
+    ...(effectiveReadOnlyBash ? { readOnlyBash: true } : {}), origin: skillChildOrigin(depth + 1, baseConfig.skillDispatchName, currentCwd),
   });
 
   return { childConfig, childManager };
