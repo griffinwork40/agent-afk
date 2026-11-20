@@ -302,11 +302,14 @@ export function createAcpPermissionGate(
     wouldAsk: (toolName, input) => {
       try { return wouldAsk(st, toolName, input); } catch { return true; }
     },
-    // D9: a turn that ends normally denies child asks still pending (background
-    // subagents) and waits until every child card is closed, before its response.
+    // D9: a turn that ends normally denies every ask still pending, with a named
+    // reason. Child asks (background subagents) are the common case; a top-level
+    // ask pending at turn-end has no current production path but is denied here
+    // defensively so the behaviour is well-defined if that changes.
     endTurn: async () => {
       for (const ask of [...st.pending]) {
-        if (ask.child === true) { ask.cancelled = true; ask.settle({ kind: 'deny', reason: 'no_active_turn' }); }
+        ask.cancelled = true;
+        ask.settle({ kind: 'deny', reason: 'no_active_turn' });
       }
       await Promise.allSettled([...st.childInFlight]);
     },
