@@ -18,10 +18,11 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { AbortError } from '../../utils/errors.js';
 import { debugLog } from '../../utils/debug.js';
-import { buildFatalDone } from './turn-stream-runner.fatal-done.js';
+import { buildFatalDone, buildInterruptedDone } from './turn-stream-runner.fatal-done.js';
 import {
   isTerminalProviderEvent,
-  settleAbandonedTurn,
+  ProviderTurns,
+  type InterruptTarget,
 } from './turn-stream-runner.abandoned-turn.js';
 import { transformProviderEvent, type TransformDeps } from './stream-consumer.js';
 import type { AccountingAccumulator } from './accounting-accumulator.js';
@@ -95,24 +96,6 @@ export interface TurnRunnerDeps {
   getStopWiring?: () => StopWiring | undefined;
 }
 
-/** A provider turn whose consumer stopped reading before its terminal event. */
-interface AbandonedTurn {
-  deps: TransformDeps;
-  /**
-   * The iterator and provider query the turn ran on, captured at abandonment
-   * so settlement never acts on a provider the session swapped in later. An
-   * interrupt sent to a provider with no turn in flight is parked and
-   * pre-aborts that provider's next turn.
-   */
-  iterator: AsyncIterator<ProviderEvent>;
-  providerQuery: ProviderQuery;
-  turnStartMs: number;
-  /** A `done` for this turn is already in the ledger (real or synthetic). */
-  doneRecorded: boolean;
-  /** The ledger was sealed under this turn: discard whatever it still emits. */
-  sealed: boolean;
-}
-
 /**
  * Runs a single provider-turn stream, accumulates output events, and yields
  * each {@link OutputEvent}. Constructed once per session; `deps.getProviderIterator()`
@@ -135,24 +118,48 @@ export class TurnStreamRunner {
    */
   private _activeDeps: TransformDeps | null = null;
   /**
-   * The abandoned turn that has not reached its terminal event yet, if any:
-   * either being settled right now (`settling` set) or parked until the next
-   * send. See turn-stream-runner.abandoned-turn.ts.
+   * The provider turn in flight and the send waiting behind it. The single
+   * source of truth for "is a provider turn still running?", which session
+   * state is not. See turn-stream-runner.abandoned-turn.ts.
    */
-  private abandoned: AbandonedTurn | null = null;
-  /** In-flight settlement of `abandoned`; null when it is parked or absent. */
-  private settling: Promise<void> | null = null;
+  private readonly turns: ProviderTurns;
 
   constructor(deps: TurnRunnerDeps) {
     this.deps = deps;
-    // Every seal path (close, reset, abort) must leave the ledger with this
-    // turn's `done`, even when settlement has not finished (#4830).
-    deps.ledger.setBeforeSeal(() => this.sealAbandonedTurn());
+    this.turns = new ProviderTurns({
+      consume: (event, turnDeps) => this.consumeProviderEvent(event, turnDeps),
+      interruptProvider: () => this.deps.getProviderQuery().interrupt(),
+      recordSyntheticDone: (turn) => this.recordSyntheticDone(turn.turnStartMs, turn.interrupted),
+    });
+    // Every seal path (close, reset, abort) must leave the ledger with an
+    // abandoned turn's `done`, even when it has not finished stopping (#4830).
+    deps.ledger.setBeforeSeal(() => this.turns.seal());
+  }
+
+  /**
+   * Decide what a session interrupt acts on. `provider` means the caller must
+   * forward it; a send still waiting to start has already been cancelled.
+   */
+  claimInterrupt(): InterruptTarget {
+    return this.turns.claimInterrupt();
+  }
+
+  /** Id the next send will get; pair with {@link hasNewerSend}. */
+  nextSendId(): number {
+    return this.turns.nextSendId;
+  }
+
+  /** True when a later send has taken over the session's busy state. */
+  hasNewerSend(id: number): boolean {
+    return this.turns.hasNewerSend(id);
   }
 
   /** Return the current turn's accumulated tool events, or [] when no turn is active. */
   getActiveTurnToolEvents(): readonly ToolEventMin[] {
-    return (this._activeDeps as { _turnToolEvents?: ToolEventMin[] } | null)?._turnToolEvents ?? [];
+    // An abandoned turn is still in flight for the provider after its send has
+    // returned, so fall back to the tracker's view of it.
+    const deps = this._activeDeps ?? this.turns.openDeps;
+    return (deps as { _turnToolEvents?: ToolEventMin[] } | null)?._turnToolEvents ?? [];
   }
 
   /** Pre-turn guard: throws when the session cannot accept a new message. */
@@ -283,13 +290,25 @@ export class TurnStreamRunner {
     content: string | ContentBlockParam[],
     inputStream: { pushUserMessage: (c: string | ContentBlockParam[]) => void },
   ): AsyncIterableIterator<OutputEvent> {
-    const initPromise = this.deps.getInitPromise();
-    if (initPromise) await initPromise;
-
-    // Contract: one send owns one provider turn. Finish any turn a previous
-    // consumer abandoned BEFORE this message is pushed, so this send can only
-    // ever read its own turn's events.
-    await this.settlePreviousTurn();
+    // Contract: one send owns one provider turn. Wait until the session is
+    // initialized and no earlier turn is in flight BEFORE this message is
+    // pushed, so this send can only ever read its own turn's events. Until
+    // then an interrupt cancels this send instead of reaching the provider.
+    const send = this.turns.beginSend();
+    try {
+      await this.turns.untilClear(send, this.deps.getInitPromise());
+    } catch (err) {
+      this.turns.withdraw(send);
+      throw err;
+    }
+    if (send.cancelled) {
+      // Interrupted, or the conversation ended, before it started: nothing
+      // reached the provider, so there is no turn to record. The consumer
+      // still gets a normal terminal.
+      this.turns.withdraw(send);
+      yield buildInterruptedDone(0);
+      return;
+    }
 
     const effectiveContent = this.withPendingContext(content);
     const historySummary =
@@ -333,29 +352,29 @@ export class TurnStreamRunner {
     // terminal (unchanged from main); the ledger gets exactly one `done` per
     // turn so events.jsonl readers always record cost/duration/stopReason.
     let doneYielded = false;
-    // Whether THIS turn's terminal provider event has been pulled, and whether
-    // the loop itself threw. Reaching `finally` with neither means the consumer
-    // closed the stream mid-turn: the turn is abandoned and must be settled.
-    let terminalPulled = false;
     let threw = false;
-    let turnIterator: AsyncIterator<ProviderEvent> | null = null;
 
     // Record the wall-clock start of this turn so the synthetic `done` can
     // carry a partial elapsed duration even when the provider never reported one.
     const turnStartMs = Date.now();
+    const iterator = this.deps.getProviderIterator();
+    // No await between the cancellation check above and this line: from here
+    // on an interrupt targets this turn.
+    const turn = this.turns.startTurn(send, deps, iterator, turnStartMs);
 
     try {
       while (true) {
-        turnIterator = this.deps.getProviderIterator();
-        const result = await turnIterator.next();
+        const result = await iterator.next();
         if (result.done) {
-          terminalPulled = true;
+          this.turns.endTurn(turn);
           break;
         }
-        // Set before the event is handled or yielded: a consumer may close the
-        // stream exactly at the terminal yield, which is a completed turn.
+        // Ended before the event is handled or yielded: the provider has no
+        // turn in flight once it has produced its terminal, so an interrupt
+        // from here on must not be forwarded, and a consumer that closes the
+        // stream exactly at the terminal yield has completed the turn.
         const terminal = isTerminalProviderEvent(result.value);
-        if (terminal) terminalPulled = true;
+        if (terminal) this.turns.endTurn(turn);
         const output = await this.consumeProviderEvent(result.value, deps);
         if (output) {
           if (output.type === 'done') doneYielded = true;
@@ -370,28 +389,21 @@ export class TurnStreamRunner {
       const stateAtExit = this.deps.getState();
       // Invariant: `finally` is the ONLY path an aborted or timed-out child
       // takes — closing the generator runs it while `break` does not reach it.
-      if (stateAtExit === 'streaming') {
+      // A later send may already be waiting behind this turn and own the busy
+      // state; only the most recent send marks the session idle.
+      if (stateAtExit === 'streaming' && !this.turns.hasNewerSend(send.id)) {
         this.deps.setState('idle');
       }
-      const abandoned =
-        !terminalPulled && !threw && turnIterator !== null && stateAtExit !== 'closed';
-      if (abandoned && turnIterator !== null) {
-        // The real `done` is recorded by the settlement, so no synthetic one
-        // here (#4830: exactly one `done` per turn).
-        this.abandonTurn(
-          {
-            deps,
-            iterator: turnIterator,
-            providerQuery: this.deps.getProviderQuery(),
-            turnStartMs,
-            doneRecorded: false,
-            sealed: false,
-          },
-          stateAtExit,
-        );
+      // Clear the active deps ref when this send ends (clean, abort, or error),
+      // unless a later send has already installed its own.
+      if (this._activeDeps === deps) this._activeDeps = null;
+      if (this.turns.isOpen(turn) && !threw && stateAtExit !== 'closed') {
+        // The consumer closed the stream mid-turn. The session reads the rest;
+        // the real `done` is recorded then, so no synthetic one here (#4830:
+        // exactly one `done` per turn).
+        this.turns.abandon(turn);
       } else {
-        // Clear the active deps ref when the turn ends (clean, abort, or error).
-        this._activeDeps = null;
+        this.turns.endTurn(turn);
         // Invariant (#4830): ledger gets exactly one `done` per turn. When the
         // loop exits via a fatal path (provider 4xx, stream stall, connection
         // error, budget ceiling, or any unhandled throw) `doneYielded` is still
@@ -464,77 +476,13 @@ export class TurnStreamRunner {
   }
 
   /** Ledger-only synthetic `done` for a turn that ended without a real one. */
-  private recordSyntheticDone(turnStartMs: number): void {
-    const signal = this.deps.getAbortController().signal;
-    this.deps.ledger.recordEvent(buildFatalDone(signal, Date.now() - turnStartMs));
-  }
-
-  /**
-   * Take ownership of a turn its consumer stopped reading.
-   *
-   * `idle` at exit means `interrupt()` already ran (it is the only thing that
-   * leaves a live stream idle), so the turn is stopping and is settled right
-   * away, in the background, without a second interrupt. Any other state means
-   * nobody stopped it: it stays parked and the next send stops and settles it.
-   */
-  private abandonTurn(turn: AbandonedTurn, stateAtExit: SessionState): void {
-    this.abandoned = turn;
-    if (stateAtExit === 'idle') {
-      void this.settle(turn, false);
-    } else {
-      this._activeDeps = null;
-    }
-  }
-
-  /** Read `turn` through to its terminal event; never rejects. */
-  private settle(turn: AbandonedTurn, interruptFirst: boolean): Promise<void> {
-    // The turn is still in flight for the provider: keep its tool events
-    // readable by the beforeTurnEnd seam until it has actually ended.
-    this._activeDeps = turn.deps;
-    const settled: Promise<void> = settleAbandonedTurn({
-      iterator: turn.iterator,
-      consume: async (event) => {
-        if (turn.sealed) return null;
-        const output = await this.consumeProviderEvent(event, turn.deps);
-        if (output?.type === 'done') turn.doneRecorded = true;
-        return output;
-      },
-      ...(interruptFirst ? { interrupt: () => turn.providerQuery.interrupt() } : {}),
-      recordMissingDone: () => this.recordAbandonedDone(turn),
-    }).finally(() => {
-      if (this._activeDeps === turn.deps) this._activeDeps = null;
-      if (this.abandoned === turn) this.abandoned = null;
-      if (this.settling === settled) this.settling = null;
-    });
-    this.settling = settled;
-    return settled;
-  }
-
-  /** Synthetic `done` for an abandoned turn, at most once per turn. */
-  private recordAbandonedDone(turn: AbandonedTurn): void {
-    if (turn.doneRecorded) return;
-    turn.doneRecorded = true;
-    this.recordSyntheticDone(turn.turnStartMs);
-  }
-
-  /**
-   * Pre-seal hook: the ledger is about to close under an abandoned turn that
-   * has not recorded its `done`. Record it now, and stop that turn's remaining
-   * events from reaching a closed session or the next conversation's ledger.
-   * The turn stays tracked so a later send still reads it off the iterator.
-   */
-  private sealAbandonedTurn(): void {
-    const turn = this.abandoned;
-    if (!turn) return;
-    turn.sealed = true;
-    this.recordAbandonedDone(turn);
-  }
-
-  /** Wait for, or perform, settlement of a turn a previous consumer abandoned. */
-  private async settlePreviousTurn(): Promise<void> {
-    if (this.settling) await this.settling;
-    const parked = this.abandoned;
-    if (parked) await this.settle(parked, true);
+  private recordSyntheticDone(turnStartMs: number, interrupted = false): void {
+    const elapsed = Date.now() - turnStartMs;
+    this.deps.ledger.recordEvent(
+      interrupted
+        ? buildInterruptedDone(elapsed)
+        : buildFatalDone(this.deps.getAbortController().signal, elapsed),
+    );
   }
 
   /**

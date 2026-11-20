@@ -1,10 +1,13 @@
 /**
- * Regression tests for the abandoned-turn desync ("ESC, send a message, it
- * looks sent but nothing runs, then every reply is one message behind").
+ * Regression tests for provider-turn ownership: the abandoned-turn desync
+ * ("ESC, send a message, it looks sent but nothing runs, then every reply is
+ * one message behind") and the stray interrupt ("ESC, send, ESC again: the
+ * session never answers again").
  *
  * Contract: one send owns one provider turn. A consumer that stops reading a
  * turn before its terminal event (the REPL soft-stop loop breaks on the first
- * event after ESC) must not leave that turn's tail for the NEXT send to read.
+ * event after ESC) must not leave that turn's tail for the NEXT send to read,
+ * and an interrupt must never reach the provider when it has no turn to stop.
  *
  * Field evidence this reproduces (session 830f0aa1, 2026-11-13): after ESC
  * during a tool round the next user message received the interrupted turn's
@@ -58,8 +61,10 @@ function completed(sessionId: string, stopReason: 'end_turn' | 'interrupted'): P
 /**
  * A provider shaped like the real ones where it matters here: ONE generator is
  * shared across turns, each turn gets its abort scope from the real
- * {@link AbortCoordinator} (so a redundant interrupt would park and pre-abort
- * the next turn, exactly as in production), and a "long" turn emits a
+ * {@link AbortCoordinator} (so a redundant interrupt parks and pre-aborts the
+ * next turn), a turn that starts pre-aborted ENDS the generator as the real
+ * driver does (anthropic-direct/query-turn-driver.ts, the early return after
+ * `abort.begin()`), and a "long" turn emits a
  * non-terminal event AFTER the abort before its terminal `turn.completed`,
  * as a tool round does when its aborted results are flushed. A "gated" long
  * turn additionally holds that tail until `releaseTail()` (a tool that is slow
@@ -111,11 +116,16 @@ function createScriptedProvider(sessionId: string): ScriptedProvider {
             const controller = abort.begin();
             try {
               if (controller.signal.aborted) {
-                yield completed(sessionId, 'interrupted');
-                continue;
+                // A parked interrupt reached this turn: the stream ends for
+                // good and every later send gets nothing.
+                abort.clear(controller);
+                return;
               }
               if (!content.includes('long')) {
                 yield { type: 'assistant.message', text: `Echo: ${content}`, sessionId };
+                // Like the real driver, the abort scope is released BEFORE the
+                // terminal is published, so a later interrupt finds no turn.
+                abort.clear(controller);
                 yield completed(sessionId, 'end_turn');
                 continue;
               }
@@ -382,7 +392,7 @@ describe('abandoned turn: ledger is sealed before settlement finishes', () => {
     expect(donesOfFirstTurn(await ledgerOf(sessionId))).toHaveLength(1);
   });
 
-  it('a turn nobody interrupted, then reset(): the rebuilt provider is not pre-aborted', async () => {
+  it('a turn nobody interrupted, then reset(): one done is kept and the next conversation runs', async () => {
     const sessionId = `abandoned-noint-reset-${Date.now()}`;
     const provider = createScriptedProvider(sessionId);
     const session = new AgentSession({ model: 'sonnet', provider });
@@ -392,10 +402,170 @@ describe('abandoned turn: ledger is sealed before settlement finishes', () => {
     const events = await collect(session, 'after reset');
     await session.close();
 
-    // Interrupting the REBUILT provider here would park the abort and kill
-    // this turn before it started.
     expect(messageTexts(events)).toEqual(['Echo: after reset']);
     expect(stopReasonOf(events)).toBe('end_turn');
     expect(donesOfFirstTurn(await ledgerOf(sessionId))).toHaveLength(1);
   });
+});
+
+describe('interrupt with no provider turn to stop', () => {
+  /** Start a send without awaiting it, and give it a moment to begin waiting. */
+  async function startSend(
+    session: AgentSession,
+    message: string,
+  ): Promise<{ events: OutputEvent[]; finished: Promise<void> }> {
+    const events: OutputEvent[] = [];
+    const finished = (async () => {
+      for await (const e of session.sendMessageStream(message)) events.push(e);
+    })();
+    await new Promise((r) => setTimeout(r, 20));
+    return { events, finished };
+  }
+
+  it('second ESC while the next send waits on the old turn: that send is cancelled and the session lives', async () => {
+    const provider = createScriptedProvider(`stray-repeat-esc-${Date.now()}`);
+    const session = new AgentSession({ model: 'sonnet', provider });
+
+    // ESC #1 on a tool that is slow to die, then a new message that has to
+    // wait for it, then ESC #2 because nothing visible is happening.
+    await sendThenEscAndBreak(session, 'long gated task');
+    const real = await startSend(session, 'real message');
+    await session.interrupt();
+    await real.finished;
+    const interruptsAfterSecondEsc = provider.interruptCalls;
+    provider.releaseTail();
+
+    const after = await collect(session, 'after');
+    const later = await collect(session, 'later');
+    await session.close();
+
+    // The cancelled send ends at once with a normal interrupted terminal and
+    // never reaches the provider; the provider was interrupted exactly once.
+    expect(real.events.map((e) => e.type)).toEqual(['done']);
+    expect(stopReasonOf(real.events)).toBe('interrupted');
+    expect(interruptsAfterSecondEsc).toBe(1);
+    expect(messageTexts(after)).toEqual(['Echo: after']);
+    expect(messageTexts(later)).toEqual(['Echo: later']);
+    expect(provider.startedTurns).toEqual(['long gated task', 'after', 'later']);
+  }, 5000);
+
+  it('ESC before the first turn has started (session still initializing) cancels the send only', async () => {
+    const provider = createScriptedProvider(`stray-init-esc-${Date.now()}`);
+    const session = new AgentSession({ model: 'sonnet', provider });
+
+    const stream = session.sendMessageStream('hello')[Symbol.asyncIterator]();
+    const first = stream.next(); // the send is now waiting on initialization
+    await session.interrupt();
+    const cancelled = await first;
+    await stream.return?.();
+    const interruptsAfterEsc = provider.interruptCalls;
+
+    const after = await collect(session, 'after');
+    await session.close();
+
+    expect(cancelled.done).toBe(false);
+    expect(cancelled.value.type).toBe('done');
+    expect(interruptsAfterEsc).toBe(0);
+    expect(messageTexts(after)).toEqual(['Echo: after']);
+    expect(provider.startedTurns).toEqual(['after']);
+  }, 5000);
+
+  it('ESC after the turn has produced its last event is not forwarded to the provider', async () => {
+    const provider = createScriptedProvider(`stray-late-esc-${Date.now()}`);
+    const session = new AgentSession({ model: 'sonnet', provider });
+
+    // Hold the stream at its terminal: the provider turn is over but the send
+    // has not finished (in production, end-of-turn hooks run in this window).
+    const stream = session.sendMessageStream('hello')[Symbol.asyncIterator]();
+    let r = await stream.next();
+    while (!r.done && r.value.type !== 'done') r = await stream.next();
+    await session.interrupt();
+    await stream.return?.();
+    const interruptsAfterEsc = provider.interruptCalls;
+
+    const after = await collect(session, 'after');
+    await session.close();
+
+    expect(interruptsAfterEsc).toBe(0);
+    expect(messageTexts(after)).toEqual(['Echo: after']);
+  }, 5000);
+
+  it('a send accepted while the interrupted turn still has its reader waits for that turn to end', async () => {
+    const provider = createScriptedProvider(`stray-live-reader-${Date.now()}`);
+    const session = new AgentSession({ model: 'sonnet', provider });
+
+    // The first consumer is interrupted but keeps its stream open.
+    const first = session.sendMessageStream('long gated task')[Symbol.asyncIterator]();
+    const firstEvents: OutputEvent[] = [];
+    const opening = await first.next();
+    if (!opening.done) firstEvents.push(opening.value);
+    await session.interrupt();
+
+    const real = await startSend(session, 'real message');
+    provider.releaseTail();
+    for (let r = await first.next(); !r.done; r = await first.next()) firstEvents.push(r.value);
+    await real.finished;
+    await session.close();
+
+    // Each consumer saw only its own turn, in order.
+    expect(chunkTexts(firstEvents)).toEqual([
+      'start:long gated task',
+      'aborting:long gated task',
+      'tail:long gated task',
+    ]);
+    expect(stopReasonOf(firstEvents)).toBe('interrupted');
+    expect(chunkTexts(real.events)).toEqual([]);
+    expect(messageTexts(real.events)).toEqual(['Echo: real message']);
+    expect(provider.startedTurns).toEqual(['long gated task', 'real message']);
+  }, 5000);
+
+  it('the earlier reader letting go does not mark the session idle under the newer turn', async () => {
+    const provider = createScriptedProvider(`stray-state-owner-${Date.now()}`);
+    const session = new AgentSession({ model: 'sonnet', provider });
+
+    const first = session.sendMessageStream('long gated task')[Symbol.asyncIterator]();
+    await first.next();
+    await session.interrupt(); // interrupt #1, for the first turn
+    const second = session.sendMessageStream('long second')[Symbol.asyncIterator]();
+    const secondOpening = second.next(); // waits behind the first turn
+    provider.releaseTail();
+    for (let r = await first.next(); !r.done && r.value.type !== 'done'; r = await first.next()) {
+      // read the first turn up to its terminal, keeping the stream open
+    }
+    await secondOpening; // the second turn is now running
+    await first.return?.(); // the earlier reader finally lets go
+    const stateAfterFirstLetGo = session.state;
+
+    await session.interrupt(); // must reach the SECOND turn
+    const interrupts = provider.interruptCalls;
+    await second.return?.();
+    await session.close();
+
+    expect(stateAfterFirstLetGo).toBe('streaming');
+    expect(interrupts).toBe(2);
+  }, 5000);
+
+  it('close() cancels a send that is still waiting to start', async () => {
+    const provider = createScriptedProvider(`stray-close-waiter-${Date.now()}`);
+    const session = new AgentSession({ model: 'sonnet', provider });
+
+    const first = session.sendMessageStream('long gated task')[Symbol.asyncIterator]();
+    await first.next();
+    await session.interrupt();
+    const second = session.sendMessageStream('real message')[Symbol.asyncIterator]();
+    const opening = second.next(); // waits behind the first turn
+    await session.close();
+
+    // Decided before the first reader lets go: the waiter must not hang on it.
+    const outcome = await Promise.race([
+      opening.then((r) => (r.done ? 'ended' : r.value.type)),
+      new Promise<string>((r) => setTimeout(() => r('hung'), 200)),
+    ]);
+    await first.return?.();
+    provider.releaseTail();
+
+    expect(outcome).toBe('done');
+    expect(session.getHistory().map((m) => m.content)).toEqual(['long gated task']);
+    expect(provider.startedTurns).toEqual(['long gated task']);
+  }, 5000);
 });

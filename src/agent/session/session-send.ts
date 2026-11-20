@@ -57,6 +57,7 @@ export async function sendMessage(
   deps: SendDeps,
 ): Promise<Message> {
   deps.runner.assertCanSend();
+  const sendId = deps.runner.nextSendId();
   const config = deps.getConfig();
   const timeoutMs = config.timeoutMs ?? DEFAULT_SESSION_TIMEOUT_MS;
 
@@ -104,7 +105,8 @@ export async function sendMessage(
       label: deps.getSessionId() ?? 'session',
     });
   } finally {
-    if (deps.getState() === 'processing') deps.setState('idle');
+    // Only the most recent send releases the busy state (see `hasNewerSend`).
+    if (deps.getState() === 'processing' && !deps.runner.hasNewerSend(sendId)) deps.setState('idle');
   }
 }
 
@@ -154,11 +156,13 @@ export async function* sendMessageStream(
   deps: SendDeps,
 ): AsyncIterableIterator<OutputEvent> {
   deps.runner.assertCanSend();
+  const sendId = deps.runner.nextSendId();
   deps.setState('streaming');
   try {
     yield* withSkillReferenceTelemetry(content, sendMessageStreamInternal(content, deps), deps);
   } finally {
-    if (deps.getState() === 'streaming') deps.setState('idle');
+    // Only the most recent send releases the busy state (see `hasNewerSend`).
+    if (deps.getState() === 'streaming' && !deps.runner.hasNewerSend(sendId)) deps.setState('idle');
   }
 }
 
@@ -209,15 +213,26 @@ export function sendMessageStreamInternal(
 }
 
 /**
- * Interrupt an in-progress provider turn. No-op when idle or closed.
+ * Interrupt the turn the session is working on. No-op when idle or closed.
+ *
+ * Contract: the provider is told to stop at most once per turn, and only while
+ * that turn is in flight. Session state cannot tell: it reads `streaming` both
+ * while a send is still waiting for the previous turn to stop and after the
+ * provider has already produced the turn's last event. An interrupt forwarded
+ * then has no turn to act on; the provider parks it and aborts the NEXT turn
+ * before it starts, which ends the provider stream for good. So the runner,
+ * which knows, decides: a send that has not started is cancelled without
+ * touching the provider, and a turn that already ended is left alone.
  */
 export async function interrupt(
-  deps: Pick<SendDeps, 'getState' | 'setState' | 'getProviderQuery'>,
+  deps: Pick<SendDeps, 'getState' | 'setState' | 'getProviderQuery' | 'runner'>,
 ): Promise<void> {
   const state = deps.getState();
   if (state !== 'streaming' && state !== 'processing') return;
+  const target = deps.runner.claimInterrupt();
+  if (target === 'none') return;
   deps.setState('idle');
-  await deps.getProviderQuery().interrupt();
+  if (target === 'provider') await deps.getProviderQuery().interrupt();
 }
 
 /**
