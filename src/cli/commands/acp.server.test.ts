@@ -22,7 +22,7 @@ vi.mock('./acp.session-load.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('./acp.session-load.js')>(), loadAcpSession: vi.fn(), replayHistory: vi.fn(),
 }));
 
-import { runAcpServer, type AcpServerOptions } from './acp.server.js';
+import { exitAfterServer, runAcpServer, type AcpServerOptions } from './acp.server.js';
 import * as acpSession from './acp.session.js';
 import * as translate from './acp.translate.js';
 import * as permission from './acp.permission.js';
@@ -439,6 +439,35 @@ describe('ACP server — cancel and close', () => {
     expect(rejected).toBe(true);
     expect(h.frames.at(-1)).toEqual({ jsonrpc: '2.0', id: 3, result: { stopReason: 'cancelled' } });
     expect(mClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ACP server — shutdown bound (D17)', () => {
+  it('EOF closes sessions concurrently; a hung close is abandoned at the deadline', async () => {
+    let n = 0;
+    mBuild.mockImplementation(async () => ({ ...(fakeHandle() as object), tag: ++n }) as never);
+    mLoad.mockImplementation(async () => ({ ...(fakeHandle() as object), tag: ++n }) as never);
+    const closed: number[] = [];
+    mClose.mockImplementation(async (handle: { tag?: number }) => {
+      if (handle.tag === 1) await new Promise(() => { /* a close that never finishes */ });
+      closed.push(handle.tag ?? 0);
+    });
+    const h = startServer({ shutdownDeadlineMs: 50 });
+    h.send(init); h.send(newSession(2));
+    h.send(req(3, 'session/resume', { sessionId: 'other-session', cwd: WS }));
+    await h.waitFor(3);
+    const started = Date.now();
+    await h.end();
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(closed).toEqual([2]);
+    expect(mClose).toHaveBeenCalledTimes(2);
+    expect(h.logs.join('\n')).toMatch(/session close still running after 50ms/);
+  });
+  it('exitAfterServer flushes output then exits with the process exit code', async () => {
+    const output = new PassThrough();
+    const exit = vi.fn();
+    await exitAfterServer(output, exit);
+    expect(exit).toHaveBeenCalledWith(0);
   });
 });
 

@@ -14,6 +14,18 @@ describe('ACP resource ownership', () => {
     expect(released).toEqual(['children', 'mcp', 'stores', 'trace']);
   });
 
+  it('D17: a hung owner is abandoned at its deadline and later owners still release', async () => {
+    const resources = new AcpSessionResources(30);
+    const released: string[] = [];
+    resources.add(() => { released.push('trace'); });
+    resources.add(() => new Promise(() => { /* an MCP server that never disconnects */ }));
+    resources.add(() => { released.push('children'); });
+    const started = Date.now();
+    await resources.release();
+    expect(released).toEqual(['children', 'trace']);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
   it('shares the drain receipt between session close and external rollback', async () => {
     const drain = vi.fn(async () => { throw new Error('drain failed'); });
     const once = onceAcpShutdown(drain);
