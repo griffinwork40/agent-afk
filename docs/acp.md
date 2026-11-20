@@ -256,9 +256,10 @@ children are asked per tool call.
 A subagent given its own working directory has its relative paths checked
 against that directory, and it is asked when they leave the session `cwd`.
 Where the subagent's directory is not known (an `agent` call or `compose` node
-run with worktree isolation, whose checkout holds the whole repository, or a
-continued `agent` chain), any of its calls that use a relative path or no path
-are asked once such a delegation has been allowed.
+run with worktree isolation, whose checkout holds the whole repository, a
+continued `agent` chain, or a `context: fork` user or project skill), any of its
+calls that use a relative path or no path are asked, are not offered
+`allow_always` and are not covered by a remembered grant.
 
 ## Permissions
 

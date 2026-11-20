@@ -107,7 +107,7 @@ describe('D9 child approval lifecycle', () => {
 
   it('children auto-allow inside reads but are asked for outside reads', async () => {
     const t = setup();
-    const child = t.gate.forChild!({ route: 'agent', depth: 1 });
+    const child = t.gate.forChild!({ route: 'agent', depth: 1, cwd });
     expect(await child('read_file', { file_path: 'a.txt' }, opts('r'))).toEqual({ behavior: 'allow' });
     void child('read_file', { file_path: outside }, opts('o'));
     await untilRequests(t.requests, 1);
@@ -118,8 +118,9 @@ describe('D9 child approval lifecycle', () => {
 describe('D10 children relocated by a delegation cwd', () => {
   it('after an agent call with its own cwd, child relative and no-path reads are asked', async () => {
     const t = setup();
+    const known = t.gate.forChild!({ route: 'agent', depth: 1, cwd });
+    expect(await known('grep', { pattern: 'x' }, opts('g0'))).toEqual({ behavior: 'allow' });
     const child = t.gate.forChild!({ route: 'agent', depth: 1 });
-    expect(await child('grep', { pattern: 'x' }, opts('g0'))).toEqual({ behavior: 'allow' });
     const p = t.gate.canUseTool('agent', { prompt: 'p', cwd: path.dirname(outside) }, opts('a1'));
     await untilRequests(t.requests, 1);
     expect((t.requests[0]!.params as { toolCall: { title: string } }).toolCall.title)
@@ -183,7 +184,7 @@ describe('D11 grants', () => {
     await untilRequests(t.requests, 1);
     t.requests[0]!.resolve(pick('allow_always'));
     expect(await p).toEqual({ behavior: 'allow' });
-    const child = t.gate.forChild!({ route: 'skill', depth: 1, label: 's' });
+    const child = t.gate.forChild!({ route: 'skill', depth: 1, label: 's', cwd });
     expect(await child('write_file', { file_path: 'b.txt', content: '' }, opts('c1'))).toEqual({ behavior: 'allow' });
     expect(t.gate.wouldAsk!('write_file', { file_path: outside })).toBe(true);
     void t.gate.canUseTool('write_file', { file_path: outside, content: '' }, opts('p2'));
@@ -191,6 +192,12 @@ describe('D11 grants', () => {
     const req = t.requests[1]!.params as { toolCall: { title: string }; options: { optionId: string }[] };
     expect(req.toolCall.title).toBe(`write_file ${outside}`);
     expect(req.options.map((o) => o.optionId)).toEqual(['allow_once', 'reject_once']);
+    // A child whose cwd is unknown is never covered for a relative write, nor offered always.
+    const unknown = t.gate.forChild!({ route: 'skill', depth: 1, label: 'u' });
+    void unknown('write_file', { file_path: 'c.txt', content: '' }, opts('c2'));
+    await untilRequests(t.requests, 3);
+    const childReq = t.requests[2]!.params as { options: { optionId: string }[] };
+    expect(childReq.options.map((o) => o.optionId)).toEqual(['allow_once', 'reject_once']);
   });
 
   it('an allow_always reply to an outside request is never remembered', async () => {

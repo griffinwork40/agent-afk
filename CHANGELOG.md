@@ -59,6 +59,10 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
   made by children of an `agent` or `compose` delegation with worktree
   isolation, or of a continued `agent` chain, are asked, because their checkout
   can lie outside the session `cwd`.
+- **Subagents whose directory is unknown are asked.** A child whose working
+  directory the server does not know, such as a `context: fork` user or project
+  skill, has its calls with a relative path or no path asked, without an
+  "always allow" option, and an earlier grant does not cover them.
 - **`git_read` of a ref that may name a file is asked.** Every subcommand that
   can print file content (`show`, `diff`, `grep`, `blame`, `cat-file`, and
   `log` with patches) is asked when a revision is not provably a commit,

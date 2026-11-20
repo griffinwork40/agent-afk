@@ -92,7 +92,8 @@ describe('D19: isolation relocates children wherever it is declared', () => {
   it('isolation "none" does not arm the rule', async () => {
     const t = setup();
     await ask(t.gate, t.requests, 'agent', { prompt: 'p', isolation: 'none' });
-    const child = t.gate.forChild!({ route: 'agent', depth: 1 });
+    // A child whose origin names the session cwd keeps auto-allowed inside reads.
+    const child = t.gate.forChild!({ route: 'agent', depth: 1, cwd });
     expect(await child('list_directory', {}, opts('l1'))).toEqual({ behavior: 'allow' });
   });
   it('a child that delegates into an isolated worktree arms the rule for grandchildren', async () => {

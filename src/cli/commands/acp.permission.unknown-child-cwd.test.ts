@@ -1,5 +1,5 @@
 /**
- * Red team 2b: a `context: fork` user/project skill forks its child through a
+ * Regression for profile section 6 (children with an unknown cwd). Red team 2b: a `context: fork` user/project skill forks its child through a
  * cwd-less SubagentManager (src/skills/user-skills.ts:186-212, "this manager
  * passes no `cwd`"), so the child runs in the ACP server's process.cwd(), not
  * the session cwd (D14: the session cwd need not be under the launch dir).
@@ -64,7 +64,7 @@ async function forkUserSkill(childGate: ReturnType<typeof inlineSkillChildGate>)
 
 afterEach(() => { vi.restoreAllMocks(); });
 
-describe('redteam2b: forked user skill runs outside the session cwd', () => {
+describe('children with an unknown cwd: a forked user skill runs outside the session cwd', () => {
   it('precondition: the forked child has no cwd, so it runs in the launch dir, not the session cwd', async () => {
     const t = setup();
     const c = await forkUserSkill(inlineSkillChildGate(t.gate.forChild!, 1));

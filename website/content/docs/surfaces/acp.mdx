@@ -168,7 +168,7 @@ Edit tools emit `diff` content items alongside text results. Each diff has this 
 
 `remote_agent` runs on a separate machine. Its tool calls are not covered by this session's approval bridge; the title says so.
 
-A subagent given its own working directory has its relative paths checked against that directory and is asked when they leave the session `cwd`. Where the subagent's directory is not known (an `agent` call or `compose` node run with worktree isolation, whose checkout holds the whole repository, or a continued `agent` chain), its calls with a relative path or no path are asked once such a delegation has been allowed.
+A subagent given its own working directory has its relative paths checked against that directory and is asked when they leave the session `cwd`. Where the subagent's directory is not known (an `agent` call or `compose` node run with worktree isolation, whose checkout holds the whole repository, a continued `agent` chain, or a `context: fork` user or project skill), its calls with a relative path or no path are asked, are not offered `allow_always` and are not covered by a remembered grant.
 
 ## Permissions
 

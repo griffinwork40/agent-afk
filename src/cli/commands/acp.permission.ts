@@ -12,7 +12,7 @@ import type {
 import { buildPendingStart, outsideTargets, permissionOptions, requiresAsk } from './acp.permission.policy.js';
 import type { ChildToolOrigin } from '../../agent/tools/nesting.can-use-tool.js';
 import { childPrefix } from './acp.permission.labels.js';
-import { dependsOnCallerCwd, relocatesChildren } from './acp.permission.paths.js';
+import { dependsOnCallerCwd } from './acp.permission.paths.js';
 import { grantFits } from './acp.permission.grants.js';
 import { AcpPeerClosedError } from './acp.rpc-peer.js';
 
@@ -114,18 +114,16 @@ interface GateState {
   childSeq: number;
   /** Child decisions still running, so the turn can wait for their cards to close. */
   childInFlight: Set<Promise<unknown>>;
-  /**
-   * Set once a delegation that runs children in another directory is allowed.
-   * From then on a child whose origin carries no cwd has its reads that depend
-   * on its own cwd (relative or absent path) asked, not auto-allowed. A child
-   * whose origin names its cwd has its paths resolved against that instead.
-   */
-  childCwdUnknown: boolean;
 }
 
 /** Who is asking: the top-level session (stream closes the card) or a forked child (gate closes it). */
 interface Asker {
   child?: { prefix: string; origin: string; cwd?: string };
+}
+
+/** A child call whose effective target depends on a child cwd the gate does not know. */
+function cwdUnknownChild(who: Asker, input: Record<string, unknown>): boolean {
+  return who.child !== undefined && who.child.cwd === undefined && dependsOnCallerCwd(input);
 }
 
 /** Abort/cancel recheck used at every await boundary before an allow can escape. */
@@ -150,7 +148,7 @@ async function askClient(
   try {
     const outside = outsideTargets(toolName, input, st.opts.cwd, who.child?.cwd).length > 0;
     // D18: "Always allow" only for a listed tool whose every argument and location is known and inside.
-    const grantable = !outside && grantFits(toolName, input, st.opts.cwd, who.child?.cwd);
+    const grantable = !outside && !cwdUnknownChild(who, input) && grantFits(toolName, input, st.opts.cwd, who.child?.cwd);
     const start = buildPendingStart(toolUseID, toolName, input, st.opts.cwd, who.child?.prefix ?? '', who.child?.cwd);
     try { await st.opts.emitToolCall(start); } catch { return denyResult('request_error'); }
     const early = interrupted(signal, ask);
@@ -208,7 +206,10 @@ async function decide(
   const name = typeof toolName === 'string' ? toolName : '';
   const input = isRecord(rawInput) ? rawInput : {};
   const callerCwd = who.child?.cwd;
-  const relocated = who.child !== undefined && callerCwd === undefined && st.childCwdUnknown && dependsOnCallerCwd(input);
+  // Fail closed: a child whose origin names no cwd may run anywhere (a `context: fork`
+  // user skill runs in the server's launch directory), so its calls with a relative
+  // or no path are asked and never covered by a grant, as for a relocated child.
+  const relocated = cwdUnknownChild(who, input);
   if (!relocated && !requiresAsk(name, input, st.opts.cwd, callerCwd)) return allow();
   if (!relocated && grantCovers(st, name, input, callerCwd)) {
     // A child's granted call has no stream card to move; it just runs (D13).
@@ -216,7 +217,6 @@ async function decide(
   }
   if (!who.child) {
     const verdict = await askClient(st, name, input, signal, toolUseID);
-    if (verdict.behavior === 'allow' && relocatesChildren(name, input, st.opts.cwd)) st.childCwdUnknown = true;
     return verdict;
   }
   if (!turnLive(st)) return denyResult('no_active_turn');
@@ -224,8 +224,6 @@ async function decide(
   const child = who.child;
   const run = (async () => {
     const result = wellFormed(await askClient(st, name, input, signal, toolUseID.length > 0 ? cardId : '', who));
-    // D19: a child that delegates into another directory relocates its own children too.
-    if (result.behavior === 'allow' && relocatesChildren(name, input, child.cwd ?? st.opts.cwd)) st.childCwdUnknown = true;
     await closeChildCard(st, cardId, name, input, result, child);
     return result;
   })();
@@ -292,7 +290,6 @@ export function createAcpPermissionGate(
 ): AcpPermissionGate {
   const st: GateState = {
     peer, sessionId, opts, granted: new Set(), pending: new Set(), childSeq: 0, childInFlight: new Set(),
-    childCwdUnknown: false,
   };
   const gated = (who: Asker): CanUseTool => async (toolName, input, options) => {
     try {
