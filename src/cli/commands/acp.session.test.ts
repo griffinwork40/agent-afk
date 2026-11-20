@@ -177,6 +177,31 @@ describe('buildAcpSession — approvals (D8, D9)', () => {
   });
 });
 
+describe('closeAcpSession — double-drain invariant [C3]', () => {
+  it('a double close calls the underlying drain exactly once', async () => {
+    // closeAcpSession calls session.close() (which drains subagents) and then
+    // resources.release() (which calls the same drainSubagents via a disposer).
+    // onceAcpShutdown makes the drain idempotent, so the underlying function
+    // must be invoked only once regardless of how many times the wrapper is called.
+    const { onceAcpShutdown } = await import('./acp.session.resources.js');
+    const underlying = vi.fn(async (_reason: string) => {});
+    const drain = onceAcpShutdown(underlying);
+    await drain('close');
+    await drain('close');
+    expect(underlying).toHaveBeenCalledTimes(1);
+  });
+
+  it('a double release of AcpSessionResources calls each disposer exactly once', async () => {
+    const { AcpSessionResources } = await import('./acp.session.resources.js');
+    const resources = new AcpSessionResources();
+    const disposer = vi.fn();
+    resources.add(disposer);
+    await resources.release();
+    await resources.release();
+    expect(disposer).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('closeAcpSession', () => {
   it('closes the session and stores', async () => {
     const handle = await buildAcpSession({ model: 'sonnet', maxTurns: 10 });

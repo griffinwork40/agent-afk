@@ -79,6 +79,13 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
     });
     const shutdown = withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor), continuationRegistry);
     const drainSubagents = onceAcpShutdown(shutdown.drainSubagents);
+    // Invariant: drainSubagents is called twice on a normal close: once by
+    // session.close() (which calls it internally via AgentSession) and once
+    // through this disposer when resources.release() runs. The double-call is
+    // safe only because onceAcpShutdown makes drainSubagents idempotent: the
+    // second call returns the same promise as the first without re-running the
+    // drain. Do not replace onceAcpShutdown with a plain async wrapper here
+    // without also removing one of the two call sites.
     resources.add(() => drainSubagents('close'));
     const provider = createAcpProvider({
       model: String(model), subagentExecutor, skillExecutor, composeExecutor, memoryStore, stateStore,
