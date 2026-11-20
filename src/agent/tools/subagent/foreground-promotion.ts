@@ -163,6 +163,14 @@ export interface RunForegroundArgs {
    * When omitted the registry falls back to the global goal key.
    */
   projectKey?: string;
+  /**
+   * The child's working directory when it differs from the parent's cwd.
+   * Present for worktree-isolated runs (`isolationTeardown.worktreePath`) and
+   * explicit cwd-override dispatches (`parsed.cwd`). When set, the failure
+   * payload includes this directory plus its git branch, HEAD SHA, and dirty
+   * file count so the parent can triage without listing worktrees.
+   */
+  childCwd?: string;
 }
 
 /**
@@ -307,7 +315,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
     const result = outcome.kind === 'result' ? outcome.result : await runPromise;
 
     // Invariant: shape synchronously and assign before teardown appends the stop note.
-    toolResult = foregroundCompletionResult({ handle, identity, parentSessionId, depth, model, parentModel, idPrefix }, result, startedAt);
+    toolResult = foregroundCompletionResult({ handle, identity, parentSessionId, depth, model, parentModel, idPrefix, childCwd: args.childCwd }, result, startedAt);
     return toolResult;
   } catch (err) {
     // Defense in depth: an unexpected throw (e.g. timeout that surfaces

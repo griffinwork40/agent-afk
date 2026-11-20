@@ -23,6 +23,7 @@ import {
   measurePartial,
   buildFailurePayload,
   type StructuredFailurePayload,
+  type WorktreeContext,
 } from './failure-payload.js';
 
 describe('truncate', () => {
@@ -293,11 +294,9 @@ describe('buildFailurePayload', () => {
     expect(payload.schemaError!.length).toBe(1025);
   });
 
-  it('produces a payload that excludes prompts/stack-traces/credentials by construction', () => {
-    // Documented invariant: the payload carries ONLY status, error,
-    // schemaError, partialOutput, subagent_id. Even if a caller passes a
-    // long error string, no extra keys leak. This pins the shape so a future
-    // edit that widens the payload has to update this test.
+  it('produces a payload that excludes prompts/stack-traces/credentials by construction (no worktree)', () => {
+    // Documented invariant: without worktreeContext the payload carries ONLY
+    // status, error, schemaError, partialOutput, subagent_id.
     const payload = buildFailurePayload({
       status: 'failed',
       errorMessage: 'boom',
@@ -308,6 +307,87 @@ describe('buildFailurePayload', () => {
     expect(Object.keys(payload).sort()).toEqual(
       ['error', 'partialOutput', 'schemaError', 'status', 'subagent_id'].sort(),
     );
+  });
+});
+
+describe('buildFailurePayload — worktree context (#5022 item 3)', () => {
+  it('omits worktree fields when worktreeContext is not supplied', () => {
+    const payload = buildFailurePayload({
+      status: 'failed',
+      errorMessage: 'e',
+      subagentId: 'c',
+    });
+    expect('cwd' in payload).toBe(false);
+    expect('branch' in payload).toBe(false);
+    expect('headSha' in payload).toBe(false);
+    expect('dirtyCount' in payload).toBe(false);
+  });
+
+  it('includes cwd when worktreeContext is supplied with only cwd', () => {
+    const wt: WorktreeContext = { cwd: '/repo/.afk-worktrees/my-task' };
+    const payload = buildFailurePayload({
+      status: 'failed',
+      errorMessage: 'e',
+      subagentId: 'c',
+      worktreeContext: wt,
+    });
+    expect(payload.cwd).toBe('/repo/.afk-worktrees/my-task');
+    expect('branch' in payload).toBe(false);
+    expect('headSha' in payload).toBe(false);
+    expect('dirtyCount' in payload).toBe(false);
+  });
+
+  it('includes all worktree fields when fully supplied', () => {
+    const wt: WorktreeContext = {
+      cwd: '/repo/.afk-worktrees/my-task',
+      branch: 'afk/my-task-abc123',
+      headSha: 'aec7a556c0ab9a234f0256020abaa4c2ef060b7a',
+      dirtyCount: 3,
+    };
+    const payload = buildFailurePayload({
+      status: 'failed',
+      errorMessage: 'auth error',
+      subagentId: 'child-wt',
+      worktreeContext: wt,
+    });
+    expect(payload.cwd).toBe(wt.cwd);
+    expect(payload.branch).toBe(wt.branch);
+    expect(payload.headSha).toBe(wt.headSha);
+    expect(payload.dirtyCount).toBe(3);
+  });
+
+  it('includes dirtyCount=0 when the worktree is clean', () => {
+    // dirtyCount=0 is meaningful (clean tree) and must not be omitted.
+    const wt: WorktreeContext = {
+      cwd: '/repo/.afk-worktrees/clean-task',
+      dirtyCount: 0,
+    };
+    const payload = buildFailurePayload({
+      status: 'failed',
+      errorMessage: 'e',
+      subagentId: 'c',
+      worktreeContext: wt,
+    });
+    expect(payload.dirtyCount).toBe(0);
+  });
+
+  it('worktree fields coexist with schemaError and partialOutput', () => {
+    const wt: WorktreeContext = {
+      cwd: '/repo/.afk-worktrees/typed-task',
+      branch: 'afk/typed-task-xyz',
+    };
+    const payload = buildFailurePayload({
+      status: 'failed',
+      errorMessage: 'schema fail',
+      schemaErrorMessage: 'expected string',
+      partialOutput: { partial: 'data' },
+      subagentId: 'typed-child',
+      worktreeContext: wt,
+    });
+    expect(payload.cwd).toBe(wt.cwd);
+    expect(payload.branch).toBe(wt.branch);
+    expect(payload.schemaError).toBe('expected string');
+    expect(payload.partialOutput).toEqual({ partial: 'data' });
   });
 });
 
