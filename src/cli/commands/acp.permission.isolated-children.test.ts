@@ -107,3 +107,16 @@ describe('D19: isolation relocates children wherever it is declared', () => {
     expect(r).toBe('pending');
   });
 });
+
+describe('D19: a continued agent inherits an unseen cwd', () => {
+  it('agent with continuation_chain_id arms the unknown-cwd rule', async () => {
+    const t = setup();
+    const p = t.gate.canUseTool('agent', { prompt: 'p', continuation_chain_id: 'chain-1' }, opts('a1'));
+    await flush();
+    t.requests[0]!.resolve({ outcome: { outcome: 'selected', optionId: 'allow_once' } });
+    expect(await p).toEqual({ behavior: 'allow' });
+    const child = t.gate.forChild!({ route: 'subagent', depth: 1 });
+    const r = await Promise.race([child('glob', { pattern: '**/*' }, opts('g1')), flush().then(() => 'pending' as const)]);
+    expect(r).toBe('pending');
+  });
+});

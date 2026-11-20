@@ -22,6 +22,34 @@ function setup() {
 }
 const opts = (id: string) => ({ signal: new AbortController().signal, toolUseID: id });
 
+// Contract: every argument of an auto-allowed tool must be either scanned as a
+// location or known not to be one. A schema that grows a new argument fails
+// here, so a new path argument cannot be silently auto-allowed.
+const NOT_LOCATIONS: Record<string, readonly string[]> = {
+  read_file: ['offset', 'limit'], view_image: [], extract_document: [],
+  json_query: ['query', 'max_results', 'max_bytes'], list_directory: [],
+  grep: ['pattern', 'include'], glob: ['pattern'], git_read: ['subcommand', 'args', 'pattern', 'max_bytes'],
+  config_get: ['target', 'key', 'all'], get_runtime_state: ['view'], get_facet: ['session', 'fields'],
+  read_witness: ['session', 'kinds', 'where', 'tool_name', 'errors_only', 'limit'],
+  search_witness: ['query', 'sessions', 'kinds', 'since', 'tool_name', 'where', 'include_current_session'],
+  read_journal: ['session', 'tool_use_id', 'kinds', 'limit'], artifact_get: ['id'],
+  artifact_list: ['session_id', 'subagent_id', 'tool_name', 'media_type', 'since', 'until', 'limit'],
+  artifact_read: ['id', 'offset', 'limit'], get_background_job_health: ['jobId'], list_sessions: [],
+  list_schedules: ['name', 'enabled'], get_schedule_history: ['taskId', 'limit'],
+};
+const SCANNED = ['file_path', 'path', 'paths'];
+
+describe('auto-allowed tool arguments', () => {
+  it('every argument of every auto-allowed built-in tool is classified', () => {
+    for (const [name, known] of Object.entries(NOT_LOCATIONS)) {
+      const schema = builtinToolSchemas.find((t) => t.name === name);
+      if (schema === undefined) continue;
+      const keys = Object.keys((schema.input_schema as { properties?: Record<string, unknown> }).properties ?? {});
+      for (const k of keys) expect([...SCANNED, ...known], `${name}.${k}`).toContain(k);
+    }
+  });
+});
+
 describe('D18 grant list', () => {
   it('is exactly the file-editing tools', () => {
     expect([...GRANTABLE_TOOLS]).toEqual(['write_file', 'edit_file', 'patch_apply']);
@@ -54,7 +82,9 @@ describe('D18 grant list', () => {
 
   it('no other tool can be offered, or obtain, a remembered grant', async () => {
     const names = [...new Set([...builtinToolSchemas.map((t) => t.name),
-      'agent', 'skill', 'compose', 'remote_agent', 'code_symbols', 'memory_update', 'mcp__srv__write_file', 'bash'])];
+      'agent', 'skill', 'compose', 'remote_agent', 'code_symbols', 'memory_update', 'mcp__srv__write_file', 'bash',
+      'procedure_write', 'workspace_publish', 'workspace_subscribe', 'state_put', 'state_cas', 'state_delete',
+      'exit_plan_mode', 'emit_progress', 'lsp_rename', 'brand_new_tool'])];
     for (const name of names.filter((n) => !GRANTABLE_TOOLS.includes(n))) {
       expect(permissionOptions(name).map((o) => o.optionId), name).not.toContain('allow_always');
       // Tools that are always auto-allowed inside never reach a grant decision.

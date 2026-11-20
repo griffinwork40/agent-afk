@@ -91,6 +91,8 @@ export function relocatesChildren(toolName: string, input: Record<string, unknow
   // checkout of the whole repository, outside a subdirectory session cwd.
   const isolates = (v: unknown): boolean => v !== undefined && v !== 'none';
   if (isolates(input['isolation'])) return true;
+  // A continued agent inherits its chain's cwd and isolation, which this call does not show.
+  if (input['continuation_chain_id'] !== undefined) return true;
   if (Array.isArray(input['nodes']) && input['nodes'].some((n) => !isRecord(n) || isolates(n['isolation']))) return true;
   if (input['cwd'] !== undefined && !(usableCwd(cwd) && typeof input['cwd'] === 'string'
     && path.resolve(cwd, input['cwd']) === path.resolve(cwd))) return true;
