@@ -218,7 +218,9 @@ describe('inline skill handlers', () => {
     // The fork config built from it is enforced by the child's bare resolver.
     const p = track(bareProviderResolver({ model: 'sonnet', canUseTool: gate! })('sonnet'));
     await expectDenyThenContinue(p, 'write_file');
-    expect(g.calls[0]?.origin).toEqual({ route: 'skill', depth: 1, agentType: 'user-skill-x' });
+    // The executor was constructed with cwd: tmp, so the gate origin now
+    // carries that directory — the fix for H5 (skill child cwd propagation).
+    expect(g.calls[0]?.origin).toEqual({ route: 'skill', depth: 1, agentType: 'user-skill-x', cwd: tmp });
   });
 
   it('mint phase gate: recorded per session, spread into fork configs, cleared on reset', () => {
