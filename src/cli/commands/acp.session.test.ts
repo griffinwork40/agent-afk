@@ -157,6 +157,26 @@ describe('buildAcpSession — injection chain', () => {
   });
 });
 
+describe('buildAcpSession — approvals (D8, D9)', () => {
+  it('always runs bypassPermissions; the skip flag only controls the bridge', async () => {
+    const { wireExecutors } = await import('../../agent/session/wire-executors.js');
+    for (const skip of [false, true, undefined]) {
+      mockInjectHotMemory.mockClear();
+      await buildAcpSession({ model: 'sonnet', maxTurns: 10, ...(skip !== undefined ? { dangerouslySkipPermissions: skip } : {}) });
+      const [config] = mockInjectHotMemory.mock.calls[0] as [{ permissionMode: string }];
+      expect(config.permissionMode).toBe('bypassPermissions');
+    }
+    expect(vi.mocked(wireExecutors).mock.calls.every(([o]) => !('childCanUseTool' in o))).toBe(true);
+  });
+
+  it('passes the child approval factory to executor wiring', async () => {
+    const { wireExecutors } = await import('../../agent/session/wire-executors.js');
+    const childCanUseTool = vi.fn();
+    await buildAcpSession({ model: 'sonnet', maxTurns: 10, childCanUseTool });
+    expect(vi.mocked(wireExecutors).mock.calls.at(-1)?.[0]).toMatchObject({ childCanUseTool });
+  });
+});
+
 describe('closeAcpSession', () => {
   it('closes the session and stores', async () => {
     const handle = await buildAcpSession({ model: 'sonnet', maxTurns: 10 });

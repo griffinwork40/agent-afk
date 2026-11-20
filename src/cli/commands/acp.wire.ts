@@ -1,6 +1,7 @@
 // Contract: the emitted/accepted AFK subset of ACP v1 at d98a032.
 // Optional upstream features not advertised by AFK are intentionally absent.
 import type { CanUseTool } from '../../agent/types/sdk-types.js';
+import type { ChildToolOrigin } from '../../agent/tools/nesting.can-use-tool.js';
 import type { ElicitationHandler } from '../../agent/elicitation-router.js';
 import type { ResponseMetadata } from '../../agent/types/message-types.js';
 export type { CanUseTool } from '../../agent/types/sdk-types.js';
@@ -154,6 +155,12 @@ export interface AcpPermissionOptions {
   onCancelled(): void;
   /** Session cwd for relative display locations; absent means relative paths are omitted. */
   cwd?: string;
+  /**
+   * D9: true while a prompt turn is live and not cancelled. A child that asks
+   * outside a turn (a background job) is denied without a card, because no
+   * update may follow the prompt response. Absent means always live.
+   */
+  turnActive?(): boolean;
 }
 export interface AcpPermissionGate {
   canUseTool: CanUseTool;
@@ -163,4 +170,10 @@ export interface AcpPermissionGate {
   cancelAll(): void;
   /** True when a call of this tool would ask the client now (policy, grants, skip). Pure. */
   wouldAsk?(toolName: string, input: Record<string, unknown>): boolean;
+  /**
+   * D9: approval callback for one forked child, used as the session's
+   * `childCanUseTool` factory. Same policy, grants and client; labelled title;
+   * the gate closes the child's card itself. Undefined/malformed origin still gates.
+   */
+  forChild?(origin: ChildToolOrigin | undefined): CanUseTool;
 }

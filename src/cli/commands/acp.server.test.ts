@@ -280,6 +280,13 @@ describe('ACP server — session/new', () => {
     expect(mGate).not.toHaveBeenCalled();
     expect(mBuild.mock.calls[0]![0].canUseTool).toBeUndefined();
     expect(mBuild.mock.calls[0]![0].dangerouslySkipPermissions).toBe(true);
+    expect(mBuild.mock.calls[0]![0].childCanUseTool).toBeUndefined();
+  });
+  it('hands the gate child factory to buildAcpSession as childCanUseTool (D9)', async () => {
+    const forChild = vi.fn();
+    mGate.mockImplementation(() => ({ canUseTool: vi.fn() as never, cancelAll: vi.fn(), forChild: forChild as never }));
+    await run([init, newSession()]);
+    expect(mBuild.mock.calls[0]![0].childCanUseTool).toBe(forChild);
   });
   it.each([
     ['outside cwd', { cwd: realpathSync(os.homedir()) }],

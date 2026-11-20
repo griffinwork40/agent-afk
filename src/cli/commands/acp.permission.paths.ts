@@ -1,0 +1,110 @@
+/**
+ * Lexical outside-the-session-directory scan for the ACP permission policy
+ * (profile section 6, decision D10). Pure: no filesystem access, so a symbolic
+ * link inside the cwd that points outside it is NOT detected (documented).
+ *
+ * @module cli/commands/acp.permission.paths
+ */
+import path from 'node:path';
+
+// Contract: every argument a tool could treat as a filesystem location is
+// scanned, under generic names as well as the obvious ones, so a new path
+// argument on an auto-allowed tool fails closed (asked), never silently allowed.
+// A value that cannot be resolved lexically (wrong type, NUL, `~`, pathspec
+// magic, a missing or relative session cwd) is reported as outside.
+const PATH_KEYS = [
+  'file_path', 'filePath', 'path', 'paths', 'cwd', 'dir', 'directory', 'root', 'file', 'files',
+  'target', 'source', 'destination', 'dest', 'output', 'base_dir', 'workdir',
+];
+/** git options that relocate the repository or write a file; the handler rejects them too. */
+const GIT_RELOCATE = /^(?:-C|--git-dir|--work-tree|--namespace|--exec-path|--output|-o)(?:=|$)/;
+const GLOB_META = /[*?{}[\]]/;
+const BRACE_ABSOLUTE_ARM = /[{,]\s*(?:[\\/~]|[A-Za-z]:)/;
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** True when `abs` is the root itself or lexically below it (Windows-safe, no prefix checks). */
+export function isContained(root: string, abs: string): boolean {
+  const rel = path.relative(root, abs);
+  if (rel === '') return true;
+  if (path.isAbsolute(rel)) return false;
+  return rel.split(/[\\/]/)[0] !== '..';
+}
+
+function usableCwd(cwd: string | undefined): cwd is string {
+  return typeof cwd === 'string' && cwd.length > 0 && !cwd.includes('\u0000') && path.isAbsolute(cwd);
+}
+
+/** Absolute display form of an outside target; the raw value when it cannot be resolved. */
+function scanValue(raw: unknown, base: string | undefined, root: string | undefined, out: string[]): void {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.includes('\u0000')) {
+    out.push(typeof raw === 'string' ? raw.replace(/\u0000/g, '') || '(invalid path)' : '(invalid path)');
+    return;
+  }
+  if (raw.startsWith('~') || raw.startsWith(':') || base === undefined || root === undefined) {
+    out.push(base !== undefined && !raw.startsWith('~') && !raw.startsWith(':') ? path.resolve(base, raw) : raw);
+    return;
+  }
+  const abs = path.resolve(base, raw);
+  if (!isContained(root, abs)) out.push(abs);
+}
+
+function scanKey(value: unknown, base: string | undefined, root: string | undefined, out: string[]): void {
+  if (Array.isArray(value)) {
+    for (const item of value) scanValue(item, base, root, out);
+    return;
+  }
+  scanValue(value, base, root, out);
+}
+
+/** Glob patterns walk from their literal prefix; `..` or an absolute brace arm leaves the base. */
+function scanGlobPattern(pattern: unknown, base: string | undefined, root: string | undefined, out: string[]): void {
+  if (pattern === undefined) return;
+  if (typeof pattern !== 'string' || base === undefined || root === undefined) {
+    out.push(typeof pattern === 'string' ? pattern : '(invalid pattern)');
+    return;
+  }
+  const segments = pattern.split(/[\\/]/);
+  const meta = segments.findIndex((s) => GLOB_META.test(s));
+  const literal = meta < 0 ? segments : segments.slice(0, meta);
+  const rest = meta < 0 ? [] : segments.slice(meta);
+  const prefix = literal.join('/');
+  const start = prefix === '' && path.isAbsolute(pattern) ? path.parse(pattern).root : prefix;
+  if (start.startsWith('~')) { out.push(pattern); return; }
+  const abs = path.resolve(base, start === '' ? '.' : start);
+  if (!isContained(root, abs) || rest.some((s) => s.includes('..')) || BRACE_ABSOLUTE_ARM.test(pattern)) {
+    out.push(isContained(root, abs) ? pattern : abs);
+  }
+}
+
+/**
+ * Every target of this call that is not lexically inside `cwd`, as absolute
+ * paths where resolvable. Empty means no argument leaves the session directory
+ * (a call without a path argument defaults to the cwd and is inside).
+ */
+export function outsidePaths(toolName: string, input: Record<string, unknown>, cwd: string | undefined): string[] {
+  const out: string[] = [];
+  const root = usableCwd(cwd) ? path.resolve(cwd) : undefined;
+  let base = root;
+  if (toolName === 'glob' && input['path'] !== undefined) {
+    const p = input['path'];
+    base = root !== undefined && typeof p === 'string' && p.length > 0 && !p.includes('\u0000') && !p.startsWith('~')
+      ? path.resolve(root, p) : undefined;
+  }
+  for (const key of PATH_KEYS) {
+    if (input[key] !== undefined) scanKey(input[key], root, root, out);
+  }
+  if (toolName === 'glob') scanGlobPattern(input['pattern'], base, root, out);
+  if (toolName === 'patch_apply' && Array.isArray(input['changes'])) {
+    for (const change of input['changes']) scanValue(isRecord(change) ? change['path'] : undefined, root, root, out);
+  }
+  if (toolName === 'git_read' && input['args'] !== undefined) {
+    const args = input['args'];
+    if (!Array.isArray(args) || args.some((a) => typeof a !== 'string' || GIT_RELOCATE.test(a))) {
+      out.push('(git repository relocation)');
+    }
+  }
+  return [...new Set(out)];
+}

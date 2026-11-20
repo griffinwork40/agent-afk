@@ -69,10 +69,19 @@ export function makeEmitToolCall(live: LiveSession, peer: AcpClientPeer) {
   return async (update: ToolCallStart): Promise<void> => {
     const known = live.translator.tools.get(update.toolCallId);
     if (known?.announced) {
+      if (known.status === 'completed' || known.status === 'failed') return;
       if (update.status === 'in_progress' && known.status !== 'in_progress') {
         known.status = 'in_progress';
         await sendUpdate(peer, live.id, {
           sessionUpdate: 'tool_call_update', toolCallId: update.toolCallId, status: 'in_progress',
+        });
+      } else if (update.status === 'completed' || update.status === 'failed') {
+        // D9: the gate closes a child-originated card itself (no stream result follows).
+        known.status = update.status;
+        known.content = update.content ?? [];
+        await sendUpdate(peer, live.id, {
+          sessionUpdate: 'tool_call_update', toolCallId: update.toolCallId, status: update.status,
+          content: known.content,
         });
       }
       return;

@@ -4,9 +4,12 @@
  *
  * @module cli/commands/acp.permission.policy
  */
+import path from 'node:path';
 import type { JsonValue, PermissionOption, ToolCallStart, ToolKind } from './acp.wire.js';
 import { toolKind, toolLocations, toolTitle } from './acp.tool-kind.js';
 import { boundedRawInput, boundStartDisplay } from './acp.translate.bounds.js';
+import { outsidePaths } from './acp.permission.paths.js';
+import { delegationSuffix } from './acp.permission.labels.js';
 
 /** Known read/search tools auto-allowed with approvals on (profile section 5/6 tables). */
 const AUTO_ALLOW = new Set<string>([
@@ -16,23 +19,39 @@ const AUTO_ALLOW = new Set<string>([
   'state_get', 'artifact_get', 'artifact_list', 'artifact_read', 'get_background_job_health',
   'list_sessions', 'list_schedules', 'get_schedule_history',
 ]);
-const DELEGATION = new Set<string>(['agent', 'skill', 'compose', 'remote_agent']);
-export const DELEGATION_SUFFIX = ' (subagent will act without further prompts)';
+export const DELEGATION = new Set<string>(['agent', 'skill', 'compose', 'remote_agent']);
+export { DELEGATION_SUFFIX, REMOTE_SUFFIX } from './acp.permission.labels.js';
 const VALID_KINDS = new Set<ToolKind>(['read', 'edit', 'delete', 'move', 'search', 'execute', 'think', 'fetch', 'switch_mode', 'other']);
 
-/** True when the call must be asked. Unknown, missing and MCP names always ask. */
-export function requiresAsk(toolName: string, input: Record<string, unknown>): boolean {
-  if (typeof toolName !== 'string' || toolName.length === 0) return true;
-  if (AUTO_ALLOW.has(toolName)) return false;
-  // Explicit read-only exception: exactly action "list", nothing else.
-  if (toolName === 'worktree' && input['action'] === 'list') return false;
-  return true;
+/**
+ * Targets of this call outside the session cwd (D10). Any failure is reported
+ * as an unresolvable outside target, so the call is asked, never auto-allowed.
+ */
+export function outsideTargets(toolName: string, input: Record<string, unknown>, cwd: string | undefined): string[] {
+  try { return outsidePaths(toolName, input, cwd); } catch { return ['(unresolvable path)']; }
 }
 
-/** Options in profile order; allow_always is never offered for bash or a missing name. */
-export function permissionOptions(toolName: string): PermissionOption[] {
+/**
+ * True when the call must be asked. Unknown, missing and MCP names always ask;
+ * an auto-allowed read/search tool asks when any target leaves `cwd` (D10).
+ * Without a usable `cwd` every path argument counts as outside (fail closed).
+ */
+export function requiresAsk(toolName: string, input: Record<string, unknown>, cwd?: string): boolean {
+  if (typeof toolName !== 'string' || toolName.length === 0) return true;
+  const readOnly = AUTO_ALLOW.has(toolName)
+    // Explicit read-only exception: exactly action "list", nothing else.
+    || (toolName === 'worktree' && input['action'] === 'list' && Object.keys(input).every((k) => k === 'action'));
+  if (!readOnly) return true;
+  return outsideTargets(toolName, input, cwd).length > 0;
+}
+
+/**
+ * Options in profile order. allow_always is never offered for bash, a missing
+ * name, a delegation tool, or a call that targets a path outside the cwd (D11).
+ */
+export function permissionOptions(toolName: string, outside = false): PermissionOption[] {
   const options: PermissionOption[] = [{ optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' }];
-  if (toolName.length > 0 && toolName !== 'bash') {
+  if (toolName.length > 0 && toolName !== 'bash' && !DELEGATION.has(toolName) && !outside) {
     options.push({ optionId: 'allow_always', name: `Always allow ${toolName} in this session`, kind: 'allow_always' });
   }
   options.push({ optionId: 'reject_once', name: 'Reject', kind: 'reject_once' });
@@ -56,14 +75,21 @@ function rawInputOf(input: Record<string, unknown>): JsonValue | undefined {
  * the safe generic shape. The delegation suffix is enforced here regardless.
  */
 export function buildPendingStart(
-  toolCallId: string, toolName: string, input: Record<string, unknown>, cwd = '',
+  toolCallId: string, toolName: string, input: Record<string, unknown>, cwd = '', prefix = '',
 ): ToolCallStart {
   const named = toolName.length > 0;
-  let title = named ? safe(() => toolTitle(toolName, input), toolName) : 'Tool call';
+  let title = named ? safe(() => toolTitle(toolName, input, cwd), toolName) : 'Tool call';
   if (typeof title !== 'string' || title.length === 0) title = named ? toolName : 'Tool call';
   const kind = named ? safe(() => toolKind(toolName), 'other' as ToolKind) : 'other';
   // Without a session cwd, relative paths resolve to nothing and are omitted.
-  const locations = named ? safe(() => toolLocations(toolName, input, cwd), []) : [];
+  const shown = named ? safe(() => toolLocations(toolName, input, cwd), []) : [];
+  const locations = Array.isArray(shown) ? [...shown] : [];
+  // D10: every outside target is shown as an absolute location, even under names the display table ignores.
+  const outside = outsideTargets(toolName, input, cwd);
+  for (const p of outside) {
+    if (path.isAbsolute(p) && !locations.some((l) => l.path === p)) locations.push({ path: p });
+  }
+  if (outside.length > 0 && !outside.some((p) => title.includes(p))) title = `${title} ${outside[0]}`;
   const rawInput = rawInputOf(input);
   // Same display bounds as a stream start (acp.translate), then the suffix is enforced regardless.
   const start = boundStartDisplay({
@@ -75,8 +101,10 @@ export function buildPendingStart(
     status: 'pending',
     ...(rawInput !== undefined ? { rawInput } : {}),
     content: [],
-    locations: Array.isArray(locations) ? locations : [],
+    locations,
   });
-  if (DELEGATION.has(toolName) && !start.title.endsWith(DELEGATION_SUFFIX)) start.title += DELEGATION_SUFFIX;
+  const suffix = delegationSuffix(toolName);
+  if (suffix !== '' && !start.title.endsWith(suffix)) start.title += suffix;
+  if (prefix !== '') start.title = `${prefix} ${start.title}`;
   return start;
 }

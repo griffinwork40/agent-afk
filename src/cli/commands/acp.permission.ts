@@ -6,16 +6,18 @@
  */
 import type { PermissionResult } from '../../agent/types/sdk-types.js';
 import type {
-  AcpClientPeer, AcpPermissionGate, AcpPermissionOptions, PermissionOption, ToolCallStart, ToolCallUpdate,
+  AcpClientPeer, AcpPermissionGate, AcpPermissionOptions, CanUseTool, PermissionOption, ToolCallStart, ToolCallUpdate,
 } from './acp.wire.js';
-import { buildPendingStart, permissionOptions, requiresAsk } from './acp.permission.policy.js';
+import { buildPendingStart, outsideTargets, permissionOptions, requiresAsk } from './acp.permission.policy.js';
+import type { ChildToolOrigin } from '../../agent/tools/nesting.can-use-tool.js';
+import { childPrefix } from './acp.permission.labels.js';
 import { AcpPeerClosedError } from './acp.rpc-peer.js';
 
 export const PERMISSION_TIMEOUT_MS = 120_000;
 
 export type DenyReason =
   | 'rejected' | 'unknown_option' | 'malformed_reply' | 'request_error'
-  | 'peer_closed' | 'aborted' | 'cancelled' | 'timeout';
+  | 'peer_closed' | 'aborted' | 'cancelled' | 'timeout' | 'no_active_turn';
 
 const allow = (): PermissionResult => ({ behavior: 'allow' });
 
@@ -105,6 +107,13 @@ interface GateState {
   opts: AcpPermissionOptions;
   granted: Set<string>;
   pending: Set<PendingAsk>;
+  /** Sequence for child card ids, so a child id can never collide with a parent stream id. */
+  childSeq: number;
+}
+
+/** Who is asking: the top-level session (stream closes the card) or a forked child (gate closes it). */
+interface Asker {
+  child?: { prefix: string; origin: string };
 }
 
 /** Abort/cancel recheck used at every await boundary before an allow can escape. */
@@ -120,17 +129,19 @@ function interrupted(signal: AbortSignal, ask: PendingAsk): DenyReason | undefin
 // approval that lands after cancellation can never become an allow.
 async function askClient(
   st: GateState, toolName: string, input: Record<string, unknown>, signal: AbortSignal, toolUseID: string,
+  who: Asker = {},
 ): Promise<PermissionResult> {
   if (signal.aborted) return denyResult('aborted');
   if (typeof toolUseID !== 'string' || toolUseID.length === 0) return denyResult('request_error');
   const ask: PendingAsk = { cancelled: false, settle: () => { ask.cancelled = true; } };
   st.pending.add(ask);
   try {
-    const start = buildPendingStart(toolUseID, toolName, input, st.opts.cwd);
+    const outside = outsideTargets(toolName, input, st.opts.cwd).length > 0;
+    const start = buildPendingStart(toolUseID, toolName, input, st.opts.cwd, who.child?.prefix ?? '');
     try { await st.opts.emitToolCall(start); } catch { return denyResult('request_error'); }
     const early = interrupted(signal, ask);
     if (early) return denyResult(early);
-    const offered = permissionOptions(toolName);
+    const offered = permissionOptions(toolName, outside);
     const params = { sessionId: st.sessionId, toolCall: requestToolCall(start), options: offered };
     const settled = await awaitReply(st.peer, params, signal, ask);
     if (settled.kind === 'deny') return denyResult(settled.reason);
@@ -149,22 +160,61 @@ async function askClient(
     }
     const after = interrupted(signal, ask);
     if (after) return denyResult(after);
-    if (decision === 'allow_always') st.granted.add(toolName);
+    // D11: offered only for inside-cwd, non-bash, non-delegation calls; recheck anyway.
+    if (decision === 'allow_always' && !outside) st.granted.add(toolName);
     return allow();
   } finally {
     st.pending.delete(ask);
   }
 }
 
+function turnLive(st: GateState): boolean {
+  try { return st.opts.turnActive === undefined || st.opts.turnActive() === true; } catch { return false; }
+}
+
+/** A remembered grant covers this call only when it targets nothing outside the cwd (D11). */
+function grantCovers(st: GateState, name: string, input: Record<string, unknown>): boolean {
+  return name.length > 0 && st.granted.has(name) && outsideTargets(name, input, st.opts.cwd).length === 0;
+}
+
 async function decide(
-  st: GateState, toolName: string, rawInput: unknown, signal: AbortSignal, toolUseID: string,
+  st: GateState, toolName: string, rawInput: unknown, signal: AbortSignal, toolUseID: string, who: Asker = {},
 ): Promise<PermissionResult> {
   if (st.opts.skip === true) return allow();
   const name = typeof toolName === 'string' ? toolName : '';
   const input = isRecord(rawInput) ? rawInput : {};
-  if (!requiresAsk(name, input)) return allow();
-  if (name.length > 0 && st.granted.has(name)) return runGranted(st, name, input, signal, toolUseID);
-  return askClient(st, name, input, signal, toolUseID);
+  if (!requiresAsk(name, input, st.opts.cwd)) return allow();
+  if (grantCovers(st, name, input)) {
+    // A child's granted call has no stream card to move; it just runs (D13).
+    return who.child ? (signal.aborted ? denyResult('aborted') : allow()) : runGranted(st, name, input, signal, toolUseID);
+  }
+  if (!who.child) return askClient(st, name, input, signal, toolUseID);
+  if (!turnLive(st)) return denyResult('no_active_turn');
+  const cardId = `child-${++st.childSeq}-${typeof toolUseID === 'string' ? toolUseID : ''}`;
+  const result = wellFormed(await askClient(st, name, input, signal, toolUseID.length > 0 ? cardId : '', who));
+  await closeChildCard(st, cardId, name, input, result, who.child);
+  return result;
+}
+
+/**
+ * D9: the parent stream never carries a child's result, so the gate closes the
+ * card itself. Deny -> failed with the reason; allow -> completed, saying where
+ * the call runs and where its result is reported. Display failure cannot change
+ * the decision already made.
+ */
+async function closeChildCard(
+  st: GateState, cardId: string, name: string, input: Record<string, unknown>,
+  result: PermissionResult, child: NonNullable<Asker['child']>,
+): Promise<void> {
+  const text = result.behavior === 'deny' ? result.message
+    : `Approved. Runs inside ${child.origin}; its result is reported by the delegating tool call.`;
+  try {
+    await st.opts.emitToolCall({
+      ...buildPendingStart(cardId, name, input, st.opts.cwd, child.prefix),
+      status: result.behavior === 'deny' ? 'failed' : 'completed',
+      content: [{ type: 'content', content: { type: 'text', text } }],
+    });
+  } catch { /* the card may stay open in the client; the decision stands */ }
 }
 
 /**
@@ -187,7 +237,8 @@ async function runGranted(
 function wouldAsk(st: GateState, toolName: string, input: Record<string, unknown>): boolean {
   if (st.opts.skip === true) return false;
   if (typeof toolName !== 'string' || toolName.length === 0) return true;
-  return requiresAsk(toolName, isRecord(input) ? input : {}) && !st.granted.has(toolName);
+  const record = isRecord(input) ? input : {};
+  return requiresAsk(toolName, record, st.opts.cwd) && !grantCovers(st, toolName, record);
 }
 
 /** Never rejects and never returns anything but an explicit allow or a named deny. */
@@ -202,17 +253,25 @@ function wellFormed(result: unknown): PermissionResult {
 export function createAcpPermissionGate(
   peer: AcpClientPeer, sessionId: string, opts: AcpPermissionOptions,
 ): AcpPermissionGate {
-  const st: GateState = { peer, sessionId, opts, granted: new Set(), pending: new Set() };
+  const st: GateState = { peer, sessionId, opts, granted: new Set(), pending: new Set(), childSeq: 0 };
+  const gated = (who: Asker): CanUseTool => async (toolName, input, options) => {
+    try {
+      // Runtime callers can violate the type; a missing signal cannot be honoured, so deny.
+      const signal: unknown = (options as { signal?: unknown } | undefined)?.signal;
+      if (!isRecord(signal) || typeof signal['aborted'] !== 'boolean') return denyResult('aborted');
+      const id: unknown = (options as { toolUseID?: unknown } | undefined)?.toolUseID;
+      return wellFormed(await decide(st, toolName, input, signal as unknown as AbortSignal,
+        typeof id === 'string' ? id : '', who));
+    } catch {
+      return denyResult('request_error');
+    }
+  };
   return {
-    canUseTool: async (toolName, input, options) => {
-      try {
-        // Runtime callers can violate the type; a missing signal cannot be honoured, so deny.
-        const signal: unknown = (options as { signal?: unknown } | undefined)?.signal;
-        if (!isRecord(signal) || typeof signal['aborted'] !== 'boolean') return denyResult('aborted');
-        return wellFormed(await decide(st, toolName, input, signal as unknown as AbortSignal, options.toolUseID));
-      } catch {
-        return denyResult('request_error');
-      }
+    canUseTool: gated({}),
+    // D9: one labelled callback per forked child; same policy, grants and client.
+    forChild: (origin: ChildToolOrigin | undefined) => {
+      const prefix = childPrefix(origin);
+      return gated({ child: { prefix, origin: prefix.slice(1, -1) } });
     },
     wouldAsk: (toolName, input) => {
       try { return wouldAsk(st, toolName, input); } catch { return true; }
