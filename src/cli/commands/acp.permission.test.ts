@@ -500,7 +500,7 @@ describe('ACP permission gate: cancelAll and late replies', () => {
     const t = setup();
     const p = call(t.gate, 'write_file', WRITE_INPUT, 'tool-1');
     await untilAsk(t.asks);
-    await t.gate.endTurn();
+    await t.gate.endTurn?.();
     expectDeny(await p, 'no_active_turn');
   });
 });
