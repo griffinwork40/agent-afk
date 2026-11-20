@@ -337,7 +337,13 @@ describe('ACP server — session/prompt', () => {
       req(3, 'session/prompt', { sessionId: 'nope', prompt: [] }),
       req(4, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [{ type: 'image', data: 'x', mimeType: 'image/png' }] }),
       req(5, 'session/prompt', { sessionId: FIXTURE_ID, prompt: 'hello' })]);
-    expect(out.slice(2).map((r) => r.error?.code)).toEqual([-32002, -32602, -32602]);
+    // Match replies by request id, not arrival order. `session/new` checks the
+    // directory on disk, so the unknown-session rejection for request 3 can
+    // overtake its reply; JSON-RPC allows that. All five must still arrive.
+    const codeFor = (id: number): number | undefined => out.find((r) => r.id === id)?.error?.code;
+    expect(out).toHaveLength(5);
+    expect(out.find((r) => r.id === 2)?.result).toEqual({ sessionId: FIXTURE_ID });
+    expect([3, 4, 5].map(codeFor)).toEqual([-32002, -32602, -32602]);
   });
   it('normalizes content blocks in order joined by newlines', async () => {
     const { h } = await run([init, newSession(), req(3, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [
