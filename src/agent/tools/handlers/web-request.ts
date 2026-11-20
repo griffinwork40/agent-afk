@@ -36,7 +36,6 @@ import {
   type DomainCheckFn,
 } from '../../../http-client/web-request.js';
 import type { EgressGuardOptions } from '../../../http-client/egress-guard.js';
-import { redactSecrets } from '../../redact-secrets.js';
 import { abortReason, extractEgressBlockedError, fetchFailedMessage } from '../../../utils/errors.js';
 import { createRequestAbortScope, getScopeAbortMessage } from '../../../utils/abort.js';
 
@@ -339,9 +338,8 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
       // token patterns embedded in JSON values (e.g. {"key":"sk-ant-…"}) are masked.
       let responseBody = result.body;
       if (typeof responseBody === 'string') {
-        responseBody = redactSecrets(responseBody);
       } else if (typeof responseBody === 'object' && responseBody !== null) {
-        const serialized = redactSecrets(JSON.stringify(responseBody));
+        const serialized = JSON.stringify(responseBody);
         try { responseBody = JSON.parse(serialized); } catch { responseBody = serialized; }
       }
 

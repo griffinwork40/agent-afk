@@ -60,3 +60,12 @@ export function buildFatalDone(signal: AbortSignal, elapsedMs: number): OutputEv
     },
   };
 }
+
+/**
+ * Build a `done` for a turn the user interrupted that will not report its own
+ * terminal: one cancelled before its message reached the provider, or one whose
+ * ledger was sealed while it was still stopping.
+ */
+export function buildInterruptedDone(elapsedMs: number): OutputEvent {
+  return { type: 'done', metadata: { stopReason: 'interrupted', durationMs: elapsedMs } };
+}

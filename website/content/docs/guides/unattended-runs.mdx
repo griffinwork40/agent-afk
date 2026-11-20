@@ -87,6 +87,8 @@ A successful process exit or an agent saying Done does not certify the task's co
 
 For REPL-to-Telegram reporting, `telegram.verifyDone: true` enables an evidence check. It looks for successful evidence-producing tool calls and, when code changed, a recognized successful verification step afterward. An unsupported Done claim is labeled **Done (unverified)** rather than treated as proven.
 
+A Done push whose report has no Pending bullet shows **Pending: not stated**, so a report that says nothing about remaining work reads differently from one that says `Pending: none`.
+
 Daemon completion notifications use `daemon.verifyDone`, enabled by default unless explicitly set to `false`. That daemon check is narrower: it looks for a successful evidence-producing tool name in the turn. It is not equivalent to independently validating the artifact or proving that a test ran after the final edit.
 
 See [verification](/guides/verification) for stronger completion checks and [observability](/guides/observability) for durable traces.

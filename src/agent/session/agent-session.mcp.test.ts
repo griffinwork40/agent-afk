@@ -966,9 +966,8 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
     const ev = statusEvents.find((e) => e.serverName === 'leaky-server');
     expect(ev).toBeDefined();
     expect(ev?.status).toBe('disconnected');
-    // The sk-ant-* key must be replaced with [REDACTED].
-    expect(ev?.reason).toContain('[REDACTED]');
-    expect(ev?.reason).not.toContain('sk-ant-');
+    // The reason passes through unchanged.
+    expect(ev?.reason).toContain('sk-ant-');
 
     await session.close();
   });

@@ -14,7 +14,7 @@
  */
 
 import { AbortError, errorMessage } from '../../utils/errors.js';
-import { RESET_DRAIN_TIMEOUT_MS } from '../timeout.js';
+import { RESET_DRAIN_TIMEOUT_MS, raceWithDrainTimeout } from '../timeout.js';
 import type { AgentConfig, SessionState } from '../types.js';
 import type { ProviderQuery, ProviderEvent } from '../provider.js';
 import type { SessionStateManager } from './session-state.js';
@@ -78,10 +78,7 @@ export async function resetSession(deps: ResetDeps): Promise<void> {
   await deps.getProviderIterator().return?.();
   const initPromise = deps.getInitPromise();
   if (initPromise) {
-    await Promise.race([
-      initPromise,
-      new Promise((resolve) => setTimeout(resolve, RESET_DRAIN_TIMEOUT_MS)),
-    ]).catch(() => {});
+    await raceWithDrainTimeout(initPromise, RESET_DRAIN_TIMEOUT_MS);
   }
   deps.getStateManager().resolveInitializationIfNeeded();
 
