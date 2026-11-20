@@ -285,10 +285,16 @@ export class TurnStreamRunner {
    * {@link OutputEvent}. Awaits `initPromise` first so the session id exists.
    *
    * Corresponds to `AgentSession.sendMessageStreamInternal`.
+   *
+   * `onTurnStart` runs once this send owns the provider: after any earlier
+   * turn has been read out (its tail events observed) and only if this send was
+   * not cancelled. Per-turn state that provider events feed must be reset here,
+   * not at send time, or a settling turn's tail leaks into this one.
    */
   async *runStream(
     content: string | ContentBlockParam[],
     inputStream: { pushUserMessage: (c: string | ContentBlockParam[]) => void },
+    onTurnStart?: () => void,
   ): AsyncIterableIterator<OutputEvent> {
     // Contract: one send owns one provider turn. Wait until the session is
     // initialized and no earlier turn is in flight BEFORE this message is
@@ -309,6 +315,7 @@ export class TurnStreamRunner {
       yield buildInterruptedDone(0);
       return;
     }
+    onTurnStart?.();
 
     const effectiveContent = this.withPendingContext(content);
     const historySummary =

@@ -123,7 +123,12 @@ function createScriptedProvider(sessionId: string): ScriptedProvider {
                 return;
               }
               if (!content.includes('long')) {
-                yield { type: 'assistant.message', text: `Echo: ${content}`, sessionId };
+                // A "check plan" turn reports the `exit_plan_mode` visible-text
+                // gate verdict as the tool handler would read it mid-turn.
+                const text = content.startsWith('check plan')
+                  ? `Plan gate: ${args.config.planExitControls?.checkPlanText?.() ?? 'unwired'}`
+                  : `Echo: ${content}`;
+                yield { type: 'assistant.message', text, sessionId };
                 // Like the real driver, the abort scope is released BEFORE the
                 // terminal is published, so a later interrupt finds no turn.
                 abort.clear(controller);
@@ -310,6 +315,29 @@ describe('abandoned turn: consumer stops reading without interrupting', () => {
     expect(messageTexts(events)).toEqual(['Echo: real message']);
     expect(stopReasonOf(events)).toBe('end_turn');
   });
+});
+
+describe('abandoned turn: per-turn plan-text state', () => {
+  it('text the interrupted turn streams while settling does not count toward the next turn plan gate', async () => {
+    const provider = createScriptedProvider(`abandoned-plan-text-${Date.now()}`);
+    const session = new AgentSession({ model: 'sonnet', provider });
+    // The tail delta (`tail:<message>`) carries well over MIN_PLAN_TEXT_CHARS.
+    const longMessage = `long gated task ${'x'.repeat(120)}`;
+
+    await sendThenEscAndBreak(session, longMessage);
+    // The next send is accepted while the old turn is still settling; its
+    // tail arrives only after that send is already waiting behind it.
+    const next = collect(session, 'check plan');
+    await new Promise((r) => setTimeout(r, 20));
+    provider.releaseTail();
+    const events = await next;
+    await session.close();
+
+    expect(provider.startedTurns).toEqual([longMessage, 'check plan']);
+    // No visible text in the new turn: the gate must refuse, not approve on
+    // the interrupted turn's leftover prose.
+    expect(messageTexts(events)).toEqual(['Plan gate: refuse']);
+  }, 5000);
 });
 
 describe('turns read to their terminal event are unaffected', () => {

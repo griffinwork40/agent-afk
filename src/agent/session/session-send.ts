@@ -204,12 +204,15 @@ export function sendMessageStreamInternal(
   // user actually RESTED in the current mode, so a transient-default stash
   // from `setPermissionMode` must not survive into a later `default → plan`.
   deps.planExit.clearModeBeforeDefault();
-  // A new user turn starts a fresh visible-plan-text window and refusal budget
-  // for the `exit_plan_mode` gate (see plan-text-tracker.ts).
-  deps.planExit.planText.beginTurn();
   // #3442: reduced-surface stderr warning, once per process, at the first real turn.
   warnReducedSurfaceOnTurn(deps.getConfig());
-  return deps.runner.runStream(content, deps.getInputStream());
+  // A new user turn starts a fresh visible-plan-text window and refusal budget
+  // for the `exit_plan_mode` gate (see plan-text-tracker.ts). Reset when the
+  // turn actually starts, not now: an earlier ESC'd turn may still be settling,
+  // and its tail text must not count toward this turn's plan.
+  return deps.runner.runStream(content, deps.getInputStream(), () =>
+    deps.planExit.planText.beginTurn(),
+  );
 }
 
 /**
