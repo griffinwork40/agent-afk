@@ -51,7 +51,7 @@ function makeState() {
   const messages: MessageParam[] = [{ role: 'user', content: 'hello' }];
   return createSessionState({
     model: 'claude-sonnet-4-5',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     userSystem: null,
     toolDispatcher: {} as unknown as ToolDispatcher,
     initialMessages: messages,

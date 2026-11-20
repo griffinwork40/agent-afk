@@ -32,7 +32,7 @@ function disableCache(): void {
 }
 
 /** Minimal stub that satisfies the `SessionState` type surface used by `composeQuerySystem`. */
-function makeState(userSystem: string | null, permissionMode = 'default'): SessionState {
+function makeState(userSystem: string | null, permissionMode = 'bypassPermissions'): SessionState {
   return {
     messages: [],
     currentModel: 'test-model',

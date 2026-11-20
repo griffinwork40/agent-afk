@@ -243,7 +243,7 @@ describe('AnthropicDirectProvider — plan-mode gate reaches the dispatcher via 
       config: {
         model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
-        permissionMode: 'default',
+        permissionMode: 'bypassPermissions',
         hookRegistry: planGateRegistry('default'),
       },
     });

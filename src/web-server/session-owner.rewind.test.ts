@@ -40,7 +40,7 @@ function setup(providerId = id, richFirst = false) {
   } });
   const query = provider.query.bind(provider);
   provider.query = (args) => {
-    native = createSessionState({ model: 'sonnet', permissionMode: 'default', userSystem: null, toolDispatcher: {} as ToolDispatcher, messageJournal: args.config.messageJournal });
+    native = createSessionState({ model: 'sonnet', permissionMode: 'bypassPermissions', userSystem: null, toolDispatcher: {} as ToolDispatcher, messageJournal: args.config.messageJournal });
     const q = query(args);
     q.listRewindTargets = () => listUserTurns(native.messages);
     q.rewindConversation = async (index) => rewindConversationHistory({ state: native, abort: { isIdle: () => true } as AbortCoordinator }, index);

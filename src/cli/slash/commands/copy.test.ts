@@ -36,7 +36,7 @@ function makeStats(assistant?: string): SessionStats {
     turnTokens: [],
     turns: turns as unknown as SessionStats['turns'],
     model: 'sonnet',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
   } as unknown as SessionStats;
 }
 

@@ -25,7 +25,7 @@ function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
     turnTokens: [],
     turns: [],
     model: 'sonnet',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     ...overrides,
   };
 }
@@ -65,7 +65,7 @@ function makeCtx(opts: {
 
 describe('togglePlanMode', () => {
   it('flips default → plan and emits ON copy', async () => {
-    const stats = makeStats({ permissionMode: 'default' });
+    const stats = makeStats({ permissionMode: 'bypassPermissions' });
     const { ctx, sess, lines } = makeCtx({ stats });
 
     await togglePlanMode(ctx, true);
@@ -148,7 +148,7 @@ describe('togglePlanMode', () => {
   });
 
   it('entering plan flips to plan and never consults getPrePlanMode (only exit restores)', async () => {
-    const stats = makeStats({ permissionMode: 'default' });
+    const stats = makeStats({ permissionMode: 'bypassPermissions' });
     const { ctx, sess } = makeCtx({ stats, prePlanMode: 'bypassPermissions' });
 
     await togglePlanMode(ctx, true);

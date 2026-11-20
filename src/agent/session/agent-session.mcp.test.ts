@@ -492,7 +492,7 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
               yield {
                 type: 'session.init',
                 info: {
-                  sessionId: 'query-counting-session', model: 'sonnet', permissionMode: 'default',
+                  sessionId: 'query-counting-session', model: 'sonnet', permissionMode: 'bypassPermissions',
                   cwd: args.config.cwd, tools: [], slashCommands: [], skills: [], plugins: [],
                   mcpServers: [], apiKeySource: 'api-key', version: 'test',
                 },
@@ -637,7 +637,7 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
           yield {
             type: 'session.init',
             info: {
-              sessionId: `${label}-session`, model: 'sonnet', permissionMode: 'default',
+              sessionId: `${label}-session`, model: 'sonnet', permissionMode: 'bypassPermissions',
               cwd: process.cwd(), tools: [], slashCommands: [], skills: [], plugins: [],
               mcpServers: [], apiKeySource: 'api-key', version: 'test',
             },
@@ -712,7 +712,7 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
           yield {
             type: 'session.init',
             info: {
-              sessionId: `${label}-session`, model: 'sonnet', permissionMode: 'default',
+              sessionId: `${label}-session`, model: 'sonnet', permissionMode: 'bypassPermissions',
               cwd: process.cwd(), tools: [], slashCommands: [], skills: [], plugins: [],
               mcpServers: [], apiKeySource: 'api-key', version: 'test',
             },

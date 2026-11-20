@@ -139,7 +139,7 @@ const CLEAR = '\x1b[3J\x1b[2J\x1b[H';
 function makeCtx(bootWarnings: string[]): Record<string, unknown> {
   return {
     bootWarnings,
-    stats: { model: 'sonnet', totalTurns: 0, permissionMode: 'default' },
+    stats: { model: 'sonnet', totalTurns: 0, permissionMode: 'bypassPermissions' },
     statusLine: { start: vi.fn(), stop: vi.fn(), repaint: vi.fn() },
     slashCtx: {
       ui: { repaintStatusLine: vi.fn() },

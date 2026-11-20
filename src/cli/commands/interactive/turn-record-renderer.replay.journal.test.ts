@@ -153,7 +153,7 @@ describe('replayJournal / printResumeBanner (real journal on disk)', () => {
       turnTokens: [],
       turns,
       model: 'sonnet',
-      permissionMode: 'default',
+      permissionMode: 'bypassPermissions',
       ...(sessionId !== undefined ? { sessionId } : {}),
     } as SessionStats;
   }

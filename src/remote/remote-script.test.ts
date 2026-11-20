@@ -65,8 +65,8 @@ describe('buildLaunchScript', () => {
   });
 
   it('passes --permission-mode with safe quoting when set', () => {
-    const s = buildLaunchScript({ ...base, permissionMode: 'default' });
-    expect(s).toContain(`'--permission-mode' 'default'`);
+    const s = buildLaunchScript({ ...base, permissionMode: 'plan' });
+    expect(s).toContain(`'--permission-mode' 'plan'`);
   });
 
   it('passes bypassPermissions mode with safe quoting', () => {

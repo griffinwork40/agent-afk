@@ -133,7 +133,7 @@ describe('AnthropicDirectQuery — plan-mode system payload', () => {
       config: {
         model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
-        permissionMode: 'default',
+        permissionMode: 'bypassPermissions',
       },
     });
 
@@ -219,7 +219,7 @@ describe('AnthropicDirectQuery — plan-mode system payload', () => {
       config: {
         model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
-        permissionMode: 'default',
+        permissionMode: 'bypassPermissions',
       },
     });
 
@@ -292,7 +292,7 @@ describe('AnthropicDirectQuery — plan-mode system payload', () => {
       config: {
         model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
-        permissionMode: 'default',
+        permissionMode: 'bypassPermissions',
       },
     });
 

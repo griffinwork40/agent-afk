@@ -23,7 +23,7 @@ export function createSessionStats(model: AgentModelInput): SessionStats {
     turnTokens: [],
     turns: [],
     model,
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     thinkingUi: 'live',
   };
 }

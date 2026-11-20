@@ -53,7 +53,7 @@ function singleTurnFull(): MessageParam[] {
 function makeState(messages: MessageParam[]): SessionState {
   return createSessionState({
     model: 'claude-sonnet-4-5',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     userSystem: null,
     // The microcompaction fallback path never dereferences the dispatcher.
     toolDispatcher: {} as unknown as ToolDispatcher,
