@@ -77,6 +77,18 @@ export interface SubagentIdentityFacts {
    */
   cwd?: string;
   /**
+   * When `true`, the worktree's `.afk-worktree-meta.json` carries
+   * `scratchDisposable: true`, meaning `.afk-scratch/` is git-ignored AND
+   * treated as disposable by the sweep — so agents may be told to put
+   * throwaway files there and that those files are deleted with the worktree.
+   * When absent or `false`, the scratch-dir sentence is suppressed (the
+   * directory is protected by the sweep's `ignored-local-state` check).
+   *
+   * Invariant: only set from a confirmed `isScratchDisposable(root)` read;
+   * never inferred from the cwd path alone.
+   */
+  scratchDisposable?: boolean;
+  /**
    * When `true`, the child may yield by ending its turn with an **Asking**
    * block — the runtime will detect it, tag the result as `needsInput`, and
    * return a structured header to the parent. Only set for foreground
@@ -252,7 +264,9 @@ export function renderSubagentIdentityPreamble(facts: SubagentIdentityFacts): st
 
   // Worktree rules (no-stash, scratch dir): emitted only when the child's cwd
   // is inside a linked afk worktree, where each is true by construction.
-  for (const rule of renderWorktreeRules(facts.cwd)) lines.push('', rule);
+  // The scratch-dir rule is additionally gated on scratchDisposable: true so
+  // we never tell an agent its files are deleted when the sweep protects them.
+  for (const rule of renderWorktreeRules(facts.cwd, facts.scratchDisposable)) lines.push('', rule);
 
   // Nested-dispatch scope. Emitted only when the allowlist is set (scoped agent),
   // so unscoped children are unchanged. Text is semantically consistent with the
@@ -306,6 +320,9 @@ export function renderSubagentIdentityPreamble(facts: SubagentIdentityFacts): st
  *   orientation block is appended. Named typed agents are excluded.
  * @param parentSessionId - Parent session id included in the orientation block
  *   for cross-session correlation via `get_runtime_state` and `afk trace`.
+ * @param scratchDisposable - When `true`, the worktree's meta confirms
+ *   `.afk-scratch/` is disposable; the scratch-dir sentence is emitted.
+ *   When absent or `false`, the sentence is suppressed (safe default).
  */
 export function injectSubagentIdentityPreamble(
   config: AgentConfig,
@@ -313,6 +330,7 @@ export function injectSubagentIdentityPreamble(
   yieldEnabled?: boolean,
   resolvedAgentType?: string,
   parentSessionId?: string,
+  scratchDisposable?: boolean,
 ): AgentConfig {
   const block = renderSubagentIdentityPreamble({
     isNonInteractive: config.isNonInteractive,
@@ -323,6 +341,7 @@ export function injectSubagentIdentityPreamble(
     yieldEnabled,
     resolvedAgentType,
     parentSessionId,
+    scratchDisposable,
   });
   return appendSystemPromptBlock(config, block);
 }
