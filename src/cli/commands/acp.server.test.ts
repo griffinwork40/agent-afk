@@ -37,7 +37,7 @@ const mGate = vi.mocked(permission.createAcpPermissionGate);
 const mLoad = vi.mocked(sessionLoad.loadAcpSession);
 const mReplay = vi.mocked(sessionLoad.replayHistory);
 
-const WS = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'acp-ws-')));
+const WS = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'acp-ws-')));
 mkdirSync(path.join(WS, 'sub'));
 const FILE_IN_WS = path.join(WS, 'plain.txt');
 writeFileSync(FILE_IN_WS, 'x');
@@ -305,11 +305,11 @@ describe('ACP server — session/new', () => {
     try {
       // Precondition: outside the launch directory, including on another drive
       // (Windows CI: checkout on D:, temp on C:, where path.relative is absolute).
-      expect(isContained(process.cwd(), realpathSync(elsewhere))).toBe(false);
+      expect(isContained(process.cwd(), realpathSync.native(elsewhere))).toBe(false);
       const { out } = await run([init, newSession(2, { cwd: elsewhere })]);
       expect(out[1]!.result).toEqual({ sessionId: FIXTURE_ID });
-      expect(mBuild).toHaveBeenCalledWith(expect.objectContaining({ cwd: realpathSync(elsewhere) }));
-      expect(mGate).toHaveBeenCalledWith(expect.anything(), FIXTURE_ID, expect.objectContaining({ cwd: realpathSync(elsewhere) }));
+      expect(mBuild).toHaveBeenCalledWith(expect.objectContaining({ cwd: realpathSync.native(elsewhere) }));
+      expect(mGate).toHaveBeenCalledWith(expect.anything(), FIXTURE_ID, expect.objectContaining({ cwd: realpathSync.native(elsewhere) }));
     } finally { rmSync(elsewhere, { recursive: true, force: true }); }
   });
   it.each([

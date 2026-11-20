@@ -30,7 +30,7 @@ class ReplacedIdSession extends ScriptedSession {
 }
 
 beforeEach(() => {
-  root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'acp-restore-')));
+  root = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'acp-restore-')));
   vi.spyOn(process, 'cwd').mockReturnValue(root);
   vi.spyOn(env, 'AFK_STATE_DIR', 'get').mockReturnValue(path.join(root, 'state'));
   vi.mocked(buildAcpSession).mockReset();

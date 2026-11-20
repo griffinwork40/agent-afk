@@ -27,7 +27,11 @@ export function validateCwd(raw: unknown): string {
   if (typeof raw !== 'string' || !path.isAbsolute(raw)) throw new AcpInvalidParams('cwd must be absolute');
   let resolved: string;
   try {
-    resolved = realpathSync(raw);
+    // .native: on Windows the JS realpath keeps 8.3 short names (RUNNER~1);
+    // the native one returns the long form the tool handlers' own containment
+    // check canonicalises to (path-policy.roots realpathSafe), so policy and
+    // enforcement see one spelling of the session directory.
+    resolved = realpathSync.native(raw);
     if (!statSync(resolved).isDirectory()) throw new AcpInvalidParams(`cwd is not a directory: ${raw}`);
   } catch (err) {
     if (err instanceof AcpInvalidParams) throw err;

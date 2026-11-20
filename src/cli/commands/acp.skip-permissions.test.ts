@@ -91,7 +91,7 @@ let temporaryRoot: string;
 let sessions: ScriptedSession[];
 
 beforeEach(() => {
-  temporaryRoot = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'acp-skip-')));
+  temporaryRoot = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'acp-skip-')));
   sessions = [];
   vi.spyOn(process, 'cwd').mockReturnValue(temporaryRoot);
   vi.spyOn(env, 'AFK_STATE_DIR', 'get').mockReturnValue(path.join(temporaryRoot, 'state'));

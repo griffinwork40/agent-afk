@@ -25,7 +25,7 @@ let sessions: ScriptedSession[];
 let extraDirs: string[] = [];
 
 beforeEach(() => {
-  temporaryRoot = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'acp-golden-')));
+  temporaryRoot = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'acp-golden-')));
   root = temporaryRoot;
   connections = [];
   sessions = [];
