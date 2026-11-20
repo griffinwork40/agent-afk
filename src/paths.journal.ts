@@ -1,6 +1,6 @@
 import { join } from 'path';
 
-import { getSessionLedgerDir } from './paths.js';
+import { getSessionLedgerDir, getAfkStateDir } from './paths.js';
 
 /**
  * Message-journal paths (docs/message-journal.md). Everything lives inside the
@@ -53,4 +53,15 @@ export function getSessionLedgerArchivePath(sessionId: string, stamp: string): s
     throw new Error(`Invalid ledger archive stamp: ${JSON.stringify(stamp)}`);
   }
   return join(getSessionLedgerDir(sessionId), `events.reset-${stamp}.jsonl`);
+}
+
+/**
+ * Path for the ACP-id → AFK-journal-id mapping file.
+ *
+ * Lives at `$AFK_STATE_DIR/acp/session-map.json` — a single JSON object
+ * `{ [acpId: string]: string }` written atomically via atomicWriteFileAsync.
+ * Host-local only; not a credential or portable export.
+ */
+export function getAcpSessionMapPath(): string {
+  return join(getAfkStateDir(), 'acp', 'session-map.json');
 }
