@@ -100,7 +100,8 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
  * Write-boundary pass: applied to the params of every `session/update` and
  * `session/request_permission` immediately before they are written, so a
  * display string cannot leave the server unescaped however the frame was
- * built. Covers `title`, `locations[].path` and `options[].name`, on the frame
+ * built. Covers `title`, `locations[].path`, `options[].name` and the `path`
+ * of a `diff` content item, on the frame
  * itself and on a nested `update` or `toolCall`. Idempotent (an escape is plain
  * ASCII), so the inner passes above stay correct. Data fields are not touched.
  */
@@ -113,6 +114,10 @@ export function sanitizeDisplay<T>(value: T): T {
   }
   if (Array.isArray(out['options'])) {
     out['options'] = out['options'].map((o: unknown) => (isObject(o) && typeof o['name'] === 'string' ? { ...o, name: cleanDisplay(o['name']) } : o));
+  }
+  // A diff content item's `path` is shown as a file header; its text is data.
+  if (Array.isArray(out['content'])) {
+    out['content'] = out['content'].map((c: unknown) => (isObject(c) && c['type'] === 'diff' && typeof c['path'] === 'string' ? { ...c, path: cleanDisplay(c['path']) } : c));
   }
   if (isObject(out['update'])) out['update'] = sanitizeDisplay(out['update']);
   if (isObject(out['toolCall'])) out['toolCall'] = sanitizeDisplay(out['toolCall']);

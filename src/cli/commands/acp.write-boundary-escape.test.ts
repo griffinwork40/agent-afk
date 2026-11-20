@@ -38,6 +38,16 @@ describe('sanitizeDisplay', () => {
     expect(sanitizeDisplay(sanitizeDisplay(dirty))).toEqual(sanitizeDisplay(dirty));
   });
 
+  it('escapes the path of a diff content item and leaves its text byte-exact', () => {
+    const update = { sessionUpdate: 'tool_call_update', toolCallId: 't', content: [
+      { type: 'diff', path: `/w/a${RLO}b.txt`, oldText: `x${RLO}`, newText: `y${ZWSP}` },
+      { type: 'content', content: { type: 'text', text: `keep${RLO}` } },
+    ] };
+    const out = sanitizeDisplay({ sessionId: 's', update }).update;
+    expect(out.content[0]).toEqual({ type: 'diff', path: '/w/a<U+202E>b.txt', oldText: `x${RLO}`, newText: `y${ZWSP}` });
+    expect(out.content[1]).toEqual({ type: 'content', content: { type: 'text', text: `keep${RLO}` } });
+  });
+
   it('passes non-objects through', () => {
     expect(sanitizeDisplay(undefined)).toBeUndefined();
     expect(sanitizeDisplay('x')).toBe('x');
