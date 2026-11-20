@@ -429,6 +429,10 @@ describe('ACP server — load and resume', () => {
     expect(h.rawOutput()).not.toMatch(/corrupt|journal/);
     expect(mClose).toHaveBeenCalledTimes(1);
   });
+  it('load replays with the restored canonical cwd so relative tool locations resolve', async () => {
+    await run([init, req(2, 'session/load', { sessionId: FIXTURE_ID, cwd: path.join(WS, 'sub'), mcpServers: [] })]);
+    expect(mReplay).toHaveBeenCalledWith(FIXTURE_ID, expect.anything(), path.join(WS, 'sub'));
+  });
   it('resume of an active id is invalid request; resume omits replay and defaults mcpServers to []', async () => {
     const { out } = await run([init, req(2, 'session/resume', { sessionId: FIXTURE_ID, cwd: WS }),
       req(3, 'session/resume', { sessionId: FIXTURE_ID, cwd: WS })]);

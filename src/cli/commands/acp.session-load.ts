@@ -86,12 +86,13 @@ export async function loadAcpSession(
 /**
  * Resolve the opaque ACP id to its journal, emit display history in order.
  *
- * A1 calls this explicitly for load (not resume). Throws on peer write failure;
+ * A1 calls this explicitly for load (not resume), passing the restored cwd
+ * so relative tool locations resolve as they would for a live call. Throws on peer write failure;
  * caller must release the live session and return internal error to the client.
  */
-export async function replayHistory(sessionId: string, peer: AcpClientPeer): Promise<void> {
+export async function replayHistory(sessionId: string, peer: AcpClientPeer, cwd?: string): Promise<void> {
   const afkId = resolveAcpId(sessionId);
-  await emitReplayUpdates(sessionId, afkId, peer);
+  await emitReplayUpdates(sessionId, afkId, peer, cwd);
 }
 
 /** Sentinel error type so callers can distinguish not-found from internal. */

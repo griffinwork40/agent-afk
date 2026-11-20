@@ -165,7 +165,7 @@ export async function handleRestore(
     }
     if (mode === 'load') {
       try {
-        await replayHistory(id, ctx.peer);
+        await replayHistory(id, ctx.peer, setup.cwd);
       } catch (err) {
         await closeAcpSession(live.handle).catch(() => undefined);
         throw internal(ctx, 'replay failed', err);

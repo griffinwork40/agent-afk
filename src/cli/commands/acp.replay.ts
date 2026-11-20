@@ -19,22 +19,9 @@
 import { loadDisplayMessages } from '../../agent/journal/display-fold.js';
 import { hydrateMessages } from '../../agent/journal/reader.js';
 import type { JournalBlock, JournalMessage } from '../../agent/journal/types.js';
-import type { AcpClientPeer, SessionUpdate, ToolCall } from './acp.wire.js';
-
-const MAX_RAW_OUTPUT_BYTES = 65_536;
-const TRUNCATION_MARKER = '\n[truncated]';
-
-/** Bound a tool result string to the profile's 65 536-byte UTF-8 limit. */
-function boundOutput(text: string): string {
-  const buf = Buffer.from(text, 'utf8');
-  if (buf.length <= MAX_RAW_OUTPUT_BYTES) return text;
-  const marker = Buffer.from(TRUNCATION_MARKER, 'utf8');
-  const budget = MAX_RAW_OUTPUT_BYTES - marker.length;
-  // Slice on UTF-8 boundary then re-decode.
-  const sliced = buf.subarray(0, budget);
-  const decoded = sliced.toString('utf8').replace(/\uFFFD$/, '');
-  return decoded + TRUNCATION_MARKER;
-}
+import type { AcpClientPeer, JsonValue, SessionUpdate } from './acp.wire.js';
+import { toolKind, toolLocations, toolTitle } from './acp.tool-kind.js';
+import { boundedRawInput, boundedResult, boundStartDisplay } from './acp.translate.bounds.js';
 
 /**
  * Collect all tool_use ids and their corresponding tool_result blocks from one
@@ -78,23 +65,25 @@ function extractToolPairs(
   });
 }
 
-/** Build a tool_call SessionUpdate for replay from a ToolPair. */
-function toolCallUpdate(pair: ToolPair): SessionUpdate {
-  const status = pair.isError ? 'failed' : 'completed';
-  const update: ToolCall & { sessionUpdate: 'tool_call' } = {
+/**
+ * Build a terminal tool_call for replay with the same display helpers a live
+ * call uses (title, kind, locations against the restored cwd, bounded input).
+ */
+function toolCallUpdate(pair: ToolPair, cwd: string): SessionUpdate {
+  const rawInput = boundedRawInput(pair.input as JsonValue | undefined);
+  const text = pair.resultText !== null ? boundedResult(pair.resultText) : null;
+  return boundStartDisplay({
     sessionUpdate: 'tool_call',
     toolCallId: pair.id,
-    title: pair.name,
-    name: pair.name,
-    kind: 'other',
-    status,
-    ...(pair.input !== undefined ? { rawInput: pair.input as import('./acp.wire.js').JsonValue } : {}),
-    ...(pair.resultText !== null ? {
-      rawOutput: boundOutput(pair.resultText),
-      content: [{ type: 'content' as const, content: { type: 'text' as const, text: boundOutput(pair.resultText) } }],
-    } : {}),
-  };
-  return update;
+    title: toolTitle(pair.name, pair.input),
+    ...(pair.name ? { name: pair.name } : {}),
+    kind: toolKind(pair.name),
+    status: pair.isError ? 'failed' : 'completed',
+    ...(rawInput !== undefined ? { rawInput } : {}),
+    content: text !== null ? [{ type: 'content', content: { type: 'text', text } }] : [],
+    locations: toolLocations(pair.name, pair.input, cwd),
+    ...(text !== null ? { rawOutput: text } : {}),
+  });
 }
 
 /** Extract plain assistant text from an assistant message (skip thinking/tool_use). */
@@ -121,7 +110,7 @@ function userText(msg: JournalMessage): string {
  * Build the ordered list of session/update payloads for the display history.
  * Exported for unit-testing without a live peer.
  */
-export function buildReplayUpdates(messages: readonly JournalMessage[]): SessionUpdate[] {
+export function buildReplayUpdates(messages: readonly JournalMessage[], cwd = ''): SessionUpdate[] {
   const updates: SessionUpdate[] = [];
 
   for (let i = 0; i < messages.length; i++) {
@@ -148,7 +137,7 @@ export function buildReplayUpdates(messages: readonly JournalMessage[]): Session
 
     const pairs = extractToolPairs(msg, resultMsg);
     for (const pair of pairs) {
-      updates.push(toolCallUpdate(pair));
+      updates.push(toolCallUpdate(pair, cwd));
     }
 
     const text = assistantText(msg);
@@ -168,7 +157,8 @@ export function buildReplayUpdates(messages: readonly JournalMessage[]): Session
 
 /**
  * Load the display history for `afkSessionId` and emit it as session/update
- * notifications on `peer` for `acpSessionId`. Resolves when all notifications
+ * notifications on `peer` for `acpSessionId`. `cwd` is the restored session
+ * cwd, used to resolve relative tool locations as a live call would. Resolves when all notifications
  * have been sent, or immediately when the history is empty.
  *
  * Throws on peer write failure — caller (loadAcpSession) must release partial
@@ -178,11 +168,12 @@ export async function emitReplayUpdates(
   acpSessionId: string,
   afkSessionId: string,
   peer: AcpClientPeer,
+  cwd = '',
 ): Promise<void> {
   const raw = loadDisplayMessages(afkSessionId);
   if (raw.length === 0) return;
   const messages = hydrateMessages(raw);
-  const updates = buildReplayUpdates(messages);
+  const updates = buildReplayUpdates(messages, cwd);
   for (const update of updates) {
     await peer.notify('session/update', { sessionId: acpSessionId, update });
   }
