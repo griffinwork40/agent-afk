@@ -29,6 +29,7 @@
  * lockstep with the plugin surface.
  */
 
+import { forkConfigGate } from '../agent/tools/nesting.can-use-tool.js';
 import { readdirSync, readFileSync } from 'fs';
 import { errorMessage, isEnoent } from '../utils/errors.js';
 import { join } from 'path';
@@ -251,6 +252,8 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
         // the fork can read its own catalogue entry and re-dispatch itself.
         // Bare name is safe: skill-bridge's `endsWith(':<name>')` filter covers `user:<name>` / `project:<name>` aliases (#744).
         skillDispatchName: parsed.name,
+        // Surface approval gate (ctx.childGate); absent => no key.
+        ...forkConfigGate(ctx?.childGate, `user-skill-${parsed.name}`),
       },
       idPrefix: `user-skill-${parsed.name}`,
       agentType: `user-skill-${parsed.name}`,

@@ -3,6 +3,7 @@
  * Forks a subagent to execute the implementation plan.
  */
 
+import { mintChildGate } from './child-gate.js';
 import { z } from 'zod';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure } from '../../../agent/subagent/result.js';
@@ -81,6 +82,7 @@ export async function runBuildPhase(
       model: defaultSubagentModel,
       systemPrompt: buildPrompt,
       apiKey: resolveCredentialForModel(defaultSubagentModel),
+      ...mintChildGate(parentSessionId, 'mint-build'), // surface approval gate
     },
     idPrefix: 'mint-build',
     agentType: 'mint-build',

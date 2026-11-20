@@ -18,6 +18,11 @@
  *     model sees, and the child keeps running — identical to a top-level deny.
  *   - Absent option ⇒ no key is added anywhere; every provider is constructed
  *     with exactly the options it had before.
+ *   - Routes outside the factory reach the same gate: depth-cap restricted
+ *     providers look it up from the factory they hold (`childGateFor`); inline
+ *     skill handlers receive `SkillExecutionContext.childGate` and put it on
+ *     each fork's `config.canUseTool`; read-only phase providers take the fork
+ *     config's `canUseTool`. Own allowlists always run first.
  *
  * @module agent/tools/nesting.can-use-tool
  */
@@ -130,4 +135,59 @@ export function composeNodeGated<R extends object>(
     label: node.id,
   });
   return surfaceGate !== undefined ? { ...restrictions, surfaceGate } : restrictions;
+}
+
+// Contract (gate carriage without new plumbing): every executor at every depth
+// already holds the session's child provider factory, so the surface gate
+// factory is registered against that function object. Depth-cap restricted
+// providers and inline skill handlers look it up from the factory they were
+// handed. Nothing is registered when the option is absent.
+const gateByProviderFactory = new WeakMap<object, ChildCanUseToolFactory>();
+
+/** Record `gate` as the surface gate of `providerFactory` (no-op when absent). */
+export function attachChildGate<F extends object>(providerFactory: F, gate: ChildCanUseToolFactory | undefined): F {
+  if (gate !== undefined) gateByProviderFactory.set(providerFactory, gate);
+  return providerFactory;
+}
+
+/** The surface gate registered for `providerFactory`, if any. */
+export function childGateOf(providerFactory: object | undefined): ChildCanUseToolFactory | undefined {
+  return providerFactory === undefined ? undefined : gateByProviderFactory.get(providerFactory);
+}
+
+/**
+ * Per-label gate an inline skill handler applies to the children it forks
+ * through its own `SubagentManager` (route `skill`, depth `childDepth`).
+ * Undefined when no surface gate is configured.
+ */
+export function inlineSkillChildGate(
+  factory: ChildCanUseToolFactory | undefined,
+  childDepth: number,
+): ((agentType: string) => CanUseTool | undefined) | undefined {
+  if (factory === undefined) return undefined;
+  return (agentType) => factory(skillChildOrigin(childDepth, agentType));
+}
+
+/** `{ canUseTool }` for a fork config: `own` (if any) first, then the surface gate. */
+export function forkConfigGate(
+  gate: ((agentType: string) => CanUseTool | undefined) | undefined,
+  agentType: string,
+  own?: CanUseTool,
+): { canUseTool: CanUseTool } | Record<string, never> {
+  const canUseTool = chainCanUseTool(own, gate?.(agentType));
+  return canUseTool !== undefined ? { canUseTool } : {};
+}
+
+/** The surface gate callback for one child built from `providerFactory`, or undefined. */
+export function childGateFor(providerFactory: object | undefined, origin: ChildToolOrigin): CanUseTool | undefined {
+  return childGateOf(providerFactory)?.(origin);
+}
+
+/** `{ childGate }` for an inline handler's SkillExecutionContext, or `{}` when no gate. */
+export function inlineChildGateOpt(
+  providerFactory: object | undefined,
+  childDepth: number,
+): { childGate: (agentType: string) => CanUseTool | undefined } | Record<string, never> {
+  const childGate = inlineSkillChildGate(childGateOf(providerFactory), childDepth);
+  return childGate !== undefined ? { childGate } : {};
 }

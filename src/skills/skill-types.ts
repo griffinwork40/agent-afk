@@ -133,6 +133,15 @@ export interface SkillExecutionContext {
    * test stubs that do not provide it).
    */
   delegationBudget?: import('../agent/tools/delegation-budget.js').DelegationBudget;
+  /**
+   * Surface approval gate for children this handler forks through its OWN
+   * `SubagentManager`: returns the `CanUseTool` for a child labelled
+   * `agentType` (origin route `skill`, depth = handler depth + 1), or
+   * undefined. Handlers MUST put it on the fork's `config.canUseTool`
+   * (chained after any own allowlist, see `forkConfigGate`). Absent when the
+   * surface supplies no `childCanUseTool` (agent/tools/nesting.can-use-tool.ts).
+   */
+  childGate?: (agentType: string) => import('../agent/types.js').CanUseTool | undefined;
 }
 
 export interface SkillMetadata {
