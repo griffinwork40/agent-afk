@@ -13,19 +13,17 @@ The previous home-grown wire format used by earlier `afk acp` releases is remove
 afk acp
 ```
 
-The server reads newline-delimited JSON from stdin and writes newline-delimited JSON to stdout. All AFK wiring, tools, hooks, memory, skills, and state is inherited automatically.
+The server reads newline-delimited JSON from stdin and writes newline-delimited JSON to stdout. All AFK wiring, tools, hooks, memory, skills, and state is inherited automatically. The project's `AFK.md` file and operator configuration reach the model. The user's configured MCP servers are connected at session creation time.
 
 Common options:
 
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-m, --model <model>` | configured default | Model for every session on this server |
-| `--max-turns <n>` | `10` | Maximum agent turns per prompt |
+| `--max-turns <n>` | `0` | Maximum messages sent per session (`0` means no cap) |
 | `--dangerously-skip-permissions` | off | Skip all permission prompts for every session (see [Permissions](#permissions)) |
 
-<Callout type="warn">
-`afk acp` currently runs Anthropic models only. The `--model` flag selects a Claude model. This restriction may be lifted in a future release.
-</Callout>
+Any model the CLI can route works on this surface. The `--model` flag selects a model using the same provider-routing logic as the terminal. The approval prompt is forwarded for every provider family.
 
 ## Connect Zed
 
@@ -48,7 +46,7 @@ After saving, AFK appears in the new-thread menu in the Agent Panel and Threads 
 
 Source: [Zed External Agents documentation](https://zed.dev/docs/ai/external-agents) (verified 2026-11-20).
 
-For any other ACP v1 client, follow that client's documentation for registering a custom agent that runs `afk acp` over stdio.
+For any other ACP v1 client, follow that client's documentation for registering a custom agent that runs `afk acp` over stdio. No third-party client has been tested against this build.
 
 ## Session lifecycle
 
@@ -75,6 +73,8 @@ AFK returns `protocolVersion: 1` regardless of the integer the client requests. 
 ### Create a session
 
 `session/new` takes required `cwd` (absolute path, at or below the server's launch directory) and `mcpServers` (array of stdio entries, each with `name`, `command`, `args`, `env`). HTTP and SSE MCP entries are rejected. An empty array is valid.
+
+Client-supplied MCP servers are started immediately when the session is created, before any tool approval prompt, and are treated as trusted in the same way as servers named on the command line.
 
 ```json
 {"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/workspace","mcpServers":[]}}
@@ -105,6 +105,8 @@ The server streams `session/update` notifications (no `id`) until the turn ends,
 
 Sessions are stateful. Additional `session/prompt` calls on the same `sessionId` continue the conversation with full context.
 
+`usage_update` is sent only for models whose context window size is known. The `cost` field is cumulative and is omitted after `session/load` or `session/resume`.
+
 </Step>
 <Step>
 
@@ -132,7 +134,7 @@ Sessions are stateful. Additional `session/prompt` calls on the same `sessionId`
 | `tool_call_update` | `toolCallId`, changed fields | Status change or accumulated result |
 | `usage_update` | `used`, `size`, optional `cost` | Context tokens used and window size |
 
-`used` is the current context-window token count. `size` is the model's context window. `cost.amount` is the cumulative session cost in USD when available. If either token count is unavailable, the entire usage update is omitted.
+`used` is the current context-window token count. `size` is the model's context window. `cost.amount` is the cumulative session cost in USD when available.
 
 ## Tool calls and diffs
 
@@ -148,7 +150,7 @@ The `kind` field classifies the tool's intent for display:
 | `think` | `agent`, `skill`, `compose`, `remote_agent` |
 | `other` | MCP tools and everything else |
 
-Read and search tools begin at `in_progress`. Tools that require consent begin at `pending` and wait for a permission decision. After execution, `status` moves to `completed` or `failed`.
+Read and search tools begin at `in_progress` when their path is inside `cwd`. Tools that require consent begin at `pending` and wait for a permission decision. After execution, `status` moves to `completed` or `failed`.
 
 Edit tools emit `diff` content items alongside text results. Each diff has this shape:
 
@@ -158,7 +160,11 @@ Edit tools emit `diff` content items alongside text results. Each diff has this 
 
 `ToolCallUpdate.content` replaces the whole collection. The server carries earlier diffs forward in every subsequent update, so the final result does not erase a diff already displayed.
 
-Delegation tools (`agent`, `skill`, `compose`, `remote_agent`) append ` (subagent will act without further prompts)` to their title. Approving a delegation tool is a single consent covering everything that subagent does, without further GUI prompts. The subagent still observes its own tool allowlist and path restrictions.
+### Delegation tools and subagents
+
+`agent`, `skill`, `compose`, and `remote_agent` are delegation tools with kind `think`. Tool calls made by in-process children (`agent`, `skill`, `compose` at any depth) go through the same approval bridge as top-level calls. The title of a child-originated request is prefixed with the subagent's origin, for example `[subagent research-agent] bash: ls`. Asking to run a delegation tool is still asked as usual.
+
+`remote_agent` runs on a separate machine. Its tool calls are not covered by this session's approval bridge; the title says so.
 
 ## Permissions
 
@@ -166,12 +172,21 @@ Before executing any tool that requires consent, the server sends a `session/req
 
 | Tool class | Decision |
 | --- | --- |
-| Read and search tools | Auto-allow |
+| Read and search tools targeting a path inside `cwd` | Auto-allow |
+| Read and search tools with no filesystem path (memory, state, session listings, etc.) | Auto-allow |
+| Read and search tools targeting a path outside `cwd` | Ask, with absolute path shown |
 | `worktree list` | Auto-allow |
 | Write tools, `bash`, `test_run`, web tools, delegation tools, MCP tools, unknown tools | Ask |
 | `--dangerously-skip-permissions` | Skip the bridge entirely |
 
-`options` always includes `allow_once` and `reject_once`. `allow_always` is offered for every tool except `bash`. An `allow_always` grant covers that exact tool name for the rest of the live session and is not persisted.
+`options` always includes `allow_once` and `reject_once`. `allow_always` is offered for write and other consent-requiring tools, with these exceptions:
+
+- Not offered for `bash`.
+- Not offered for delegation tools (`agent`, `skill`, `compose`, `remote_agent`).
+- Not offered when the request was triggered because the path is outside `cwd`.
+- A remembered `allow_always` grant for a tool never covers a call of that tool that targets a path outside `cwd`; that call is always asked again.
+
+Grants are per-session and per tool name, shared between the session and its in-process children. They are not persisted across sessions.
 
 ```json
 {"jsonrpc":"2.0","id":"acp:1","method":"session/request_permission","params":{"sessionId":"...","toolCall":{...},"options":[{"optionId":"allow_once","name":"Allow once","kind":"allow_once"},{"optionId":"allow_always","name":"Always allow edit_file in this session","kind":"allow_always"},{"optionId":"reject_once","name":"Reject","kind":"reject_once"}]}}
@@ -191,8 +206,6 @@ Reply with one of these outcome shapes:
 ```
 
 A rejected tool produces a failed `tool_call_update` with text `Permission denied: rejected`. The model may continue after an ordinary rejection. A cancelled outcome stops the turn with `stopReason: "cancelled"`. Unanswered requests time out after 120 seconds with an explicit deny.
-
-Writes are confined to the session `cwd` and its descendants. A path outside that directory is denied before it reaches the permission bridge.
 
 <Callout type="warn">
 `--dangerously-skip-permissions` is a server-wide setting. Every session on this server runs without permission prompts. Use only in a trusted, externally sandboxed environment. The flag provides no sandbox of its own.
@@ -236,18 +249,17 @@ Both methods return resource-not-found (`-32002`) for unknown ids, and invalid-r
 
 Cancellation is not an error. It produces a successful response with `stopReason: "cancelled"`.
 
-## Limitations
+## Limits
 
-- Anthropic models only on this surface (open question Q-B in the profile).
 - No image or audio input blocks.
-- No HTTP or SSE MCP transports.
+- No HTTP or SSE MCP transports passed by the client.
 - No additional workspace directories beyond `cwd`.
 - No system-prompt override.
 - No session listing or deletion.
 - No ACP plan mode.
-- No model fallback for the ACP surface.
-- Writes outside `cwd` are denied; there is no GUI path-approval bridge.
-- Approving a delegation tool (`agent`, `skill`, `compose`, `remote_agent`) is a single consent for what that subagent does without further GUI prompts.
+- No background subagents (`remote_agent` tool calls are not covered by this session's approval bridge).
+- The agent cannot ask the user a free-form question on this surface; the session is non-interactive.
+- No third-party client has been tested against this build.
 
 ## Smoke test
 

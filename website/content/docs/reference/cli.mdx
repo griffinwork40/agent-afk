@@ -62,7 +62,7 @@ Usage: `afk [options] [command]`
 | `captures` | List bash output captures — full output files written when a command produces more than 100 KB. Captures live under the witness directory and are evicted automatically by the 30-day / 2 GiB retention sweep. |
 | `defects` | Show top recurring pre-existing defects from the session ledger |
 | `receipt` | Manage run receipts — human- and machine-readable session summaries. |
-| `acp` | Start an Agent Client Protocol (ACP) JSON-RPC 2.0 server over stdio (compatible with Zed, JetBrains, and other ACP clients) |
+| `acp` | Start an Agent Client Protocol (ACP) JSON-RPC 2.0 server over stdio (compatible with Zed and other ACP v1 clients; Zed configuration verified against Zed docs) |
 | `pause` | Freeze all running AFK sessions in place (write pause.lock) |
 | `resume` | Unfreeze all paused AFK sessions (remove pause.lock) |
 
@@ -2671,7 +2671,7 @@ Usage: `afk receipt regenerate [options]`
 
 ## `afk acp`
 
-Start an Agent Client Protocol (ACP) JSON-RPC 2.0 server over stdio (compatible with Zed, JetBrains, and other ACP clients)
+Start an Agent Client Protocol (ACP) JSON-RPC 2.0 server over stdio (compatible with Zed and other ACP v1 clients; Zed configuration verified against Zed docs)
 
 Usage: `afk acp [options]`
 
