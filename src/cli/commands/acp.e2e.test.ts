@@ -64,7 +64,7 @@ function rowsFor(file: string): Row[] {
 
 describe('ACP golden transcripts against the real server (A1/A2/A3/A4 integration)', () => {
   it('has exactly one independent internal script for every frozen transcript', () => {
-    expect(files).toHaveLength(19);
+    expect(files).toHaveLength(20);
     for (const file of files) expect(scriptFor(file.replace('.ndjson', ''), root)).toBeDefined();
   });
   for (const file of files) {
@@ -86,7 +86,7 @@ describe('ACP golden transcripts against the real server (A1/A2/A3/A4 integratio
         stem === 'child-approval-allow' ? ['tool-1', 'child:tool-c1'] :
         stem === 'child-approval-reject' || stem === 'read-outside-cwd-asked' ? ['tool-1'] :
         stem === 'permission-reject' || stem === 'cancel-during-permission' ? [] :
-          stem === 'permission-allow-always-then-skip' ? ['tool-1', 'tool-2'] :
+          stem === 'permission-allow-always-then-skip' || stem === 'grant-git-internals-asked' ? ['tool-1', 'tool-2'] :
             stem.startsWith('tool-') || stem === 'permission-allow-once' ? ['tool-1'] : [],
       );
       // Replay may construct a provider but must never execute historical calls.
