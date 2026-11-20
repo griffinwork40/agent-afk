@@ -1,5 +1,5 @@
 /**
- * /global — open the public global chat room, or manage it.
+ * /global: open the public global chat room, or manage it.
  *
  *   /global              open the room (first run shows the notice and name screens)
  *   /global name <name>  set or change the display name

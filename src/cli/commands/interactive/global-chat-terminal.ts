@@ -66,13 +66,15 @@ export interface Takeover {
  * Invariant (restore order): raw mode off, guards disarmed, leave the
  * alternate screen, run `afterLeave` (resume recording), then
  * `compositor.resumeInput()` and `compositor.repaint()`. Recording is paused
- * after entering and resumed after leaving so a cast never holds chat text.
+ * just before entering and resumed just after leaving, so a cast holds no chat
+ * text and never an unmatched enter or leave sequence.
  */
 export function takeTerminal(params: {
   compositor: ChatCompositor;
   stdin: ChatStdin;
   stdout: ChatStdout;
   guards: ChatTeardownGuards;
+  /** Runs just before the alternate screen is entered (pause recording). */
   afterEnter: () => void;
   afterLeave: () => void;
   onCrash: () => void;
@@ -107,8 +109,8 @@ export function takeTerminal(params: {
   // mode off on suspend, so it is re-enabled for per-byte keystrokes.
   compositor.suspendInput();
   try { stdin.setRawMode?.(true); } catch { /* non-TTY */ }
-  stdout.write(ENTER_ALT_SCREEN);
   try { afterEnter(); } catch { /* recorder pause is best effort */ }
+  stdout.write(ENTER_ALT_SCREEN);
   return { restore };
 }
 

@@ -51,7 +51,7 @@ function msg(text: string, pubkey = 'a'.repeat(64)): Msg {
 describe('runGlobalChatView lifecycle', () => {
   it('enters, pauses recording, and on Esc leaves the alt screen before resumeInput', async () => {
     const h = await open();
-    expect(h.log.slice(0, 3)).toEqual(['suspend', 'write:ENTER', 'pause']);
+    expect(h.log.slice(0, 3)).toEqual(['suspend', 'pause', 'write:ENTER']);
     expect(h.stdin.raw).toEqual([true]);
     expect(h.client.connected).toBe(1);
     h.stdin.type('\x1b');
