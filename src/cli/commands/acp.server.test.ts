@@ -1,685 +1,468 @@
 /**
- * Unit tests for the ACP JSON-RPC 2.0 stdio server (acp.server.ts).
- *
- * All tests run over in-memory PassThrough streams — no real AgentSession or
- * Anthropic API calls are made.  acp.session.ts is mocked to return a fake
- * session handle whose `sendMessageStream` is fully controlled per test.
+ * Tests for the ACP v1 stdio server (acp.server.ts). Seams owned by other
+ * lanes (translate, permission, session-load) and acp.session are mocked;
+ * golden transcripts from tests/fixtures/acp drive the protocol scenarios.
  */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { PassThrough } from 'node:stream';
+import { readFileSync, mkdtempSync, realpathSync, rmSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
-import { realpathSync } from 'node:fs';
+import path from 'node:path';
 import type { OutputEvent } from '../../agent/types/session-types.js';
+import type { AcpClientPeer, AcpPermissionOptions, SessionUpdate } from './acp.wire.js';
 
-// ---------------------------------------------------------------------------
-// Mock acp.session.ts — must be hoisted before any server import
-// ---------------------------------------------------------------------------
-
-const mockSendMessageStream = vi.fn();
-const mockSessionClose = vi.fn().mockResolvedValue(undefined);
-const mockMemoryClose = vi.fn();
-const mockStateClose = vi.fn();
-
-// vi.mock factories are hoisted — cannot reference let/const from outer scope.
-// Use vi.fn() inline; we import the mock module below to spy on buildAcpSession.
-vi.mock('./acp.session.js', () => ({
-  buildAcpSession: vi.fn(async () => ({
-    session: {
-      sendMessageStream: vi.fn(),
-      close: vi.fn().mockResolvedValue(undefined),
-      abort: vi.fn(),
-    },
-    memoryStore: { close: vi.fn() },
-    stateStore: { close: vi.fn() },
-  })),
-  closeAcpSession: vi.fn(async (handle: { session: { close: () => Promise<void> } }) => {
-    await handle.session.close();
-    (handle as unknown as Record<string, { close?: () => void }>)['memoryStore']?.close?.();
-    (handle as unknown as Record<string, { close?: () => void }>)['stateStore']?.close?.();
-  }),
+vi.mock('./acp.session.js', () => ({ buildAcpSession: vi.fn(), closeAcpSession: vi.fn() }));
+vi.mock('./acp.translate.js', () => ({
+  createTranslatorState: vi.fn(() => ({ tools: new Map(), cancelled: false })),
+  translateOutputEvent: vi.fn((ev: { __acp?: SessionUpdate[] }) => ev.__acp ?? []),
+  finishTurn: vi.fn(() => ({ updates: [], stopReason: 'end_turn' })),
 }));
+vi.mock('./acp.permission.js', () => ({ createAcpPermissionGate: vi.fn() }));
+vi.mock('./acp.session-load.js', () => ({ loadAcpSession: vi.fn(), replayHistory: vi.fn() }));
 
-// ---------------------------------------------------------------------------
-// Import server AFTER mock is registered; import mock module to access spies
-// ---------------------------------------------------------------------------
-
-import { runAcpServer } from './acp.server.js';
+import { runAcpServer, type AcpServerOptions } from './acp.server.js';
 import * as acpSession from './acp.session.js';
+import * as translate from './acp.translate.js';
+import * as permission from './acp.permission.js';
+import * as sessionLoad from './acp.session-load.js';
+import { getVersion } from '../version.js';
 
-// Typed alias for the hoisted mock's buildAcpSession spy
-const mockBuildAcpSession = acpSession.buildAcpSession as ReturnType<typeof vi.fn>;
+const mBuild = vi.mocked(acpSession.buildAcpSession);
+const mClose = vi.mocked(acpSession.closeAcpSession);
+const mFinish = vi.mocked(translate.finishTurn);
+const mGate = vi.mocked(permission.createAcpPermissionGate);
+const mLoad = vi.mocked(sessionLoad.loadAcpSession);
+const mReplay = vi.mocked(sessionLoad.replayHistory);
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+const WS = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'acp-ws-')));
+mkdirSync(path.join(WS, 'sub'));
+afterAll(() => { rmSync(WS, { recursive: true, force: true }); });
 
-/**
- * Send NDJSON lines to the server and collect all NDJSON output lines.
- * The server loop ends when the input stream ends (`.end()`).
- */
-async function runScenario(
-  lines: string[],
-  opts?: { dangerouslySkipPermissions?: boolean },
-): Promise<unknown[]> {
-  const input = new PassThrough();
-  const output = new PassThrough();
-
-  const serverDone = runAcpServer({
-    model: 'sonnet',
-    maxTurns: 10,
-    input,
-    output,
-    ...opts,
-  });
-
-  // Collect output asynchronously
-  const outputChunks: Buffer[] = [];
-  output.on('data', (chunk: Buffer) => outputChunks.push(chunk));
-
-  // Feed lines then end
-  for (const line of lines) {
-    input.write(line + '\n');
-  }
-  input.end();
-
-  await serverDone;
-  // Give the output stream a tick to flush
-  await new Promise<void>((r) => setImmediate(r));
-
-  const raw = Buffer.concat(outputChunks).toString('utf-8');
-  return raw
-    .split('\n')
-    .filter((l) => l.trim())
-    .map((l) => JSON.parse(l) as unknown);
+/** Fake AgentSession: scripted stream, interrupt releases a blocked stream. */
+let script: () => AsyncIterable<OutputEvent> = async function* () { /* empty */ };
+let interrupted: () => void = () => {};
+const interruptSpy = vi.fn(async () => { interrupted(); });
+function waitInterrupt(): Promise<void> { return new Promise((r) => { interrupted = r; }); }
+function fakeHandle(): never {
+  return { session: { sendMessageStream: vi.fn(() => script()), interrupt: interruptSpy, abort: vi.fn() } } as never;
 }
-
-function req(id: number, method: string, params?: unknown): string {
-  return JSON.stringify({ jsonrpc: '2.0', id, method, ...(params !== undefined ? { params } : {}) });
-}
-
-async function* makeStream(events: OutputEvent[]): AsyncIterable<OutputEvent> {
-  for (const e of events) yield e;
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+const ev = (updates: SessionUpdate[]): OutputEvent =>
+  ({ type: 'chunk', chunk: { type: 'content', content: '' }, __acp: updates }) as unknown as OutputEvent;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockSessionClose.mockResolvedValue(undefined);
-  // Re-wire the hoisted buildAcpSession mock to use our controllable fakes
-  mockBuildAcpSession.mockResolvedValue({
-    session: {
-      sendMessageStream: mockSendMessageStream,
-      close: mockSessionClose,
-      abort: vi.fn(),
-    },
-    memoryStore: { close: mockMemoryClose },
-    stateStore: { close: mockStateClose },
-  });
+  mBuild.mockImplementation(async () => fakeHandle());
+  mLoad.mockImplementation(async () => fakeHandle());
+  mClose.mockResolvedValue(undefined);
+  mFinish.mockImplementation(() => ({ updates: [], stopReason: 'end_turn' }));
+  mGate.mockImplementation(() => ({ canUseTool: vi.fn() as never, cancelAll: vi.fn() }));
+  script = async function* () { /* empty */ };
 });
 
-describe('ACP server — initialize', () => {
-  it('returns server info and capabilities', async () => {
-    const [res] = await runScenario([req(1, 'initialize')]) as Array<{
-      id: number;
-      result: { serverInfo: { name: string }; agentCapabilities: { streaming: boolean } };
-    }>;
-    if (!res) throw new Error('expected response');
-    expect(res.id).toBe(1);
-    expect(res.result.serverInfo.name).toBe('afk');
-    expect(res.result.agentCapabilities.streaming).toBe(true);
-  });
+const FIXTURE_ID = '11111111-1111-4111-8111-111111111111';
 
-  // Fix #3: initialize must include protocolVersion and agentCapabilities
-  it('initialize includes protocolVersion and agentCapabilities', async () => {
-    const [res] = await runScenario([req(1, 'initialize')]) as Array<{
-      id: number;
-      result: {
-        protocolVersion: string;
-        agentCapabilities: { streaming: boolean; methods: string[] };
-        serverInfo: { name: string; version: string };
-      };
-    }>;
-    if (!res) throw new Error('expected response');
-    expect(res.result.protocolVersion).toBe('1.0');
-    expect(res.result.agentCapabilities.streaming).toBe(true);
-    expect(res.result.agentCapabilities.methods).toContain('session/cancel');
-    expect(res.result.serverInfo.version).toBe('acp/1.0');
+interface Harness {
+  frames: unknown[];
+  logs: string[];
+  send(frame: unknown): void;
+  sendRaw(raw: string | Buffer): void;
+  waitFor(n: number): Promise<unknown[]>;
+  end(): Promise<void>;
+  rawOutput(): string;
+}
+
+function startServer(opts: Partial<AcpServerOptions> = {}): Harness {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const frames: unknown[] = [];
+  const logs: string[] = [];
+  let raw = '';
+  let buf = '';
+  output.on('data', (c: Buffer) => {
+    raw += c.toString('utf-8');
+    buf += c.toString('utf-8');
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      frames.push(JSON.parse(buf.slice(0, i)) as unknown);
+      buf = buf.slice(i + 1);
+    }
+  });
+  const done = runAcpServer({
+    model: 'sonnet', maxTurns: 10, input, output, cancelGraceMs: 20, serverCwd: WS,
+    log: (l) => { logs.push(l); }, ...opts,
+  });
+  return {
+    frames,
+    logs,
+    send: (f) => { input.write(JSON.stringify(f) + '\n'); },
+    sendRaw: (r) => { input.write(r); },
+    async waitFor(n) {
+      const start = Date.now();
+      while (frames.length < n) {
+        if (Date.now() - start > 2000) throw new Error(`timed out waiting for ${n} frames, got ${JSON.stringify(frames)}`);
+        await new Promise((r) => setTimeout(r, 2));
+      }
+      return frames;
+    },
+    async end() {
+      input.end();
+      await done;
+      await new Promise((r) => setImmediate(r));
+    },
+    rawOutput: () => raw,
+  };
+}
+
+const req = (id: number | string, method: string, params?: unknown): unknown =>
+  ({ jsonrpc: '2.0', id, method, ...(params !== undefined ? { params } : {}) });
+const note = (method: string, params?: unknown): unknown => ({ jsonrpc: '2.0', method, params });
+
+interface TranscriptLine { direction: 'client_to_agent' | 'agent_to_client'; frame: Record<string, unknown> }
+
+/** Load a golden transcript with the README's substitutions applied. */
+function loadTranscript(stem: string, cwd: string, version: string): TranscriptLine[] {
+  const url = new URL(`../../../tests/fixtures/acp/transcripts/${stem}.ndjson`, import.meta.url);
+  return readFileSync(url, 'utf-8').split('\n').filter((l) => l.trim()).map((l) => {
+    const text = l.split('"/workspace').join(`"${cwd}`).split('"6.0.0"').join(JSON.stringify(version));
+    return JSON.parse(text) as TranscriptLine;
+  });
+}
+
+vi.mock('node:crypto', async (orig) => ({ ...(await orig<typeof import('node:crypto')>()), randomUUID: () => '11111111-1111-4111-8111-111111111111' }));
+
+type Frame = Record<string, unknown>;
+interface Plan { before: SessionUpdate[]; after: SessionUpdate[]; cancel: boolean; perm?: { pending: SessionUpdate; params: unknown } }
+
+/** Split a transcript's agent frames per prompt into stream vs gate-originated parts. */
+function plansFor(lines: TranscriptLine[]): Plan[] {
+  const plans: Plan[] = [];
+  let cur: Plan | undefined;
+  let seenPerm = false;
+  for (const { direction, frame } of lines) {
+    if (direction === 'client_to_agent') {
+      if (frame['method'] === 'session/prompt') { cur = { before: [], after: [], cancel: false }; plans.push(cur); seenPerm = false; }
+      if (frame['method'] === 'session/cancel' && cur) cur.cancel = true;
+      continue;
+    }
+    if (!cur) continue;
+    if ('id' in frame && !('method' in frame)) { cur = undefined; continue; }
+    if (frame['method'] === 'session/request_permission') {
+      const pending = cur.before.pop()!;
+      cur.perm = { pending, params: frame['params'] };
+      seenPerm = true;
+      continue;
+    }
+    const update = (frame['params'] as { update: SessionUpdate }).update;
+    const isGateProgress = seenPerm && update.sessionUpdate === 'tool_call_update'
+      && update.status === 'in_progress' && Object.keys(update).length === 3;
+    if (isGateProgress) continue;
+    (seenPerm ? cur.after : cur.before).push(update);
+  }
+  return plans;
+}
+
+/** Minimal A3 stand-in honouring the frozen seam: emit pending, ask, emit in_progress on allow. */
+function installFakeGate(plans: Plan[]): void {
+  mGate.mockImplementation((peer: AcpClientPeer, _sid: string, opts: AcpPermissionOptions) => {
+    const ac = new AbortController();
+    const canUseTool = async (): Promise<{ behavior: 'allow' | 'deny' }> => {
+      const perm = plans[0]!.perm!;
+      await opts.emitToolCall(perm.pending as never);
+      let reply: unknown;
+      try { reply = await peer.request('session/request_permission', perm.params, ac.signal); } catch { return { behavior: 'deny' }; }
+      const outcome = (reply as { outcome: { outcome: string; optionId?: string } }).outcome;
+      if (outcome.outcome === 'cancelled') { opts.onCancelled(); return { behavior: 'deny' }; }
+      if (outcome.optionId?.startsWith('allow')) {
+        await opts.emitToolCall({ ...(perm.pending as object), status: 'in_progress' } as never);
+        return { behavior: 'allow' };
+      }
+      return { behavior: 'deny' };
+    };
+    return { canUseTool: canUseTool as never, cancelAll: () => ac.abort() };
+  });
+}
+
+function installScript(plans: Plan[]): void {
+  script = async function* () {
+    const plan = plans[0]!;
+    const interruptedP = waitInterrupt();
+    for (const u of plan.before) yield ev([u]);
+    if (plan.perm) {
+      const opts = mBuild.mock.calls.at(-1)?.[0] ?? mLoad.mock.calls.at(-1)?.[1];
+      await opts!.canUseTool!('t', {}, { signal: new AbortController().signal } as never);
+    }
+    if (plan.cancel) await interruptedP;
+    for (const u of plan.after) yield ev([u]);
+    plans.shift();
+  };
+}
+
+async function replay(stem: string): Promise<void> {
+  const lines = loadTranscript(stem, WS, getVersion());
+  const plans = plansFor(lines);
+  installFakeGate(plans);
+  installScript(plans);
+  mReplay.mockImplementation(async (sessionId, peer) => {
+    const start = lines.findIndex((l) => l.frame['method'] === 'session/load');
+    for (const l of lines.slice(start + 1)) {
+      if (l.frame['method'] !== 'session/update') break;
+      await peer.notify('session/update', { ...(l.frame['params'] as object), sessionId });
+    }
+  });
+  const h = startServer();
+  let expected = 0;
+  for (const l of lines) {
+    if (l.direction === 'agent_to_client') { expected++; continue; }
+    await h.waitFor(expected);
+    h.send(l.frame);
+  }
+  await h.waitFor(expected);
+  await new Promise((r) => setTimeout(r, 30));
+  expect(h.frames).toEqual(lines.filter((l) => l.direction === 'agent_to_client').map((l) => l.frame));
+  await h.end();
+}
+
+describe('ACP server — golden transcripts', () => {
+  for (const stem of [
+    'text-turn', 'tool-read', 'tool-edit-diff', 'tool-bash-failed', 'permission-allow-once', 'permission-reject',
+    'permission-allow-always-then-skip', 'cancel-during-permission', 'cancel-during-stream', 'load-replay', 'resume',
+    'close-idempotent', 'bad-version-negotiation',
+  ]) {
+    it(`replays ${stem}`, async () => { await replay(stem); });
+  }
+});
+
+const init = req(1, 'initialize', { protocolVersion: 1 });
+type Res = { id: unknown; result?: Record<string, unknown>; error?: { code: number; message: string } };
+async function run(frames: unknown[], opts: Partial<AcpServerOptions> = {}): Promise<{ out: Res[]; h: Harness }> {
+  const h = startServer(opts);
+  for (const f of frames) h.send(f);
+  await h.end();
+  return { out: h.frames as Res[], h };
+}
+const newSession = (id = 2, params: Record<string, unknown> = {}): unknown =>
+  req(id, 'session/new', { cwd: WS, mcpServers: [], ...params });
+
+describe('ACP server — initialize', () => {
+  it('negotiates version 1 and rejects a string version as invalid params', async () => {
+    const { out } = await run([req(1, 'initialize', { protocolVersion: '1.0' }), req(2, 'initialize', { protocolVersion: 7 })]);
+    expect(out[0]).toEqual({ jsonrpc: '2.0', id: 1, error: { code: -32602, message: 'Invalid params' } });
+    expect(out[1]!.result!['protocolVersion']).toBe(1);
+  });
+  it('rejects duplicate initialize and session methods before initialize', async () => {
+    const { out } = await run([newSession(1), init, req(3, 'initialize', { protocolVersion: 1 })]);
+    expect(out.map((r) => r.error?.code ?? 'ok')).toEqual([-32600, 'ok', -32600]);
+  });
+  it('unknown and unadvertised methods are method not found', async () => {
+    const { out } = await run([init, req(2, 'session/list', {}), req(3, 'session/set_mode', {})]);
+    expect(out.slice(1).map((r) => r.error)).toEqual([
+      { code: -32601, message: 'Method not found' }, { code: -32601, message: 'Method not found' }]);
   });
 });
 
 describe('ACP server — session/new', () => {
-  it('rejects before initialize', async () => {
-    const [res] = await runScenario([req(1, 'session/new')]) as Array<{
-      id: number; error: { code: number };
-    }>;
-    if (!res) throw new Error('expected response');
-    expect(res.error.code).toBe(-32600);
+  it('hands the gate canUseTool, cwd, id and converted MCP config to buildAcpSession', async () => {
+    const canUseTool = vi.fn();
+    mGate.mockImplementation(() => ({ canUseTool: canUseTool as never, cancelAll: vi.fn() }));
+    const mcp = [{ name: 'fs', command: '/bin/fs', args: ['-x'], env: [{ name: 'K', value: 'v' }] }];
+    const { out } = await run([init, newSession(2, { cwd: path.join(WS, 'sub'), mcpServers: mcp })]);
+    expect(out[1]!.result).toEqual({ sessionId: FIXTURE_ID });
+    expect(mGate).toHaveBeenCalledWith(expect.anything(), FIXTURE_ID, expect.objectContaining({ skip: false }));
+    expect(mBuild).toHaveBeenCalledWith(expect.objectContaining({
+      canUseTool, cwd: path.join(WS, 'sub'), sessionId: FIXTURE_ID,
+      mcpServers: { fs: { type: 'stdio', command: '/bin/fs', args: ['-x'], env: { K: 'v' } } },
+    }));
   });
-
-  it('creates a session and returns a sessionId after initialize', async () => {
-    const results = await runScenario([
-      req(1, 'initialize'),
-      req(2, 'session/new'),
-    ]) as Array<{ id: number; result?: { sessionId?: string }; error?: unknown }>;
-
-    const newRes = results.find((r) => r.id === 2);
-    // Fix non-blocking extra: IDs are now UUIDs, not acp- prefixed
-    expect(typeof newRes?.result?.sessionId).toBe('string');
-    expect((newRes?.result?.sessionId as string).length).toBeGreaterThan(0);
+  it('skips the gate entirely with --dangerously-skip-permissions', async () => {
+    await run([init, newSession()], { dangerouslySkipPermissions: true });
+    expect(mGate).not.toHaveBeenCalled();
+    expect(mBuild.mock.calls[0]![0].canUseTool).toBeUndefined();
+    expect(mBuild.mock.calls[0]![0].dangerouslySkipPermissions).toBe(true);
+  });
+  it.each([
+    ['outside cwd', { cwd: realpathSync(os.homedir()) }],
+    ['missing cwd', { cwd: path.join(WS, 'nope') }],
+    ['relative cwd', { cwd: 'sub' }],
+    ['http mcp', { mcpServers: [{ type: 'http', name: 'h', url: 'https://x', headers: [] }] }],
+    ['duplicate mcp name', { mcpServers: [{ name: 'a', command: '/a', args: [], env: [] }, { name: 'a', command: '/b', args: [], env: [] }] }],
+    ['duplicate env name', { mcpServers: [{ name: 'a', command: '/a', args: [], env: [{ name: 'K', value: '1' }, { name: 'K', value: '2' }] }] }],
+    ['relative mcp command', { mcpServers: [{ name: 'a', command: 'a', args: [], env: [] }] }],
+    ['additional directories', { additionalDirectories: [WS] }],
+    ['missing mcpServers', { mcpServers: undefined }],
+  ])('rejects %s as invalid params without leaking details', async (_n, params) => {
+    const { out } = await run([init, newSession(2, params)]);
+    expect(out[1]!.error).toEqual({ code: -32602, message: 'Invalid params' });
+    expect(mBuild).not.toHaveBeenCalled();
+  });
+  it('session construction failure is a generic internal error', async () => {
+    mBuild.mockRejectedValueOnce(new Error('ANTHROPIC_API_KEY missing at /secret/path'));
+    const { out, h } = await run([init, newSession()]);
+    expect(out[1]!.error).toEqual({ code: -32603, message: 'Internal error' });
+    expect(h.rawOutput()).not.toMatch(/secret|ANTHROPIC/);
+    expect(h.logs.join('\n')).toMatch(/ANTHROPIC_API_KEY/);
   });
 });
 
 describe('ACP server — session/prompt', () => {
-  it('streams text_delta updates then done', async () => {
-    mockSendMessageStream.mockImplementation(() =>
-      makeStream([
-        { type: 'chunk', chunk: { type: 'content', content: 'Hello' } },
-        { type: 'chunk', chunk: { type: 'content', content: ' world' } },
-        { type: 'done', metadata: {} },
-      ] as OutputEvent[]),
-    );
-
-    const input = new PassThrough();
-    const output = new PassThrough();
-
-    // Read output line by line via async iterator
-    const rl = (await import('node:readline')).createInterface({ input: output, crlfDelay: Infinity });
-    const lineQueue: string[] = [];
-    const waiters: Array<(line: string) => void> = [];
-    rl.on('line', (line) => {
-      if (waiters.length > 0) {
-        waiters.shift()!(line);
-      } else {
-        lineQueue.push(line);
-      }
-    });
-    const nextLine = (): Promise<string> =>
-      lineQueue.length > 0
-        ? Promise.resolve(lineQueue.shift()!)
-        : new Promise((resolve) => waiters.push(resolve));
-
-    const serverDone = runAcpServer({ model: 'sonnet', maxTurns: 10, input, output });
-
-    // Step 1: initialize
-    input.write(req(1, 'initialize') + '\n');
-    const initRes = JSON.parse(await nextLine()) as {
-      id: number; result: { serverInfo: { name: string } };
-    };
-    expect(initRes.id).toBe(1);
-    expect(initRes.result.serverInfo.name).toBe('afk');
-
-    // Step 2: session/new
-    input.write(req(2, 'session/new') + '\n');
-    const newRes = JSON.parse(await nextLine()) as { id: number; result: { sessionId: string } };
-    expect(newRes.id).toBe(2);
-    const sessionId = newRes.result.sessionId;
-    expect(typeof sessionId).toBe('string');
-
-    // Step 3: session/prompt — expect 2 notification frames + 1 done response
-    input.write(req(3, 'session/prompt', { sessionId, prompt: 'hi' }) + '\n');
-
-    // Fix #2: intermediate frames are notifications (no id, method: session/update)
-    const frame1 = JSON.parse(await nextLine()) as {
-      jsonrpc: string; method?: string; id?: number;
-      params?: { type: string; update: { type: string; delta: string } };
-    };
-    const frame2 = JSON.parse(await nextLine()) as {
-      jsonrpc: string; method?: string; id?: number;
-      params?: { type: string; update: { type: string; delta: string } };
-    };
-    const frame3 = JSON.parse(await nextLine()) as {
-      id: number; result: { type: string };
-    };
-
-    // Intermediate frames must be notifications (no id)
-    expect(frame1.method).toBe('session/update');
-    expect(frame1.id).toBeUndefined();
-    expect(frame1.params?.update.type).toBe('text_delta');
-    expect(frame1.params?.update.delta).toBe('Hello');
-
-    expect(frame2.method).toBe('session/update');
-    expect(frame2.id).toBeUndefined();
-    expect(frame2.params?.update.delta).toBe(' world');
-
-    // Final frame is a response with the request id
-    expect(frame3.id).toBe(3);
-    expect(frame3.result.type).toBe('done');
-
-    input.end();
-    await serverDone;
+  it('rejects bad prompts: unknown session, image media, string prompt', async () => {
+    const { out } = await run([init, newSession(),
+      req(3, 'session/prompt', { sessionId: 'nope', prompt: [] }),
+      req(4, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [{ type: 'image', data: 'x', mimeType: 'image/png' }] }),
+      req(5, 'session/prompt', { sessionId: FIXTURE_ID, prompt: 'hello' })]);
+    expect(out.slice(2).map((r) => r.error?.code)).toEqual([-32002, -32602, -32602]);
   });
-
-  // Fix #2: explicit test that intermediate frames have no id
-  it('intermediate frames are notifications without id', async () => {
-    mockSendMessageStream.mockImplementation(() =>
-      makeStream([
-        { type: 'chunk', chunk: { type: 'content', content: 'A' } },
-        { type: 'done', metadata: {} },
-      ] as OutputEvent[]),
-    );
-
-    // All in ONE runScenario so the sessionId is valid
-    const allResults = await runScenario([
-      req(1, 'initialize'),
-      req(2, 'session/new'),
-      // sessionId resolved inline via the req builder — use a placeholder;
-      // the server will return -32602 for unknown id, but we need the real one.
-      // So we must read it from step 2 and build step 3 dynamically.
-      // Instead, use the streaming test helper pattern inline:
+  it('normalizes content blocks in order joined by newlines', async () => {
+    const { h } = await run([init, newSession(), req(3, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [
+      { type: 'text', text: 'a' }, { type: 'resource_link', name: 'n', uri: 'file:///x' },
+      { type: 'resource', resource: { uri: 'file:///y', text: 'body' } },
+      { type: 'resource', resource: { uri: 'file:///z', blob: 'AAAA' } }] })]);
+    expect(h.frames.at(-1)).toEqual({ jsonrpc: '2.0', id: 3, result: { stopReason: 'end_turn' } });
+    const session = (await mBuild.mock.results[0]!.value) as { session: { sendMessageStream: ReturnType<typeof vi.fn> } };
+    expect(session.session.sendMessageStream).toHaveBeenCalledWith('a\nn (file:///x)\nfile:///y\nbody\nfile:///z (binary resource omitted)');
+  });
+  it('a second prompt during an active turn is invalid request', async () => {
+    script = async function* () { await waitInterrupt(); };
+    const h = startServer();
+    h.send(init); h.send(newSession());
+    await h.waitFor(2);
+    h.send(req(3, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] }));
+    h.send(req(4, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] }));
+    await h.waitFor(3);
+    expect(h.frames[2]).toEqual({ jsonrpc: '2.0', id: 4, error: { code: -32600, message: 'Invalid request' } });
+    await h.end();
+    expect(h.frames[3]).toEqual({ jsonrpc: '2.0', id: 3, result: { stopReason: 'cancelled' } });
+  });
+  it('a provider error is a generic internal error, removes the dead session', async () => {
+    script = async function* () { yield { type: 'error', error: new Error('sk-ant-secret 401') } as OutputEvent; };
+    const { out, h } = await run([init, newSession(),
+      req(3, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] }),
     ]);
-
-    const sessionId = (allResults.find((r: unknown) =>
-      (r as { id?: number }).id === 2) as { result: { sessionId: string } }).result.sessionId;
-
-    const input2 = new PassThrough();
-    const output2 = new PassThrough();
-    const chunks: Buffer[] = [];
-    output2.on('data', (c: Buffer) => chunks.push(c));
-    const done2 = runAcpServer({ model: 'sonnet', maxTurns: 10, input: input2, output: output2 });
-    input2.write(req(1, 'initialize') + '\n');
-    input2.write(req(2, 'session/new') + '\n');
-    // Give server a tick to create session and get real sessionId
-    await new Promise<void>((r) => setImmediate(r));
-    // Read the real sessionId from output2
-    const partial = Buffer.concat(chunks).toString('utf-8');
-    const lines2 = partial.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as Record<string, unknown>);
-    const realSessionId = (lines2.find((r) => r['id'] === 2) as { result: { sessionId: string } } | undefined)?.result?.sessionId ?? sessionId;
-    input2.write(req(3, 'session/prompt', { sessionId: realSessionId, prompt: 'hi' }) + '\n');
-    input2.end();
-    await done2;
-    await new Promise<void>((r) => setImmediate(r));
-    const allLines = Buffer.concat(chunks).toString('utf-8')
-      .split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as unknown);
-
-    // Find the notification frame (no id field)
-    const notification = allLines.find((r: unknown) => {
-      const frame = r as Record<string, unknown>;
-      return frame['method'] === 'session/update' && !('id' in frame);
-    });
-    expect(notification).toBeDefined();
-    // The done response must have the request id
-    const doneFrame = allLines.find((r: unknown) => {
-      const frame = r as Record<string, unknown>;
-      return typeof frame['id'] === 'number' &&
-        (frame['result'] as Record<string, unknown>)?.['type'] === 'done';
-    });
-    expect(doneFrame).toBeDefined();
+    expect(out[2]).toEqual({ jsonrpc: '2.0', id: 3, error: { code: -32603, message: 'Internal error' } });
+    expect(h.rawOutput()).not.toMatch(/sk-ant/);
+    expect(mClose).toHaveBeenCalledTimes(1);
   });
-
-  it('returns error for unknown sessionId', async () => {
-    const results = await runScenario([
-      req(1, 'initialize'),
-      req(2, 'session/prompt', { sessionId: 'no-such', prompt: 'hi' }),
-    ]) as Array<{ id: number; error?: { code: number } }>;
-
-    const promptRes = results.find((r) => r.id === 2);
-    expect(promptRes?.error?.code).toBe(-32602);
+  it('a dead session is not reused after an error', async () => {
+    script = async function* () { yield { type: 'error', error: new Error('boom') } as OutputEvent; };
+    const h = startServer();
+    h.send(init); h.send(newSession());
+    h.send(req(3, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] }));
+    await h.waitFor(3);
+    h.send(req(4, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] }));
+    await h.waitFor(4);
+    expect((h.frames[3] as Res).error?.code).toBe(-32002);
+    await h.end();
   });
-
-  it('returns error when prompt is missing', async () => {
-    const results = await runScenario([
-      req(1, 'initialize'),
-      req(2, 'session/new'),
-      req(3, 'session/prompt', { sessionId: 'acp-fake', prompt: '' }),
-    ]) as Array<{ id: number; error?: { code: number } }>;
-
-    const promptRes = results.find((r) => r.id === 3);
-    expect(promptRes?.error?.code).toBe(-32602);
+  it('maps finishTurn stop reasons', async () => {
+    mFinish.mockImplementation(() => ({ updates: [], stopReason: 'max_tokens' }));
+    const { out } = await run([init, newSession(), req(3, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] })]);
+    expect(out[2]!.result).toEqual({ stopReason: 'max_tokens' });
   });
-
-  // Fix #4: accept ContentBlock[] as prompt
-  it('accepts ContentBlock[] as prompt', async () => {
-    mockSendMessageStream.mockImplementation(() =>
-      makeStream([{ type: 'done', metadata: {} }] as OutputEvent[]),
-    );
-
-    // Use streaming helper to get the real sessionId within a single server run
-    const input = new PassThrough();
-    const output = new PassThrough();
-    const chunks: Buffer[] = [];
-    output.on('data', (c: Buffer) => chunks.push(c));
-    const serverDone = runAcpServer({ model: 'sonnet', maxTurns: 10, input, output });
-
-    input.write(req(1, 'initialize') + '\n');
-    input.write(req(2, 'session/new') + '\n');
-    await new Promise<void>((r) => setImmediate(r));
-
-    const partial = Buffer.concat(chunks).toString('utf-8');
-    const earlyLines = partial.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as Record<string, unknown>);
-    const sessionId = (earlyLines.find((r) => r['id'] === 2) as { result: { sessionId: string } }).result.sessionId;
-
-    input.write(req(3, 'session/prompt', {
-      sessionId,
-      prompt: [
-        { type: 'text', text: 'Hello ' },
-        { type: 'text', text: 'world' },
-      ],
-    }) + '\n');
-    input.end();
-    await serverDone;
-    await new Promise<void>((r) => setImmediate(r));
-
-    const allLines = Buffer.concat(chunks).toString('utf-8')
-      .split('\n').filter((l) => l.trim())
-      .map((l) => JSON.parse(l) as { id?: number; result?: { type: string }; error?: { code: number } });
-
-    const promptRes = allLines.find((r) => r.id === 3);
-    expect(promptRes?.result?.type).toBe('done');
-    expect(mockSendMessageStream).toHaveBeenCalledWith('Hello world');
-  });
-
-  // Fix #6: error responses do not leak internal messages
-  it('error responses do not leak internal messages', async () => {
-    const internalMsg = 'secret database connection string xyz123';
-    mockSendMessageStream.mockImplementation(async function* () {
-      throw new Error(internalMsg);
-    });
-
-    // Single server run so sessionId is valid
-    const input = new PassThrough();
-    const output = new PassThrough();
-    const chunks: Buffer[] = [];
-    output.on('data', (c: Buffer) => chunks.push(c));
-    const serverDone = runAcpServer({ model: 'sonnet', maxTurns: 10, input, output });
-
-    input.write(req(1, 'initialize') + '\n');
-    input.write(req(2, 'session/new') + '\n');
-    await new Promise<void>((r) => setImmediate(r));
-
-    const partial = Buffer.concat(chunks).toString('utf-8');
-    const earlyLines = partial.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as Record<string, unknown>);
-    const sessionId = (earlyLines.find((r) => r['id'] === 2) as { result: { sessionId: string } }).result.sessionId;
-
-    input.write(req(3, 'session/prompt', { sessionId, prompt: 'hi' }) + '\n');
-    input.end();
-    await serverDone;
-    await new Promise<void>((r) => setImmediate(r));
-
-    const allLines = Buffer.concat(chunks).toString('utf-8')
-      .split('\n').filter((l) => l.trim())
-      .map((l) => JSON.parse(l) as { id?: number; error?: { code: number; message: string } });
-
-    const promptRes = allLines.find((r) => r.id === 3);
-    expect(promptRes?.error?.code).toBe(-32603);
-    expect(promptRes?.error?.message).not.toContain(internalMsg);
-    expect(promptRes?.error?.message).toBe('Internal server error');
+  it('wires onCancelled so a permission-originated cancel ends the turn cancelled', async () => {
+    let onCancelled!: () => void;
+    mGate.mockImplementation((_p, _s, o) => { onCancelled = o.onCancelled; return { canUseTool: vi.fn() as never, cancelAll: vi.fn() }; });
+    script = async function* () { await waitInterrupt(); };
+    const h = startServer();
+    h.send(init); h.send(newSession());
+    await h.waitFor(2);
+    h.send(req(3, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] }));
+    await new Promise((r) => setTimeout(r, 10));
+    onCancelled();
+    await h.waitFor(3);
+    expect(h.frames[2]).toEqual({ jsonrpc: '2.0', id: 3, result: { stopReason: 'cancelled' } });
+    expect(interruptSpy).toHaveBeenCalled();
+    await h.end();
   });
 });
 
-describe('ACP server — session/close', () => {
-  it('closes an existing session', async () => {
-    const results = await runScenario([
-      req(1, 'initialize'),
-      req(2, 'session/new'),
-    ]) as Array<{ id: number; result?: { sessionId?: string } }>;
-
-    const sessionId = results.find((r) => r.id === 2)?.result?.sessionId ?? '';
-    expect(typeof sessionId).toBe('string');
-
-    const results2 = await runScenario([
-      req(1, 'initialize'),
-      req(2, 'session/new'),
-      req(3, 'session/close', { sessionId }),
-    ]) as Array<{ id: number; result?: { closed?: boolean }; error?: { code: number } }>;
-
-    // The sessionId from the first run won't exist in the second run's state,
-    // so close will return an error — that's the expected behaviour.
-    const closeRes = results2.find((r) => r.id === 3);
-    expect(closeRes).toBeDefined();
+describe('ACP server — cancel and close', () => {
+  it('cancel of an idle or unknown session, or malformed, sends nothing', async () => {
+    const { out, h } = await run([init, newSession(), note('session/cancel', { sessionId: FIXTURE_ID }),
+      note('session/cancel', { sessionId: 'nope' }), note('session/cancel', {})]);
+    expect(out).toHaveLength(2);
+    expect(h.logs.join('\n')).toMatch(/malformed session\/cancel/);
   });
-
-  it('returns error for unknown sessionId', async () => {
-    const results = await runScenario([
-      req(1, 'initialize'),
-      req(2, 'session/close', { sessionId: 'no-such' }),
-    ]) as Array<{ id: number; error?: { code: number } }>;
-
-    const closeRes = results.find((r) => r.id === 2);
-    expect(closeRes?.error?.code).toBe(-32602);
+  it('close during a turn resolves the prompt cancelled before replying {}', async () => {
+    script = async function* () { await waitInterrupt(); };
+    const h = startServer();
+    h.send(init); h.send(newSession());
+    await h.waitFor(2);
+    h.send(req(3, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] }));
+    await new Promise((r) => setTimeout(r, 10));
+    h.send(req(4, 'session/close', { sessionId: FIXTURE_ID }));
+    await h.waitFor(4);
+    expect(h.frames.slice(2)).toEqual([
+      { jsonrpc: '2.0', id: 3, result: { stopReason: 'cancelled' } }, { jsonrpc: '2.0', id: 4, result: {} }]);
+    expect(mClose).toHaveBeenCalledTimes(1);
+    await h.end();
   });
-});
-
-describe('ACP server — session/cancel', () => {
-  // Fix #8: session/cancel aborts a running prompt
-  it('session/cancel aborts a running prompt', async () => {
-    // Create a stream that never resolves on its own (blocked)
-    let resolveStream!: () => void;
-    const blockedStream = async function* () {
-      await new Promise<void>((r) => { resolveStream = r; });
-      yield { type: 'done', metadata: {} } as OutputEvent;
-    };
-    mockSendMessageStream.mockImplementation(blockedStream);
-
-    const input = new PassThrough();
-    const output = new PassThrough();
-    const rl = (await import('node:readline')).createInterface({ input: output, crlfDelay: Infinity });
-    const lineQueue: string[] = [];
-    const waiters: Array<(line: string) => void> = [];
-    rl.on('line', (line) => {
-      if (waiters.length > 0) waiters.shift()!(line);
-      else lineQueue.push(line);
-    });
-    const nextLine = (): Promise<string> =>
-      lineQueue.length > 0
-        ? Promise.resolve(lineQueue.shift()!)
-        : new Promise((resolve) => waiters.push(resolve));
-
-    const serverDone = runAcpServer({ model: 'sonnet', maxTurns: 10, input, output });
-
-    input.write(req(1, 'initialize') + '\n');
-    await nextLine(); // init response
-
-    input.write(req(2, 'session/new') + '\n');
-    const newLine = await nextLine();
-    const newRes = JSON.parse(newLine) as { result: { sessionId: string } };
-    const sessionId = newRes.result.sessionId;
-
-    // Start the prompt (fire-and-forget on server side)
-    input.write(req(3, 'session/prompt', { sessionId, prompt: 'block me' }) + '\n');
-
-    // Give the server a tick to start handling the prompt
-    await new Promise<void>((r) => setImmediate(r));
-
-    // Send cancel — should get a response
-    input.write(req(4, 'session/cancel', { sessionId }) + '\n');
-    const cancelLine = await nextLine();
-    const cancelRes = JSON.parse(cancelLine) as { id: number; result: { cancelled: boolean } };
-    expect(cancelRes.id).toBe(4);
-    expect(cancelRes.result.cancelled).toBe(true);
-
-    // Unblock the stream so the server can finish
-    resolveStream();
-    input.end();
-    await serverDone;
-  });
-
-  it('returns error for unknown sessionId', async () => {
-    const results = await runScenario([
-      req(1, 'initialize'),
-      req(2, 'session/cancel', { sessionId: 'no-such' }),
-    ]) as Array<{ id: number; error?: { code: number } }>;
-
-    const res = results.find((r) => r.id === 2);
-    expect(res?.error?.code).toBe(-32602);
+  it('EOF cancels active turns, rejects pending peer requests and releases sessions', async () => {
+    let rejected = false;
+    mGate.mockImplementation((peer) => ({
+      canUseTool: vi.fn() as never, cancelAll: vi.fn(),
+      __ask: peer.request('session/request_permission', {}).catch(() => { rejected = true; }),
+    }) as never);
+    script = async function* () { await waitInterrupt(); };
+    const h = startServer();
+    h.send(init); h.send(newSession());
+    await h.waitFor(3);
+    h.send(req(3, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] }));
+    await new Promise((r) => setTimeout(r, 10));
+    await h.end();
+    expect(rejected).toBe(true);
+    expect(h.frames.at(-1)).toEqual({ jsonrpc: '2.0', id: 3, result: { stopReason: 'cancelled' } });
+    expect(mClose).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('ACP server — protocol errors', () => {
-  it('returns parse error for malformed JSON', async () => {
-    const results = await runScenario(['not json']) as Array<{ error?: { code: number } }>;
-    expect(results[0]?.error?.code).toBe(-32700);
+describe('ACP server — load and resume', () => {
+  it('unknown id is resource not found; failed replay releases the session', async () => {
+    mLoad.mockRejectedValueOnce(Object.assign(new Error('no journal'), { code: -32002 }));
+    mReplay.mockRejectedValueOnce(new Error('corrupt journal /x'));
+    const params = { sessionId: FIXTURE_ID, cwd: WS, mcpServers: [] };
+    const h = startServer();
+    const steps = [init, req(2, 'session/load', params), req(3, 'session/load', params),
+      req(4, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] })];
+    for (const [i, f] of steps.entries()) { h.send(f); await h.waitFor(i + 1); }
+    await h.end();
+    const out = h.frames as Res[];
+    expect(out.slice(1).map((r) => r.error?.code)).toEqual([-32002, -32603, -32002]);
+    expect(h.rawOutput()).not.toMatch(/corrupt|journal/);
+    expect(mClose).toHaveBeenCalledTimes(1);
   });
-
-  it('returns invalid request for missing method', async () => {
-    const results = await runScenario([
-      JSON.stringify({ jsonrpc: '2.0', id: 1 }),
-    ]) as Array<{ error?: { code: number } }>;
-    expect(results[0]?.error?.code).toBe(-32600);
+  it('resume of an active id is invalid request; resume omits replay and defaults mcpServers to []', async () => {
+    const { out } = await run([init, req(2, 'session/resume', { sessionId: FIXTURE_ID, cwd: WS }),
+      req(3, 'session/resume', { sessionId: FIXTURE_ID, cwd: WS })]);
+    expect(out[1]!.result).toEqual({});
+    expect(out[2]!.error?.code).toBe(-32600);
+    expect(mReplay).not.toHaveBeenCalled();
+    expect(mLoad).toHaveBeenCalledWith({ sessionId: FIXTURE_ID, cwd: WS, mcpServers: [] }, expect.objectContaining({ mcpServers: {} }));
   });
+});
 
-  it('returns method-not-found for unknown method', async () => {
-    const results = await runScenario([
-      req(1, 'initialize'),
-      req(2, 'unknown/method'),
-    ]) as Array<{ id: number; error?: { code: number } }>;
-
-    const res = results.find((r) => r.id === 2);
-    expect(res?.error?.code).toBe(-32601);
-  });
-
-  it('skips blank lines silently', async () => {
-    const results = await runScenario([
-      '',
-      '   ',
-      req(1, 'initialize'),
+describe('ACP server — transport safety', () => {
+  it('parse error, invalid envelope and oversize lines use null ids; blank lines are skipped', async () => {
+    const big = JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'initialize', params: { pad: 'x'.repeat(1_048_577) } });
+    const h = startServer();
+    h.sendRaw('\n  \nnot json\n');
+    h.sendRaw(Buffer.from([0xff, 0xfe, 0x0a]));
+    h.send({ jsonrpc: '2.0', id: 1 });
+    h.send({ jsonrpc: '1.0', id: 2, method: 'initialize' });
+    h.sendRaw(big + '\n');
+    h.send(init);
+    await h.end();
+    expect(h.frames).toEqual([
+      { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } },
+      { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } },
+      { jsonrpc: '2.0', id: 1, error: { code: -32600, message: 'Invalid request' } },
+      { jsonrpc: '2.0', id: 2, error: { code: -32600, message: 'Invalid request' } },
+      { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid request' } },
+      expect.objectContaining({ id: 1, result: expect.objectContaining({ protocolVersion: 1 }) }),
     ]);
-    expect(results).toHaveLength(1);
   });
-
-  // Fix #7: rejects oversized lines
-  it('rejects oversized lines', async () => {
-    // Build a line just over 1MiB
-    const oversized = JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: { pad: 'x'.repeat(1_048_577) },
-    });
-    const results = await runScenario([oversized]) as Array<{
-      error?: { code: number; message: string };
-    }>;
-    expect(results[0]?.error?.code).toBe(-32700);
-    expect(results[0]?.error?.message).toMatch(/too large/i);
-  });
-});
-
-describe('ACP server — cwd validation', () => {
-  it('rejects cwd outside process.cwd()', async () => {
-    // H4: use os.tmpdir() realpath — guaranteed to exist on all platforms
-    // (including Windows) and guaranteed to be outside process.cwd() in CI.
-    const outsideCwd = realpathSync(os.tmpdir());
-    const results = await runScenario([
-      req(1, 'initialize'),
-      req(2, 'session/new', { cwd: outsideCwd }),
-    ]) as Array<{ id: number; error?: { code: number; message: string } }>;
-
-    const res = results.find((r) => r.id === 2);
-    expect(res?.error?.code).toBe(-32602);
-    expect(res?.error?.message).toMatch(/outside server working directory/i);
-  });
-
-  it('rejects non-existent cwd', async () => {
-    const results = await runScenario([
-      req(1, 'initialize'),
-      req(2, 'session/new', { cwd: '/this/path/does/not/exist/afk-test-xyz' }),
-    ]) as Array<{ id: number; error?: { code: number; message: string } }>;
-
-    const res = results.find((r) => r.id === 2);
-    expect(res?.error?.code).toBe(-32602);
-    expect(res?.error?.message).toMatch(/does not exist/i);
-  });
-
-  it('accepts valid cwd under process.cwd()', async () => {
-    const results = await runScenario([
-      req(1, 'initialize'),
-      req(2, 'session/new', { cwd: process.cwd() }),
-    ]) as Array<{ id: number; result?: { sessionId?: string }; error?: unknown }>;
-
-    const res = results.find((r) => r.id === 2);
-    expect(res?.error).toBeUndefined();
-    expect(typeof res?.result?.sessionId).toBe('string');
-  });
-
-  it('passes validated cwd to buildAcpSession', async () => {
-    await runScenario([
-      req(1, 'initialize'),
-      req(2, 'session/new', { cwd: process.cwd() }),
-    ]);
-
-    expect(mockBuildAcpSession).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: process.cwd() }),
-    );
-  });
-});
-
-describe('ACP server — session/cancel', () => {
-  it('cancel calls session.abort to interrupt the stream', async () => {
-    const mockAbort = vi.fn();
-    let resolveStream!: () => void;
-    const blockedStream = async function* () {
-      await new Promise<void>((r) => { resolveStream = r; });
-      yield { type: 'done', metadata: {} } as OutputEvent;
-    };
-    mockSendMessageStream.mockImplementation(blockedStream);
-    mockBuildAcpSession.mockResolvedValue({
-      session: {
-        sendMessageStream: mockSendMessageStream,
-        close: mockSessionClose,
-        abort: mockAbort,
-      },
-      memoryStore: { close: mockMemoryClose },
-      stateStore: { close: mockStateClose },
-    });
-
-    const input = new PassThrough();
-    const output = new PassThrough();
-    const rl = (await import('node:readline')).createInterface({ input: output, crlfDelay: Infinity });
-    const lineQueue: string[] = [];
-    const waiters: Array<(line: string) => void> = [];
-    rl.on('line', (line) => {
-      if (waiters.length > 0) waiters.shift()!(line);
-      else lineQueue.push(line);
-    });
-    const nextLine = (): Promise<string> =>
-      lineQueue.length > 0
-        ? Promise.resolve(lineQueue.shift()!)
-        : new Promise((resolve) => waiters.push(resolve));
-
-    const serverDone = runAcpServer({ model: 'sonnet', maxTurns: 10, input, output });
-
-    input.write(req(1, 'initialize') + '\n');
-    await nextLine();
-
-    input.write(req(2, 'session/new') + '\n');
-    const newRes = JSON.parse(await nextLine()) as { result: { sessionId: string } };
-    const sessionId = newRes.result.sessionId;
-
-    input.write(req(3, 'session/prompt', { sessionId, prompt: 'block me' }) + '\n');
-    await new Promise<void>((r) => setImmediate(r));
-
-    input.write(req(4, 'session/cancel', { sessionId }) + '\n');
-    const cancelLine = await nextLine();
-    const cancelRes = JSON.parse(cancelLine) as { id: number; result: { cancelled: boolean } };
-    expect(cancelRes.id).toBe(4);
-    expect(cancelRes.result.cancelled).toBe(true);
-    expect(mockAbort).toHaveBeenCalledWith('acp-cancel');
-
-    resolveStream();
-    input.end();
-    await serverDone;
-  });
-});
-
-// Fix #1: default permissionMode is 'default'
-describe('ACP server — permissionMode', () => {
-  it('default permissionMode is default (no bypassPermissions)', async () => {
-    await runScenario([req(1, 'initialize'), req(2, 'session/new')]);
-    expect(mockBuildAcpSession).toHaveBeenCalledWith(
-      expect.objectContaining({ dangerouslySkipPermissions: undefined }),
-    );
-  });
-
-  it('passes dangerouslySkipPermissions=true when flag is set', async () => {
-    await runScenario(
-      [req(1, 'initialize'), req(2, 'session/new')],
-      { dangerouslySkipPermissions: true },
-    );
-    expect(mockBuildAcpSession).toHaveBeenCalledWith(
-      expect.objectContaining({ dangerouslySkipPermissions: true }),
-    );
+  it('stdout carries protocol frames only; unknown response ids are ignored and logged', async () => {
+    const { h } = await run([init, { jsonrpc: '2.0', id: 'acp:42', result: {} }]);
+    for (const line of h.rawOutput().trim().split('\n')) expect(JSON.parse(line)).toHaveProperty('jsonrpc', '2.0');
+    expect(h.frames).toHaveLength(1);
+    expect(h.logs.join('\n')).toMatch(/acp:42/);
   });
 });
