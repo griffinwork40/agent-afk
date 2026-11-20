@@ -15,6 +15,8 @@
  */
 
 import { execFile, execFileSync } from 'child_process';
+import type { TraceSink } from '../../../trace/writer.js';
+import { emitSessionPhase } from '../../../trace/emit.js';
 import { promisify } from 'util';
 import { env } from '../../../../config/env.js';
 
@@ -27,7 +29,7 @@ export type ClosedRouterResult =
   | { rotated: true;  kind: 'rotated' | 'reset' }
   | { rotated: false; kind: Exclude<ClosedRouterKind, 'rotated' | 'reset'> };
 
-/** Cached PATH check: undefined = not yet resolved. Only set true (positive). */
+/** Cached PATH check: undefined = not yet resolved. Only a positive result is cached. */
 let _closedRouterOnPath: boolean | undefined;
 
 /** Reset the PATH cache — for test isolation only. */
@@ -57,17 +59,21 @@ function isClosedRouterOnPath(): boolean {
  * Returns `{ rotated: false, kind: ... }` on `no-action`, `all-hot`, or any
  * error. The caller should fall through to the normal park behavior.
  */
-export async function tryClosedRouterRotate(): Promise<ClosedRouterResult> {
+export async function tryClosedRouterRotate(
+  traceWriter?: TraceSink,
+  signal?: AbortSignal,
+): Promise<ClosedRouterResult> {
   // Gate 1: env var must be explicitly enabled.
   if (env.AFK_CLOSED_ROUTER !== '1') {
     return { rotated: false, kind: 'no-action' };
   }
 
-  // Gate 2: binary must be on PATH (cached after first check).
+  // Gate 2: binary must be on PATH (only a positive result is cached).
   if (!isClosedRouterOnPath()) {
-    process.stderr.write(
-      'agent-afk: AFK_CLOSED_ROUTER=1 but `closed-router` not found on PATH — skipping rotation.\n',
-    );
+    void emitSessionPhase(traceWriter, {
+      phase: 'closed_router_rotate',
+      metadata: { kind: 'error', reason: 'binary-not-found' },
+    });
     return { rotated: false, kind: 'error' };
   }
 
@@ -75,16 +81,24 @@ export async function tryClosedRouterRotate(): Promise<ClosedRouterResult> {
     const { stdout } = await execFileAsync(
       'closed-router',
       ['rotate', '--once', '--json', '--on-limit'],
-      { timeout: 10_000, maxBuffer: 64 * 1024 },
+      { signal, timeout: 10_000, maxBuffer: 64 * 1024 },
     );
+
+    // Re-check abort after the subprocess returns: the rotation already wrote
+    // to the shared keychain, but the caller should not replay on an aborted
+    // signal — it will check isClosed() || signal.aborted and return early.
+    if (signal?.aborted) {
+      return { rotated: false, kind: 'no-action' };
+    }
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(stdout.trim());
     } catch {
-      process.stderr.write(
-        `agent-afk: closed-router returned non-JSON output — skipping rotation.\n`,
-      );
+      void emitSessionPhase(traceWriter, {
+        phase: 'closed_router_rotate',
+        metadata: { kind: 'error', reason: 'non-json-output' },
+      });
       return { rotated: false, kind: 'error' };
     }
 
@@ -100,15 +114,21 @@ export async function tryClosedRouterRotate(): Promise<ClosedRouterResult> {
       return { rotated: false, kind };
     }
 
-    process.stderr.write(
-      `agent-afk: closed-router returned unexpected kind ${JSON.stringify(kind)} — skipping rotation.\n`,
-    );
+    void emitSessionPhase(traceWriter, {
+      phase: 'closed_router_rotate',
+      metadata: { kind: 'error', reason: 'unexpected-kind', receivedKind: JSON.stringify(kind) ?? 'undefined' },
+    });
     return { rotated: false, kind: 'error' };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(
-      `agent-afk: closed-router rotate failed: ${msg} — skipping rotation.\n`,
-    );
+    // Log a fixed message + exit code — do NOT echo the raw child error message,
+    // which may include child-process stderr and could contain credential material.
+    // Omit timeout's null code; preserve spawn strings and numeric exit codes.
+    const rawCode = err instanceof Error && 'code' in err ? (err as NodeJS.ErrnoException).code : undefined;
+    const exitCode = rawCode !== null && rawCode !== undefined ? rawCode : undefined;
+    void emitSessionPhase(traceWriter, {
+      phase: 'closed_router_rotate',
+      metadata: { kind: 'error', reason: 'subprocess-failed', ...(exitCode !== undefined ? { exitCode } : {}) },
+    });
     return { rotated: false, kind: 'error' };
   }
 }

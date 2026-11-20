@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { TraceSink } from '../../../trace/writer.js';
 
 // Mock env — must match the specifier the source file uses.
 const envMock = vi.hoisted(() => ({ AFK_CLOSED_ROUTER: '1' as string | undefined }));
@@ -26,6 +27,13 @@ vi.mock('child_process', async (importOriginal) => {
     execFile: execFileCbMock,
   };
 });
+
+// Mock the trace emit so we can assert on emitted session phases.
+const emitSessionPhaseMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('../../../trace/emit.js', () => ({ emitSessionPhase: emitSessionPhaseMock }));
+
+/** Minimal no-op TraceSink for passing as traceWriter. */
+const noopWriter = {} as TraceSink;
 
 // Dynamic import AFTER mocks are registered.
 const { tryClosedRouterRotate, _resetClosedRouterPathCache } = await import('./closed-router-rotate.js');
@@ -96,42 +104,51 @@ describe('tryClosedRouterRotate', () => {
   });
 
   it('returns error on non-JSON output', async () => {
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     mockRotateStdout('not json at all');
-    const result = await tryClosedRouterRotate();
+    const result = await tryClosedRouterRotate(noopWriter);
     expect(result).toEqual({ rotated: false, kind: 'error' });
-    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('non-JSON'));
-    stderrSpy.mockRestore();
+    expect(emitSessionPhaseMock).toHaveBeenCalledWith(
+      noopWriter,
+      expect.objectContaining({ phase: 'closed_router_rotate', metadata: expect.objectContaining({ reason: 'non-json-output' }) }),
+    );
   });
 
   it('returns error on unknown kind', async () => {
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     mockRotateStdout(JSON.stringify({ kind: 'unknown-future-kind' }));
-    const result = await tryClosedRouterRotate();
+    const result = await tryClosedRouterRotate(noopWriter);
     expect(result).toEqual({ rotated: false, kind: 'error' });
-    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('unexpected kind'));
-    stderrSpy.mockRestore();
+    expect(emitSessionPhaseMock).toHaveBeenCalledWith(
+      noopWriter,
+      expect.objectContaining({ phase: 'closed_router_rotate', metadata: expect.objectContaining({ reason: 'unexpected-kind' }) }),
+    );
   });
 
   it('returns error and never throws on exec failure', async () => {
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     mockRotateError('Command timed out');
-    const result = await tryClosedRouterRotate();
+    const result = await tryClosedRouterRotate(noopWriter);
     expect(result).toEqual({ rotated: false, kind: 'error' });
-    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('Command timed out'));
-    stderrSpy.mockRestore();
+    expect(emitSessionPhaseMock).toHaveBeenCalledWith(
+      noopWriter,
+      expect.objectContaining({ phase: 'closed_router_rotate', metadata: expect.objectContaining({ reason: 'subprocess-failed' }) }),
+    );
+    // Raw error message must NOT be recorded — credential material could appear there.
+    const call = emitSessionPhaseMock.mock.calls.find(
+      (c) => (c[1] as { phase: string }).phase === 'closed_router_rotate',
+    );
+    expect(JSON.stringify(call)).not.toContain('Command timed out');
   });
 
   it('returns error when binary is not on PATH', async () => {
     // Reset positive-only cache so this test re-checks PATH.
     _resetClosedRouterPathCache();
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     execFileSyncMock.mockImplementation(() => { throw new Error('not found'); });
-    const result = await tryClosedRouterRotate();
+    const result = await tryClosedRouterRotate(noopWriter);
     expect(result).toEqual({ rotated: false, kind: 'error' });
-    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('not found on PATH'));
+    expect(emitSessionPhaseMock).toHaveBeenCalledWith(
+      noopWriter,
+      expect.objectContaining({ phase: 'closed_router_rotate', metadata: expect.objectContaining({ reason: 'binary-not-found' }) }),
+    );
     // execFile (the async spawn) must NOT have been called — gate failed before subprocess.
     expect(execFileCbMock).not.toHaveBeenCalled();
-    stderrSpy.mockRestore();
   });
 });

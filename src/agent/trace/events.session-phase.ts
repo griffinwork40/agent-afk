@@ -167,6 +167,14 @@ export const SessionPhaseNameSchema = z.enum([
   // 401/403 trigger; metadata carries outcome, status, authMode. See
   // SessionPhaseName JSDoc in types.session-phase.ts for the full contract.
   'auth_retry_outcome',
+  // Closed-router credential rotation attempt (#5048). Single event emitted
+  // fire-and-forget by `tryClosedRouterRotate` on every failure path. Only
+  // emitted on failure; a successful rotation is visible via the subsequent
+  // `usage_limit_resume` event. Must mirror types.session-phase.ts.
+  'closed_router_rotate',
+  // Per-endpoint concurrency semaphore wait (#3886). Must mirror
+  // types.session-phase.ts; session-phase.test.ts parity enforces it.
+  'endpoint_semaphore_wait',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

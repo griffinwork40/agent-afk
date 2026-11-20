@@ -150,7 +150,8 @@ export async function* turnWithUsageLimitRetry(
     if (pendingErrorEvent && !closedRouterTried) {
       if (isClosed() || runInput.signal.aborted) return;
       closedRouterTried = true;
-      const rotation = await tryClosedRouterRotate();
+      const rotation = await tryClosedRouterRotate(runInput.traceWriter, runInput.signal);
+      if (isClosed() || runInput.signal.aborted) return;
       if (rotation.rotated) {
         clearKeychainCache();
         const adopted = await adoptFreshClient(ctx, runInput);
@@ -158,14 +159,20 @@ export async function* turnWithUsageLimitRetry(
           void emitSessionPhase(runInput.traceWriter, {
             phase: 'usage_limit_resume',
             durationMs: 0,
-            metadata: { source: 'closed-router-rotate', hotSwapped: true, kind: rotation.kind },
+            metadata: { source: 'closed-router-rotate', hotSwapped: adopted.swapped, accountId: adopted.accountId, kind: rotation.kind },
           });
-          pendingErrorEvent = null;
-          resetsAt = null;
-          noTimestamp = false;
-          continue;
+          if (!adopted.swapped) {
+            // rotation returned kind 'reset' but the client ended up on the same
+            // account — no new credential, so there is nothing to replay against;
+            // fall through to the normal park loop.
+          } else {
+            pendingErrorEvent = null;
+            resetsAt = null;
+            noTimestamp = false;
+            continue;
+          }
         }
-        // adoption failed — fall through to park loop
+        // adoption failed or no swap — fall through to park loop
       }
     }
 
@@ -217,8 +224,10 @@ export async function* turnWithUsageLimitRetry(
   }
   noteTurnProgress(runInput);
 
-  // When closed-router is active, poll every 30 s instead of 60 s so
-  // cron-driven credential rotations are picked up twice as fast.
+  // When closed-router is active, shorten the API probe interval from 60 s to
+  // 30 s. This does not change hot-swap pickup latency (waitForHotSwap compares
+  // the keychain token every 30 s regardless); it only doubles the cadence of
+  // replay probes against the exhausted account while the park loop runs.
   const pollIntervalMs = env.AFK_CLOSED_ROUTER === '1' ? 30_000 : undefined;
 
   // ── oauth-limit-no-ts path ─────────────────────────────────────────────
