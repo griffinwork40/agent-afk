@@ -49,7 +49,12 @@ from pathlib import Path
 from typing import Any, Literal, override
 
 from harbor.agents.capabilities import AgentCapabilities
-from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_template
+from harbor.agents.installed.base import (
+    BaseInstalledAgent,
+    ErrorPattern,
+    NonZeroAgentExitCodeError,
+    with_prompt_template,
+)
 from harbor.agents.installed.node_install import nvm_node_install_snippet
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
@@ -80,6 +85,17 @@ _SUPPRESSED_ENV: tuple[str, ...] = (
 )
 
 
+class AfkBudgetCapError(NonZeroAgentExitCodeError):
+    """afk exited because --max-budget-usd was reached.
+
+    This is agent behaviour (like AgentTimeoutError), not an infrastructure
+    failure.  nightly_report.build_record keeps valid_for_comparison=True
+    when it sees this exception_type so the night is not invalidated.
+    Message emitted by src/cli/errors/classifier.ts:120:
+      "Session stopped: cost ceiling reached ($X.XXXX of $Y.YYYY limit)."
+    """
+
+
 class AfkAgent(BaseInstalledAgent):
     """Harbor installed agent for agent-afk (afk CLI).
 
@@ -92,6 +108,18 @@ class AfkAgent(BaseInstalledAgent):
     """
 
     capabilities = AgentCapabilities(atif=False)
+
+    # Extend the base ERROR_PATTERNS so that afk's budget-cap exit is
+    # classified as AfkBudgetCapError rather than the generic
+    # NonZeroAgentExitCodeError.  nightly_report.build_record then keeps
+    # valid_for_comparison=True (same exemption as AgentTimeoutError).
+    ERROR_PATTERNS = [
+        *BaseInstalledAgent.ERROR_PATTERNS,
+        ErrorPattern(
+            r"Session stopped: cost ceiling reached",
+            AfkBudgetCapError,
+        ),
+    ]
 
     @staticmethod
     @override
