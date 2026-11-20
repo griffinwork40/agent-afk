@@ -369,13 +369,18 @@ export class TurnStreamRunner {
           this.turns.endTurn(turn);
           break;
         }
-        // Ended before the event is handled or yielded: the provider has no
-        // turn in flight once it has produced its terminal, so an interrupt
-        // from here on must not be forwarded, and a consumer that closes the
-        // stream exactly at the terminal yield has completed the turn.
+        // Ordering at the terminal event. (1) Mark it BEFORE handling: the
+        // provider has no turn in flight once it has produced its terminal, so
+        // an interrupt from here on must not be forwarded. (2) End the turn
+        // only AFTER handling: a send waiting behind this turn must not start
+        // until the Stop hook has run and the `done` is in the ledger, or the
+        // next turn's records would land ahead of this turn's `done`. (3) End
+        // it BEFORE the yield: a consumer that closes the stream exactly at
+        // the terminal yield has completed the turn, not abandoned it.
         const terminal = isTerminalProviderEvent(result.value);
-        if (terminal) this.turns.endTurn(turn);
+        if (terminal) this.turns.markTerminal(turn);
         const output = await this.consumeProviderEvent(result.value, deps);
+        if (terminal) this.turns.endTurn(turn);
         if (output) {
           if (output.type === 'done') doneYielded = true;
           yield output;
@@ -397,7 +402,7 @@ export class TurnStreamRunner {
       // Clear the active deps ref when this send ends (clean, abort, or error),
       // unless a later send has already installed its own.
       if (this._activeDeps === deps) this._activeDeps = null;
-      if (this.turns.isOpen(turn) && !threw && stateAtExit !== 'closed') {
+      if (this.turns.isOpen(turn) && !turn.terminal && !threw && stateAtExit !== 'closed') {
         // The consumer closed the stream mid-turn. The session reads the rest;
         // the real `done` is recorded then, so no synthetic one here (#4830:
         // exactly one `done` per turn).

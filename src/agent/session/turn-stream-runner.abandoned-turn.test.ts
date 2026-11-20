@@ -21,6 +21,7 @@
 // src/__test-utils__/redirect-paths-env.ts (per-file AFK_HOME sentinel).
 import { describe, it, expect } from 'vitest';
 import { AgentSession } from './agent-session.js';
+import { createHookRegistry } from '../hooks.js';
 import { AbortCoordinator } from '../providers/shared/abort-coordinator.js';
 import { readLedger, type LedgerRecord } from '../session-ledger.js';
 import type {
@@ -567,5 +568,97 @@ describe('interrupt with no provider turn to stop', () => {
     expect(outcome).toBe('done');
     expect(session.getHistory().map((m) => m.content)).toEqual(['long gated task']);
     expect(provider.startedTurns).toEqual(['long gated task']);
+  }, 5000);
+});
+
+describe('end-of-turn work finishes before the turn is released', () => {
+  /**
+   * A session whose FIRST Stop hook blocks until `releaseStop()`: the window in
+   * which the provider turn is over but the session is still finishing it
+   * (Stop hooks, then the ledger `done`).
+   */
+  function sessionWithSlowStop(sessionId: string): {
+    session: AgentSession;
+    provider: ScriptedProvider;
+    stopEntered: Promise<void>;
+    releaseStop: () => void;
+  } {
+    let entered: () => void = () => {};
+    const stopEntered = new Promise<void>((r) => {
+      entered = r;
+    });
+    let releaseStop: () => void = () => {};
+    const stopGate = new Promise<void>((r) => {
+      releaseStop = r;
+    });
+    let calls = 0;
+    const registry = createHookRegistry();
+    registry.register('Stop', async () => {
+      if (calls++ === 0) {
+        entered();
+        await stopGate;
+      }
+      return {};
+    });
+    const provider = createScriptedProvider(sessionId);
+    const session = new AgentSession({ model: 'sonnet', provider, hookRegistry: registry });
+    session.wireStopHook({ getHasNextTurn: () => true });
+    return { session, provider, stopEntered, releaseStop };
+  }
+
+  it('a waiting send starts only after the previous turn has run its Stop hook and recorded its done', async () => {
+    const sessionId = `eot-order-${Date.now()}`;
+    const { session, provider, stopEntered, releaseStop } = sessionWithSlowStop(sessionId);
+
+    // Interrupted turn whose reader stays attached, and a send waiting behind it.
+    const first = session.sendMessageStream('long gated task')[Symbol.asyncIterator]();
+    await first.next();
+    await session.interrupt();
+    const realEvents: OutputEvent[] = [];
+    const realFinished = (async () => {
+      for await (const e of session.sendMessageStream('real message')) realEvents.push(e);
+    })();
+    provider.releaseTail();
+    const firstFinished = (async () => {
+      for (let r = await first.next(); !r.done; r = await first.next()) {
+        // read the first turn to its end
+      }
+    })();
+
+    // The old turn's last event has been pulled; its Stop hook is running.
+    await stopEntered;
+    await new Promise((r) => setTimeout(r, 30));
+    const startedDuringStop = [...provider.startedTurns];
+    const historyDuringStop = session.getHistory().map((m) => m.content);
+
+    releaseStop();
+    await firstFinished;
+    await realFinished;
+    await session.close();
+
+    expect(startedDuringStop).toEqual(['long gated task']);
+    expect(historyDuringStop).not.toContain('real message');
+    const kinds = (await ledgerOf(sessionId)).filter((r) => r.kind === 'user' || r.kind === 'done');
+    expect(kinds.map((r) => r.kind)).toEqual(['user', 'done', 'user', 'done']);
+    expect(kinds[1]!.stopReason).toBe('interrupted');
+    expect(messageTexts(realEvents)).toEqual(['Echo: real message']);
+  }, 5000);
+
+  it('an interrupt while a finished turn is still running its Stop hook is not forwarded', async () => {
+    const { session, provider, stopEntered, releaseStop } = sessionWithSlowStop(`eot-esc-${Date.now()}`);
+
+    const helloFinished = collect(session, 'hello');
+    await stopEntered; // provider turn is over; the session is in its Stop hook
+    await session.interrupt();
+    const interruptsDuringStop = provider.interruptCalls;
+    releaseStop();
+    const hello = await helloFinished;
+
+    const after = await collect(session, 'after');
+    await session.close();
+
+    expect(interruptsDuringStop).toBe(0);
+    expect(messageTexts(hello)).toEqual(['Echo: hello']);
+    expect(messageTexts(after)).toEqual(['Echo: after']);
   }, 5000);
 });

@@ -13,6 +13,13 @@
  *     (`AbortCoordinator.requestAbort`) and aborts the NEXT turn before it
  *     starts, which ends the provider generator and with it the session.
  *
+ * Those two questions have different answers at the end of a turn. Once the
+ * terminal event is pulled the provider has nothing left to interrupt
+ * (`OpenTurn.terminal`), but the session still has to finish the turn: Stop
+ * hooks, then the ledger `done` and the broadcast. The turn stays in flight
+ * for sends until that is done (`endTurn`), so the next turn's records never
+ * land ahead of this turn's `done`.
+ *
  * Invariant: the provider iterator is SHARED across turns, so a consumer that
  * stops reading before the terminal event leaves the provider generator parked
  * mid-turn. The session then reads the rest of that turn itself ("settles"
@@ -103,6 +110,11 @@ export interface OpenTurn {
   readonly turnStartMs: number;
   /** An interrupt for this turn has already been forwarded to the provider. */
   interrupted: boolean;
+  /**
+   * Its terminal event has been pulled, so the provider has no turn left to
+   * interrupt, though the session may still be finishing it.
+   */
+  terminal: boolean;
   /** Its consumer stopped reading before the terminal event. */
   abandoned: boolean;
   /** The session has started reading the rest of it. */
@@ -224,6 +236,7 @@ export class ProviderTurns {
       iterator,
       turnStartMs,
       interrupted: false,
+      terminal: false,
       abandoned: false,
       settling: false,
       doneRecorded: false,
@@ -239,7 +252,18 @@ export class ProviderTurns {
     return this.open === turn;
   }
 
-  /** The turn's terminal event has been pulled (or it can produce none). */
+  /**
+   * The turn's terminal event has been pulled: an interrupt must no longer be
+   * forwarded for it. The turn is not over for waiting sends until `endTurn`.
+   */
+  markTerminal(turn: OpenTurn): void {
+    turn.terminal = true;
+  }
+
+  /**
+   * The session is finished with `turn`: its terminal event has been fully
+   * handled (or it can produce none). Releases a send waiting behind it.
+   */
   endTurn(turn: OpenTurn): void {
     if (this.open === turn) this.open = null;
     turn.markEnded();
@@ -269,7 +293,7 @@ export class ProviderTurns {
       return 'pending-send';
     }
     const turn = this.open;
-    if (turn && !turn.interrupted) {
+    if (turn && !turn.interrupted && !turn.terminal) {
       turn.interrupted = true;
       return 'provider';
     }
