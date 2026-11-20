@@ -77,15 +77,25 @@ describe('D20: revisions that are not provably commits', () => {
       expect(requiresAsk('git_read', input, cwd), JSON.stringify(input)).toBe(false);
     }
   });
-  it('lexical: cat-file -p always asks; bare refs on show/grep/diff ask; HEAD forms stay allowed', () => {
+  it('lexical: cat-file -p always asks; bare refs on show and grep ask; HEAD forms stay allowed', () => {
     const ask = (input: Record<string, unknown>) => requiresAsk('git_read', input, cwd);
     expect(ask({ subcommand: 'cat-file', args: ['-p', 'HEAD~1'] })).toBe(true);
     expect(ask({ subcommand: 'show', args: ['v1.0'], paths: ['a.txt'] })).toBe(true);
-    expect(ask({ subcommand: 'diff', args: ['v1', 'v2'], paths: ['.'] })).toBe(true);
+    expect(ask({ subcommand: 'diff', args: ['v1', 'v2'] })).toBe(true);
     expect(ask({ subcommand: 'grep', args: ['main'], pattern: 'x' })).toBe(true);
     expect(ask({ subcommand: 'show', args: ['HEAD'], paths: ['a.txt'] })).toBe(false);
     expect(ask({ subcommand: 'diff', args: ['HEAD~1', 'HEAD'], paths: ['.'] })).toBe(false);
     expect(ask({ subcommand: 'diff', args: ['main~0..HEAD'], paths: ['.'] })).toBe(false);
     expect(ask({ subcommand: 'show', args: ['--stat', 'HEAD^2'] })).toBe(false);
+  });
+});
+
+describe('D20: diff of blob refs', () => {
+  it('real git: diff with a pathspec prints no blob content; without one it is asked', async () => {
+    const handler = createGitReadHandler(cwd);
+    const scoped = { subcommand: 'diff', args: ['release-notes', 'HEAD'], paths: ['.'] };
+    const r = await handler(scoped, new AbortController().signal, { resolveBase: cwd } as never);
+    expect(String(r.content)).not.toContain('DB_PASSWORD');
+    expect(requiresAsk('git_read', { subcommand: 'diff', args: ['release-notes', 'HEAD'] }, cwd)).toBe(true);
   });
 });

@@ -16,8 +16,11 @@ import { planGitRead } from '../../agent/tools/git-read.policy.js';
 // pathspec, which ranges over the whole repository, (c) rename following and
 // (d) the `%(raw)` format atom, which prints the object a ref names. Those cases
 // are asked. A revision counts as a commit only in a commit-peeled form
-// (`<rev>^{commit}`, `<rev>~N`, `<rev>^N`) or as `HEAD`/`@` (git refuses to point
-// HEAD at a non-commit; only a direct write to `.git/HEAD` can, see profile).
+// (`<rev>^{commit}`, `<rev>~N`, `<rev>^N`), or as `HEAD`/`@`: git refuses to
+// store a non-commit in HEAD, so only a write inside the git directory (asked
+// when that is outside the session cwd) or a hand-built repository can do it
+// (accepted, documented in the profile). `diff` with a pathspec prints nothing
+// for blobs (verified against git), so only show and grep need this rule.
 // Plain metadata is never asked. A subcommand not classified here, or a
 // request the tool's own policy refuses, is asked (fail closed).
 const METADATA = new Set([
@@ -43,8 +46,8 @@ function namesObject(rev: string): boolean {
 
 /** D20: true only for revisions that cannot resolve to a blob or tree. */
 function provablyCommit(rev: string): boolean {
-  return rev.split(/\.\.\.?/).every((part) => part === 'HEAD' || part === '@'
-    || (!part.includes(':') && !OBJECT_ID.test(part) && COMMIT_PEEL.test(part) && !part.endsWith('^{}')));
+  return rev.split(/\.\.\.?/).every((part) => part === 'HEAD' || part === '@' ||
+    (!part.includes(':') && !OBJECT_ID.test(part) && COMMIT_PEEL.test(part) && !part.endsWith('^{}')));
 }
 
 /**
@@ -85,7 +88,6 @@ export function gitReadReachesOutside(input: Record<string, unknown>, root: stri
     default: return true;
   }
   if ((sub === 'show' || sub === 'diff') && !patchy(opts) && opts.some((o) => SUPPRESS_PATCH.has(o))) return objectRev;
-  if (sub === 'diff' && unproven) return true;
   if (objectRev || opts.includes('--follow')) return true;
   return paths.length === 0 && !CWD_SCOPED.has(sub);
 }
