@@ -25,7 +25,7 @@ function makeArgs(configOver: Partial<AgentConfig> = {}) {
   const args: DispatcherWiringArgs = {
     config,
     model: 'claude-sonnet-4-5',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     surface: 'cli',
     providerName: 'anthropic-direct',
     externalTools: undefined,

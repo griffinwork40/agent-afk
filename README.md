@@ -12,9 +12,7 @@ Open source. Runs locally. Works with any model provider, including local models
 [![Awesome Harness Engineering](https://img.shields.io/badge/awesome-harness--engineering-fc60a8?logo=awesomelists&logoColor=white)](https://github.com/walkinglabs/awesome-harness-engineering#coding-agent-harnesses)
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/4a84f6e4-2494-4065-a01f-54a1c557f7f3" width="820" autoplay loop muted playsinline>
-    Your browser does not support the video tag.
-  </video>
+  <img src="docs/assets/readme-hero.jpg" width="820" alt="agent-afk">
 </p>
 
 > ⭐ **Like the idea of an agent you can walk away from? [Star the repo](https://github.com/griffinwork40/agent-afk/stargazers)** -- it's the fastest way to help other people find it.

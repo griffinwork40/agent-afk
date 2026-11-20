@@ -30,7 +30,7 @@ function makeStats(turns: TurnRecord[]): SessionStats {
     turnTokens: [],
     turns,
     model: 'sonnet',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
   };
 }
 
@@ -305,7 +305,7 @@ describe('formatStatusFields — token budget indicator', () => {
       turnTokens: [],
       turns: [],
       model: 'sonnet',
-      permissionMode: 'default',
+      permissionMode: 'bypassPermissions',
     };
   }
 
@@ -360,7 +360,7 @@ describe('formatStatusFields — active agent fan-out count', () => {
       turnTokens: [],
       turns: [],
       model: 'sonnet',
-      permissionMode: 'default',
+      permissionMode: 'bypassPermissions',
     };
   }
 

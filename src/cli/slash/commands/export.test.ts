@@ -42,7 +42,7 @@ function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
     turnTokens: [{ input: 500, output: 500, cache: 0 }],
     turns: [makeTurn()],
     model: 'claude-sonnet',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     ...overrides,
   };
 }

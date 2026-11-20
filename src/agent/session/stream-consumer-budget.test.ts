@@ -40,7 +40,7 @@ function makeSessionMetadata(): SessionMetadata {
   return {
     sessionId: 'test-session',
     model: 'claude-sonnet-5',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
   };
 }
 

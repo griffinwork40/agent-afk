@@ -21,7 +21,7 @@ function makeStats(model = 'opus'): SessionStats {
     turnCosts: [],
     turnTokens: [],
     turns: [],
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     thinkingUi: 'summary',
   };
 }

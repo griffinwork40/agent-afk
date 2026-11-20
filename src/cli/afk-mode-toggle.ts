@@ -56,8 +56,8 @@ export async function toggleAfkMode(
   const next = desired !== undefined ? desired : !current;
 
   try {
-    await ctx.session.current.setPermissionMode(next ? 'autonomous' : 'default');
-    ctx.stats.permissionMode = next ? 'autonomous' : 'default';
+    await ctx.session.current.setPermissionMode(next ? 'autonomous' : 'bypassPermissions');
+    ctx.stats.permissionMode = next ? 'autonomous' : 'bypassPermissions';
     ctx.ui.repaintStatusLine();
     if (next) {
       resetAfkPushBudget();

@@ -37,7 +37,7 @@ function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
     turnTokens: [],
     turns: [],
     model: 'sonnet',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     ...overrides,
   };
 }

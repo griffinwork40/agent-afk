@@ -91,7 +91,7 @@ describe('exit_plan_mode live advertisement (anthropic-direct)', () => {
     async function* twoInputs() { yield { content: 't1' }; await flip; yield { content: 't2' }; }
     const query = provider.query({
       prompt: twoInputs(),
-      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', permissionMode: 'default', planExitControls },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', permissionMode: 'bypassPermissions', planExitControls },
     });
     let turnIdx = 0;
     messagesCreateMock.mockImplementation(() => {
