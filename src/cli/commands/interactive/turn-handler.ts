@@ -191,6 +191,9 @@ export async function runTurn(
         // tool call that blocks this loop does not create a dead-ESC window.
         // Orphaned tool_use records from a mid-loop break are healed by
         // repairOrphanToolUses before the next request (see query.ts).
+        // The rest of the turn's events are read by the session itself, so
+        // the next send never receives them (see
+        // agent/session/turn-stream-runner.abandoned-turn.ts).
         if (state.softStopRequested || state.pauseInterruptRequested) {
           break;
         }
