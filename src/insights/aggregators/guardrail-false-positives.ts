@@ -50,6 +50,7 @@ import { sidecarPredatesWindow } from './session-prescreen.js';
 import type { InsightsOptions } from '../types.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
 import type { TraceEvent, SessionPhasePayload, ToolCallPayload, HookDecisionPayload, HookSummaryPayload } from '../../agent/trace/types.js';
+import { collectTrips, classifyTrip } from './guardrail-false-positives.trips.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -136,6 +137,21 @@ export interface GuardrailFalsePositiveAggregates {
    * Non-zero counts can prompt investigation of fork read-root scope.
    */
   denialBreakerTaggedFailures: number;
+
+  /**
+   * Total distinct `denial_circuit_breaker_tripped` session-phase events across
+   * all traced sessions in the window (#3849 trip-episode count).
+   *
+   * Each event represents one distinct breaker trip episode (the emitter fires
+   * exactly once per trip, at `breaker.count === DENIAL_CIRCUIT_BREAKER_THRESHOLD`).
+   * This is the episode count the issue asked to surface alongside the tagged-failure
+   * count. `null` means no traces in the window contained the event at all —
+   * either no breaker trips occurred, or the traces predate PR #5093 which added
+   * the event; callers should render these two cases differently from zero.
+   *
+   * Zero means the event kind is present in at least one trace but no trips fired.
+   */
+  denialBreakerTripEpisodes: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -153,62 +169,16 @@ export function zeroGuardrailFalsePositiveAggregates(): GuardrailFalsePositiveAg
     // Rule IDs are hook-provided strings, including prototype property names.
     byRule: Object.create(null) as Record<string, number>,
     denialBreakerTaggedFailures: 0,
+    // null = no traces observed the event at all (predate #5093 or no trips).
+    denialBreakerTripEpisodes: null,
   };
 }
 
 // ---------------------------------------------------------------------------
 // Per-trace analysis
 // ---------------------------------------------------------------------------
-
-interface TripObservation {
-  /** `subagentId` from the phase metadata, or undefined for root-session trips. */
-  actorId: string | undefined;
-  /** Index of the trip event in the events array (for lookahead). */
-  eventIndex: number;
-}
-
-/**
- * Extract all `hook_block_repeat_tripped` phase events from a parsed event
- * array.
- */
-function collectTrips(events: TraceEvent[]): TripObservation[] {
-  const trips: TripObservation[] = [];
-  for (let i = 0; i < events.length; i++) {
-    const ev = events[i]!;
-    if (ev.kind !== 'session_phase') continue;
-    const p = ev.payload as SessionPhasePayload;
-    if (p.phase !== 'hook_block_repeat_tripped') continue;
-    // metadata.subagentId is present when the trip occurred inside a fork.
-    const actorId =
-      typeof p.metadata?.['subagentId'] === 'string' ? p.metadata['subagentId'] : undefined;
-    trips.push({ actorId, eventIndex: i });
-  }
-  return trips;
-}
-
-/**
- * Classify a single trip: scan forward from `startIndex` in `events` for up
- * to {@link FP_LOOKAHEAD_TOOL_CALLS} completed tool-call events from the same
- * actor. Returns `true` (false positive) if one succeeds, `false` otherwise.
- */
-function classifyTrip(
-  events: TraceEvent[],
-  startIndex: number,
-  actorId: string | undefined,
-): boolean {
-  let toolCallsSeen = 0;
-  for (let j = startIndex + 1; j < events.length && toolCallsSeen < FP_LOOKAHEAD_TOOL_CALLS; j++) {
-    const ev = events[j]!;
-    if (ev.kind !== 'tool_call') continue;
-    const p = ev.payload as ToolCallPayload;
-    if (p.phase !== 'completed') continue;
-    // Scope to the same actor: undefined = root session.
-    if (p.subagentId !== actorId) continue;
-    toolCallsSeen++;
-    if (!p.isError) return true; // agent continued successfully → FP
-  }
-  return false; // no success within window → true positive
-}
+// collectTrips and classifyTrip are in guardrail-false-positives.trips.ts
+// (extracted to stay under the 350-code-line ceiling).
 
 /**
  * Sum `PreToolUse` block counts from a `hook_summary` payload.
@@ -295,7 +265,9 @@ export function aggregateGuardrailFalsePositives(
     }
 
     // Harvest PreToolUse block counts from hook_summary, per-ruleId counts
-    // from hook_decision blocks, and denial-breaker-tagged failures from tool_call events.
+    // from hook_decision blocks, denial-breaker-tagged failures, and
+    // denial_circuit_breaker_tripped episode counts from tool_call /
+    // session_phase events.
     for (const ev of events) {
       if (ev.kind === 'hook_summary') {
         agg.totalPreToolUseBlocks += sumPreToolUseBlocks(ev.payload as HookSummaryPayload);
@@ -306,6 +278,17 @@ export function aggregateGuardrailFalsePositives(
         const p = ev.payload as HookDecisionPayload;
         if (p.decision === 'block' && typeof p.ruleId === 'string' && p.ruleId.length > 0) {
           agg.byRule[p.ruleId] = (agg.byRule[p.ruleId] ?? 0) + 1;
+        }
+        continue;
+      }
+
+      if (ev.kind === 'session_phase') {
+        const p = ev.payload as SessionPhasePayload;
+        if (p.phase === 'denial_circuit_breaker_tripped') {
+          // Seeing this event kind means the trace was produced by a build that
+          // includes #5093. Upgrade null → 0 on first occurrence so callers can
+          // distinguish "no trips in a #5093+ trace" from "trace predates the event".
+          agg.denialBreakerTripEpisodes = (agg.denialBreakerTripEpisodes ?? 0) + 1;
         }
         continue;
       }

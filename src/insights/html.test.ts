@@ -487,7 +487,7 @@ describe('renderGuardrailFalsePositives', () => {
     agg.guardrailFalsePositives.denialBreakerTaggedFailures = 2;
     const html = renderGuardrailFalsePositives(agg);
     expect(html).toContain('<div class="metric-val">2</div><div class="metric-label">Denial-Breaker Tagged Failures</div>');
-    expect(html).toContain('not distinct breaker trip episodes');
+    expect(html).toContain('Multiple rows may belong to one episode');
     expect(html).not.toContain('Blocks by Rule ID');
     expect(html).not.toContain('NaN');
   });
@@ -523,6 +523,69 @@ describe('renderGuardrailFalsePositives', () => {
       expect(html).not.toContain('undefined');
       expect(html).not.toContain('NaN');
     }
+  });
+});
+
+describe('renderGuardrailFalsePositives — denialBreakerTripEpisodes (#3849)', () => {
+  it('renders "unknown" when denialBreakerTripEpisodes is null (predate #5093)', () => {
+    const agg = makeZeroAgg();
+    // Trigger section render via tagged failures
+    agg.guardrailFalsePositives.denialBreakerTaggedFailures = 1;
+    // null = traces predate the event
+    agg.guardrailFalsePositives.denialBreakerTripEpisodes = null;
+    const html = renderGuardrailFalsePositives(agg);
+    expect(html).toContain('Denial-Breaker Trip Episodes');
+    expect(html).toContain('>unknown<');
+    expect(html).toContain('predate');
+    expect(html).not.toContain('NaN');
+    expect(html).not.toContain('undefined');
+  });
+
+  it('renders numeric count when denialBreakerTripEpisodes is 0', () => {
+    const agg = makeZeroAgg();
+    agg.guardrailFalsePositives.denialBreakerTaggedFailures = 1;
+    agg.guardrailFalsePositives.denialBreakerTripEpisodes = 0;
+    const html = renderGuardrailFalsePositives(agg);
+    expect(html).toContain('Denial-Breaker Trip Episodes');
+    expect(html).toContain('>0<');
+    expect(html).toContain('Distinct breaker trip episodes');
+    expect(html).not.toContain('predate');
+  });
+
+  it('renders numeric count when denialBreakerTripEpisodes is > 0', () => {
+    const agg = makeZeroAgg();
+    agg.guardrailFalsePositives.denialBreakerTripEpisodes = 4;
+    const html = renderGuardrailFalsePositives(agg);
+    expect(html).toContain('Denial-Breaker Trip Episodes');
+    expect(html).toContain('>4<');
+    expect(html).toContain('Distinct breaker trip episodes');
+    expect(html).not.toContain('predate');
+    expect(html).not.toContain('NaN');
+  });
+
+  it('shows episode count alongside tagged-failure count', () => {
+    const agg = makeZeroAgg();
+    agg.guardrailFalsePositives.denialBreakerTripEpisodes = 1;
+    agg.guardrailFalsePositives.denialBreakerTaggedFailures = 3;
+    const html = renderGuardrailFalsePositives(agg);
+    expect(html).toContain('Denial-Breaker Trip Episodes');
+    expect(html).toContain('Denial-Breaker Tagged Failures');
+    expect(html).toContain('>1<');
+    expect(html).toContain('>3<');
+  });
+
+  it('renders section when only denialBreakerTripEpisodes is non-null (no other data)', () => {
+    const agg = makeZeroAgg();
+    agg.guardrailFalsePositives.denialBreakerTripEpisodes = 2;
+    const html = renderGuardrailFalsePositives(agg);
+    expect(html).not.toBe('');
+    expect(html).toContain('Denial-Breaker Trip Episodes');
+  });
+
+  it('omits section when denialBreakerTripEpisodes is null and no other data', () => {
+    const agg = makeZeroAgg();
+    // denialBreakerTripEpisodes is already null in zero agg
+    expect(renderGuardrailFalsePositives(agg)).toBe('');
   });
 });
 
