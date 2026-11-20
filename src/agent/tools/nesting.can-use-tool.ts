@@ -175,14 +175,17 @@ export function childGateOf(providerFactory: object | undefined): ChildCanUseToo
 /**
  * Per-label gate an inline skill handler applies to the children it forks
  * through its own `SubagentManager` (route `skill`, depth `childDepth`).
+ * Pass `cwd` when the handler knows the child's working directory so the
+ * gate can resolve the child's relative paths correctly.
  * Undefined when no surface gate is configured.
  */
 export function inlineSkillChildGate(
   factory: ChildCanUseToolFactory | undefined,
   childDepth: number,
+  cwd?: string,
 ): ((agentType: string) => CanUseTool | undefined) | undefined {
   if (factory === undefined) return undefined;
-  return (agentType) => factory(skillChildOrigin(childDepth, agentType));
+  return (agentType) => factory(skillChildOrigin(childDepth, agentType, cwd));
 }
 
 /** `{ canUseTool }` for a fork config: `own` (if any) first, then the surface gate. */
@@ -200,11 +203,16 @@ export function childGateFor(providerFactory: object | undefined, origin: ChildT
   return childGateOf(providerFactory)?.(origin);
 }
 
-/** `{ childGate }` for an inline handler's SkillExecutionContext, or `{}` when no gate. */
+/**
+ * `{ childGate }` for an inline handler's SkillExecutionContext, or `{}` when
+ * no gate. Pass `cwd` when the handler knows the child's working directory so
+ * the gate's `ChildToolOrigin.cwd` matches the directory the child runs in.
+ */
 export function inlineChildGateOpt(
   providerFactory: object | undefined,
   childDepth: number,
+  cwd?: string,
 ): { childGate: (agentType: string) => CanUseTool | undefined } | Record<string, never> {
-  const childGate = inlineSkillChildGate(childGateOf(providerFactory), childDepth);
+  const childGate = inlineSkillChildGate(childGateOf(providerFactory), childDepth, cwd);
   return childGate !== undefined ? { childGate } : {};
 }

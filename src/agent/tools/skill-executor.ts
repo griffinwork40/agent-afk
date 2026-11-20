@@ -414,7 +414,12 @@ export class SkillExecutor {
             ? { workspaceStore: this.ctx.workspaceStore }
             : {}),
           // Surface approval gate for the handler's own forks (absent => no key).
-          ...inlineChildGateOpt(this.ctx.childProviderFactory, depth + 1),
+          // Pass currentCwd so the gate origin carries the directory the child
+          // will actually run in — the gate can then resolve relative paths.
+          ...inlineChildGateOpt(this.ctx.childProviderFactory, depth + 1, this.currentCwd),
+          // The session's working directory for the handler's own forks. Absent
+          // when the executor has no anchored cwd (older surfaces, test stubs).
+          ...(this.currentCwd !== undefined ? { sessionCwd: this.currentCwd } : {}),
         },
       );
     } catch (err) {
