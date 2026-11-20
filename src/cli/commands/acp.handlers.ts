@@ -12,7 +12,8 @@ import { MODEL_CONTEXT_LIMITS, contextLimitFor } from '../../agent/model-limits.
 import { resolveModelInput } from '../../agent/session/model-slots.js';
 import { getVersion } from '../version.js';
 import { buildAcpSession, closeAcpSession, type AcpSessionOptions } from './acp.session.js';
-import { loadAcpSession, replayHistory } from './acp.session-load.js';
+import { AcpNotFoundError, loadAcpSession, replayHistory } from './acp.session-load.js';
+import { recordAcpMapping, resolveAcpId } from './acp.session-map.js';
 import { createAcpPermissionGate } from './acp.permission.js';
 import { createTranslatorState } from './acp.translate.js';
 import { AcpInvalidParams, parseSessionSetup, type SessionSetup } from './acp.params.js';
@@ -144,7 +145,29 @@ export async function handleSessionNew(ctx: ServerContext, params: unknown): Pro
     throw internal(ctx, 'session construction failed', err);
   }
   ctx.sessions.set(sessionId, live);
+  const recording = recordProviderId(ctx, live);
+  if (recording) await recording;
   return { sessionId };
+}
+
+/**
+ * Profile §2: if the provider reports a journal id other than the ACP id it
+ * was seeded with, durably map ACP id -> provider id so a later load/resume
+ * finds the history. Checked after construction and after every turn, since
+ * a provider may only issue its id once it has streamed. Never fails the call.
+ */
+function recordProviderId(ctx: ServerContext, live: LiveSession): Promise<void> | undefined {
+  const fail = (err: unknown): void => { ctx.log(`[acp] could not record provider session id for ${live.id}: ${String(err)}`); };
+  try {
+    const reported = live.handle?.session.getSessionIdentity?.().sessionId;
+    // Seeded id kept (the common case): nothing to record, no disk read, no added latency.
+    if (typeof reported !== 'string' || reported === '' || reported === live.id) return undefined;
+    if (resolveAcpId(live.id) === reported) return undefined;
+    return recordAcpMapping(live.id, reported).catch(fail);
+  } catch (err) {
+    fail(err);
+    return undefined;
+  }
 }
 
 /** Restore a mapped session; load additionally replays display history. */
@@ -163,7 +186,7 @@ export async function handleRestore(
     try {
       live.handle = await loadAcpSession({ sessionId: id, cwd: setup.cwd, mcpServers: setup.wireMcp }, options);
     } catch (err) {
-      if ((err as { code?: unknown } | null)?.code === RESOURCE_NOT_FOUND) {
+      if (err instanceof AcpNotFoundError) {
         throw new AcpError(RESOURCE_NOT_FOUND, 'unknown session');
       }
       throw internal(ctx, `session ${mode} failed`, err);
@@ -210,7 +233,10 @@ export function startPrompt(ctx: ServerContext, params: unknown): Promise<Prompt
     ...(ctx.opts.cancelGraceMs !== undefined ? { cancelGraceMs: ctx.opts.cancelGraceMs } : {}),
   });
   return turn.then(
-    (stopReason: StopReason) => ({ stopReason }),
+    (stopReason: StopReason) => {
+      const recording = recordProviderId(ctx, live);
+      return recording ? recording.then(() => ({ stopReason })) : { stopReason };
+    },
     async (err: unknown) => {
       // The handle may be dead after a provider error: drop it so it is not reused.
       const failure = internal(ctx, 'prompt failed', err);
