@@ -23,7 +23,7 @@
  */
 
 import { debugLog } from '../../utils/debug.js';
-import { HookBlockedError, errorMessage } from '../../utils/errors.js';
+import { HookBlockedError } from '../../utils/errors.js';
 import { checkToolPermission, type ToolPermissionConfig } from './permissions.js';
 import { repeatCallFingerprint } from './repeat-circuit-breaker.js';
 import {
@@ -46,7 +46,7 @@ import { dispatchPreToolUse } from '../subagent-hooks.js';
 import { emitHookDecision, emitSessionPhase } from '../trace/emit.js';
 import type { HookRegistry, PreToolUseContext } from '../hooks.js';
 import type { ToolCall, ToolResult } from '../providers/anthropic-direct/types.js';
-import type { CanUseTool, PermissionResult } from '../types/sdk-types.js';
+import type { CanUseTool } from '../types/sdk-types.js';
 import type { TraceSink } from '../trace/index.js';
 import type { GrantManager } from './grant-manager.js';
 import { readOnlyBashDenialOverride } from './readonly-git-surface.js';
@@ -54,6 +54,8 @@ import { isPeerToolBlocked, peerToolChildDenial } from './peer-tool-gate.js';
 import type { HookBlockRepeatState } from './hook-block-repeat-breaker.js';
 import { applyHookBlockRepeatGate as applyHookBlockRepeat } from './dispatcher.hook-block-repeat-gate.js';
 import { bashCommandDenialReason } from './dispatcher.pre-dispatch-gates.bash.js';
+import { runCanUseTool } from './dispatcher.pre-dispatch-gates.can-use-tool.js';
+export { runCanUseTool } from './dispatcher.pre-dispatch-gates.can-use-tool.js';
 
 // ---------------------------------------------------------------------------
 // Mutable state
@@ -236,49 +238,6 @@ async function recordForkReadDenial(
     isError: true,
     failureClass: DENIAL_BREAKER_FAILURE_CLASS,
   };
-}
-
-/**
- * Consult the optional `canUseTool` permission callback for a single call.
- * Returns a permission-denied {@link ToolResult} to short-circuit when the
- * policy denies (or throws — fail-closed), or `null` to proceed. On an
- * `allow` result carrying `updatedInput`, the call's input is rewritten in
- * place so both the handler and the PostToolUse hook observe the new value.
- *
- * Invariant: callers MUST invoke this AFTER `checkToolPermission` (the static
- * allowlist wins) and BEFORE the read-only-bash gate, in BOTH `execute()` and
- * the `executeBatch()` phase-1 loop, so parallel tool calls are gated too.
- */
-async function runCanUseTool(
-  call: ToolCall,
-  deps: PreDispatchGateDeps,
-): Promise<ToolResult | null> {
-  if (!deps.canUseTool) return null;
-  let result: PermissionResult;
-  try {
-    result = await deps.canUseTool(call.name, (call.input ?? {}) as Record<string, unknown>, {
-      signal: call.signal,
-      toolUseID: call.id,
-    });
-  } catch (err) {
-    // Fail closed: a throwing policy denies the call rather than crashing the
-    // turn. The message names the cause so the denial is never silent.
-    const reason = `Tool "${call.name}" denied by canUseTool (threw): ${
-      errorMessage(err)
-    }`;
-    await emitPreToolUseBlock(call.name, reason, deps);
-    return { content: reason, isError: true, failureClass: 'permission-denied' };
-  }
-  if (result.behavior === 'deny') {
-    const reason = result.message || `Tool "${call.name}" denied by permission policy`;
-    await emitPreToolUseBlock(call.name, reason, deps);
-    return { content: reason, isError: true, failureClass: 'permission-denied' };
-  }
-  // allow — apply an optional input rewrite in place.
-  if (result.updatedInput !== undefined) {
-    call.input = result.updatedInput;
-  }
-  return null;
 }
 
 // Bash-command gates (checkReadOnlyBash, checkDestructiveGitBash) extracted to
