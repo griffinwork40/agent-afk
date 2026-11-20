@@ -16,6 +16,11 @@ import { gitReadReachesOutside } from './acp.permission.git.js';
 const PATH_KEYS = [
   'file_path', 'filePath', 'path', 'paths', 'cwd', 'dir', 'directory', 'root', 'file', 'files',
   'target', 'source', 'destination', 'dest', 'output', 'base_dir', 'workdir',
+  // Tool-specific locations read from the handlers (D18): model_complete
+  // `input_path`, image_generate and image_edit `output_path`, image_edit
+  // `image_paths`, worktree `repo`. Display and the outside check only:
+  // remembered grants never rely on this list (acp.permission.grants).
+  'input_path', 'output_path', 'image_paths', 'repo',
 ];
 /** git options that relocate the repository or write a file; the handler rejects them too. */
 const GIT_RELOCATE = /^(?:-C|--git-dir|--work-tree|--namespace|--exec-path|--output|-o)(?:=|$)/;
@@ -82,6 +87,13 @@ function scanGlobPattern(pattern: unknown, base: string | undefined, root: strin
 
 /** True when a delegation input relocates its children away from the session cwd. */
 export function relocatesChildren(toolName: string, input: Record<string, unknown>, cwd: string | undefined): boolean {
+  // D19: any isolation other than an explicit "none" may put children in a
+  // checkout of the whole repository, outside a subdirectory session cwd.
+  const isolates = (v: unknown): boolean => v !== undefined && v !== 'none';
+  if (isolates(input['isolation'])) return true;
+  // A continued agent inherits its chain's cwd and isolation, which this call does not show.
+  if (input['continuation_chain_id'] !== undefined) return true;
+  if (Array.isArray(input['nodes']) && input['nodes'].some((n) => !isRecord(n) || isolates(n['isolation']))) return true;
   if (input['cwd'] !== undefined && !(usableCwd(cwd) && typeof input['cwd'] === 'string'
     && path.resolve(cwd, input['cwd']) === path.resolve(cwd))) return true;
   return toolName === 'compose' && Array.isArray(input['nodes']) && input['nodes'].some((n) => isRecord(n) && n['cwd'] !== undefined);

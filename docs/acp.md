@@ -34,8 +34,8 @@ afk acp
   approval prompt is forwarded for every provider family.
 - Text and embedded-context prompts (`embeddedContext: true`).
 - Streaming tool-call progress with diffs for edit operations.
-- Interactive permission approvals, with allow-once and allow-always (see
-  [Permissions](#permissions) for the full rules), and reject.
+- Interactive permission approvals, with allow-once, reject, and allow-always for
+  the file editing tools only (see [Permissions](#permissions) for the full rules).
 - Session load, replay, and resume.
 - Read tools that target a path outside the session `cwd` are asked, with the
   absolute path shown. Write and edit tools are always asked regardless of path.
@@ -248,9 +248,10 @@ children are asked per tool call.
 
 A subagent given its own working directory has its relative paths checked
 against that directory, and it is asked when they leave the session `cwd`.
-Where the subagent's directory is not known yet (a worktree-isolated `compose`
-node), any of its calls that use a relative path or no path are asked once a
-delegation to another directory has been allowed.
+Where the subagent's directory is not known (an `agent` call or `compose` node
+run with worktree isolation, whose checkout holds the whole repository, or a
+continued `agent` chain), any of its calls that use a relative path or no path
+are asked once such a delegation has been allowed.
 
 ## Permissions
 
@@ -263,20 +264,24 @@ requires consent.
 | Read and search tools targeting a path inside `cwd` | Auto-allow |
 | Read and search tools with no filesystem path (memory, state, session listings, etc.) | Auto-allow |
 | Read and search tools targeting a path outside `cwd` | Ask, with absolute path shown |
-| `git_read` that can print file content from outside `cwd` (a revision such as `HEAD:../other/file` or an object id, patches from `show`, `diff` or `log -p` with no path inside `cwd`, `cat-file -p`) | Ask |
+| `git_read` that can print file content from outside `cwd` (a revision such as `HEAD:../other/file` or an object id; `show` or `grep` of a ref that is not provably a commit, since a tag can point at a file; patches from `show`, `diff` or `log -p` with no path inside `cwd`; any `cat-file -p`; a `%(raw)` format) | Ask |
 | `git_read` metadata (status, branch and tag names, commit subjects, stats, file names) or content limited to paths inside `cwd` | Auto-allow |
 | `worktree` with action `list` | Auto-allow |
 | Write tools, `bash`, `test_run`, web tools, delegation tools, MCP tools, unknown tools | Ask |
 | `--dangerously-skip-permissions` | Skip the bridge entirely |
 
 `options` always includes `allow_once` and `reject_once`. `allow_always` is
-offered for write and other consent-requiring tools, with these exceptions:
+offered only for the file editing tools `write_file`, `edit_file` and
+`patch_apply`, and only when every path the call names is inside `cwd` and the
+call carries no argument the server does not recognise for that tool. Every
+other tool is asked every time with allow once or reject only: `bash`,
+`test_run`, delegation tools (`agent`, `skill`, `compose`, `remote_agent`),
+`model_complete`, `image_generate`, `image_edit`, mutating `worktree` actions,
+web tools, every MCP tool and any tool not named here.
 
-- Not offered for `bash`.
-- Not offered for delegation tools (`agent`, `skill`, `compose`, `remote_agent`).
-- Not offered when the request was triggered because the path is outside `cwd`.
-- A remembered `allow_always` grant for a tool never covers a call of that tool
-  that targets a path outside `cwd`; that call is always asked again.
+- A remembered `allow_always` grant covers a later call of the same tool only
+  under the same conditions. A call that targets a path outside `cwd`, or that
+  carries an argument the server does not recognise, is asked again.
 
 Grants are per-session and per tool name, shared between the session and its
 in-process children. They are not persisted across sessions.
