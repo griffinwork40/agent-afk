@@ -326,6 +326,22 @@ export const MISC_ENV_REGISTRY = [
     category: 'misc',
   },
 
+  // ── Goal quality gates (Phase 2a, #2194) ─────────────────────────────────
+  {
+    name: 'AFK_GOAL_CHECKS',
+    description:
+      'Colon-separated list of shell commands that must all exit 0 before a goal ' +
+      'is considered complete (Phase 2a quality gates). Each command is executed in ' +
+      'the session working directory via the platform shell. An empty or unset value ' +
+      'skips all checks (vacuously passing). Example: `pnpm test:pnpm lint` runs the ' +
+      'test suite and then the linter. Commands that contain a literal colon must be ' +
+      'expressed using an alternative form (limitation of the colon separator).',
+    type: 'string',
+    required: false,
+    example: 'pnpm test:pnpm lint',
+    category: 'misc',
+  },
+
   // ── Skill manifest ────────────────────────────────────────────────────────
   {
     name: 'AFK_SKILLS_MANIFEST_ALWAYS',
