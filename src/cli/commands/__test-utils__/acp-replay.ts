@@ -4,7 +4,7 @@ import path from 'node:path';
 import { expect } from 'vitest';
 import { runAcpServer } from '../acp.server.js';
 import { getVersion } from '../../version.js';
-import { AgentFrameValidator, type Frame, type Row } from './acp-schema.js';
+import { AgentFrameValidator, type Frame, type Row } from './acp-frame-schema.js';
 import { persistedId } from './acp-scripts.js';
 
 export function substitute(value: unknown, root: string, sessionId: string): unknown {

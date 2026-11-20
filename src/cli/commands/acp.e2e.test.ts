@@ -5,7 +5,7 @@ import path from 'node:path';
 import { env } from '../../config/env.js';
 import { fakeHandle, ScriptedSession } from './__test-utils__/acp-fake-session.js';
 import { scriptFor } from './__test-utils__/acp-scripts.js';
-import { AgentFrameValidator, fixtureRoot, schemaErrors, type Row } from './__test-utils__/acp-schema.js';
+import { AgentFrameValidator, fixtureRoot, schemaErrors, type Row } from './__test-utils__/acp-frame-schema.js';
 import { GoldenConnection, replayGolden } from './__test-utils__/acp-replay.js';
 import { seedHistory } from './__test-utils__/acp-history.js';
 import { loadJournalMessages } from '../../agent/journal/reader.js';
