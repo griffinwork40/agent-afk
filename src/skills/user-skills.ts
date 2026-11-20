@@ -198,7 +198,11 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
       // outside the worktree (e.g. its own ~/.afk/skills/<name> dir) — the
       // child ⊇ parent read-scope invariant (#544/#547) is already satisfied
       // for any parent because read scope is not narrowed.
-      ...(ctx?.sessionCwd !== undefined ? { cwd: ctx.sessionCwd } : {}),
+      // A handler invoked directly (no executor-built context) still has the
+      // parent session's own cwd, as the /mint phases use; fall back to it.
+      ...((ctx?.sessionCwd ?? parentSession?.cwd) !== undefined
+        ? { cwd: (ctx?.sessionCwd ?? parentSession?.cwd) as string }
+        : {}),
       // Forward the parent's witness writer (when ctx supplies one) so this
       // user-skill's forked sub-agent inherits it and its tool activity —
       // including any permission-denials a restricted user SKILL.md produces —

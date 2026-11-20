@@ -121,15 +121,14 @@ describe('redteam2: revision syntax edge cases', () => {
   });
 
   // ── blame with named revision ─────────────────────────────────────────────
-  it('blame v1.0 with an explicit path is AUTO-ALLOWED (blame + path + proven-ish rev)', () => {
-    // blame is CWD_SCOPED; with an explicit path it cannot escape. The rev
-    // is unproven but blame only annotates lines of the named file.
-    // Current policy: blame is in CWD_SCOPED, so paths.length > 0 → auto.
-    // Regression guard: this should stay auto-allowed.
+  it('blame v1.0 with an explicit path is ASKED: a named ref may point at a blob', () => {
+    // History: this guard first recorded blame + path + tag as auto-allowed.
+    // The content rule now asks for every content-producing subcommand whose
+    // revision is not provably a commit, because a tag can name a blob.
     expect(
       gitReadReachesOutside({ subcommand: 'blame', args: ['v1.0'], paths: ['a.txt'] }, cwd),
-      'blame v1.0 with path: CWD-scoped, auto-allowed',
-    ).toBe(false);
+      'blame v1.0 with path: the ref is not provably a commit, so it is asked',
+    ).toBe(true);
   });
 
   it('blame with no rev and no path: policy auto-allows (blame is CWD_SCOPED, paths.length===0 means whole cwd)', () => {
