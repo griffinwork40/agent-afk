@@ -32,6 +32,8 @@ For the fastest availability check, ask the agent to call `get_runtime_state` wi
 | `bash` | Execute a shell command. | R, S, D; background processes only in root REPL |
 | `wait_for` | Wait for a URL, file, PID, or command. | R, S, D |
 | `test_run` | Run a detected test suite. | R, S, D |
+| **Desktop computer-use** | | |
+| `desktop_screenshot` | Capture the host desktop display or a region. | R, S, D; requires `AFK_DESKTOP_ENABLED=1`; macOS and native Windows only |
 | **Browser and web** | | |
 | `browser_open` | Open a managed browser tab. | R, S, D |
 | `browser_observe` | Read the current page state. | R, S, D |
@@ -407,6 +409,36 @@ Capture a PNG screenshot of the current page or a specific element, returning `p
 Close the current browser session, freeing cookies and page state. Subsequent `browser_open` calls create a fresh session. Leaves the underlying browser process alive.
 
 No parameters.
+
+---
+
+## Desktop computer-use
+
+Desktop tools capture and control the host machine's graphical desktop. They are **off by default** and require `AFK_DESKTOP_ENABLED=1`.
+
+**Supported platforms (Tranche 1):**
+- **macOS** — uses the system `screencapture` binary. The process responsible for the terminal session must hold Screen Recording permission (System Settings → Privacy & Security → Screen Recording). Grant it once; no permission is automated.
+- **Windows (native only, UNVERIFIED — Step 0W pending)** — uses a PowerShell/.NET child process. WSL2 is not supported. Whether Windows daemon/service contexts can reach the interactive desktop is unknown until Step 0W.
+- **Linux** — not supported in v1.
+
+Desktop tools are **excluded from forked child agents** (integration-risk I1). Any delegation of desktop capability must be explicit and single-owner.
+
+### `desktop_screenshot`
+
+Capture a PNG screenshot of the host desktop and return it as a viewable image. The PNG is also written as a sidecar under `~/.afk/state/witness/<sessionId>/desktop/screenshots/`.
+
+The result text is `{ path, bytes, width, height, scaleFactor, displayIndex, logicalWidth, logicalHeight }` — the scale factor and logical dimensions are reported for coordinate-space transparency so later tranches can map logical→physical pixels.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `display` | number | | Zero-based display index. 0 = primary display. Default: 0. |
+| `region` | object | | Partial capture in logical pixels. When omitted, the full display is captured. |
+| `region.x` | number | (when region set) | Left edge in logical pixels. |
+| `region.y` | number | (when region set) | Top edge in logical pixels. |
+| `region.width` | number | (when region set) | Width in logical pixels (must be positive). |
+| `region.height` | number | (when region set) | Height in logical pixels (must be positive). |
+
+Images exceeding 8000 px per side are saved to the sidecar path but not attached to the tool result (the same limit as `browser_screenshot`). Use `region` to capture a smaller area.
 
 ---
 

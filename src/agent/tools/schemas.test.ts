@@ -188,6 +188,9 @@ describe('builtinToolSchemas', () => {
       // are optional in the JSON Schema; the handler enforces the mutual-exclusion
       // at call time (same pattern as model_complete and web_scrape).
       'artifact_publish',
+      // `desktop_screenshot` — display and region are both optional; full display
+      // 0 is captured by default.
+      'desktop_screenshot',
     ]);
     for (const tool of builtinToolSchemas) {
       expect(tool.input_schema.required).toBeDefined();
