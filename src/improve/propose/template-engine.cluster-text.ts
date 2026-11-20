@@ -10,32 +10,34 @@ interface DisplayCluster {
 
 const MAX_CLUSTERS = 5;
 const MAX_TEXT_LENGTH = 200;
-// Deliberately independent of the current machine's home: cards can come from
-// other users/platforms. Quoted paths may contain spaces; bare paths end at
-// an error-message delimiter or whitespace. A single space is kept only inside
-// a DIRECTORY name ("My Project/a.ts"): it must be followed, within 255 chars,
-// by a non-space char and then a separator, and never by a path root (/, \\,
-// or a drive letter). So adjacent paths and prose between paths are never
-// swallowed into one match whose basename could be another user's name. The
-// bounded lookahead keeps matching linear on long input. A space inside the
-// final (file) segment is not captured; only its first word is kept.
-// Keep the basename, not the home.
-//
-// Patterns covered:
+// Contract: cards can come from other users/platforms, so this is deliberately
+// independent of the current machine's home. Keep the basename, not the home.
 //   • POSIX:   /Users/<name>/…  /home/<name>/…  /root/…  (bare or quoted)
-//   • Windows: C:\Users\<name>\… (bare or quoted, forward or back slash)
+//   • Windows: C:\Users\<name>\… or driveless \Users\<name>\… (either slash)
 //   • UNC:     \\<host>\<share>\Users\<name>\… (bare or quoted)
-//
-// /root boundary: negative lookahead (?![a-zA-Z0-9_]) prevents matching
-// /rootfs, /root2, etc. while still matching /root, /root/ and /root\….
-const HOME_PATH = /(?:\\\\[^\\/\s"'`]+[\\/][^\\/\s"'`]+[\\/](?:Users|Documents and Settings)[\\/][^\\/\s"'`]+|[A-Z]:[\\/](?:Users|Documents and Settings)[\\/][^\\/\s"'`]+|\/(?:Users|home)\/[^/\s"'`]+|\/root(?![a-zA-Z0-9_]))(?:[\\/](?:[^\s"'`<>()[\]{},;](?:[^\s"'`<>()[\]{},;]| (?![A-Z]:[\\/])(?=[^\t\n\v\f\r"'`<>()[\]{},;\\/]{0,254}[^\s"'`<>()[\]{},;\\/][\\/]))*)?)?/gi;
-const QUOTED_HOME_PATH = /(["'`])((?:\\\\[^\\/\s"'`]+[\\/][^\\/\s"'`]+[\\/](?:Users|Documents and Settings)[\\/]|[A-Z]:[\\/](?:Users|Documents and Settings)[\\/]|\/(?:Users|home)\/|\/root(?![a-zA-Z0-9_])(?:[\\/]|$))[^\r\n]*?)\1/gi;
+// /root boundary: (?![a-zA-Z0-9_]) rejects /rootfs, /root2 but keeps /root/….
+// Quoted paths may contain spaces. A bare path ends at whitespace or an
+// error-message delimiter, except that a single space is kept inside a
+// DIRECTORY name ("My Project/a.ts"): a non-space char and a separator must
+// follow within 255 chars (bounded, so matching stays linear).
+// Invariant: once a bare match crosses a space, no home root starts anywhere
+// after it. Every char after the first crossed space lies in the word that
+// directly follows some crossed space, and each crossing is refused when that
+// word (up to whitespace or a delimiter) contains a HOME_ROOT start. A refused
+// root is then matched and redacted on its own, so no username can become the
+// kept basename.
+const HOME_ROOT = /(?:\\\\[^\\/\s"'`]+[\\/][^\\/\s"'`]+[\\/](?:Users|Documents and Settings)[\\/][^\\/\s"'`]+|[A-Z]:[\\/](?:Users|Documents and Settings)[\\/][^\\/\s"'`]+|\/(?:Users|home)\/[^/\s"'`]+|\/root(?![a-zA-Z0-9_])|[\\/](?:Users|Documents and Settings)[\\/][^\\/\s"'`]+)/.source;
+const SEG_CHAR = /[^\s"'`<>()[\]{},;]/.source;
+const DIR_SPACE = /(?![A-Z]:[\\/])(?=[^\t\n\v\f\r"'`<>()[\]{},;\\/]{0,254}[^\s"'`<>()[\]{},;\\/][\\/])/.source;
+const HOME_PATH = new RegExp(`${HOME_ROOT}(?:[\\\\/](?:${SEG_CHAR}(?:${SEG_CHAR}| ${DIR_SPACE}(?!${SEG_CHAR}*?${HOME_ROOT}))*)?)?`, 'gi');
+const QUOTED_HOME_PATH = /(["'`])((?:\\\\[^\\/\s"'`]+[\\/][^\\/\s"'`]+[\\/](?:Users|Documents and Settings)[\\/]|(?:[A-Z]:)?[\\/](?:Users|Documents and Settings)[\\/]|\/(?:Users|home)\/|\/root(?![a-zA-Z0-9_])(?:[\\/]|$))[^\r\n]*?)\1/gi;
 
 function collapsePath(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, '');
   const parts = trimmed.split(/[\\/]/);
-  // A home directory alone must not preserve the user's name as the basename.
-  const isHome = /^(?:\\\\[^\\/]+[\\/][^\\/]+[\\/](?:Users|Documents and Settings)[\\/][^\\/]+|[A-Z]:[\\/](?:Users|Documents and Settings)[\\/][^\\/]+|\/(?:Users|home)\/[^/]+|\/root(?![a-zA-Z0-9_]))$/i.test(trimmed);
+  // A match that ENDS at a home root (top-level or nested, e.g. ".../x/Users/bob")
+  // must not keep that root's username as the basename.
+  const isHome = /(?:^|[\\/])(?:(?:Users|home|Documents and Settings)[\\/][^\\/]+|root)$/i.test(trimmed);
   return isHome ? '<home>' : `<home>/…/${parts.at(-1) ?? ''}`;
 }
 

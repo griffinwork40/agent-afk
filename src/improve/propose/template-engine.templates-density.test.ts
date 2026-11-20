@@ -396,6 +396,42 @@ describe('toolFailureDensityTemplate — cluster rendering safety', () => {
     }
   });
 
+  // ---- PR #5127 review @ 108e960: no home root after a crossed space ----
+
+  it.each([
+    ['at /Users/fake-alice/a.ts imported from file:///home/private-bob'],
+    ['cp /Users/fake-alice/a.ts ./home/private-bob'],
+    ['see /Users/fake-alice/a.ts in x/Users/private-bob'],
+    ['see /Users/fake-alice/a.ts in x/y/home/private-bob'],
+    [String.raw`C:\Users\fake-alice\a.ts in x\Users\private-bob`],
+    [String.raw`/Users/fake-alice/a.ts in x\Documents and Settings\private-bob`],
+    ['/Users/fake-alice/My Dir/sub x/y/z/home/private-bob/k.ts and more'],
+  ])('does not carry a match across a space into a later prefixed home root: %s', (text) => {
+    for (const output of renderAll(text)) {
+      expect(output).not.toMatch(/fake-alice|private-bob/);
+    }
+  });
+
+  it('keeps the prose before a prefixed home root intact', () => {
+    for (const output of renderAll('see /Users/fake-alice/a.ts in x/y/home/private-bob')) {
+      expect(output).toContain('a.ts in x/y');
+    }
+  });
+
+  it('collapses a match that ends at a nested home root to <home>', () => {
+    for (const output of renderAll('open /Users/fake-alice/x/Users/private-bob failed')) {
+      expect(output).not.toMatch(/fake-alice|private-bob/);
+      expect(output).toContain('failed');
+    }
+  });
+
+  it('redacts prefixed roots in near-linear time on a long adversarial tail', () => {
+    const start = performance.now();
+    const outputs = renderAll(`/Users/fake-alice/x ${'a/b y/Users/q '.repeat(3_400)}`);
+    expect(performance.now() - start).toBeLessThan(2_000);
+    for (const output of outputs) expect(output).not.toContain('fake-alice');
+  });
+
   it('matches a long space-separated tail in linear time (no catastrophic backtracking)', () => {
     const start = performance.now();
     const outputs = renderAll(`/Users/fake-alice/${'x '.repeat(25_000)}`);
