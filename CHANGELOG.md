@@ -119,6 +119,12 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
   and dirty submodules are not entered (`status` and `diff` behave as with
   `--ignore-submodules=dirty`). If the repository's configuration cannot be
   read, `git_read` refuses the call instead of running unprotected.
+- **The subagent workspace checkpoint also never runs repository filter drivers.**
+  `captureWorkspaceCheckpoint` enumerates and neutralises filter drivers (via
+  the same `GIT_CONFIG_COUNT` mechanism as `git_read`) before running
+  `git status`, so a checkpoint in a repository with LFS or other filter
+  drivers cannot start an unapproved program. If enumeration fails the
+  checkpoint is marked unavailable and drift checks fail closed.
 - **`git_read` asks before returning file content from outside the session
   directory.** Calls that can produce file content from elsewhere in the
   repository (such as `show`, `diff` with patches, or a revision that names
