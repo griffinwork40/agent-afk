@@ -111,6 +111,11 @@ function prepareLive(ctx: ServerContext, id: string, setup: SessionSetup): { liv
       onCancelled: () => cancelTurn(live, ctx.log),
     });
   }
+  // The first start of a call that will not ask is in_progress, not pending (profile §5).
+  const gate = live.gate;
+  translator.requiresConsent = gate
+    ? (name, input) => gate.wouldAsk?.(name, input) ?? true
+    : () => false;
   const options: AcpSessionOptions = {
     model: ctx.opts.model,
     maxTurns: ctx.opts.maxTurns,

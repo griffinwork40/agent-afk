@@ -148,6 +148,44 @@ describe('ACP permission gate: allow paths', () => {
     expectDeny(await other, 'rejected');
   });
 
+  it('a remembered grant announces the in_progress transition before allowing', async () => {
+    const t = setup();
+    const p = call(t.gate, 'write_file', WRITE_INPUT, 'tool-1');
+    await untilAsk(t.asks);
+    t.asks[0]!.resolve(selected('allow_always'));
+    expectAllow(await p);
+    t.log.length = 0;
+    expectAllow(await call(t.gate, 'write_file', { file_path: '/workspace/second.txt' }, 'tool-2'));
+    expect(t.log).toEqual([{ kind: 'emit', update: expect.objectContaining({
+      toolCallId: 'tool-2', name: 'write_file', status: 'in_progress' }) }]);
+  });
+
+  it('a remembered grant whose in_progress transition cannot be emitted is denied', async () => {
+    let fail = false;
+    const t = setup({ emitToolCall: vi.fn(async () => { if (fail) throw new Error('closed'); }) });
+    const p = call(t.gate, 'write_file', WRITE_INPUT, 'tool-1');
+    await untilAsk(t.asks);
+    t.asks[0]!.resolve(selected('allow_always'));
+    expectAllow(await p);
+    fail = true;
+    expectDeny(await call(t.gate, 'write_file', WRITE_INPUT, 'tool-2'), 'request_error');
+  });
+
+  it('wouldAsk reports consent need from the policy and remembered grants', async () => {
+    const t = setup();
+    expect(t.gate.wouldAsk?.('read_file', {})).toBe(false);
+    expect(t.gate.wouldAsk?.('worktree', { action: 'list' })).toBe(false);
+    expect(t.gate.wouldAsk?.('write_file', WRITE_INPUT)).toBe(true);
+    expect(t.gate.wouldAsk?.('', {})).toBe(true);
+    const p = call(t.gate, 'write_file', WRITE_INPUT, 'tool-1');
+    await untilAsk(t.asks);
+    t.asks[0]!.resolve(selected('allow_always'));
+    expectAllow(await p);
+    expect(t.gate.wouldAsk?.('write_file', {})).toBe(false);
+    expect(t.gate.wouldAsk?.('edit_file', {})).toBe(true);
+    expect(createAcpPermissionGate(t.peer, SID, { ...t.opts, skip: true }).wouldAsk?.('bash', {})).toBe(false);
+  });
+
   it('a grant for one tool does not resolve an independent pending ask', async () => {
     const t = setup();
     const a = call(t.gate, 'write_file', WRITE_INPUT, 'tool-1');

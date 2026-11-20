@@ -163,10 +163,31 @@ async function decide(
   const name = typeof toolName === 'string' ? toolName : '';
   const input = isRecord(rawInput) ? rawInput : {};
   if (!requiresAsk(name, input)) return allow();
-  if (name.length > 0 && st.granted.has(name)) {
-    return signal.aborted ? denyResult('aborted') : allow();
-  }
+  if (name.length > 0 && st.granted.has(name)) return runGranted(st, name, input, signal, toolUseID);
   return askClient(st, name, input, signal, toolUseID);
+}
+
+/**
+ * Remembered grant: no question, but the client still sees the call move to
+ * in_progress before it runs (profile section 5/6), deduplicated by A1.
+ */
+async function runGranted(
+  st: GateState, toolName: string, input: Record<string, unknown>, signal: AbortSignal, toolUseID: string,
+): Promise<PermissionResult> {
+  if (signal.aborted) return denyResult('aborted');
+  if (typeof toolUseID !== 'string' || toolUseID.length === 0) return denyResult('request_error');
+  try {
+    await st.opts.emitToolCall({ ...buildPendingStart(toolUseID, toolName, input), status: 'in_progress' });
+  } catch {
+    return denyResult('request_error');
+  }
+  return signal.aborted ? denyResult('aborted') : allow();
+}
+
+function wouldAsk(st: GateState, toolName: string, input: Record<string, unknown>): boolean {
+  if (st.opts.skip === true) return false;
+  if (typeof toolName !== 'string' || toolName.length === 0) return true;
+  return requiresAsk(toolName, isRecord(input) ? input : {}) && !st.granted.has(toolName);
 }
 
 /** Never rejects and never returns anything but an explicit allow or a named deny. */
@@ -192,6 +213,9 @@ export function createAcpPermissionGate(
       } catch {
         return denyResult('request_error');
       }
+    },
+    wouldAsk: (toolName, input) => {
+      try { return wouldAsk(st, toolName, input); } catch { return true; }
     },
     cancelAll: () => {
       for (const ask of [...st.pending]) {
