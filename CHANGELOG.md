@@ -111,6 +111,14 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 - **The process exits promptly when the client closes its end.** On EOF the
   server cancels and releases every live session within a bounded time and
   then exits without waiting for stray timers.
+- **`git_read` never runs a program named by repository configuration.**
+  Filter drivers (`filter.<name>.clean`, `smudge`, `process`) from any config
+  source are switched off for each call, so `blame`, `diff` and `status` show
+  the raw stored content of filtered files (Git LFS files appear as their
+  pointer text and may be reported as modified). Repository hooks are not run,
+  and dirty submodules are not entered (`status` and `diff` behave as with
+  `--ignore-submodules=dirty`). If the repository's configuration cannot be
+  read, `git_read` refuses the call instead of running unprotected.
 - **`git_read` asks before returning file content from outside the session
   directory.** Calls that can produce file content from elsewhere in the
   repository (such as `show`, `diff` with patches, or a revision that names
