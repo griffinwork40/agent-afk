@@ -172,6 +172,11 @@ async function askClient(
     const after = interrupted(signal, ask);
     if (after) return denyResult(after);
     // D11: offered only for inside-cwd, non-bash, non-delegation calls; recheck anyway.
+    // The dual-check here is intentional: `outside` (computed from the original
+    // ask's input at the top of askClient) gates whether allow_always is stored,
+    // while grantCovers (in decide) recomputes outsideTargets on the NEW call's
+    // input. The two checks operate on different inputs on purpose: a grant earned
+    // for an inside-cwd call must not cover a later call that targets outside.
     if (decision === 'allow_always' && !outside) st.granted.add(toolName);
     return allow();
   } finally {
