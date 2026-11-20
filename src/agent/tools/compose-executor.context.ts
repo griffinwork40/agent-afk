@@ -13,8 +13,10 @@ import type { TraceSink } from '../trace/index.js';
 import type { ReadScopeInputs } from '../subagent-read-scope.js';
 import type { AgentRegistry } from '../agents/index.js';
 import type { InboundAttachmentReader } from '../content/attachment-registry.js';
+import type { ChildGateOptions } from './nesting.can-use-tool.js';
 
-export interface ComposeExecutorContext {
+/** `childCanUseTool` (ChildGateOptions): surface approval gate chained after each node's own restriction. */
+export interface ComposeExecutorContext extends ChildGateOptions {
   // NOTE: compose nodes are NOT wired for the parent-registry fallback. The
   // DAG executor (dag-subagent.ts) forks each node with `parent: { sessionId }`
   // only — it strips getInputStreamRef/hookRegistry — so SubagentStop can

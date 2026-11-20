@@ -32,6 +32,7 @@ import type { BackgroundAgentRegistry } from '../background-registry.js';
 import type { AgentRegistry } from '../agents/types.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
 import type { HookRegistry } from '../hooks.js';
+import { childGateOpt, type ChildGateArgs, type ChildGateOptions } from './nesting.can-use-tool.js';
 
 export const DEFAULT_MAX_NESTING_DEPTH = 3;
 
@@ -97,7 +98,7 @@ export function resolveMaxNestingDepth(): number {
   return DEFAULT_MAX_NESTING_DEPTH;
 }
 
-export interface ChildProviderFactoryArgs {
+export interface ChildProviderFactoryArgs extends ChildGateArgs {
   childExecutor: SubagentExecutor;
   childSkillExecutor?: SkillExecutor;
   /**
@@ -253,7 +254,7 @@ export const DEFAULT_READ_ONLY_SKILLS: ReadonlySet<string> = new Set(['ground-st
  * between sibling dispatches — folding them into closure keeps every
  * call site in the executors free of provider-routing detail.
  */
-export interface CreateChildProviderFactoryOptions {
+export interface CreateChildProviderFactoryOptions extends ChildGateOptions {
   /**
    * OpenAI-compatible endpoint URL. Forwarded as `baseURL` when the factory
    * builds an `OpenAICompatibleProvider` for an OpenAI-routed child. Sourced
@@ -296,7 +297,7 @@ export interface CreateChildProviderFactoryOptions {
 export function createChildProviderFactory(
   opts: CreateChildProviderFactoryOptions = {},
 ): (args: ChildProviderFactoryArgs) => ModelProvider {
-  return ({ childExecutor, childSkillExecutor, model, allowedTools, readOnlyBash, customTools, subscribeHandler }) => {
+  return ({ childExecutor, childSkillExecutor, model, allowedTools, readOnlyBash, customTools, subscribeHandler, origin }) => {
     const providerOpts = {
       // A read-only skill's child passes `allowedTools: RECON_ALLOWED_TOOLS`
       // (no write_file/edit_file); everyone else gets the full CHILD_ALLOWED_TOOLS.
@@ -318,6 +319,7 @@ export function createChildProviderFactory(
       // constructor is the only read point — config.customTools is not consulted
       // at query time when a pre-built provider is set.
       ...(customTools !== undefined && customTools.length > 0 ? { customTools } : {}),
+      ...childGateOpt(opts.childCanUseTool, origin), // surface approval gate (nesting.can-use-tool.ts)
     };
     const route = providerForModel(typeof model === 'string' ? model : undefined);
     if (route === 'openai-compatible') {

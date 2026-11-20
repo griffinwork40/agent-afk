@@ -13,6 +13,7 @@ import { defaultTierModelFallback } from '../subagent/resolve-child-model.js';
 import { prepareDispatchModel } from './dispatch-preparation.js';
 import { resolveChildBudgets } from './subagent/child-config.helpers.js';
 import { resolveComposeNodeProvider } from './compose-node-provider.js';
+import { composeNodeGated } from './nesting.can-use-tool.js';
 import {
   resolvedAgentToolRestriction,
   resolveComposeAgentPrompt,
@@ -234,9 +235,9 @@ export async function buildComposeDagNode(args: BuildComposeDagNodeArgs): Promis
     ...(n.isolation === 'worktree' ? { isolation: 'worktree' as const } : {}),
     ...(n.isolation === 'worktree' && n.task_slug !== undefined ? { taskSlug: n.task_slug } : {}),
     // Node provider carries workspace + named-agent gates (compose-node-provider.ts).
-    ...resolveComposeNodeProvider(nodeModel, ctx.workspaceStore, ctx.openaiBaseUrl, resolvedAgent),
+    ...resolveComposeNodeProvider(nodeModel, ctx.workspaceStore, ctx.openaiBaseUrl, composeNodeGated(resolvedAgent, ctx.childCanUseTool, n, depth)),
     ...(nodeFallback !== undefined
-      ? { modelFallback: { ...nodeFallback, buildProvider: (m: string) => resolveComposeNodeProvider(m, ctx.workspaceStore, ctx.openaiBaseUrl, resolvedAgent).provider } }
+      ? { modelFallback: { ...nodeFallback, buildProvider: (m: string) => resolveComposeNodeProvider(m, ctx.workspaceStore, ctx.openaiBaseUrl, composeNodeGated(resolvedAgent, ctx.childCanUseTool, n, depth)).provider } }
       : {}),
     // Per-node resolved attachments; depth+1/maxDepth for preamble (#2266).
     ...(resolvedAttachments !== undefined ? { resolvedAttachments } : {}), depth: depth + 1, maxDepth,
