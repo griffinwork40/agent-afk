@@ -24,9 +24,15 @@ import {
 import type { AcpRpcPeer, InitializeResponse, PromptResponse, StopReason } from './acp.wire.js';
 
 export class AcpError extends Error {
-  constructor(readonly code: number, readonly detail?: string) {
+  /** D16: `data` carries only the client's own session id, never internal detail. */
+  constructor(readonly code: number, readonly detail?: string, readonly data?: { sessionId: string }) {
     super(detail ?? `ACP error ${code}`);
   }
+}
+
+/** D16: resource not found for a session id the client named. */
+function unknownSession(sessionId: string): AcpError {
+  return new AcpError(RESOURCE_NOT_FOUND, 'unknown session', { sessionId });
 }
 
 export interface HandlerOptions {
@@ -40,7 +46,6 @@ export interface HandlerOptions {
 export interface ServerContext {
   opts: HandlerOptions;
   peer: AcpRpcPeer;
-  serverCwd: string;
   initialized: boolean;
   sessions: Map<string, LiveSession>;
   /** Ids whose restore is in flight (duplicate restore is invalid request). */
@@ -90,9 +95,9 @@ export function knownContextWindow(model: AgentModelInput): number | undefined {
   return Number.isSafeInteger(n) && n > 0 ? n : undefined;
 }
 
-function parseSetup(params: unknown, ctx: ServerContext, mode: 'new' | 'load' | 'resume'): SessionSetup {
+function parseSetup(params: unknown, mode: 'new' | 'load' | 'resume'): SessionSetup {
   try {
-    return parseSessionSetup(params, ctx.serverCwd, mode);
+    return parseSessionSetup(params, mode);
   } catch (err) {
     if (err instanceof AcpInvalidParams) throw new AcpError(INVALID_PARAMS, err.detail);
     throw err;
@@ -104,7 +109,7 @@ function prepareLive(ctx: ServerContext, id: string, setup: SessionSetup): { liv
   const translator = createTranslatorState();
   const window = knownContextWindow(ctx.opts.model);
   if (window !== undefined) translator.contextWindowSize = window;
-  const live: LiveSession = { id, cwd: setup.cwd, translator, closing: false };
+  const live: LiveSession = { id, cwd: setup.cwd, translator, closing: false, wireMcp: JSON.stringify(setup.wireMcp) };
   if (!ctx.opts.dangerouslySkipPermissions) {
     live.gate = createAcpPermissionGate(ctx.peer, id, {
       skip: false,
@@ -139,7 +144,7 @@ function internal(ctx: ServerContext, what: string, err: unknown): AcpError {
 
 export async function handleSessionNew(ctx: ServerContext, params: unknown): Promise<{ sessionId: string }> {
   requireInit(ctx);
-  const setup = parseSetup(params, ctx, 'new');
+  const setup = parseSetup(params, 'new');
   const sessionId = randomUUID();
   const { live, options } = prepareLive(ctx, sessionId, setup);
   try {
@@ -173,14 +178,44 @@ function recordProviderId(ctx: ServerContext, live: LiveSession): Promise<void> 
   }
 }
 
+/**
+ * D15: load or resume of a session that is live and idle on this connection
+ * keeps the live handle (grants, translator, MCP servers): load replays its
+ * journal again, resume replies with no replay. A prompt in flight, a close in
+ * progress or a concurrent restore is invalid request. The live session keeps
+ * its directory and servers, so a different cwd or MCP list is invalid params.
+ */
+async function reopenLive(
+  ctx: ServerContext, live: LiveSession, setup: SessionSetup, rawMcp: unknown, mode: 'load' | 'resume',
+): Promise<Record<string, never>> {
+  if (live.active || live.closing) throw new AcpError(INVALID_REQUEST, 'session has a prompt in flight');
+  const sameMcp = (mode === 'resume' && rawMcp === undefined) || JSON.stringify(setup.wireMcp) === live.wireMcp;
+  if (setup.cwd !== live.cwd || !sameMcp) {
+    throw new AcpError(INVALID_PARAMS, 'live session reopened with a different cwd or mcpServers');
+  }
+  if (mode === 'resume') return {};
+  ctx.restoring.add(live.id);
+  try {
+    await replayHistory(live.id, ctx.peer, live.cwd);
+  } catch (err) {
+    throw internal(ctx, 'replay failed', err);
+  } finally {
+    ctx.restoring.delete(live.id);
+  }
+  if (ctx.sessions.get(live.id) !== live || live.closing) throw unknownSession(live.id);
+  return {};
+}
+
 /** Restore a mapped session; load additionally replays display history. */
 export async function handleRestore(
   ctx: ServerContext, params: unknown, mode: 'load' | 'resume',
 ): Promise<Record<string, never>> {
   requireInit(ctx);
-  const setup = parseSetup(params, ctx, mode);
+  const setup = parseSetup(params, mode);
   const id = setup.sessionId ?? '';
-  if (ctx.sessions.has(id) || ctx.restoring.has(id)) throw new AcpError(INVALID_REQUEST, 'session already active');
+  if (ctx.restoring.has(id)) throw new AcpError(INVALID_REQUEST, 'restore already in progress');
+  const existing = ctx.sessions.get(id);
+  if (existing) return reopenLive(ctx, existing, setup, (params as Record<string, unknown>)['mcpServers'], mode);
   ctx.restoring.add(id);
   try {
     const { live, options } = prepareLive(ctx, id, setup);
@@ -189,9 +224,7 @@ export async function handleRestore(
     try {
       live.handle = await loadAcpSession({ sessionId: id, cwd: setup.cwd, mcpServers: setup.wireMcp }, options);
     } catch (err) {
-      if (err instanceof AcpNotFoundError) {
-        throw new AcpError(RESOURCE_NOT_FOUND, 'unknown session');
-      }
+      if (err instanceof AcpNotFoundError) throw unknownSession(id);
       throw internal(ctx, `session ${mode} failed`, err);
     }
     if (mode === 'load') {
@@ -229,8 +262,10 @@ export function startPrompt(ctx: ServerContext, params: unknown): Promise<Prompt
   const text = normalizePrompt((params as Record<string, unknown>)['prompt']);
   if (text === null) throw new AcpError(INVALID_PARAMS, 'invalid prompt content');
   const live = ctx.sessions.get(sessionId);
-  if (!live || live.closing) throw new AcpError(RESOURCE_NOT_FOUND, 'unknown session');
+  if (!live || live.closing) throw unknownSession(sessionId);
   if (live.active) throw new AcpError(INVALID_REQUEST, 'prompt already active');
+  // D15: a reload's replay must finish before a new turn streams into it.
+  if (ctx.restoring.has(sessionId)) throw new AcpError(INVALID_REQUEST, 'session is being reloaded');
   const turn = runPromptTurn(live, text, {
     peer: ctx.peer, log: ctx.log,
     ...(ctx.opts.cancelGraceMs !== undefined ? { cancelGraceMs: ctx.opts.cancelGraceMs } : {}),

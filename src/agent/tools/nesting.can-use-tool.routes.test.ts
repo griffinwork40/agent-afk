@@ -10,7 +10,7 @@
  * per-query dispatcher, exactly as the forked child session would.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { ModelProvider } from '../provider.js';
@@ -182,7 +182,18 @@ describe.each([['sonnet', 'anthropic-direct'], ['gpt-4o', 'openai-compatible']] 
     expect(nestedSkill, 'depth-1 agent child must carry a nested skill executor').toBeDefined();
     await nestedSkill.execute({ id: 's2', name: 'skill', input: { name: 'gate-probe' }, signal }).catch(() => undefined);
     await expectDeniedWrite(lastProvider());
-    expect(last(g.calls)?.origin).toEqual({ route: 'skill', depth: 2, agentType: 'gate-probe' });
+    // The nested skill executor knows its directory, so the origin names it.
+    expect(last(g.calls)?.origin).toEqual({ route: 'skill', depth: 2, agentType: 'gate-probe', cwd: tmp });
+  });
+
+  it('agent tool with its own cwd: the child origin carries that cwd for the gate', async () => {
+    const g = recordingGate();
+    const w = wire({ childCanUseTool: g.factory, defaultSubagentModel: model });
+    const own = join(tmp, 'own-cwd');
+    mkdirSync(own, { recursive: true });
+    await agentCall(w.subagentExecutor, { prompt: 'do it', id_prefix: 'moved', cwd: own, model });
+    await expectDeniedWrite(lastProvider());
+    expect(last(g.calls)?.origin).toEqual({ route: 'agent', depth: 1, label: 'moved', cwd: own });
   });
 
   it('agent tool, background mode: child provider is gated (same construction path)', async () => {
@@ -227,7 +238,7 @@ describe.each([['sonnet', 'anthropic-direct'], ['gpt-4o', 'openai-compatible']] 
     expect(a).toBeDefined(); expect(b).toBeDefined();
     opened.push(a!, b!);
     await expectDeniedWrite(a!);
-    expect(last(g.calls)?.origin).toEqual({ route: 'compose', depth: 1, label: 'a' });
+    expect(last(g.calls)?.origin).toEqual({ route: 'compose', depth: 1, label: 'a', cwd: tmp });
     // research-agent's own allowlist denies write_file BEFORE the human is asked.
     const before = g.calls.length;
     const r = await runInChild(b!, 'write_file', { file_path: join(tmp, 'b.txt'), content: 'x' });

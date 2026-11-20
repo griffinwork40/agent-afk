@@ -27,8 +27,10 @@ const VALID_KINDS = new Set<ToolKind>(['read', 'edit', 'delete', 'move', 'search
  * Targets of this call outside the session cwd (D10). Any failure is reported
  * as an unresolvable outside target, so the call is asked, never auto-allowed.
  */
-export function outsideTargets(toolName: string, input: Record<string, unknown>, cwd: string | undefined): string[] {
-  try { return outsidePaths(toolName, input, cwd); } catch { return ['(unresolvable path)']; }
+export function outsideTargets(
+  toolName: string, input: Record<string, unknown>, cwd: string | undefined, callerCwd?: string,
+): string[] {
+  try { return outsidePaths(toolName, input, cwd, callerCwd); } catch { return ['(unresolvable path)']; }
 }
 
 /**
@@ -36,13 +38,13 @@ export function outsideTargets(toolName: string, input: Record<string, unknown>,
  * an auto-allowed read/search tool asks when any target leaves `cwd` (D10).
  * Without a usable `cwd` every path argument counts as outside (fail closed).
  */
-export function requiresAsk(toolName: string, input: Record<string, unknown>, cwd?: string): boolean {
+export function requiresAsk(toolName: string, input: Record<string, unknown>, cwd?: string, callerCwd?: string): boolean {
   if (typeof toolName !== 'string' || toolName.length === 0) return true;
   const readOnly = AUTO_ALLOW.has(toolName)
     // Explicit read-only exception: exactly action "list", nothing else.
     || (toolName === 'worktree' && input['action'] === 'list' && Object.keys(input).every((k) => k === 'action'));
   if (!readOnly) return true;
-  return outsideTargets(toolName, input, cwd).length > 0;
+  return outsideTargets(toolName, input, cwd, callerCwd).length > 0;
 }
 
 /**
@@ -75,17 +77,18 @@ function rawInputOf(input: Record<string, unknown>): JsonValue | undefined {
  * the safe generic shape. The delegation suffix is enforced here regardless.
  */
 export function buildPendingStart(
-  toolCallId: string, toolName: string, input: Record<string, unknown>, cwd = '', prefix = '',
+  toolCallId: string, toolName: string, input: Record<string, unknown>, cwd = '', prefix = '', callerCwd?: string,
 ): ToolCallStart {
+  const shownCwd = callerCwd ?? cwd;
   const named = toolName.length > 0;
-  let title = named ? safe(() => toolTitle(toolName, input, cwd), toolName) : 'Tool call';
+  let title = named ? safe(() => toolTitle(toolName, input, shownCwd), toolName) : 'Tool call';
   if (typeof title !== 'string' || title.length === 0) title = named ? toolName : 'Tool call';
   const kind = named ? safe(() => toolKind(toolName), 'other' as ToolKind) : 'other';
   // Without a session cwd, relative paths resolve to nothing and are omitted.
-  const shown = named ? safe(() => toolLocations(toolName, input, cwd), []) : [];
+  const shown = named ? safe(() => toolLocations(toolName, input, shownCwd), []) : [];
   const locations = Array.isArray(shown) ? [...shown] : [];
   // D10: every outside target is shown as an absolute location, even under names the display table ignores.
-  const outside = outsideTargets(toolName, input, cwd);
+  const outside = outsideTargets(toolName, input, cwd, callerCwd);
   for (const p of outside) {
     if (path.isAbsolute(p) && !locations.some((l) => l.path === p)) locations.push({ path: p });
   }

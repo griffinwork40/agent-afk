@@ -65,8 +65,9 @@ export function successResponse(id: RequestId, result: unknown): RpcResponse {
 }
 
 /** Error response with the profile's generic public message for `code`. */
-export function errorResponse(id: RequestId, code: number): RpcResponse {
-  return { jsonrpc: '2.0', id, error: { code, message: ERROR_MESSAGES[code] ?? 'Internal error' } };
+export function errorResponse(id: RequestId, code: number, data?: { sessionId: string }): RpcResponse {
+  const message = ERROR_MESSAGES[code] ?? 'Internal error';
+  return { jsonrpc: '2.0', id, error: data !== undefined ? { code, message, data } : { code, message } };
 }
 
 export type InboundFrame =

@@ -12,7 +12,7 @@
  */
 
 import { Command } from 'commander';
-import { runAcpServer } from './acp.server.js';
+import { exitAfterServer, runAcpServer } from './acp.server.js';
 import { handleCommandError } from '../errors/index.js';
 import { getModel } from '../shared-helpers.js';
 import type { AgentModelInput } from '../../agent/types.js';
@@ -49,6 +49,10 @@ export function registerAcpCommand(program: Command): void {
             output: process.stdout,
             dangerouslySkipPermissions: options.dangerouslySkipPermissions,
           });
+          // D17: every session is closed (journal closed, trace sealed) or
+          // abandoned at its deadline; a timer left by session close must not
+          // keep a client waiting for the process to end.
+          await exitAfterServer(process.stdout, (code) => process.exit(code));
         } catch (err) {
           handleCommandError(err);
         }

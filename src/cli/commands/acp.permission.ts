@@ -4,6 +4,7 @@
  *
  * @module cli/commands/acp.permission
  */
+import path from 'node:path';
 import type { PermissionResult } from '../../agent/types/sdk-types.js';
 import type {
   AcpClientPeer, AcpPermissionGate, AcpPermissionOptions, CanUseTool, PermissionOption, ToolCallStart, ToolCallUpdate,
@@ -114,15 +115,16 @@ interface GateState {
   childInFlight: Set<Promise<unknown>>;
   /**
    * Set once a delegation that runs children in another directory is allowed.
-   * The child origin carries no cwd, so from then on a child read whose target
-   * depends on its own cwd (relative or absent path) is asked, not auto-allowed.
+   * From then on a child whose origin carries no cwd has its reads that depend
+   * on its own cwd (relative or absent path) asked, not auto-allowed. A child
+   * whose origin names its cwd has its paths resolved against that instead.
    */
   childCwdUnknown: boolean;
 }
 
 /** Who is asking: the top-level session (stream closes the card) or a forked child (gate closes it). */
 interface Asker {
-  child?: { prefix: string; origin: string };
+  child?: { prefix: string; origin: string; cwd?: string };
 }
 
 /** Abort/cancel recheck used at every await boundary before an allow can escape. */
@@ -145,8 +147,8 @@ async function askClient(
   const ask: PendingAsk = { cancelled: false, child: who.child !== undefined, settle: () => { ask.cancelled = true; } };
   st.pending.add(ask);
   try {
-    const outside = outsideTargets(toolName, input, st.opts.cwd).length > 0;
-    const start = buildPendingStart(toolUseID, toolName, input, st.opts.cwd, who.child?.prefix ?? '');
+    const outside = outsideTargets(toolName, input, st.opts.cwd, who.child?.cwd).length > 0;
+    const start = buildPendingStart(toolUseID, toolName, input, st.opts.cwd, who.child?.prefix ?? '', who.child?.cwd);
     try { await st.opts.emitToolCall(start); } catch { return denyResult('request_error'); }
     const early = interrupted(signal, ask);
     if (early) return denyResult(early);
@@ -182,8 +184,8 @@ function turnLive(st: GateState): boolean {
 }
 
 /** A remembered grant covers this call only when it targets nothing outside the cwd (D11). */
-function grantCovers(st: GateState, name: string, input: Record<string, unknown>): boolean {
-  return name.length > 0 && st.granted.has(name) && outsideTargets(name, input, st.opts.cwd).length === 0;
+function grantCovers(st: GateState, name: string, input: Record<string, unknown>, callerCwd?: string): boolean {
+  return name.length > 0 && st.granted.has(name) && outsideTargets(name, input, st.opts.cwd, callerCwd).length === 0;
 }
 
 async function decide(
@@ -192,9 +194,10 @@ async function decide(
   if (st.opts.skip === true) return allow();
   const name = typeof toolName === 'string' ? toolName : '';
   const input = isRecord(rawInput) ? rawInput : {};
-  const relocated = who.child !== undefined && st.childCwdUnknown && dependsOnCallerCwd(input);
-  if (!relocated && !requiresAsk(name, input, st.opts.cwd)) return allow();
-  if (!relocated && grantCovers(st, name, input)) {
+  const callerCwd = who.child?.cwd;
+  const relocated = who.child !== undefined && callerCwd === undefined && st.childCwdUnknown && dependsOnCallerCwd(input);
+  if (!relocated && !requiresAsk(name, input, st.opts.cwd, callerCwd)) return allow();
+  if (!relocated && grantCovers(st, name, input, callerCwd)) {
     // A child's granted call has no stream card to move; it just runs (D13).
     return who.child ? (signal.aborted ? denyResult('aborted') : allow()) : runGranted(st, name, input, signal, toolUseID);
   }
@@ -229,7 +232,7 @@ async function closeChildCard(
     : `Approved. Runs inside ${child.origin}; its result is reported by the delegating tool call.`;
   try {
     await st.opts.emitToolCall({
-      ...buildPendingStart(cardId, name, input, st.opts.cwd, child.prefix),
+      ...buildPendingStart(cardId, name, input, st.opts.cwd, child.prefix, child.cwd),
       status: result.behavior === 'deny' ? 'failed' : 'completed',
       content: [{ type: 'content', content: { type: 'text', text } }],
     });
@@ -293,7 +296,8 @@ export function createAcpPermissionGate(
     // D9: one labelled callback per forked child; same policy, grants and client.
     forChild: (origin: ChildToolOrigin | undefined) => {
       const prefix = childPrefix(origin);
-      return gated({ child: { prefix, origin: prefix.slice(1, -1) } });
+      const cwd = typeof origin?.cwd === 'string' && path.isAbsolute(origin.cwd) ? path.resolve(origin.cwd) : undefined;
+      return gated({ child: { prefix, origin: prefix.slice(1, -1), ...(cwd !== undefined ? { cwd } : {}) } });
     },
     wouldAsk: (toolName, input) => {
       try { return wouldAsk(st, toolName, input); } catch { return true; }

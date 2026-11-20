@@ -13,7 +13,7 @@ The previous home-grown wire format used by earlier `afk acp` releases is remove
 afk acp
 ```
 
-The server reads newline-delimited JSON from stdin and writes newline-delimited JSON to stdout. All AFK wiring, tools, hooks, memory, skills, and state is inherited automatically. The project's `AFK.md` file and operator configuration reach the model. The user's configured MCP servers are connected at session creation time.
+The server reads newline-delimited JSON from stdin and writes newline-delimited JSON to stdout. All AFK wiring, tools, hooks, memory, skills, and state is inherited automatically. The project's `AFK.md` file and operator configuration reach the model. The user's configured MCP servers are connected at session creation time. When the client closes stdin, AFK closes every session (sealing its journal and trace) and exits; a hung MCP server is given at most 2 seconds to disconnect.
 
 Common options:
 
@@ -72,7 +72,7 @@ AFK returns `protocolVersion: 1` regardless of the integer the client requests. 
 
 ### Create a session
 
-`session/new` takes required `cwd` (absolute path, at or below the server's launch directory) and `mcpServers` (array of stdio entries, each with `name`, `command`, `args`, `env`). HTTP and SSE MCP entries are rejected. An empty array is valid.
+`session/new` takes required `cwd` (an absolute path to an existing directory, anywhere; it need not be where `afk acp` was started) and `mcpServers` (array of stdio entries, each with `name`, `command`, `args`, `env`). HTTP and SSE MCP entries are rejected. An empty array is valid.
 
 Client-supplied MCP servers are started immediately when the session is created, before any tool approval prompt, and are treated as trusted in the same way as servers named on the command line.
 
@@ -166,6 +166,8 @@ Edit tools emit `diff` content items alongside text results. Each diff has this 
 
 `remote_agent` runs on a separate machine. Its tool calls are not covered by this session's approval bridge; the title says so.
 
+A subagent given its own working directory has its relative paths checked against that directory and is asked when they leave the session `cwd`. Where the subagent's directory is not known yet (a worktree-isolated `compose` node), its calls with a relative path or no path are asked once a delegation to another directory has been allowed.
+
 ## Permissions
 
 Before executing any tool that requires consent, the server sends a `session/request_permission` request (an agent-to-client request with an `acp:N` id). The client must reply before the tool runs.
@@ -175,6 +177,8 @@ Before executing any tool that requires consent, the server sends a `session/req
 | Read and search tools targeting a path inside `cwd` | Auto-allow |
 | Read and search tools with no filesystem path (memory, state, session listings, etc.) | Auto-allow |
 | Read and search tools targeting a path outside `cwd` | Ask, with absolute path shown |
+| `git_read` that can print file content from outside `cwd` (`HEAD:../file` style revisions, object ids, patches with no path inside `cwd`, `cat-file -p`) | Ask |
+| `git_read` metadata, or content limited to paths inside `cwd` | Auto-allow |
 | `worktree list` | Auto-allow |
 | Write tools, `bash`, `test_run`, web tools, delegation tools, MCP tools, unknown tools | Ask |
 | `--dangerously-skip-permissions` | Skip the bridge entirely |
@@ -234,7 +238,7 @@ Cancellation of an idle or unknown session is a no-op.
 
 `session/resume` restores without replay and returns `{}`. `mcpServers` is optional on resume; omitting it is equivalent to an empty array.
 
-Both methods return resource-not-found (`-32002`) for unknown ids, and invalid-request (`-32600`) if the session is already active.
+Both methods return resource-not-found (`-32002`, with `data.sessionId`) for unknown ids. A session already open and idle on this connection can be loaded or resumed without closing it first: AFK keeps the open session, `session/load` replays its history again, and `session/resume` replies with no replay. Reopening with a different `cwd` or `mcpServers` list is invalid-params (`-32602`). While a prompt is running, or the session is closing or replaying, the request is invalid-request (`-32600`) and the prompt is not cancelled.
 
 ## Error codes
 
@@ -244,7 +248,7 @@ Both methods return resource-not-found (`-32002`) for unknown ids, and invalid-r
 | `-32600` | Invalid request |
 | `-32601` | Method not found |
 | `-32602` | Invalid params |
-| `-32002` | Resource not found (unknown session id) |
+| `-32002` | Resource not found (unknown or closed session id); `data.sessionId` repeats the id |
 | `-32603` | Internal error (details logged to stderr only) |
 
 Cancellation is not an error. It produces a successful response with `stopReason: "cancelled"`.

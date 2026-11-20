@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { env } from '../../config/env.js';
@@ -22,6 +22,7 @@ let temporaryRoot: string;
 let root: string;
 let connections: GoldenConnection[];
 let sessions: ScriptedSession[];
+let extraDirs: string[] = [];
 
 beforeEach(() => {
   temporaryRoot = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'acp-golden-')));
@@ -39,8 +40,18 @@ afterEach(async () => {
   finally {
     vi.restoreAllMocks();
     rmSync(temporaryRoot, { recursive: true, force: true });
+    for (const dir of extraDirs) rmSync(dir, { recursive: true, force: true });
+    extraDirs = [];
   }
 });
+/** A launch directory that is a sibling of the session root, never an ancestor of it. */
+function launchElsewhere(): string {
+  const dir = path.join(temporaryRoot, '..', `${path.basename(temporaryRoot)}-launch`);
+  mkdirSync(dir, { recursive: true });
+  extraDirs.push(dir);
+  expect(path.relative(dir, root).startsWith('..')).toBe(true);
+  return dir;
+}
 function connect(): GoldenConnection {
   const connection = new GoldenConnection();
   connections.push(connection);
@@ -53,7 +64,7 @@ function rowsFor(file: string): Row[] {
 
 describe('ACP golden transcripts against the real server (A1/A2/A3/A4 integration)', () => {
   it('has exactly one independent internal script for every frozen transcript', () => {
-    expect(files).toHaveLength(16);
+    expect(files).toHaveLength(19);
     for (const file of files) expect(scriptFor(file.replace('.ndjson', ''), root)).toBeDefined();
   });
   for (const file of files) {
@@ -61,11 +72,15 @@ describe('ACP golden transcripts against the real server (A1/A2/A3/A4 integratio
       const stem = file.replace('.ndjson', '');
       const script = scriptFor(stem, root);
       vi.mocked(buildAcpSession).mockImplementation(async options => {
+        // D15: a live session journals under its own minted id, which a reload then replays.
+        if (stem === 'load-live-session' && options.sessionId !== undefined) seedHistory(root, options.sessionId);
         const handle = fakeHandle(options, script);
         sessions.push(handle.session as unknown as ScriptedSession);
         return handle;
       });
       if (stem === 'load-replay' || stem === 'resume') seedHistory(root);
+      // D14: the server is launched somewhere unrelated to the session directory.
+      if (stem === 'session-cwd-outside-launch') vi.mocked(process.cwd).mockReturnValue(launchElsewhere());
       await replayGolden(connect(), rowsFor(file), root, stem);
       expect(script.executed, `${stem}: only approved tools execute`).toEqual(
         stem === 'child-approval-allow' ? ['tool-1', 'child:tool-c1'] :
@@ -75,7 +90,9 @@ describe('ACP golden transcripts against the real server (A1/A2/A3/A4 integratio
             stem.startsWith('tool-') || stem === 'permission-allow-once' ? ['tool-1'] : [],
       );
       // Replay may construct a provider but must never execute historical calls.
-      if (stem === 'load-replay') expect(script.asked).toEqual([]);
+      if (stem === 'load-replay' || stem === 'load-live-session') expect(script.asked).toEqual([]);
+      // D15: reloading a live session reuses its handle; nothing is rebuilt.
+      if (stem === 'load-live-session') expect(buildAcpSession).toHaveBeenCalledTimes(1);
     });
   }
 });

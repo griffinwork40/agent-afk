@@ -30,6 +30,8 @@ export interface LiveSession {
   gate?: AcpPermissionGate;
   active?: ActiveTurn;
   closing: boolean;
+  /** Canonical JSON of the wire MCP list the session was opened with (D15 reopen check). */
+  wireMcp?: string;
 }
 
 /** Thrown when the turn fails for a reason other than cancellation. */

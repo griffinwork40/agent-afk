@@ -25,7 +25,9 @@ describe('D10 lexical containment', () => {
 describe('D10 auto-allow only inside the session cwd', () => {
   it('a read with no path argument defaults to the cwd and is not asked', () => {
     for (const n of ['grep', 'glob', 'list_directory', 'git_read', 'memory_search', 'config_get']) {
-      expect(requiresAsk(n, n === 'glob' ? { pattern: '**/*.ts' } : {}, cwd), n).toBe(false);
+      // git_read needs a subcommand to be a call at all; `{}` is refused by the tool and asked (fail closed).
+      const input = n === 'glob' ? { pattern: '**/*.ts' } : n === 'git_read' ? { subcommand: 'status' } : {};
+      expect(requiresAsk(n, input, cwd), n).toBe(false);
     }
   });
   it('inside paths stay auto-allowed, outside paths are asked', () => {
@@ -58,6 +60,54 @@ describe('D10 auto-allow only inside the session cwd', () => {
     }
     expect(requiresAsk('git_read', { subcommand: 'log', args: ['--oneline'] }, cwd)).toBe(false);
     expect(requiresAsk('git_read', { subcommand: 'log', args: 'oops' }, cwd)).toBe(true);
+  });
+  it('git_read: content that can come from outside the session directory is asked', () => {
+    const ask = (input: Record<string, unknown>) => requiresAsk('git_read', input, cwd);
+    // Revision paths and object names reach any file in the repository.
+    expect(ask({ subcommand: 'show', args: ['HEAD:../other/file'] })).toBe(true);
+    expect(ask({ subcommand: 'show', args: ['HEAD:./inside.txt'] })).toBe(true);
+    expect(ask({ subcommand: 'show', args: [':0:secret'] })).toBe(true);
+    expect(ask({ subcommand: 'show', args: ['HEAD^{tree}'], paths: ['.'] })).toBe(true);
+    expect(ask({ subcommand: 'show', args: ['0123abcd'], paths: ['a.txt'] })).toBe(true);
+    expect(ask({ subcommand: 'cat-file', args: ['-p', 'HEAD:other/s.txt'] })).toBe(true);
+    expect(ask({ subcommand: 'diff', args: ['HEAD:a', 'HEAD:b'] })).toBe(true);
+    expect(ask({ subcommand: 'grep', args: ['HEAD:other'], pattern: 'x' })).toBe(true);
+    expect(ask({ subcommand: 'blame', args: ['HEAD:../x'], paths: ['a.txt'] })).toBe(true);
+    // Patch output without a pathspec ranges over the whole repository.
+    for (const sub of ['show', 'diff']) expect(ask({ subcommand: sub }), sub).toBe(true);
+    expect(ask({ subcommand: 'show', args: ['HEAD'] })).toBe(true);
+    expect(ask({ subcommand: 'diff', args: ['main..HEAD', '--cached'] })).toBe(true);
+    expect(ask({ subcommand: 'log', args: ['-p'] })).toBe(true);
+    expect(ask({ subcommand: 'log', args: ['-Ssecret'] })).toBe(true);
+    expect(ask({ subcommand: 'log', args: ['--unified=3'] })).toBe(true);
+    expect(ask({ subcommand: 'log', args: ['-p', '--follow'], paths: ['a.txt'] })).toBe(true);
+    // Not understood: refused by the tool's policy, so asked (fail closed).
+    expect(ask({ subcommand: 'show', args: ['--ext-diff'] })).toBe(true);
+    expect(ask({ subcommand: 'nope' })).toBe(true);
+    expect(ask({ subcommand: 'log', args: [3] })).toBe(true);
+  });
+  it('git_read: metadata and content scoped inside the session directory are not asked', () => {
+    const ask = (input: Record<string, unknown>) => requiresAsk('git_read', input, cwd);
+    for (const input of [
+      { subcommand: 'status', args: ['--short'] },
+      { subcommand: 'branch', args: ['-a'] },
+      { subcommand: 'tag' },
+      { subcommand: 'log', args: ['--oneline', '--max-count=20'] },
+      { subcommand: 'log', args: ['--stat', 'main..HEAD'] },
+      { subcommand: 'rev-parse', args: ['HEAD'] },
+      { subcommand: 'ls-files' },
+      { subcommand: 'show', args: ['--stat', 'HEAD'] },
+      { subcommand: 'show', args: ['--no-patch', '--format=%s', 'HEAD'] },
+      { subcommand: 'diff', args: ['--name-only'] },
+      { subcommand: 'diff', paths: ['src'] },
+      { subcommand: 'diff', args: ['HEAD~1', 'HEAD'], paths: ['.'] },
+      { subcommand: 'show', args: ['HEAD'], paths: ['a.txt'] },
+      { subcommand: 'log', args: ['-p'], paths: ['src'] },
+      { subcommand: 'grep', pattern: 'TODO' },
+      { subcommand: 'grep', args: ['HEAD'], pattern: 'TODO' },
+      { subcommand: 'blame', paths: ['a.txt'] },
+      { subcommand: 'cat-file', args: ['-t', 'HEAD'] },
+    ]) expect(ask(input), JSON.stringify(input)).toBe(false);
   });
   it('glob roots: absolute pattern, .. segments and absolute brace arms are asked', () => {
     expect(requiresAsk('glob', { pattern: `${path.dirname(cwd)}/**` }, cwd)).toBe(true);

@@ -77,9 +77,12 @@ beforeEach(() => { vi.clearAllMocks(); });
 
 describe('ACP permission policy table', () => {
   it('auto-allows known read/search tools and worktree list only', () => {
-    for (const n of ['read_file', 'grep', 'glob', 'list_directory', 'memory_search', 'git_read', 'config_get']) {
+    for (const n of ['read_file', 'grep', 'glob', 'list_directory', 'memory_search', 'config_get']) {
       expect(requiresAsk(n, {})).toBe(false);
     }
+    // git_read with no subcommand cannot be classified, so it is asked; plain status is not.
+    expect(requiresAsk('git_read', {})).toBe(true);
+    expect(requiresAsk('git_read', { subcommand: 'status' })).toBe(false);
     expect(requiresAsk('worktree', { action: 'list' })).toBe(false);
     for (const action of ['create', 'remove', 'keep', 'release', undefined]) {
       expect(requiresAsk('worktree', action === undefined ? {} : { action })).toBe(true);

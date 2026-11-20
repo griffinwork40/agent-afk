@@ -17,6 +17,7 @@ import {
   releaseSession, startPrompt, type ServerContext,
 } from './acp.handlers.js';
 import { cancelTurn } from './acp.prompt-turn.js';
+import { withDeadline } from './acp.session.resources.js';
 import {
   INTERNAL_ERROR, INVALID_REQUEST, MAX_LINE_BYTES, METHOD_NOT_FOUND, PARSE_ERROR,
   classifyLine, createSerialWriter, errorResponse, successResponse,
@@ -32,16 +33,23 @@ export interface AcpServerOptions {
   dangerouslySkipPermissions?: boolean;
   /** Diagnostics sink; defaults to stderr. Never stdout. */
   log?: (line: string) => void;
-  /** Launch directory used for cwd containment; defaults to process.cwd(). */
-  serverCwd?: string;
   /** How long a cancelled turn keeps draining queued updates (ms). */
   cancelGraceMs?: number;
+  /** D17: bound on EOF teardown per phase (in-flight replies, then session close); tests shorten it. */
+  shutdownDeadlineMs?: number;
 }
+
+/**
+ * D17: generous next to a normal close (tens of ms) so the journal close and
+ * trace seal inside AgentSession.close() finish; a close still running at the
+ * deadline is abandoned, and the trace writer's exit backstop seals its trace.
+ */
+export const SHUTDOWN_DEADLINE_MS = 10_000;
 
 function toErrorFrame(ctx: ServerContext, id: RpcRequest['id'], err: unknown): RpcFrame {
   if (err instanceof AcpError) {
     if (err.detail) ctx.log(`[acp] request ${String(id)} failed: ${err.detail}`);
-    return errorResponse(id, err.code);
+    return errorResponse(id, err.code, err.data);
   }
   ctx.log(`[acp] request ${String(id)} failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
   return errorResponse(id, INTERNAL_ERROR);
@@ -82,7 +90,7 @@ export async function runAcpServer(options: AcpServerOptions): Promise<void> {
       ...(options.dangerouslySkipPermissions !== undefined ? { dangerouslySkipPermissions: options.dangerouslySkipPermissions } : {}),
       ...(options.cancelGraceMs !== undefined ? { cancelGraceMs: options.cancelGraceMs } : {}),
     },
-    peer, serverCwd: options.serverCwd ?? process.cwd(), initialized: false,
+    peer, initialized: false,
     sessions: new Map(), restoring: new Set(), promptWrites: new Map(), log,
   };
   const inflight = new Set<Promise<void>>();
@@ -140,14 +148,31 @@ export async function runAcpServer(options: AcpServerOptions): Promise<void> {
       }
     }
   } finally {
-    await shutdown(ctx, inflight);
+    await shutdown(ctx, inflight, options.shutdownDeadlineMs ?? SHUTDOWN_DEADLINE_MS);
   }
 }
 
-/** EOF: reject pending peer requests, cancel turns, release every session. */
-async function shutdown(ctx: ServerContext, inflight: Set<Promise<void>>): Promise<void> {
+/**
+ * EOF: reject pending peer requests, cancel turns, then release every session
+ * concurrently (D17). Each phase is bounded; nothing here holds the loop open.
+ */
+async function shutdown(ctx: ServerContext, inflight: Set<Promise<void>>, deadlineMs: number): Promise<void> {
   ctx.peer.close('input closed');
   for (const live of ctx.sessions.values()) cancelTurn(live, ctx.log);
-  await Promise.allSettled([...inflight]);
-  for (const live of [...ctx.sessions.values()]) await releaseSession(ctx, live);
+  if (await withDeadline(() => Promise.allSettled([...inflight]), deadlineMs) === 'timeout') {
+    ctx.log(`[acp] in-flight replies still pending after ${deadlineMs}ms at shutdown`);
+  }
+  const closing = [...ctx.sessions.values()].map((live) => releaseSession(ctx, live));
+  if (await withDeadline(() => Promise.allSettled(closing), deadlineMs) === 'timeout') {
+    ctx.log(`[acp] session close still running after ${deadlineMs}ms at shutdown; exiting anyway`);
+  }
+}
+
+/** D17: after the server resolves, flush stdout (bounded) and end the process with its exit code. */
+export async function exitAfterServer(output: Writable, exit: (code: number) => void, flushMs = 1_000): Promise<void> {
+  await withDeadline(() => new Promise<void>((resolve) => {
+    if (output.writableEnded || output.destroyed) { resolve(); return; }
+    output.write('', () => resolve());
+  }), flushMs);
+  exit(typeof process.exitCode === 'number' ? process.exitCode : 0);
 }

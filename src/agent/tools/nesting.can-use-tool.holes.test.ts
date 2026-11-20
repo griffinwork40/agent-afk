@@ -142,7 +142,7 @@ describe('depth-cap agent child', () => {
     const g = recordingGate();
     const { childConfig, result } = capNesting(createChildProviderFactory({ childCanUseTool: g.factory }), ['write_file', 'read_file']);
     await expectDenyThenContinue(track(childConfig.provider), 'write_file');
-    expect(g.calls[0]?.origin).toEqual({ route: 'agent', depth: 4, label: 'leaf' });
+    expect(g.calls[0]?.origin).toEqual({ route: 'agent', depth: 4, label: 'leaf', cwd: tmp });
     const rebuilt = track(result.rebuildProvider?.('gpt-4o'));
     expect(rebuilt.name).toBe('openai-compatible');
     await expectDenyThenContinue(rebuilt, 'write_file');
@@ -169,7 +169,7 @@ describe('agent-route model-fallback rebuild (factory path, below the cap)', () 
     result.childManager?.teardownAll?.();
     const rebuilt = track(result.rebuildProvider?.('gpt-4o'));
     await expectDenyThenContinue(rebuilt, 'write_file');
-    expect(g.calls[0]?.origin).toEqual({ route: 'agent', depth: 1, label: 'fb' });
+    expect(g.calls[0]?.origin).toEqual({ route: 'agent', depth: 1, label: 'fb', cwd: tmp });
   });
 });
 

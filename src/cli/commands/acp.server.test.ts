@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { PassThrough } from 'node:stream';
-import { readFileSync, mkdtempSync, realpathSync, rmSync, mkdirSync } from 'node:fs';
+import { readFileSync, mkdtempSync, realpathSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { OutputEvent } from '../../agent/types/session-types.js';
@@ -22,7 +22,7 @@ vi.mock('./acp.session-load.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('./acp.session-load.js')>(), loadAcpSession: vi.fn(), replayHistory: vi.fn(),
 }));
 
-import { runAcpServer, type AcpServerOptions } from './acp.server.js';
+import { exitAfterServer, runAcpServer, type AcpServerOptions } from './acp.server.js';
 import * as acpSession from './acp.session.js';
 import * as translate from './acp.translate.js';
 import * as permission from './acp.permission.js';
@@ -38,6 +38,8 @@ const mReplay = vi.mocked(sessionLoad.replayHistory);
 
 const WS = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'acp-ws-')));
 mkdirSync(path.join(WS, 'sub'));
+const FILE_IN_WS = path.join(WS, 'plain.txt');
+writeFileSync(FILE_IN_WS, 'x');
 afterAll(() => { rmSync(WS, { recursive: true, force: true }); });
 
 /** Fake AgentSession: scripted stream, interrupt releases a blocked stream. */
@@ -90,7 +92,7 @@ function startServer(opts: Partial<AcpServerOptions> = {}): Harness {
     }
   });
   const done = runAcpServer({
-    model: 'sonnet', maxTurns: 10, input, output, cancelGraceMs: 20, serverCwd: WS,
+    model: 'sonnet', maxTurns: 10, input, output, cancelGraceMs: 20,
     log: (l) => { logs.push(l); }, ...opts,
   });
   return {
@@ -242,6 +244,13 @@ async function run(frames: unknown[], opts: Partial<AcpServerOptions> = {}): Pro
   await h.end();
   return { out: h.frames as Res[], h };
 }
+/** One frame per request, each sent only after the previous reply: no handler races. */
+async function seq(frames: unknown[], opts: Partial<AcpServerOptions> = {}): Promise<{ out: Res[]; h: Harness }> {
+  const h = startServer(opts);
+  for (const [i, f] of frames.entries()) { h.send(f); await h.waitFor(i + 1); }
+  await h.end();
+  return { out: h.frames as Res[], h };
+}
 const newSession = (id = 2, params: Record<string, unknown> = {}): unknown =>
   req(id, 'session/new', { cwd: WS, mcpServers: [], ...params });
 
@@ -288,8 +297,18 @@ describe('ACP server — session/new', () => {
     await run([init, newSession()]);
     expect(mBuild.mock.calls[0]![0].childCanUseTool).toBe(forChild);
   });
+  it('D14: accepts an existing cwd outside the server launch directory, canonicalised', async () => {
+    const elsewhere = mkdtempSync(path.join(os.tmpdir(), 'acp-elsewhere-'));
+    try {
+      expect(path.relative(process.cwd(), realpathSync(elsewhere)).startsWith('..')).toBe(true);
+      const { out } = await run([init, newSession(2, { cwd: elsewhere })]);
+      expect(out[1]!.result).toEqual({ sessionId: FIXTURE_ID });
+      expect(mBuild).toHaveBeenCalledWith(expect.objectContaining({ cwd: realpathSync(elsewhere) }));
+      expect(mGate).toHaveBeenCalledWith(expect.anything(), FIXTURE_ID, expect.objectContaining({ cwd: realpathSync(elsewhere) }));
+    } finally { rmSync(elsewhere, { recursive: true, force: true }); }
+  });
   it.each([
-    ['outside cwd', { cwd: realpathSync(os.homedir()) }],
+    ['cwd that is a file', { cwd: FILE_IN_WS }],
     ['missing cwd', { cwd: path.join(WS, 'nope') }],
     ['relative cwd', { cwd: 'sub' }],
     ['http mcp', { mcpServers: [{ type: 'http', name: 'h', url: 'https://x', headers: [] }] }],
@@ -423,6 +442,36 @@ describe('ACP server — cancel and close', () => {
   });
 });
 
+describe('ACP server — shutdown bound (D17)', () => {
+  it('EOF closes sessions concurrently; a hung close is abandoned at the deadline', async () => {
+    let n = 0;
+    mBuild.mockImplementation(async () => ({ ...(fakeHandle() as object), tag: ++n }) as never);
+    mLoad.mockImplementation(async () => ({ ...(fakeHandle() as object), tag: ++n }) as never);
+    const closed: number[] = [];
+    mClose.mockImplementation(async (handle) => {
+      const tag = (handle as unknown as { tag?: number }).tag;
+      if (tag === 1) await new Promise(() => { /* a close that never finishes */ });
+      closed.push(tag ?? 0);
+    });
+    const h = startServer({ shutdownDeadlineMs: 50 });
+    h.send(init); h.send(newSession(2));
+    h.send(req(3, 'session/resume', { sessionId: 'other-session', cwd: WS }));
+    await h.waitFor(3);
+    const started = Date.now();
+    await h.end();
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(closed).toEqual([2]);
+    expect(mClose).toHaveBeenCalledTimes(2);
+    expect(h.logs.join('\n')).toMatch(/session close still running after 50ms/);
+  });
+  it('exitAfterServer flushes output then exits with the process exit code', async () => {
+    const output = new PassThrough();
+    const exit = vi.fn();
+    await exitAfterServer(output, exit);
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+});
+
 describe('ACP server — load and resume', () => {
   it('unknown id is resource not found; failed replay releases the session', async () => {
     // The real load module's not-found signal (a class, no numeric code), not an invented coded error.
@@ -443,13 +492,76 @@ describe('ACP server — load and resume', () => {
     await run([init, req(2, 'session/load', { sessionId: FIXTURE_ID, cwd: path.join(WS, 'sub'), mcpServers: [] })]);
     expect(mReplay).toHaveBeenCalledWith(FIXTURE_ID, expect.anything(), path.join(WS, 'sub'));
   });
-  it('resume of an active id is invalid request; resume omits replay and defaults mcpServers to []', async () => {
-    const { out } = await run([init, req(2, 'session/resume', { sessionId: FIXTURE_ID, cwd: WS }),
-      req(3, 'session/resume', { sessionId: FIXTURE_ID, cwd: WS })]);
-    expect(out[1]!.result).toEqual({});
-    expect(out[2]!.error?.code).toBe(-32600);
+  it('D15: resume of a live idle id succeeds on the same handle; resume omits replay and defaults mcpServers to []', async () => {
+    const { out } = await seq([init, req(2, 'session/resume', { sessionId: FIXTURE_ID, cwd: WS }),
+      req(3, 'session/resume', { sessionId: FIXTURE_ID, cwd: WS }),
+      req(4, 'session/resume', { sessionId: FIXTURE_ID, cwd: WS, mcpServers: [] })]);
+    expect(out.slice(1).map((r) => r.result)).toEqual([{}, {}, {}]);
     expect(mReplay).not.toHaveBeenCalled();
+    expect(mLoad).toHaveBeenCalledTimes(1);
     expect(mLoad).toHaveBeenCalledWith({ sessionId: FIXTURE_ID, cwd: WS, mcpServers: [] }, expect.objectContaining({ mcpServers: {} }));
+    expect(mClose).toHaveBeenCalledTimes(1);
+  });
+  it('D15: load of a live idle id (from session/new) replays again and keeps the live handle and gate', async () => {
+    const { out } = await seq([init, newSession(),
+      req(3, 'session/load', { sessionId: FIXTURE_ID, cwd: WS, mcpServers: [] }),
+      req(4, 'session/load', { sessionId: FIXTURE_ID, cwd: WS, mcpServers: [] }),
+      req(5, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [{ type: 'text', text: 'hi' }] })]);
+    expect(out.slice(2)).toEqual([
+      { jsonrpc: '2.0', id: 3, result: {} }, { jsonrpc: '2.0', id: 4, result: {} },
+      { jsonrpc: '2.0', id: 5, result: { stopReason: 'end_turn' } }]);
+    expect(mReplay).toHaveBeenCalledTimes(2);
+    expect(mReplay).toHaveBeenCalledWith(FIXTURE_ID, expect.anything(), WS);
+    expect(mLoad).not.toHaveBeenCalled();
+    expect(mBuild).toHaveBeenCalledTimes(1);
+    expect(mGate).toHaveBeenCalledTimes(1);
+  });
+  it('D15: load or resume while a prompt is in flight is invalid request and does not disturb the turn', async () => {
+    script = async function* () { await waitInterrupt(); };
+    const h = startServer();
+    h.send(init); h.send(newSession());
+    await h.waitFor(2);
+    h.send(req(3, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] }));
+    await new Promise((r) => setTimeout(r, 10));
+    h.send(req(4, 'session/load', { sessionId: FIXTURE_ID, cwd: WS, mcpServers: [] }));
+    h.send(req(5, 'session/resume', { sessionId: FIXTURE_ID, cwd: WS }));
+    await h.waitFor(4);
+    expect(h.frames.slice(2)).toEqual([
+      { jsonrpc: '2.0', id: 4, error: { code: -32600, message: 'Invalid request' } },
+      { jsonrpc: '2.0', id: 5, error: { code: -32600, message: 'Invalid request' } }]);
+    expect(interruptSpy).not.toHaveBeenCalled();
+    expect(mReplay).not.toHaveBeenCalled();
+    await h.end();
+    expect(h.frames.at(-1)).toEqual({ jsonrpc: '2.0', id: 3, result: { stopReason: 'cancelled' } });
+  });
+  it('D15: reopening a live session with another cwd or MCP list is invalid params, session kept', async () => {
+    const mcp = [{ name: 'a', command: '/a', args: [], env: [] }];
+    const { out } = await seq([init, newSession(),
+      req(3, 'session/load', { sessionId: FIXTURE_ID, cwd: path.join(WS, 'sub'), mcpServers: [] }),
+      req(4, 'session/resume', { sessionId: FIXTURE_ID, cwd: WS, mcpServers: mcp }),
+      req(5, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] })]);
+    expect(out.slice(2).map((r) => r.error?.code ?? r.result)).toEqual([-32602, -32602, { stopReason: 'end_turn' }]);
+    expect(mReplay).not.toHaveBeenCalled();
+    // Released once, by EOF only: the rejected reopen did not close it.
+    expect(mClose).toHaveBeenCalledTimes(1);
+  });
+  it('D16: session errors carry data.sessionId; other errors carry no data', async () => {
+    mLoad.mockRejectedValueOnce(new sessionLoad.AcpNotFoundError('Unknown session'));
+    mLoad.mockRejectedValueOnce(new sessionLoad.AcpNotFoundError('Unknown session'));
+    const { out } = await seq([init, newSession(),
+      req(3, 'session/prompt', { sessionId: 'tck-never', prompt: [] }),
+      req(4, 'session/load', { sessionId: 'gone-1', cwd: WS, mcpServers: [] }),
+      req(5, 'session/resume', { sessionId: 'gone-2', cwd: WS }),
+      req(6, 'session/close', { sessionId: FIXTURE_ID }),
+      req(7, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] }),
+      req(8, 'session/prompt', { sessionId: FIXTURE_ID, prompt: 'not an array' }),
+      req(9, 'session/new', { cwd: 'relative', mcpServers: [] })]);
+    const nf = (id: number, sessionId: string) =>
+      ({ jsonrpc: '2.0', id, error: { code: -32002, message: 'Resource not found', data: { sessionId } } });
+    expect(out.slice(2)).toEqual([nf(3, 'tck-never'), nf(4, 'gone-1'), nf(5, 'gone-2'),
+      { jsonrpc: '2.0', id: 6, result: {} }, nf(7, FIXTURE_ID),
+      { jsonrpc: '2.0', id: 8, error: { code: -32602, message: 'Invalid params' } },
+      { jsonrpc: '2.0', id: 9, error: { code: -32602, message: 'Invalid params' } }]);
   });
 });
 

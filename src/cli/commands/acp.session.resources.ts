@@ -1,7 +1,24 @@
+/** D17: how long one external owner (MCP disconnect, store close, ...) may take at teardown. */
+export const RESOURCE_DISPOSE_DEADLINE_MS = 2_000;
+
+/** Resolve when `work` settles or after `ms`, whichever is first; never rejects, never holds the loop. */
+export function withDeadline(work: () => unknown, ms: number): Promise<'done' | 'timeout'> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve('timeout'), ms);
+    timer.unref?.();
+    Promise.resolve().then(work).then(
+      () => { clearTimeout(timer); resolve('done'); },
+      () => { clearTimeout(timer); resolve('done'); },
+    );
+  });
+}
+
 /** Reverse-order, best-effort ownership for partially built ACP sessions. */
 export class AcpSessionResources {
   private readonly disposers: Array<() => unknown> = [];
   private released: Promise<void> | undefined;
+
+  constructor(private readonly deadlineMs = RESOURCE_DISPOSE_DEADLINE_MS) {}
 
   add(dispose: () => unknown): void {
     this.disposers.push(dispose);
@@ -13,9 +30,8 @@ export class AcpSessionResources {
   }
 
   private async releaseAll(): Promise<void> {
-    for (const dispose of this.disposers.reverse()) {
-      try { await dispose(); } catch { /* Release all owners even if one fails. */ }
-    }
+    // D17: a hung owner is abandoned after its deadline so the rest still release.
+    for (const dispose of this.disposers.reverse()) await withDeadline(dispose, this.deadlineMs);
   }
 }
 

@@ -130,6 +130,44 @@ describe('D10 children relocated by a delegation cwd', () => {
     await untilRequests(t.requests, 2);
     expect(await child('read_file', { file_path: path.join(cwd, 'a.txt') }, opts('r1'))).toEqual({ behavior: 'allow' });
   });
+  it('a child whose origin names its cwd is resolved against it, not asked wholesale', async () => {
+    const t = setup();
+    const p = t.gate.canUseTool('agent', { prompt: 'p', cwd: path.join(cwd, 'pkg') }, opts('a1'));
+    await untilRequests(t.requests, 1);
+    t.requests[0]!.resolve(pick('allow_once'));
+    expect(await p).toEqual({ behavior: 'allow' });
+    const inside = t.gate.forChild!({ route: 'agent', depth: 1, cwd: path.join(cwd, 'pkg') });
+    expect(await inside('grep', { pattern: 'x' }, opts('g1'))).toEqual({ behavior: 'allow' });
+    expect(await inside('read_file', { file_path: 'src/a.ts' }, opts('r1'))).toEqual({ behavior: 'allow' });
+    expect(t.requests).toHaveLength(1);
+    // A relative path that climbs out of the session cwd from the child's cwd is asked, shown absolute.
+    void inside('read_file', { file_path: '../../x.txt' }, opts('r2'));
+    await untilRequests(t.requests, 2);
+    const asked = t.requests[1]!.params as { toolCall: { title: string } };
+    expect(asked.toolCall.title).toContain(path.resolve(cwd, 'pkg', '../../x.txt'));
+    // A child working outside the session cwd: anything defaulting to its cwd is outside.
+    const away = t.gate.forChild!({ route: 'agent', depth: 1, cwd: path.dirname(outside) });
+    void away('grep', { pattern: 'x' }, opts('g2'));
+    await untilRequests(t.requests, 3);
+    expect((t.requests[2]!.params as { toolCall: { title: string } }).toolCall.title).toContain(path.dirname(outside));
+  });
+  it('without a delegation relocating children, a child cwd inside the session is auto-allowed for reads', async () => {
+    const t = setup();
+    const child = t.gate.forChild!({ route: 'skill', depth: 1, cwd });
+    expect(await child('list_directory', {}, opts('l1'))).toEqual({ behavior: 'allow' });
+    expect(await child('read_file', { file_path: 'a.txt' }, opts('r1'))).toEqual({ behavior: 'allow' });
+    expect(t.requests).toHaveLength(0);
+  });
+  it('a relative or malformed origin cwd is ignored and the conservative rule applies', async () => {
+    const t = setup();
+    const p = t.gate.canUseTool('agent', { prompt: 'p', cwd: path.dirname(outside) }, opts('a1'));
+    await untilRequests(t.requests, 1);
+    t.requests[0]!.resolve(pick('allow_once'));
+    await p;
+    const child = t.gate.forChild!({ route: 'agent', depth: 1, cwd: 'relative/dir' });
+    void child('grep', { pattern: 'x' }, opts('g1'));
+    await untilRequests(t.requests, 2);
+  });
   it('compose node cwd values are shown and relocate children', async () => {
     const t = setup();
     void t.gate.canUseTool('compose', { nodes: [{ id: 'n', prompt: 'p', cwd: outside }] }, opts('c1'));
