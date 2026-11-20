@@ -32,6 +32,8 @@ For the fastest availability check, ask the agent to call `get_runtime_state` wi
 | `bash` | Execute a shell command. | R, S, D; background processes only in root REPL |
 | `wait_for` | Wait for a URL, file, PID, or command. | R, S, D |
 | `test_run` | Run a detected test suite. | R, S, D |
+| **Desktop computer-use** | | |
+| `desktop_screenshot` | Capture the host desktop display or a region. Absent from tool list until operator sets `AFK_DESKTOP_ENABLED`. | R, S, D; macOS supported; native Windows not yet verified (Step 0W pending) |
 | **Browser and web** | | |
 | `browser_open` | Open a managed browser tab. | R, S, D |
 | `browser_observe` | Read the current page state. | R, S, D |
@@ -407,6 +409,36 @@ Capture a PNG screenshot of the current page or a specific element, returning `p
 Close the current browser session, freeing cookies and page state. Subsequent `browser_open` calls create a fresh session. Leaves the underlying browser process alive.
 
 No parameters.
+
+---
+
+## Desktop computer-use
+
+Desktop tools capture and control the host machine's graphical desktop. They are **off by default** and absent from the model's tool list until the operator sets `AFK_DESKTOP_ENABLED`. When disabled, `desktop_screenshot` is not offered to the model at all (not just refused at call time).
+
+**Supported platforms (Tranche 1):**
+- **macOS** — uses the system `screencapture` binary. The process responsible for the terminal session must hold Screen Recording permission (System Settings → Privacy & Security → Screen Recording). Grant it once; no permission is automated.
+- **Windows (native only, NOT YET VERIFIED — Step 0W pending)** — uses a PowerShell/.NET child process. WSL2 is not supported. Whether Windows daemon/service contexts can reach the interactive desktop is unknown until Step 0W produces a written verdict.
+- **Linux** — not supported in v1.
+
+Desktop tools are **excluded from forked child agents** (integration-risk I1). Any delegation of desktop capability must be explicit and single-owner.
+
+### `desktop_screenshot`
+
+Capture a PNG screenshot of the host desktop and return it as a viewable image. The PNG is also written as a sidecar under `~/.afk/state/witness/<sessionId>/desktop/screenshots/` with mode `0600` (owner-only).
+
+The result text is `{ path, bytes, width, height, scaleFactor, displayIndex, logicalWidth, logicalHeight }` — the scale factor (or `null` when it cannot be determined) and logical dimensions are reported for coordinate-space transparency so later tranches can map logical→physical pixels.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `display` | integer | | Zero-based display index (0–255). 0 = primary display. Default: 0. |
+| `region` | object | | Partial capture in logical pixels. When omitted, the full display is captured. |
+| `region.x` | integer | (when region set) | Left edge in logical pixels (non-negative). |
+| `region.y` | integer | (when region set) | Top edge in logical pixels (non-negative). |
+| `region.width` | integer | (when region set) | Width in logical pixels (positive, max 32768). |
+| `region.height` | integer | (when region set) | Height in logical pixels (positive, max 32768). |
+
+On macOS, a capture exceeding 8000 px per side or 2 MiB base64 is downscaled with `sips` before it is attached. The full-resolution PNG is always kept as the sidecar. The result reports both the captured dimensions and the attached dimensions when downscaling occurred, plus the ratio between them (for coordinate mapping). On Windows there is no downscaling yet: an oversized capture returns a text-only result that names the sidecar path. The same text-only result is returned on macOS if downscaling fails.
 
 ---
 

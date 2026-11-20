@@ -93,6 +93,24 @@ environment variable.
   work via `wl-copy`/`xclip` if a Wayland/X11 server is running (WSLg in
   Windows 11), or via `clip.exe` from within WSL2 for paste-to-Windows.
 
+## Desktop computer-use tools (native Windows only)
+
+The `desktop_screenshot` tool and future desktop input tools require a **native
+Windows interactive terminal session**. They do not work inside WSL2: the
+desktop tools call the Windows desktop APIs directly, and a WSL2 Linux process
+cannot reach the Windows interactive desktop.
+
+If you are running agent-afk inside WSL2 and invoke a desktop tool, you will
+see: *"Desktop tools require native Windows. Run afk in a native Windows
+interactive terminal, not WSL2."*
+
+> **Note (Step 0W pending):** Windows desktop support is a proposal that has
+> not been tested on real Windows hardware. The Step 0W feasibility spike
+> (see the spec) is required before making any capability claim. Whether a
+> Windows daemon or Telegram service context can reach the interactive desktop
+> is also unknown until Step 0W. Set `AFK_DESKTOP_ENABLED=1` only after
+> Step 0W confirms that your environment is supported.
+
 ## Native Windows support (WIP)
 
 The following areas are being addressed for native Windows compatibility:
