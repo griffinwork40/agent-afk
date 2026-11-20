@@ -92,6 +92,19 @@ describe('D9 child approval lifecycle', () => {
     }
   });
 
+  it('endTurn denies a pending child ask and resolves only after its card is closed', async () => {
+    const t = setup();
+    const p = t.gate.forChild!({ route: 'agent', depth: 1, label: 'bg' })('bash', { command: 'sleep' }, opts('bg2'));
+    await untilRequests(t.requests, 1);
+    await t.gate.endTurn!();
+    expect(t.emits.at(-1)).toMatchObject({ status: 'failed', content: [{ content: { text: 'Permission denied: no_active_turn' } }] });
+    expect(await p).toMatchObject({ behavior: 'deny', message: 'Permission denied: no_active_turn' });
+    void t.gate.canUseTool('bash', { command: 'top' }, opts('top'));
+    await untilRequests(t.requests, 2);
+    await t.gate.endTurn!();
+    expect(t.emits.at(-1)?.status).toBe('pending');
+  });
+
   it('children auto-allow inside reads but are asked for outside reads', async () => {
     const t = setup();
     const child = t.gate.forChild!({ route: 'agent', depth: 1 });

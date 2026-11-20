@@ -176,4 +176,6 @@ export interface AcpPermissionGate {
    * the gate closes the child's card itself. Undefined/malformed origin still gates.
    */
   forChild?(origin: ChildToolOrigin | undefined): CanUseTool;
+  /** D9: deny pending child asks and wait for every child card to close. Never rejects. */
+  endTurn?(): Promise<void>;
 }

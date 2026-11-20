@@ -16,6 +16,8 @@ import type {
 export interface ActiveTurn {
   abort: AbortController;
   cancelled: boolean;
+  /** Set once the stream is drained: new child asks are denied (D9). */
+  ending?: boolean;
   /** Settles once the prompt response is decided (never rejects). */
   done: Promise<void>;
 }
@@ -180,6 +182,9 @@ export async function runPromptTurn(
     } catch (err) {
       if (!turn.cancelled) throw err;
     }
+    // D9: no child-originated card may stay pending or in progress after the turn.
+    turn.ending = true;
+    try { await live.gate?.endTurn?.(); } catch (err) { deps.log(`[acp] endTurn failed: ${String(err)}`); }
     let finished;
     try {
       finished = finishTurn(live.translator, meta);

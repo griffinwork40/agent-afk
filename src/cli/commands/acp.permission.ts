@@ -31,7 +31,7 @@ export function denyResult(reason: DenyReason): PermissionResult {
 }
 
 type Settled = { kind: 'reply'; value: unknown } | { kind: 'deny'; reason: DenyReason };
-interface PendingAsk { cancelled: boolean; settle(s: Settled): void }
+interface PendingAsk { cancelled: boolean; child?: boolean; settle(s: Settled): void }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -109,6 +109,8 @@ interface GateState {
   pending: Set<PendingAsk>;
   /** Sequence for child card ids, so a child id can never collide with a parent stream id. */
   childSeq: number;
+  /** Child decisions still running, so the turn can wait for their cards to close. */
+  childInFlight: Set<Promise<unknown>>;
 }
 
 /** Who is asking: the top-level session (stream closes the card) or a forked child (gate closes it). */
@@ -133,7 +135,7 @@ async function askClient(
 ): Promise<PermissionResult> {
   if (signal.aborted) return denyResult('aborted');
   if (typeof toolUseID !== 'string' || toolUseID.length === 0) return denyResult('request_error');
-  const ask: PendingAsk = { cancelled: false, settle: () => { ask.cancelled = true; } };
+  const ask: PendingAsk = { cancelled: false, child: who.child !== undefined, settle: () => { ask.cancelled = true; } };
   st.pending.add(ask);
   try {
     const outside = outsideTargets(toolName, input, st.opts.cwd).length > 0;
@@ -190,10 +192,15 @@ async function decide(
   }
   if (!who.child) return askClient(st, name, input, signal, toolUseID);
   if (!turnLive(st)) return denyResult('no_active_turn');
-  const cardId = `child-${++st.childSeq}-${typeof toolUseID === 'string' ? toolUseID : ''}`;
-  const result = wellFormed(await askClient(st, name, input, signal, toolUseID.length > 0 ? cardId : '', who));
-  await closeChildCard(st, cardId, name, input, result, who.child);
-  return result;
+  const cardId = `child-${++st.childSeq}-${toolUseID}`;
+  const child = who.child;
+  const run = (async () => {
+    const result = wellFormed(await askClient(st, name, input, signal, toolUseID.length > 0 ? cardId : '', who));
+    await closeChildCard(st, cardId, name, input, result, child);
+    return result;
+  })();
+  st.childInFlight.add(run);
+  try { return await run; } finally { st.childInFlight.delete(run); }
 }
 
 /**
@@ -253,7 +260,9 @@ function wellFormed(result: unknown): PermissionResult {
 export function createAcpPermissionGate(
   peer: AcpClientPeer, sessionId: string, opts: AcpPermissionOptions,
 ): AcpPermissionGate {
-  const st: GateState = { peer, sessionId, opts, granted: new Set(), pending: new Set(), childSeq: 0 };
+  const st: GateState = {
+    peer, sessionId, opts, granted: new Set(), pending: new Set(), childSeq: 0, childInFlight: new Set(),
+  };
   const gated = (who: Asker): CanUseTool => async (toolName, input, options) => {
     try {
       // Runtime callers can violate the type; a missing signal cannot be honoured, so deny.
@@ -275,6 +284,14 @@ export function createAcpPermissionGate(
     },
     wouldAsk: (toolName, input) => {
       try { return wouldAsk(st, toolName, input); } catch { return true; }
+    },
+    // D9: a turn that ends normally denies child asks still pending (background
+    // subagents) and waits until every child card is closed, before its response.
+    endTurn: async () => {
+      for (const ask of [...st.pending]) {
+        if (ask.child === true) { ask.cancelled = true; ask.settle({ kind: 'deny', reason: 'no_active_turn' }); }
+      }
+      await Promise.allSettled([...st.childInFlight]);
     },
     cancelAll: () => {
       for (const ask of [...st.pending]) {
