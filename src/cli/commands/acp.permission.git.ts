@@ -11,12 +11,15 @@ import { planGitRead } from '../../agent/tools/git-read.policy.js';
 // Contract: the handler runs git in the session cwd, so pathspecs are already
 // confined there (the tool rejects others). What can still reach file CONTENT
 // elsewhere in the repository is (a) a revision that names a blob or tree
-// directly (`HEAD:../x`, `:0:path`, `HEAD^{tree}`, or a bare object id, which
-// may be a blob), (b) a content subcommand with no pathspec, which ranges over
-// the whole repository, and (c) rename following. Those cases are asked.
-// Plain metadata (status, branch and tag names, commit subjects and stats,
-// file names) is never asked. A subcommand not classified here, or a request
-// the tool's own policy refuses, is asked (fail closed on what is not understood).
+// (`HEAD:../x`, `:0:path`, `HEAD^{tree}`, a bare object id, or ANY ref name,
+// since a tag can point at a blob: D20), (b) a content subcommand with no
+// pathspec, which ranges over the whole repository, (c) rename following and
+// (d) the `%(raw)` format atom, which prints the object a ref names. Those cases
+// are asked. A revision counts as a commit only in a commit-peeled form
+// (`<rev>^{commit}`, `<rev>~N`, `<rev>^N`) or as `HEAD`/`@` (git refuses to point
+// HEAD at a non-commit; only a direct write to `.git/HEAD` can, see profile).
+// Plain metadata is never asked. A subcommand not classified here, or a
+// request the tool's own policy refuses, is asked (fail closed).
 const METADATA = new Set([
   'status', 'tag', 'branch', 'rev-parse', 'merge-base', 'rev-list', 'reflog', 'for-each-ref',
   'describe', 'shortlog', 'remote', 'stash', 'worktree', 'ls-files',
@@ -25,6 +28,8 @@ const METADATA = new Set([
 const CWD_SCOPED = new Set(['grep', 'blame']);
 const SUPPRESS_PATCH = new Set(['--stat', '--numstat', '--shortstat', '--name-only', '--name-status', '--summary', '--no-patch', '-s']);
 const OBJECT_ID = /^[0-9a-f]{4,64}$/i;
+const COMMIT_PEEL = /(?:\^\{commit\}|~\d*|\^\d*)$/;
+const RAW_ATOM = /%\(\s*\*?\s*raw/i;
 
 function patchy(opts: readonly string[]): boolean {
   return opts.some((o) => o === '-p' || o === '--patch' || o === '--word-diff'
@@ -33,7 +38,13 @@ function patchy(opts: readonly string[]): boolean {
 
 /** A revision that may name a blob or tree rather than a commit. */
 function namesObject(rev: string): boolean {
-  return rev.split(/\.\.\.?/).some((part) => part.includes(':') || part.includes('^{') || OBJECT_ID.test(part));
+  return rev.split(/\.\.\.?/).some((part) => part.includes(':') || (part.includes('^{') && !part.endsWith('^{commit}')) || OBJECT_ID.test(part));
+}
+
+/** D20: true only for revisions that cannot resolve to a blob or tree. */
+function provablyCommit(rev: string): boolean {
+  return rev.split(/\.\.\.?/).every((part) => part === 'HEAD' || part === '@'
+    || (!part.includes(':') && !OBJECT_ID.test(part) && COMMIT_PEEL.test(part) && !part.endsWith('^{}')));
 }
 
 /**
@@ -47,6 +58,8 @@ export function gitReadReachesOutside(input: Record<string, unknown>, root: stri
   );
   if (!plan.ok) return true;
   const [sub = '', ...rest] = plan.argv;
+  // `--format=%(raw)` (for-each-ref, tag, branch) prints the referenced object itself.
+  if (rest.some((t) => /^--(?:format|pretty)=/.test(t) && RAW_ATOM.test(t))) return true;
   if (METADATA.has(sub)) return false;
   const sep = rest.lastIndexOf('--');
   const head = sep < 0 ? rest : rest.slice(0, sep);
@@ -59,15 +72,20 @@ export function gitReadReachesOutside(input: Record<string, unknown>, root: stri
     (tok.startsWith('-') ? opts : revs).push(tok);
   }
   const objectRev = revs.some(namesObject);
+  const unproven = revs.some((r) => !provablyCommit(r));
   switch (sub) {
-    case 'cat-file': return opts.includes('-p') && (objectRev || revs.length === 0);
+    // `cat-file -p` prints whatever object it is given (D20).
+    case 'cat-file': return opts.includes('-p');
+    // `log` walks commits only: a blob revision is an error, never output.
     case 'log': if (!patchy(opts)) return false; break;
-    case 'show': case 'diff':
-      if (!patchy(opts) && opts.some((o) => SUPPRESS_PATCH.has(o))) return objectRev;
-      break;
-    case 'grep': case 'blame': break;
+    // `show` and `grep` print a blob a ref names whatever the options or pathspec.
+    case 'show': case 'grep': if (unproven) return true; break;
+    case 'diff': break;
+    case 'blame': break;
     default: return true;
   }
+  if ((sub === 'show' || sub === 'diff') && !patchy(opts) && opts.some((o) => SUPPRESS_PATCH.has(o))) return objectRev;
+  if (sub === 'diff' && unproven) return true;
   if (objectRev || opts.includes('--follow')) return true;
   return paths.length === 0 && !CWD_SCOPED.has(sub);
 }
