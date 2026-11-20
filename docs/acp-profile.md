@@ -124,9 +124,9 @@ Upstream `ToolCallUpdate.content` replaces the collection. The translator must r
 
 ## 6. Permission policy and failure resolution
 
-Default mode runs the bridge for every top-level tool invocation that reaches it. Earlier hooks and static allowlists may deny before it runs. A bridge allow never overrides those gates or later destructive-command checks. The headless bash floor remains in effect. Permission classifications use real tool names, not a client-supplied `kind` or title.
+Approvals are on unless `afk acp` is started with `--dangerously-skip-permissions`. The approval bridge is the `canUseTool` callback and does not depend on which AFK permission mode the session runs in, so this policy survives changes to the set of permission modes. With approvals on, the bridge runs for every top-level tool invocation that reaches it. Earlier hooks and static allowlists may deny before it runs. A bridge allow never overrides those gates or later destructive-command checks. The headless bash floor remains in effect. Permission classifications use real tool names, not a client-supplied `kind` or title.
 
-| Invocation | Default decision |
+| Invocation | Decision with approvals on |
 |---|---|
 | Known read/search tools in the table above | Auto-allow, subject to existing gates |
 | `worktree` with action `list` | Auto-allow as an explicit read-only exception |
@@ -164,7 +164,7 @@ The client responds with `{ "outcome": { "outcome": "selected", "optionId": "all
 
 Denials become a failed tool update with text `Permission denied: <reason>` while the connection is writable. Ordinary denials allow the model to continue; cancellation stops the turn. Shutdown also cancels any active prompt. Never return an undefined or malformed permission result: the current dispatcher treats anything other than explicit deny as allow. This bridge must therefore always return an explicit allow or deny.
 
-Delegation consent is the single consent for the child's actions without further GUI prompts (D5). Children retain their existing allowlist, path and destructive-command restrictions. This profile does not claim that child providers inherit the bridge. Out-of-cwd writes remain denied in default mode (D6); no GUI path-approval handler is installed. A tool blocked by the path hook may never reach the bridge. The skip-permissions flag has its existing path-bypass implications and is an explicit operator opt-out, not an implicit GUI capability.
+Delegation consent is the single consent for the child's actions without further GUI prompts (D5). Children retain their existing allowlist, path and destructive-command restrictions. This profile does not claim that child providers inherit the bridge. Out-of-cwd writes remain denied while the session keeps path containment (D6); no GUI path-approval handler is installed. If path containment is ever removed from this surface, out-of-cwd writes must be asked through the bridge with the absolute path shown, never auto-allowed (Q-E). A tool blocked by the path hook may never reach the bridge. The skip-permissions flag has its existing path-bypass implications and is an explicit operator opt-out, not an implicit GUI capability.
 
 ## 7. Cancellation and close during a turn
 
@@ -232,6 +232,15 @@ These remain human decisions, not approvals implied by the frozen profile. Until
 * **Q-A:** Does harness hardening ship in v6.0 or later: explicit-allow-only dispatcher semantics, forwarding parent `canUseTool` into child providers, and passing `sessionKey` to path-approval elicitation? This profile assumes no GUI prompts inside children and no GUI path-approval bridge.
 * **Q-B:** Keep the hardcoded Claude-only provider for v6.0 and document it, or switch this surface to the provider router (related to #4911)? The contract lane leaves the provider selection unchanged. Protocol capabilities do not promise a model provider.
 * **Q-C:** Never offer `allow_always` for bash (current D4), or allow it per exact command? Current transcripts do not offer it for bash.
+* **Q-D:** Expose AFK plan mode as an ACP session mode? The pinned schema supports it: `NewSessionResponse.modes` (a `SessionModeState` with `currentModeId` and `availableModes`), the `session/set_mode` method and the `current_mode_update` session update. `modes` is optional in `NewSessionResponse` (only `sessionId` is required), and the v6.0 profile omits it.
+* **Q-E:** AFK may reduce its permission modes to plan and bypass. An ACP session with approvals on currently gets path containment from the `default` mode. If that mode is removed, the bridge becomes the only interactive gate: out-of-cwd writes must then be asked, and forwarding the bridge into child providers (Q-A) stops being optional, because an approved subagent would otherwise write anywhere unasked.
+
+Provisional resolutions used for the v6.0 build, each open to reversal before merge:
+
+* Q-A: explicit-allow-only dispatcher semantics ship in v6.0 as a separate small change. Child-provider forwarding and the path-approval session key are follow-ups unless Q-E forces them in.
+* Q-B: attempted after the main lanes integrate. If it is not proven by tests, v6.0 documents the single-provider limit.
+* Q-C: never offered for bash.
+* Q-D: not in v6.0.
 
 ## Schema-driven clarifications from the original plan
 
