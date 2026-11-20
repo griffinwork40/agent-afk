@@ -102,8 +102,8 @@ export async function codeActions(input: LspRefactorInput, ctx: QueryContext, en
   // when each applyEdit arrives: a concurrent query may re-sync an open document
   // while the command is outstanding. Files this action wrote are checked
   // against the text it wrote (`written`), not against timestamps.
-  const commandSnapshot = await requestSnapshot(ctx.client);
   try {
+    const commandSnapshot = await requestSnapshot(ctx.client);
     await ctx.client.withWorkspaceEditHandler(async (edit) => {
       const result = await applyWorkspaceEdit(edit, { ...editOptions(ctx, { ...env, ...commandSnapshot }),
         writtenContents: written, onApplied: remember });
