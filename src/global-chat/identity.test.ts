@@ -26,10 +26,11 @@ function store(now?: () => number): FileIdentityStore {
   return new FileIdentityStore({ filePath, now });
 }
 
-async function validRecord(name = 'alice', noticeVersion = 0, nameChangedAt = 0): Promise<string> {
+/** Builds a valid serialised record (version:1 included). */
+async function validRecord(name = 'alice', noticeVersion = 0, nameChangedAt = 1_000_000): Promise<string> {
   const kp = await generateKeyPair();
   const tag = await deriveTag(kp.pubkey);
-  return JSON.stringify({ pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag, name, nameChangedAt, noticeVersion });
+  return JSON.stringify({ version: 1, pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag, name, nameChangedAt, noticeVersion });
 }
 
 // ---------------------------------------------------------------------------
@@ -50,46 +51,71 @@ describe('FileIdentityStore.load()', () => {
     expect(id!.tag).toMatch(/^[0-9a-f]{4}$/);
   });
 
-  it('returns null for empty file without throwing', async () => {
+  it('throws for empty file', async () => {
     await writeFile(filePath, '');
-    expect(await store().load()).toBeNull();
+    await expect(store().load()).rejects.toThrow();
   });
 
-  it('returns null for corrupt JSON without throwing', async () => {
+  it('throws for corrupt JSON', async () => {
     await writeFile(filePath, '{ not valid json !!');
-    expect(await store().load()).toBeNull();
+    await expect(store().load()).rejects.toThrow();
   });
 
-  it('returns null for missing fields without throwing', async () => {
+  it('throws for missing fields', async () => {
     await writeFile(filePath, JSON.stringify({ pubkey: 'aa'.repeat(32), name: 'alice' }));
-    expect(await store().load()).toBeNull();
+    await expect(store().load()).rejects.toThrow();
   });
 
-  it('returns null for wrong pubkey length', async () => {
+  it('throws for missing version field', async () => {
     const kp = await generateKeyPair();
     const tag = await deriveTag(kp.pubkey);
-    await writeFile(filePath, JSON.stringify({ pubkey: kp.pubkey.slice(0, 32), privateKeyPkcs8: kp.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 0, noticeVersion: 0 }));
-    expect(await store().load()).toBeNull();
+    // No version field
+    await writeFile(filePath, JSON.stringify({ pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 1_000_000, noticeVersion: 0 }));
+    await expect(store().load()).rejects.toThrow();
   });
 
-  it('returns null for mismatched tag', async () => {
+  it('throws for wrong pubkey length', async () => {
     const kp = await generateKeyPair();
-    await writeFile(filePath, JSON.stringify({ pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag: '0000', name: 'alice', nameChangedAt: 0, noticeVersion: 0 }));
-    expect(await store().load()).toBeNull();
+    const tag = await deriveTag(kp.pubkey);
+    await writeFile(filePath, JSON.stringify({ version: 1, pubkey: kp.pubkey.slice(0, 32), privateKeyPkcs8: kp.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 1_000_000, noticeVersion: 0 }));
+    await expect(store().load()).rejects.toThrow();
   });
 
-  it('returns null when private key does not match public key', async () => {
+  it('throws for mismatched tag', async () => {
+    const kp = await generateKeyPair();
+    await writeFile(filePath, JSON.stringify({ version: 1, pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag: '0000', name: 'alice', nameChangedAt: 1_000_000, noticeVersion: 0 }));
+    await expect(store().load()).rejects.toThrow();
+  });
+
+  it('throws when private key does not match public key', async () => {
     const kp1 = await generateKeyPair();
     const kp2 = await generateKeyPair();
     const tag = await deriveTag(kp1.pubkey);
-    // pubkey from kp1 but privateKeyPkcs8 from kp2 — self-verify fails
-    await writeFile(filePath, JSON.stringify({ pubkey: kp1.pubkey, privateKeyPkcs8: kp2.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 0, noticeVersion: 0 }));
-    expect(await store().load()).toBeNull();
+    await writeFile(filePath, JSON.stringify({ version: 1, pubkey: kp1.pubkey, privateKeyPkcs8: kp2.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 1_000_000, noticeVersion: 0 }));
+    await expect(store().load()).rejects.toThrow();
   });
 
-  it('never throws even if file is unreadable (directory at path)', async () => {
+  it('throws for non-safe-integer nameChangedAt', async () => {
+    const kp = await generateKeyPair();
+    const tag = await deriveTag(kp.pubkey);
+    await writeFile(filePath, JSON.stringify({ version: 1, pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 1.5, noticeVersion: 0 }));
+    await expect(store().load()).rejects.toThrow();
+  });
+
+  it('throws when file is unreadable (directory at path)', async () => {
     await mkdir(filePath);
-    expect(await store().load()).toBeNull();
+    await expect(store().load()).rejects.toThrow();
+  });
+
+  it('error message is generic (no path or key contents)', async () => {
+    await writeFile(filePath, '{ bad }');
+    try {
+      await store().load();
+    } catch (err) {
+      const msg = (err as Error).message;
+      expect(msg).not.toContain(filePath);
+      expect(msg.length).toBeGreaterThan(0);
+    }
   });
 });
 
@@ -113,6 +139,21 @@ describe('FileIdentityStore.create()', () => {
     const id = await store().load();
     expect(id?.name).toBe('bob');
     if (r.ok) expect(id?.pubkey).toBe(r.identity.pubkey);
+  });
+
+  it('written record includes version:1', async () => {
+    await store().create('alice');
+    const raw = await import('node:fs/promises').then(fs => fs.readFile(filePath, 'utf-8'));
+    const parsed = JSON.parse(raw);
+    expect(parsed.version).toBe(1);
+  });
+
+  it('nameChangedAt uses injected clock on create', async () => {
+    const t0 = 9_999_999;
+    await store(() => t0).create('alice');
+    const raw = await import('node:fs/promises').then(fs => fs.readFile(filePath, 'utf-8'));
+    const parsed = JSON.parse(raw);
+    expect(parsed.nameChangedAt).toBe(t0);
   });
 
   it('returns already_exists when file already present', async () => {
@@ -175,33 +216,53 @@ describe('FileIdentityStore.rename()', () => {
     if (!r.ok) expect(r.code).toBe('not_created');
   });
 
-  it('same name is a no-op returning success', async () => {
-    await store().create('alice');
+  it('returns not_created for corrupt file', async () => {
+    await writeFile(filePath, '{ bad json');
     const r = await store().rename('alice');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe('not_created');
+  });
+
+  it('same name is a no-op returning success', async () => {
+    const t0 = 1_000_000;
+    await store(() => t0).create('alice');
+    // Same name — no interval check needed
+    const r = await store(() => t0).rename('alice');
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.identity.name).toBe('alice');
   });
 
-  it('renames successfully after interval', async () => {
+  it('renames successfully after interval since create', async () => {
     const t0 = 1_000_000;
-    const s = store(() => t0);
-    await s.create('alice');
-    // Simulate name set at t0 (nameChangedAt = t0 after rename)
+    await store(() => t0).create('alice');
+    // t1 is past the interval from create time
     const t1 = t0 + NAME_CHANGE_INTERVAL_MS + 1;
-    const s2 = store(() => t1);
-    // First rename sets nameChangedAt
-    const r1 = await s2.rename('bob');
-    expect(r1.ok).toBe(true);
-    if (r1.ok) expect(r1.identity.name).toBe('bob');
+    const r = await store(() => t1).rename('bob');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.identity.name).toBe('bob');
+  });
+
+  it('enforces rate interval since create (too soon)', async () => {
+    const t0 = 1_000_000;
+    await store(() => t0).create('alice');
+    // Attempt rename before interval has elapsed
+    const t1 = t0 + NAME_CHANGE_INTERVAL_MS - 1000;
+    const r = await store(() => t1).rename('bob');
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.code).toBe('name_change_too_soon');
+      expect(typeof r.retryAfterMs).toBe('number');
+      expect(r.retryAfterMs).toBeGreaterThan(0);
+    }
   });
 
   it('enforces rate interval on second rename', async () => {
     const t0 = 1_000_000;
     await store(() => t0).create('alice');
-    // Rename once at t0 + interval + 1 (allowed)
+    // First rename: allowed (past interval from create)
     const t1 = t0 + NAME_CHANGE_INTERVAL_MS + 1;
     await store(() => t1).rename('bob');
-    // Attempt rename too soon after bob
+    // Second rename too soon after first
     const t2 = t1 + NAME_CHANGE_INTERVAL_MS - 1000;
     const r = await store(() => t2).rename('carol');
     expect(r.ok).toBe(false);
@@ -213,8 +274,10 @@ describe('FileIdentityStore.rename()', () => {
   });
 
   it('returns bad_name for invalid new name', async () => {
-    await store().create('alice');
-    const r = await store().rename('Bad Name!');
+    const t0 = 1_000_000;
+    await store(() => t0).create('alice');
+    const t1 = t0 + NAME_CHANGE_INTERVAL_MS + 1;
+    const r = await store(() => t1).rename('Bad Name!');
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe('bad_name');
   });
@@ -335,14 +398,12 @@ describe('FileIdentityStore concurrency', () => {
     const t0 = 1_000_000;
     const s = store(() => t0);
     await s.create('alice');
-    // Fire multiple renames concurrently — only the first real rename should
-    // succeed; the rest are either no-ops (same name) or rate-limited.
+    // All same-name renames — no-op success regardless of interval
     const results = await Promise.all([
       s.rename('alice'),
       s.rename('alice'),
       s.rename('alice'),
     ]);
-    // All no-ops (same name) should return ok
     for (const r of results) expect(r.ok).toBe(true);
     const id = await s.load();
     expect(id).not.toBeNull();

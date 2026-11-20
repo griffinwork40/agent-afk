@@ -1,20 +1,14 @@
 /**
  * File-backed identity store for the global-chat client.
  *
- * Contract:
- *   - The private key is loaded once per operation and never held beyond the
- *     call that uses it; it is never returned to callers.
- *   - Corrupt or unreadable storage is surfaced as `load()` returning null
- *     and `create/rename/sign` returning `{ok:false,code:'not_created'}`.
- *     The file is NEVER overwritten to repair corruption; only successful
- *     mutations may write.
- *   - All mutations are serialized through a promise chain so concurrent
- *     calls within the same instance cannot interleave writes.
- *   - atomicWriteFile with mode 0600 and mkdirMode 0700 is used for every
- *     write so the private key is not briefly world-readable.
- *   - Self-verification: on every load the stored public key is used to
- *     verify a known canonical string signed with the stored private key.
- *     A key pair that fails verification is treated as corrupt.
+ * Rules:
+ *   - Missing file  → load() returns null; create() proceeds.
+ *   - Corrupt file  → load()/create()/rename()/sign() throw a generic error.
+ *   - create() never overwrites any existing or corrupt file.
+ *   - All mutations serialise through a promise chain (no interleaved writes).
+ *   - atomicWriteFileAsync mode 0600 / mkdirMode 0700 for every write.
+ *   - Self-verification on every load: sign a known canonical with the stored
+ *     private key and verify with the stored public key; mismatch → corrupt.
  *
  * @module global-chat/identity
  */
@@ -38,6 +32,8 @@ import type { ChatIdentity, IdentityResult, IdentityStore } from './client-types
 // ---------------------------------------------------------------------------
 
 interface IdentityRecord {
+  /** Format version; must equal 1. */
+  version: 1;
   /** Hex-encoded raw 32-byte Ed25519 public key. */
   pubkey: string;
   /** Hex-encoded PKCS8-encoded Ed25519 private key. */
@@ -46,7 +42,7 @@ interface IdentityRecord {
   tag: string;
   /** Display name matching NAME_PATTERN. */
   name: string;
-  /** Epoch ms of the most recent name change, or 0 on first create. */
+  /** Epoch ms of the most recent name change (set by injected clock on create). */
   nameChangedAt: number;
   /** Highest notice version accepted by this identity, or 0 if none. */
   noticeVersion: number;
@@ -70,16 +66,22 @@ export interface IdentityStoreOptions {
 /** Canonical string used exclusively for self-verification on load. */
 const SELF_VERIFY_CANONICAL = 'afk-global-chat/v1\nself-verify';
 
+/** Generic error thrown for any corrupt or unreadable identity file. */
+class IdentityCorruptError extends Error {
+  constructor() { super('Identity storage is corrupt or unreadable'); }
+}
+
 function isValidRecord(v: unknown): v is IdentityRecord {
   if (typeof v !== 'object' || v === null) return false;
   const r = v as Record<string, unknown>;
   return (
+    r['version'] === 1 &&
     typeof r['pubkey'] === 'string' && /^[0-9a-f]{64}$/.test(r['pubkey']) &&
     typeof r['privateKeyPkcs8'] === 'string' && r['privateKeyPkcs8'].length > 0 &&
     typeof r['tag'] === 'string' && /^[0-9a-f]{4}$/.test(r['tag']) &&
-    typeof r['name'] === 'string' &&
-    typeof r['nameChangedAt'] === 'number' && Number.isFinite(r['nameChangedAt']) &&
-    typeof r['noticeVersion'] === 'number' && Number.isFinite(r['noticeVersion'])
+    typeof r['name'] === 'string' && r['name'].length > 0 &&
+    typeof r['nameChangedAt'] === 'number' && Number.isSafeInteger(r['nameChangedAt']) && r['nameChangedAt'] >= 0 &&
+    typeof r['noticeVersion'] === 'number' && Number.isSafeInteger(r['noticeVersion']) && r['noticeVersion'] >= 0
   );
 }
 
@@ -100,6 +102,9 @@ export class FileIdentityStore implements IdentityStore {
 
   // -------------------------------------------------------------------------
   // Internal: load and self-verify the record
+  //
+  // Returns null  → file is absent (ENOENT).
+  // Throws        → file exists but is corrupt or unreadable.
   // -------------------------------------------------------------------------
 
   async #loadRecord(): Promise<IdentityRecord | null> {
@@ -108,31 +113,33 @@ export class FileIdentityStore implements IdentityStore {
       raw = await readFile(this.#filePath, 'utf-8');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      // Unreadable (permissions, I/O error) — do not throw, treat as absent.
-      return null;
+      // Exists but unreadable (permissions, I/O error).
+      throw new IdentityCorruptError();
     }
+
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      // Corrupt JSON — do not overwrite, return null.
-      return null;
+      throw new IdentityCorruptError();
     }
-    if (!isValidRecord(parsed)) return null;
 
-    // Self-verify: import the private key and sign; then verify with the
-    // stored public key. This confirms the key pair is internally consistent.
+    if (!isValidRecord(parsed)) throw new IdentityCorruptError();
+
+    // Self-verify: sign a known canonical with the stored private key and
+    // verify with the stored public key.  Also check the stored tag.
     try {
       const privateKey = await importPrivateKey(parsed.privateKeyPkcs8);
       const sig = await sign(SELF_VERIFY_CANONICAL, privateKey);
       const ok = await verify(SELF_VERIFY_CANONICAL, sig, parsed.pubkey);
-      if (!ok) return null;
-      // Also verify stored tag matches the public key.
+      if (!ok) throw new IdentityCorruptError();
       const expectedTag = await deriveTag(parsed.pubkey);
-      if (expectedTag !== parsed.tag) return null;
-    } catch {
-      return null;
+      if (expectedTag !== parsed.tag) throw new IdentityCorruptError();
+    } catch (err) {
+      if (err instanceof IdentityCorruptError) throw err;
+      throw new IdentityCorruptError();
     }
+
     return parsed;
   }
 
@@ -164,6 +171,7 @@ export class FileIdentityStore implements IdentityStore {
   // Public API
   // -------------------------------------------------------------------------
 
+  /** Returns null for missing file; throws for corrupt/unreadable file. */
   async load(): Promise<ChatIdentity | null> {
     const record = await this.#loadRecord();
     if (record === null) return null;
@@ -172,18 +180,18 @@ export class FileIdentityStore implements IdentityStore {
 
   async create(name: string): Promise<IdentityResult> {
     return this.#enqueue(async () => {
-      // Refuse to overwrite any existing (even corrupt) file.
-      let exists = false;
+      // Probe: absent → proceed; present (healthy or corrupt) → already_exists.
+      let fileAbsent = false;
       try {
         await readFile(this.#filePath, 'utf-8');
-        exists = true;
+        // File readable — healthy or corrupt, do not overwrite.
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-          // Unreadable file — treat as existing to avoid overwriting.
-          exists = true;
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          fileAbsent = true;
         }
+        // Unreadable (non-ENOENT) — treat as existing to avoid overwriting.
       }
-      if (exists) {
+      if (!fileAbsent) {
         return { ok: false, code: 'already_exists' } satisfies IdentityResult;
       }
 
@@ -195,11 +203,12 @@ export class FileIdentityStore implements IdentityStore {
       const kp = await generateKeyPair();
       const tag = await deriveTag(kp.pubkey);
       const record: IdentityRecord = {
+        version: 1,
         pubkey: kp.pubkey,
         privateKeyPkcs8: kp.privateKeyPkcs8,
         tag,
         name,
-        nameChangedAt: 0,
+        nameChangedAt: this.#now(),
         noticeVersion: 0,
       };
       await this.#write(record);
@@ -209,7 +218,12 @@ export class FileIdentityStore implements IdentityStore {
 
   async rename(name: string): Promise<IdentityResult> {
     return this.#enqueue(async () => {
-      const record = await this.#loadRecord();
+      let record: IdentityRecord | null;
+      try {
+        record = await this.#loadRecord();
+      } catch {
+        return { ok: false, code: 'not_created' } satisfies IdentityResult;
+      }
       if (record === null) {
         return { ok: false, code: 'not_created' } satisfies IdentityResult;
       }
@@ -224,17 +238,15 @@ export class FileIdentityStore implements IdentityStore {
         return { ok: false, code: nameResult.code } satisfies IdentityResult;
       }
 
-      // Enforce rate interval: nameChangedAt === 0 means first create, skip check.
+      // Enforce rate interval — no sentinel exception; always check.
       const now = this.#now();
-      if (record.nameChangedAt !== 0) {
-        const elapsed = now - record.nameChangedAt;
-        if (elapsed < NAME_CHANGE_INTERVAL_MS) {
-          return {
-            ok: false,
-            code: 'name_change_too_soon',
-            retryAfterMs: NAME_CHANGE_INTERVAL_MS - elapsed,
-          } satisfies IdentityResult;
-        }
+      const elapsed = now - record.nameChangedAt;
+      if (elapsed < NAME_CHANGE_INTERVAL_MS) {
+        return {
+          ok: false,
+          code: 'name_change_too_soon',
+          retryAfterMs: NAME_CHANGE_INTERVAL_MS - elapsed,
+        } satisfies IdentityResult;
       }
 
       const updated: IdentityRecord = { ...record, name, nameChangedAt: now };
@@ -251,7 +263,8 @@ export class FileIdentityStore implements IdentityStore {
 
   async acceptNotice(version: number): Promise<void> {
     return this.#enqueue(async () => {
-      const record = await this.#loadRecord();
+      let record: IdentityRecord | null;
+      try { record = await this.#loadRecord(); } catch { return; }
       if (record === null) return;
       if (record.noticeVersion >= version) return;
       await this.#write({ ...record, noticeVersion: version });
@@ -260,7 +273,8 @@ export class FileIdentityStore implements IdentityStore {
 
   async disable(): Promise<void> {
     return this.#enqueue(async () => {
-      const record = await this.#loadRecord();
+      let record: IdentityRecord | null;
+      try { record = await this.#loadRecord(); } catch { return; }
       if (record === null) return;
       await this.#write({ ...record, noticeVersion: 0 });
     });
