@@ -99,6 +99,8 @@ export function translateOutputEvent(ev: OutputEvent, st: TranslatorState, ctx: 
   switch (chunk.type) {
     case 'content':
     case 'thinking':
+      // An empty chunk carries nothing and some clients render it as a blank bubble.
+      if (chunk.content.length === 0) return [];
       return [{ sessionUpdate: chunk.type === 'content' ? 'agent_message_chunk' : 'agent_thought_chunk', content: { type: 'text', text: chunk.content } }];
     case 'tool_use_detail': return translateDetail(chunk, st, ctx);
     case 'tool_result': return translateResult(chunk, st, ctx);

@@ -22,6 +22,10 @@ describe('ACP stream translation', () => {
     const st = createTranslatorState();
     expect(emit(st, { type: 'content', content: 'Hello' })).toEqual([{ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hello' } }]);
     expect(emit(st, { type: 'thinking', content: 'Reasoning' })).toEqual([{ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Reasoning' } }]);
+    // Empty chunks are dropped, never sent.
+    expect(emit(st, { type: 'content', content: '' })).toEqual([]);
+    expect(emit(st, { type: 'thinking', content: '' })).toEqual([]);
+    expect(emit(st, { type: 'content', content: ' ' })).toHaveLength(1);
     expect(emit(st, { type: 'tool_use', content: 'Using tool', metadata: { precedingToolUseIds: ['t'] } })).toEqual([]);
     for (const event of [
       { type: 'message', message: { role: 'assistant', content: 'Hello' } },
