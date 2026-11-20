@@ -2738,6 +2738,60 @@ describe('SessionToolDispatcher — canUseTool (Dim 8 in-process permission poli
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['empty object', {}],
+    ['unknown behavior', { behavior: 'alow' }],
+    ['ask', { behavior: 'ask' }],
+    ['string', 'allow'],
+    ['boolean', true],
+    ['array', []],
+    ['null rewrite', { behavior: 'allow', updatedInput: null }],
+    ['array rewrite', { behavior: 'allow', updatedInput: [] }],
+    ['string rewrite', { behavior: 'allow', updatedInput: 'rewritten' }],
+  ])('fails closed on a malformed permission result: %s', async (_label, result) => {
+    const handler = vi.fn(echoHandler());
+    const writer = new InMemoryTraceWriter();
+    // Deliberately violate the typed contract, as a runtime plugin can.
+    const canUseTool = (async () => result) as CanUseTool;
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', handler]]),
+      canUseTool,
+      traceWriter: writer,
+    });
+    const r = await d.execute(makeCall());
+    expect(r).toMatchObject({ isError: true, failureClass: 'permission-denied' });
+    expect(r.content).toContain('Tool "echo"');
+    expect(r.content).toContain('permission result was malformed');
+    expect(handler).not.toHaveBeenCalled();
+    const blocks = writer.events.filter((e) => e.kind === 'hook_decision');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.payload).toMatchObject({
+      hookEvent: 'PreToolUse', decision: 'block', blockedTool: 'echo', reason: r.content,
+    });
+  });
+
+  it('fails closed on malformed results in the safe-classified batch path', async () => {
+    expect(defaultConcurrencyClassifier('read_file')).toBe(true);
+    const handler = vi.fn(async () => ({ content: 'should not execute' }));
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['read_file', handler]]),
+      permissions: { allowedTools: ['read_file'] },
+      canUseTool: (async () => ({})) as unknown as CanUseTool,
+    });
+    const results = await d.executeBatch([
+      makeCall({ id: 'a', name: 'read_file' }),
+      makeCall({ id: 'b', name: 'read_file' }),
+    ]);
+    expect(results).toHaveLength(2);
+    for (const r of results) {
+      expect(r).toMatchObject({ isError: true, failureClass: 'permission-denied' });
+      expect(r.content).toContain('permission result was malformed');
+    }
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it('deny overrides a tool that the static allowlist permits (policy can restrict)', async () => {
     // 'echo' IS allowlisted, but the policy denies it. canUseTool runs AFTER
     // the allowlist, so it can further restrict — never widen.
