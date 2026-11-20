@@ -23,7 +23,7 @@ export function registerAcpCommand(program: Command): void {
     .command('acp')
     .description(
       'Start an Agent Client Protocol (ACP) JSON-RPC 2.0 server over stdio ' +
-        '(compatible with Zed, JetBrains, and other ACP clients)',
+        '(compatible with Zed and other ACP v1 clients; Zed configuration verified against Zed docs)',
     )
     .option('-m, --model <model>', 'model to use for sessions (default: configured default)')
     .option(

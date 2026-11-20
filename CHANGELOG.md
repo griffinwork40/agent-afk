@@ -27,8 +27,38 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
   `sessionUpdate` as the discriminator (not `type`); the `done` response carries
   only `stopReason` (not a `costUsd` field). Clients that embedded the old
   format must rewrite their integration against the profile. See
-  `docs/acp.md` for the user guide and wire examples. The ACP surface currently
-  supports Anthropic models only.
+  `docs/acp.md` for the user guide and wire examples.
+- **Provider routing:** any model the CLI can route works on the ACP surface.
+  The `--model` flag uses the same provider-routing logic as the terminal; the
+  approval prompt is forwarded for every provider family.
+- **`--max-turns` default changed to `0` (no cap).** The flag counts messages
+  sent per session, not steps within a prompt.
+- **Permission approvals are on by default.** Every session sends
+  `session/request_permission` before executing any consent-requiring tool.
+  The `--dangerously-skip-permissions` flag skips the approval bridge entirely;
+  it no longer implies a different permission mode.
+- **In-process subagent tool calls are asked.** Tool calls made by children
+  forked by `agent`, `skill`, or `compose` at any depth go through the same
+  approval bridge as top-level calls. Each request is prefixed with the
+  subagent's origin so the client can identify it. `remote_agent` runs on a
+  separate machine and is not covered.
+- **Reads and writes outside the session `cwd` are asked.** Read and search
+  tools that target a path outside the session directory are asked rather than
+  auto-allowed, with the absolute path shown. Write tools continue to be asked
+  regardless of path.
+- **`allow_always` restrictions.** The always-allow option is not offered for
+  `bash`, delegation tools (`agent`, `skill`, `compose`, `remote_agent`), or any
+  request triggered because a path is outside `cwd`. A remembered always-allow
+  grant never covers a call targeting a path outside `cwd`; that call is always
+  asked again.
+- **Permission callback semantics tightened.** A permission callback result is
+  treated as allow only when it is an explicit, well-formed allow object.
+  Malformed, missing, or unexpected results are treated as deny.
+- **Client-supplied MCP servers trusted on connect.** MCP servers a client
+  passes in `session/new` are started immediately, before any tool approval, and
+  are trusted the same way as servers named on the command line.
+- **Witness trace written per session.** Every `afk acp` session writes a
+  witness trace viewable with the standard `afk trace` commands.
 
 ## [5.360.0] - 2026-11-19
 
