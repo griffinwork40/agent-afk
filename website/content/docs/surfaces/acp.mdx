@@ -127,7 +127,7 @@ Sessions are stateful. Additional `session/prompt` calls on the same `sessionId`
 
 | `sessionUpdate` | Key fields | Description |
 | --- | --- | --- |
-| `agent_message_chunk` | `content.text` | Incremental assistant text |
+| `agent_message_chunk` | `content.text` | Incremental assistant text, never empty |
 | `agent_thought_chunk` | `content.text` | Provider reasoning, only when available |
 | `user_message_chunk` | `content.text` | During session replay only |
 | `tool_call` | `toolCallId`, `title`, `name`, `kind`, `status`, `rawInput`, `locations` | First announcement of a tool call |
@@ -150,6 +150,8 @@ The `kind` field classifies the tool's intent for display:
 | `think` | `agent`, `skill`, `compose`, `remote_agent` |
 | `other` | MCP tools and everything else |
 
+The `title` says what the call does, on one line cut with `…`: the file path for file tools, the command for `bash` (`bash pnpm test`), method and URL for web tools, pattern and directory for `grep` and `glob`, server and tool for MCP tools, agent type or skill and the first words of the task for delegation tools, and subcommand and arguments for `git_read`. A path outside `cwd` is appended and always stays visible. History replay uses the same titles.
+
 Read and search tools begin at `in_progress` when their path is inside `cwd`. Tools that require consent begin at `pending` and wait for a permission decision. After execution, `status` moves to `completed` or `failed`.
 
 Edit tools emit `diff` content items alongside text results. Each diff has this shape:
@@ -162,7 +164,7 @@ Edit tools emit `diff` content items alongside text results. Each diff has this 
 
 ### Delegation tools and subagents
 
-`agent`, `skill`, `compose`, and `remote_agent` are delegation tools with kind `think`. Tool calls made by in-process children (`agent`, `skill`, `compose` at any depth) go through the same approval bridge as top-level calls. The title of a child-originated request is prefixed with the subagent's origin, for example `[subagent research-agent] bash: ls`. Asking to run a delegation tool is still asked as usual.
+`agent`, `skill`, `compose`, and `remote_agent` are delegation tools with kind `think`. Tool calls made by in-process children (`agent`, `skill`, `compose` at any depth) go through the same approval bridge as top-level calls. The title of a child-originated request is prefixed with the subagent's origin, for example `[subagent research-agent] bash ls`. Asking to run a delegation tool is still asked as usual.
 
 `remote_agent` runs on a separate machine. Its tool calls are not covered by this session's approval bridge; the title says so.
 
@@ -177,7 +179,7 @@ Before executing any tool that requires consent, the server sends a `session/req
 | Read and search tools targeting a path inside `cwd` | Auto-allow |
 | Read and search tools with no filesystem path (memory, state, session listings, etc.) | Auto-allow |
 | Read and search tools targeting a path outside `cwd` | Ask, with absolute path shown |
-| `git_read` that can print file content from outside `cwd` (`HEAD:../file` style revisions, object ids, `show` or `grep` of a ref that is not provably a commit, patches with no path inside `cwd`, any `cat-file -p`, a `%(raw)` format) | Ask |
+| `git_read` that can print file content from outside `cwd` (any revision that is not provably a commit, such as a tag, a branch name, `HEAD:../file` or an object id, given to `show`, `diff`, `grep`, `blame`, `cat-file` or `log -p`; patches with no path inside `cwd`; `cat-file` other than `-t`, `-s` or `-e` on one object; a `%(raw)` format) | Ask |
 | `git_read` metadata, or content limited to paths inside `cwd` | Auto-allow |
 | `worktree list` | Auto-allow |
 | Write tools, `bash`, `test_run`, web tools, delegation tools, MCP tools, unknown tools | Ask |
@@ -186,6 +188,7 @@ Before executing any tool that requires consent, the server sends a `session/req
 `options` always includes `allow_once` and `reject_once`. `allow_always` is offered only for the file editing tools `write_file`, `edit_file` and `patch_apply`, and only when every path the call names is inside `cwd` and the call carries no argument the server does not recognise for that tool. Every other tool is asked every time with allow once or reject only: `bash`, `test_run`, delegation tools (`agent`, `skill`, `compose`, `remote_agent`), `model_complete`, `image_generate`, `image_edit`, mutating `worktree` actions, web tools, every MCP tool and any tool not named here.
 
 - A remembered `allow_always` grant covers a later call of the same tool only under the same conditions. A call that targets a path outside `cwd`, or that carries an argument the server does not recognise, is asked again.
+- A write to a sensitive file inside `cwd` is asked every time, never offered `allow_always` and never covered by a grant, because it can change what a later auto-allowed call runs or shows: any path with a `.git` segment (including a `.git` file), `.gitattributes` and `.gitmodules` at any depth (titled `(git internals)`), and `.mcp.json`, `afk.config.json`, `.afk/settings.json` and `.afk/worktree-setup.json` (titled `(project config that runs commands)`). Upper case and Windows spellings with trailing dots or spaces count.
 
 Grants are per-session and per tool name, shared between the session and its in-process children. They are not persisted across sessions.
 

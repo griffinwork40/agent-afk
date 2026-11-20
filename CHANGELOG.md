@@ -59,9 +59,30 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
   made by children of an `agent` or `compose` delegation with worktree
   isolation, or of a continued `agent` chain, are asked, because their checkout
   can lie outside the session `cwd`.
-- **`git_read` of a ref that may name a file is asked.** `show` and `grep` of a
-  revision that is not provably a commit, any `cat-file -p`, and `%(raw)`
-  formats are asked, because a tag can point at a file outside `cwd`.
+- **`git_read` of a ref that may name a file is asked.** Every subcommand that
+  can print file content (`show`, `diff`, `grep`, `blame`, `cat-file`, and
+  `log` with patches) is asked when a revision is not provably a commit,
+  whatever its options or path, because a tag can point at a file outside
+  `cwd`. This closes a bypass where `diff <tag> -- <file>` printed an outside
+  file unasked. `cat-file` is auto-allowed only for `-t`, `-s` or `-e` on one
+  object; `%(raw)` formats are asked.
+- **Writes to git internals and command-running project config are always
+  asked.** A `write_file`, `edit_file` or `patch_apply` target with a `.git`
+  path segment (including a `.git` file), a `.gitattributes` or `.gitmodules`
+  file, `.mcp.json`, `afk.config.json`, `.afk/settings.json` or
+  `.afk/worktree-setup.json` is asked every time, without an "always allow"
+  option, and is never covered by an earlier grant. Case and Windows spelling
+  variants count. The card title says why: `(git internals)` or
+  `(project config that runs commands)`. This closes a bypass where one
+  "always allow" for `write_file` let the agent plant a git filter that a
+  later auto-allowed `git_read` ran.
+- **Approval cards say what is being approved.** Titles now include the shell
+  command for `bash`, method and URL for web tools, pattern and directory for
+  `grep` and `glob`, server and tool for MCP tools, agent type or skill and the
+  first words of the task for delegation tools, and subcommand and arguments
+  for `git_read`. Titles are one line, cut with `…`; a path outside `cwd`
+  stays visible. Replayed history uses the same titles.
+- **Empty message and thought chunks are no longer sent.**
 - **Permission callback semantics tightened.** A permission callback result is
   treated as allow only when it is an explicit, well-formed allow object.
   Malformed, missing, or unexpected results are treated as deny.
