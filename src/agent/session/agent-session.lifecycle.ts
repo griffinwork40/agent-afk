@@ -21,7 +21,6 @@ import type { HookRegistry } from '../hooks.js';
 import type { ProviderQuery, ProviderEvent } from '../provider.js';
 import type { QueryInputStream } from './input-iterable.js';
 import { buildMcpDisconnectNotice, failedMcpServers, oauthPendingMcpServers } from '../mcp/failure-notice.js';
-import { redactSecrets } from '../redact-secrets.js';
 import type { OutputEvent } from '../types/session-types.js';
 
 /** Mutable slots on AgentSession that `buildSessionRunner` reads and writes. */
@@ -216,7 +215,7 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
             type: 'mcp_server_status',
             serverName,
             status: 'disconnected',
-            reason: redactSecrets(reason),
+            reason: reason,
           });
         };
 

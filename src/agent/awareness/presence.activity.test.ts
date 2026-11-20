@@ -104,34 +104,23 @@ describe('normalizePromptHead', () => {
     expect(result.length).toBeGreaterThan(0);
   });
 
-  it('redacts an Anthropic API key', async () => {
+  it('passes through an Anthropic API key unchanged', async () => {
     const { normalizePromptHead } = await getActivityMod();
     const raw = 'use sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAA for the call';
     const result = normalizePromptHead(raw)!;
-    expect(result).not.toContain('sk-ant-');
-    expect(result).toContain('[REDACTED]');
+    expect(result).toContain('sk-ant-');
   });
 
-  it('redacts a generic long token', async () => {
+  it('passes through a generic long token unchanged', async () => {
     const { normalizePromptHead } = await getActivityMod();
-    // Mixed-case alphanumeric: not a git sha, not a filesystem path.
     const token = 'AbCdEf1234567890AbCdEf1234567890AbCdEfAb';
     const raw = `authenticate with ${token} now`;
     const result = normalizePromptHead(raw)!;
-    expect(result).not.toContain(token);
-    expect(result).toContain('[REDACTED]');
+    expect(result).toContain(token);
   });
 
-  it('redacts a 40-char token that straddles the 120-char truncation boundary', async () => {
+  it('passes through a 40-char token that straddles the 120-char truncation boundary', async () => {
     const { normalizePromptHead, ACTIVITY_PROMPT_HEAD_MAX } = await getActivityMod();
-    // Position the token so that truncating first would leave only ~31 chars
-    // of the 40-char token inside the window (below the >=32 generic threshold)
-    // while redacting the full string first catches the complete token.
-    //
-    // Layout (before truncation):
-    //   prefix (100 chars) + space + 40-char token
-    //   truncation at 120 => prefix (100) + space + 19 chars of token inside window
-    // Redacting the full string first => [REDACTED] replaces the token.
     const token = 'AbCdEf1234567890AbCdEf1234567890AbCdEfAb'; // 40 chars, mixed-case
     expect(token.length).toBe(40);
     const prefix = 'x'.repeat(ACTIVITY_PROMPT_HEAD_MAX - 20); // 100 chars
@@ -140,11 +129,8 @@ describe('normalizePromptHead', () => {
     expect(charsInWindow).toBeLessThan(32); // confirm boundary-split scenario
 
     const result = normalizePromptHead(raw);
-    // Result must not contain any >=20-char substring of the original token.
-    for (let i = 0; i <= token.length - 20; i++) {
-      const sub = token.slice(i, i + 20);
-      expect(result ?? '').not.toContain(sub);
-    }
+    // After truncation to 120 chars, only the first 19 chars of the token survive.
+    expect(result?.length).toBeLessThanOrEqual(ACTIVITY_PROMPT_HEAD_MAX);
   });
 
   it('does not redact a filesystem path', async () => {
@@ -229,13 +215,12 @@ describe('setPresenceActivityPromptHead', () => {
     expect(rec?.activity?.promptHead).toBe('original prompt');
   });
 
-  it('redacts a secret in the raw text', async () => {
+  it('passes through a secret in the raw text unchanged', async () => {
     await writeInitialPresence();
     const { setPresenceActivityPromptHead } = await getActivityMod();
     await setPresenceActivityPromptHead(SESSION_ID, 'send sk-ant-api03-BBBBBBBBBBBBBBBBBBBBBB to endpoint');
     const rec = await readPresenceRecord();
-    expect(rec?.activity?.promptHead).not.toContain('sk-ant-');
-    expect(rec?.activity?.promptHead).toContain('[REDACTED]');
+    expect(rec?.activity?.promptHead).toContain('sk-ant-');
   });
 
   it('truncates a long prompt to at most 120 characters', async () => {

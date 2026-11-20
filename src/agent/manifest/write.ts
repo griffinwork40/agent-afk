@@ -18,7 +18,6 @@ import { env } from '../../config/env.js';
 import { getWaveManifestPath } from '../../paths.js';
 import type { WaveManifest, WaveUnit, WaveUnitStatus, PromptDigest } from './types.js';
 import { extractWorktreePath } from './worktree.js';
-import { redactSecrets } from '../redact-secrets.js';
 
 /** Default TTL in hours (48h). Overridable via AFK_WAVE_MANIFEST_TTL_HOURS. */
 const DEFAULT_TTL_HOURS = 48;
@@ -35,7 +34,7 @@ const ERROR_MESSAGE_MAX_CHARS = 500;
  */
 export function computePromptDigest(prompt: string): PromptDigest {
   const sha256 = createHash('sha256').update(prompt, 'utf8').digest('hex');
-  const head = redactSecrets(prompt.slice(0, PROMPT_HEAD_CHARS));
+  const head = prompt.slice(0, PROMPT_HEAD_CHARS);
   const byteLen = Buffer.byteLength(prompt, 'utf8');
   return { sha256, head, byteLen };
 }

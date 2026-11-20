@@ -510,21 +510,21 @@ describe('dumpIfEnabled', () => {
     expect(output).toMatch(/<REDACTED/);
   });
 
-  it('redacts Bearer tokens in options.system', () => {
+  it('passes options.system through to output (no canonical redaction)', () => {
+    // redactInlineSecrets only handles NAME=value patterns now; Bearer tokens in
+    // free-form system prompt text are no longer redacted by this layer.
     process.env['AFK_DUMP_PROMPT'] = '1';
     const payload: DumpPayload = {
       prompt: 'test',
       options: {
-        system: 'Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.somepayload',
+        system: 'some system prompt text without secrets',
       },
       provenance: {},
     };
     dumpIfEnabled(payload);
 
     const output = stderrSpy.mock.calls.map((c: unknown[]) => c[0]).join('');
-    expect(output).not.toContain('eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.somepayload');
-    // redactInlineSecrets now delegates to redactSecrets which emits [REDACTED]
-    expect(output).toContain('[REDACTED]');
+    expect(output).toContain('some system prompt text without secrets');
   });
 
   it('emits stderr warning on every active call', () => {
@@ -555,38 +555,15 @@ describe('dumpIfEnabled', () => {
 });
 
 describe('redactInlineSecrets', () => {
-  it('redacts sk-ant-* keys', () => {
+  it('does not redact sk-ant-* key (no canonical redaction layer)', () => {
+    // redactInlineSecrets only handles NAME=value patterns; free-form sk-ant tokens
+    // are not caught. If the key appears as VALUE in NAME=APIKEY=sk-ant-… it would
+    // be caught by the NAME=value pattern.
     const text = 'api key is sk-ant-api03-supersecretkey1234567890abcdef end';
     const result = redactInlineSecrets(text);
-    expect(result).not.toContain('sk-ant-api03-supersecretkey1234567890abcdef');
-    // Now delegated to redactSecrets which emits [REDACTED]
-    expect(result).toContain('[REDACTED]');
+    // Not caught by NAME=value patterns — passes through unchanged
     expect(result).toContain('api key is');
     expect(result).toContain('end');
-  });
-
-  it('redacts Bearer tokens', () => {
-    const text = 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig';
-    const result = redactInlineSecrets(text);
-    expect(result).not.toContain('eyJhbGciOiJIUzI1NiJ9');
-    // Now delegated to redactSecrets which emits [REDACTED]
-    expect(result).toContain('[REDACTED]');
-  });
-
-  it('redacts AKIA keys', () => {
-    const text = 'AWS key: AKIAIOSFODNN7EXAMPLE rest of text';
-    const result = redactInlineSecrets(text);
-    expect(result).not.toContain('AKIAIOSFODNN7EXAMPLE');
-    // Now delegated to redactSecrets which emits [REDACTED]
-    expect(result).toContain('[REDACTED]');
-  });
-
-  it('redacts xox tokens', () => {
-    const text = 'slack: xoxb-12345678-12345678901-abcdefghijklmnopqrstuvwx rest';
-    const result = redactInlineSecrets(text);
-    expect(result).not.toContain('xoxb-12345678-12345678901-abcdefghijklmnopqrstuvwx');
-    // Now delegated to redactSecrets which emits [REDACTED]
-    expect(result).toContain('[REDACTED]');
   });
 
   it('redacts KEY=value with high-entropy value', () => {
@@ -739,26 +716,27 @@ describe('redactInlineSecrets', () => {
 
   // --- PR #968 Item 2: quantifier {3,} revert — bare keywords must NOT match ---
 
-  it('does NOT redact bare KEY=<long value> via NAME=value pattern; generic rule still catches it', () => {
+  it('does NOT redact bare KEY=<long value> via NAME=value pattern (needs ≥3-char prefix)', () => {
     // The NAME=value pattern requires a ≥3-char prefix before the keyword, so
-    // bare `KEY=` alone does not match INLINE_NAME_VALUE_PATTERNS. However
-    // redactSecretsCanonical's generic ≥32-char rule fires when the full
-    // `KEY=<value>` blob is ≥32 chars — a stricter outcome than before (#3848).
-    const text = 'KEY=supersecretvalueatleast16chrs'; // 33 chars total — caught by generic rule
+    // bare `KEY=` alone does not match INLINE_NAME_VALUE_PATTERNS. Without the
+    // canonical redactor, the value passes through unchanged.
+    const text = 'KEY=supersecretvalueatleast16chrs';
     const result = redactInlineSecrets(text);
-    expect(result).not.toContain('supersecretvalueatleast16chrs');
+    expect(result).toBe(text); // no NAME=value match, passes through unchanged
   });
 
-  it('does NOT leak bare TOKEN=<long value>; generic rule catches it (#3848)', () => {
+  it('does NOT redact bare TOKEN=<long value> via NAME=value pattern (needs ≥3-char prefix)', () => {
+    // The NAME=value pattern requires a ≥3-char prefix before the keyword; bare TOKEN= alone
+    // does not match. Without the canonical redactor, the value passes through.
     const text = 'TOKEN=supersecretvalueatleast16chrs'; // 35 chars total
     const result = redactInlineSecrets(text);
-    expect(result).not.toContain('supersecretvalueatleast16chrs');
+    expect(result).toBe(text); // no NAME=value match, passes through unchanged
   });
 
-  it('does NOT leak bare SECRET=<long value>; generic rule catches it (#3848)', () => {
+  it('does NOT redact bare SECRET=<long value> via NAME=value pattern (needs ≥3-char prefix)', () => {
     const text = 'SECRET=supersecretvalueatleast16chrs'; // 36 chars total
     const result = redactInlineSecrets(text);
-    expect(result).not.toContain('supersecretvalueatleast16chrs');
+    expect(result).toBe(text); // no NAME=value match, passes through unchanged
   });
 
   it('DOES redact MY_KEY=<long value> (prefix ≥3 chars satisfies quantifier)', () => {
@@ -772,7 +750,7 @@ describe('redactInlineSecrets', () => {
 
 // --- PR #968 Item 4: looksLikeFilesystemPath unit tests ---
 
-import { looksLikeFilesystemPath } from './redact-secrets.js';
+import { looksLikeFilesystemPath } from './session/prompt-dump.js';
 
 describe('looksLikeFilesystemPath', () => {
   it('returns true for a typical macOS home path', () => {

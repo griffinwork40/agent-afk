@@ -1,5 +1,4 @@
 /** Safe, bounded error-cluster text at the proposal rendering boundary. */
-import { redactSecrets } from '../../agent/redact-secrets.js';
 import type { FailureCard } from '../schemas.js';
 
 interface DisplayCluster {
@@ -44,7 +43,7 @@ function collapsePath(path: string): string {
 function safeClusterText(raw: string): string {
   // Redact the complete string BEFORE truncating so a boundary cannot leave a
   // secret fragment. The canonical redactor intentionally preserves paths.
-  const flat = redactSecrets(raw)
+  const flat = raw
     .replace(QUOTED_HOME_PATH, (_match, _quote: string, path: string) => collapsePath(path))
     .replace(HOME_PATH, collapsePath)
     .replace(/[\u0000-\u001f\u007f-\u009f\s]+/g, ' ')

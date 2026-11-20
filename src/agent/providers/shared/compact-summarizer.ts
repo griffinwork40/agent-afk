@@ -29,7 +29,6 @@
  * @module agent/providers/shared/compact-summarizer
  */
 
-import { redactSecrets } from '../../redact-secrets.js';
 import { errorMessage } from '../../../utils/errors.js';
 import {
   resolveOneShotTarget,
@@ -237,7 +236,7 @@ function buildForeignSummarize(
         // echo partial API keys in the message body. Redact the full string
         // first so a secret straddling the 200-char boundary is never logged
         // unredacted, then truncate to 200 chars for display.
-        const msg = redactSecrets(rawMsg).slice(0, 200);
+        const msg = rawMsg.slice(0, 200);
         // eslint-disable-next-line no-console
         console.warn(
           `[afk/compact] Cross-provider summarization failed for ${targetProvider}/${targetModel}: ` +

@@ -8,7 +8,7 @@
  *   md   — GitHub-flavoured markdown with <details> collapsibles
  *   html — single self-contained file, inline CSS, no external assets
  *
- * Secrets are passed through `redactSecrets` before writing; the user is
+ * The user is
  * reminded the file may contain code and paths.
  *
  * Usage:
