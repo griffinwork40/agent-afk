@@ -11,6 +11,14 @@ import { join } from 'node:path';
 import { getAfkStateDir } from './paths.js';
 
 /**
+ * Root directory for global-chat client state: `<state>/global-chat/`.
+ * Created with mode 0700 by the stores that write into it.
+ */
+export function getGlobalChatDir(): string {
+  return join(getAfkStateDir(), 'global-chat');
+}
+
+/**
  * Path to the global-chat identity file.
  *
  * Stores the user's display name, public key, PKCS8-encoded private key
@@ -19,7 +27,7 @@ import { getAfkStateDir } from './paths.js';
  * is not readable by other OS users. Directory is created with mode 0700.
  */
 export function getGlobalChatIdentityPath(): string {
-  return join(getAfkStateDir(), 'global-chat', 'identity.json');
+  return join(getGlobalChatDir(), 'identity.json');
 }
 
 /**
@@ -29,5 +37,5 @@ export function getGlobalChatIdentityPath(): string {
  * list; the file is not overwritten until the next successful mutation.
  */
 export function getGlobalChatMutesPath(): string {
-  return join(getAfkStateDir(), 'global-chat', 'mutes.json');
+  return join(getGlobalChatDir(), 'mutes.json');
 }
