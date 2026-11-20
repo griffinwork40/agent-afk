@@ -222,6 +222,36 @@ describe('RemoteSubagentHandle', () => {
       expect(h.session.abortSignal.aborted).toBe(true);
       expect(['cancelled', 'failed']).toContain(r.status);
     });
+
+    it('concurrent cancel() calls both settle after the in-flight resolves (#4965)', async () => {
+      // Two concurrent cancel() calls must both await the in-flight run before
+      // resolving — the second must not return before the first has settled.
+      let streamResolve!: () => void;
+      const runner: SshRunner = {
+        async exec(_t, script) {
+          if (script.includes(PID_MARKER)) return { code: 0, stdout: `${PID_MARKER} 9\n`, stderr: '' };
+          return { code: 0, stdout: '', stderr: '' };
+        },
+        async stream(_t, _script, o) {
+          await new Promise<void>((resolve) => {
+            streamResolve = resolve;
+            o.signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+          return { code: 255, stdout: '', stderr: '' };
+        },
+      };
+      const h = makeHandle(runner);
+      const runP = h.runToResult('x');
+      // Fire two concurrent cancel() calls without awaiting either.
+      const c1 = h.cancel();
+      const c2 = h.cancel();
+      // Allow the abort signal to propagate so the stream can resolve.
+      streamResolve?.();
+      // Both promises must resolve — neither may leave the in-flight dangling.
+      await Promise.all([c1, c2]);
+      await runP;
+      expect(h.status).toBe('cancelled');
+    });
   });
 
   describe('runInBackground()', () => {
