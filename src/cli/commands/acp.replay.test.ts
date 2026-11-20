@@ -7,6 +7,8 @@
  * @module cli/commands/acp.replay.test
  */
 
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { JournalMessage } from '../../agent/journal/types.js';
 import type { SessionUpdate } from './acp.wire.js';
@@ -123,21 +125,24 @@ describe('buildReplayUpdates', () => {
   });
 
   it('replayed tool calls use the live display helpers: title, kind and locations', () => {
+    // A platform-absolute session cwd: `/workspace` is root-relative on Windows, not absolute.
+    const ws = path.join(os.tmpdir(), 'acp-replay-ws');
+    const file = path.join(ws, 'a.txt');
     const msgs = [
-      toolUseMsg('tool-1', 'read_file', { file_path: '/workspace/a.txt', offset: 1 }),
+      toolUseMsg('tool-1', 'read_file', { file_path: file, offset: 1 }),
       toolResultMsg('tool-1', 'old\n'),
       toolUseMsg('tool-2', 'grep', { pattern: 'x', path: 'src' }),
       toolResultMsg('tool-2', 'src/a.ts:1:x'),
     ];
-    const [read, grep] = buildReplayUpdates(msgs, '/workspace') as Array<SessionUpdate & { sessionUpdate: 'tool_call' }>;
+    const [read, grep] = buildReplayUpdates(msgs, ws) as Array<SessionUpdate & { sessionUpdate: 'tool_call' }>;
     expect(read).toEqual({
-      sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: 'read_file /workspace/a.txt', name: 'read_file',
-      kind: 'read', status: 'completed', rawInput: { file_path: '/workspace/a.txt', offset: 1 },
+      sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: `read_file ${file}`, name: 'read_file',
+      kind: 'read', status: 'completed', rawInput: { file_path: file, offset: 1 },
       content: [{ type: 'content', content: { type: 'text', text: 'old\n' } }],
-      locations: [{ path: '/workspace/a.txt', line: 1 }], rawOutput: 'old\n',
+      locations: [{ path: file, line: 1 }], rawOutput: 'old\n',
     });
     // Relative paths resolve against the restored session cwd, as for a live call.
-    expect(grep).toMatchObject({ title: 'grep', kind: 'search', locations: [{ path: '/workspace/src' }] });
+    expect(grep).toMatchObject({ title: 'grep', kind: 'search', locations: [{ path: path.join(ws, 'src') }] });
   });
 
   it('a nameless historical call gets the generic live display, never a bare empty title', () => {
