@@ -23,14 +23,23 @@ import type { PathFlavor } from './acp.permission.paths.js';
 //    (agent/hooks/config-loader.ts loadHooksConfig project-local layers).
 //  - `<cwd>/.afk/worktree-setup.json` (agent/worktree/worktree-setup.ts runs
 //    its commands in new worktrees).
+//  - agent instructions and definitions: any `.afk` segment (skills, agents,
+//    plugins, plans, anything the agent reads back), and `AFK.md`, the only
+//    instruction file the prompt loader reads (cli/config/afk-md-tier.ts via
+//    paths.ts getProjectAfkMdPath / getUserAfkMdPath). Under win32 the 8.3
+//    short name `AFK~N` counts as `.afk`.
 // The project files are matched at any depth, since a child may run elsewhere.
+// Precedence: git internals, then command-running config, then instructions.
 export const GIT_MARKER = '(git internals)';
 export const CONFIG_MARKER = '(project config that runs commands)';
+export const AGENT_MARKER = '(agent instructions or definitions)';
 
 const GIT_FILES = new Set(['.gitattributes', '.gitmodules']);
 const CONFIG_FILES = new Set(['.mcp.json', 'afk.config.json']);
 const AFK_CONFIG_FILES = new Set(['settings.json', 'worktree-setup.json']);
 const SHORT_GIT = /^git(?:att|mod)?~\d+$/;
+const INSTRUCTION_FILES = new Set(['afk.md']);
+const SHORT_AFK = /^afk~\d+$/;
 
 function fold(segment: string, p: PathFlavor): string {
   const lower = segment.replace(/[A-Z]/g, (c) => c.toLowerCase());
@@ -55,7 +64,9 @@ export function sensitiveMarker(raw: string, base: string | undefined, p: PathFl
     const parent = segs[segs.length - 2] ?? '';
     if (CONFIG_FILES.has(last) || (parent === '.afk' && AFK_CONFIG_FILES.has(last))) return CONFIG_MARKER;
   }
-  return '';
+  const isAfk = (s: string): boolean => s === '.afk' || (p.sep === '\\' && SHORT_AFK.test(s));
+  const isAgent = (segs: string[]): boolean => segs.some(isAfk) || INSTRUCTION_FILES.has(segs[segs.length - 1] ?? '');
+  return lists.some(isAgent) ? AGENT_MARKER : '';
 }
 
 /** The write targets of a file-writing tool call; empty for other tools. */
@@ -69,7 +80,7 @@ function writeTargets(toolName: string, input: Record<string, unknown>): unknown
 
 /**
  * Distinct markers for every sensitive write target of this call, in a stable
- * order (git first). Non-string targets are left to the grant and outside checks.
+ * order (git, then config, then instructions). Non-string targets are left to the grant and outside checks.
  */
 export function sensitiveMarkers(
   toolName: string, input: Record<string, unknown>, base: string | undefined, p: PathFlavor = path,
@@ -81,5 +92,5 @@ export function sensitiveMarkers(
       if (m !== '') found.add(m);
     }
   }
-  return [GIT_MARKER, CONFIG_MARKER].filter((m) => found.has(m));
+  return [GIT_MARKER, CONFIG_MARKER, AGENT_MARKER].filter((m) => found.has(m));
 }
