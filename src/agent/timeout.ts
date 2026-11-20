@@ -64,6 +64,28 @@ export interface WithTimeoutOptions {
   extender?: TimeoutExtender;
 }
 
+/**
+ * Race a promise against a timeout, swallowing any rejection from the promise.
+ * The timer is always cleared once the race settles (fix for #5169).
+ * Unlike `withTimeout`, this never throws on timeout -- it just resolves.
+ */
+export async function raceWithDrainTimeout(
+  promise: Promise<unknown>,
+  timeoutMs: number,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, timeoutMs);
+  });
+  try {
+    await Promise.race([promise, timeoutPromise]);
+  } catch {
+    // swallow rejection from promise
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
