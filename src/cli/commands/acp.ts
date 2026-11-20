@@ -1,13 +1,12 @@
 /**
  * `afk acp` — Agent Client Protocol (ACP) stdio server.
  *
- * Starts a JSON-RPC 2.0 server over stdin/stdout so Zed, JetBrains, and
- * other ACP-capable editors can drive afk as a first-class agent backend.
+ * Starts a JSON-RPC 2.0 server over stdin/stdout so an editor or GUI client
+ * that implements the Agent Client Protocol, version 1, can drive afk.
  *
- * Protocol: newline-delimited JSON (NDJSON) on stdin → NDJSON on stdout.
- * The server speaks the ACP subset: initialize, session/new, session/prompt,
- * session/close, and session/cancel.  Each session/prompt streams intermediate
- * notifications (no id) followed by a final done response with the request id.
+ * Protocol: newline-delimited JSON on stdin and stdout. The behavioural
+ * contract (methods, capabilities, approval policy, error matrix) is
+ * docs/acp-profile.md; the handlers live in acp.handlers.ts.
  *
  * @module cli/commands/acp
  */
