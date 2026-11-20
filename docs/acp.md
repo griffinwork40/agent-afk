@@ -197,7 +197,13 @@ The `title` says what the call does, on one line cut with `…`: the file path
 for file tools, the command for `bash` (`bash pnpm test`), method and URL for
 web tools, pattern and directory for `grep` and `glob`, server and tool for MCP
 tools, agent type or skill and the first words of the task for delegation
-tools, and subcommand and arguments for `git_read`. A path outside `cwd` is
+tools, and subcommand and arguments for `git_read`. A `bash` command with
+more than one non-empty line shows the count before the ellipsis:
+`bash echo hello (+2 more lines)…`. Unicode direction controls, zero-width
+characters, and similar invisible characters are replaced with visible escapes
+such as `<U+202E>` so the card cannot be spoofed with bidi tricks. `rawInput`
+fields are left byte-exact; client implementers should display
+`rawInput.command` in full for `bash` calls. A path outside `cwd` is
 appended and always stays visible. History replay uses the same titles.
 
 A read tool auto-starts at `in_progress`. A write or other consent-requiring
@@ -294,10 +300,11 @@ web tools, every MCP tool and any tool not named here.
   `allow_always` and never covered by a grant, because it can change what a
   later auto-allowed call runs or shows: any path with a `.git` segment
   (including a `.git` file), `.gitattributes` and `.gitmodules` at any depth
-  (titled `(git internals)`), and `.mcp.json`, `afk.config.json`,
+  (titled `(git internals)`); `.mcp.json`, `afk.config.json`,
   `.afk/settings.json` and `.afk/worktree-setup.json` (titled
-  `(project config that runs commands)`). Upper case and Windows spellings
-  with trailing dots or spaces count.
+  `(project config that runs commands)`); and any path with an `.afk` segment
+  or the file `AFK.md` (titled `(agent instructions or definitions)`).
+  Upper case and Windows spellings with trailing dots or spaces count.
 
 Grants are per-session and per tool name, shared between the session and its
 in-process children. They are not persisted across sessions.
