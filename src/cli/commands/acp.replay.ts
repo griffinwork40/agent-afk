@@ -21,7 +21,7 @@ import { hydrateMessages } from '../../agent/journal/reader.js';
 import type { JournalBlock, JournalMessage } from '../../agent/journal/types.js';
 import type { AcpClientPeer, JsonValue, SessionUpdate } from './acp.wire.js';
 import { toolKind, toolLocations, toolTitle } from './acp.tool-kind.js';
-import { boundedRawInput, boundedResult, boundStartDisplay } from './acp.translate.bounds.js';
+import { boundedRawInput, boundedResult, boundStartDisplay, sanitizeDisplay } from './acp.translate.bounds.js';
 
 /**
  * Collect all tool_use ids and their corresponding tool_result blocks from one
@@ -175,6 +175,6 @@ export async function emitReplayUpdates(
   const messages = hydrateMessages(raw);
   const updates = buildReplayUpdates(messages, cwd);
   for (const update of updates) {
-    await peer.notify('session/update', { sessionId: acpSessionId, update });
+    await peer.notify('session/update', sanitizeDisplay({ sessionId: acpSessionId, update }));
   }
 }

@@ -15,6 +15,7 @@ import { childPrefix } from './acp.permission.labels.js';
 import { dependsOnCallerCwd } from './acp.permission.paths.js';
 import { grantFits } from './acp.permission.grants.js';
 import { AcpPeerClosedError } from './acp.rpc-peer.js';
+import { sanitizeDisplay } from './acp.translate.bounds.js';
 
 export const PERMISSION_TIMEOUT_MS = 120_000;
 
@@ -94,7 +95,7 @@ function awaitReply(
     if (ask.cancelled) { ask.settle({ kind: 'deny', reason: 'cancelled' }); return; }
     if (signal.aborted) { onAbort(); return; }
     try {
-      peer.request('session/request_permission', params, outbound.signal).then(
+      peer.request('session/request_permission', sanitizeDisplay(params), outbound.signal).then(
         (value) => { ask.settle({ kind: 'reply', value }); },
         (err: unknown) => { ask.settle({ kind: 'deny', reason: peerFailureReason(err) }); },
       );

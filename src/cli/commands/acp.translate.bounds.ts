@@ -92,3 +92,29 @@ export function boundStartDisplay(start: ToolCallStart): ToolCallStart {
   if (start.locations && serializedBytes(start.locations) > COLLECTION_BYTES) start.locations = [];
   return start;
 }
+
+const cleanDisplay = (s: string): string => escapeInvisible(s.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' '));
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * Write-boundary pass: applied to the params of every `session/update` and
+ * `session/request_permission` immediately before they are written, so a
+ * display string cannot leave the server unescaped however the frame was
+ * built. Covers `title`, `locations[].path` and `options[].name`, on the frame
+ * itself and on a nested `update` or `toolCall`. Idempotent (an escape is plain
+ * ASCII), so the inner passes above stay correct. Data fields are not touched.
+ */
+export function sanitizeDisplay<T>(value: T): T {
+  if (!isObject(value)) return value;
+  const out: Record<string, unknown> = { ...value };
+  if (typeof out['title'] === 'string') out['title'] = cleanDisplay(out['title']);
+  if (Array.isArray(out['locations'])) {
+    out['locations'] = out['locations'].map((l: unknown) => (isObject(l) && typeof l['path'] === 'string' ? { ...l, path: cleanDisplay(l['path']) } : l));
+  }
+  if (Array.isArray(out['options'])) {
+    out['options'] = out['options'].map((o: unknown) => (isObject(o) && typeof o['name'] === 'string' ? { ...o, name: cleanDisplay(o['name']) } : o));
+  }
+  if (isObject(out['update'])) out['update'] = sanitizeDisplay(out['update']);
+  if (isObject(out['toolCall'])) out['toolCall'] = sanitizeDisplay(out['toolCall']);
+  return out as T;
+}

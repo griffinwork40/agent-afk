@@ -12,6 +12,7 @@ import type { AcpSessionHandle } from './acp.session.js';
 import type {
   AcpClientPeer, AcpPermissionGate, SessionUpdate, StopReason, ToolCallStart, TranslatorState, TurnMetadata,
 } from './acp.wire.js';
+import { sanitizeDisplay } from './acp.translate.bounds.js';
 
 export interface ActiveTurn {
   abort: AbortController;
@@ -48,7 +49,7 @@ const DEFAULT_CANCEL_GRACE_MS = 2000;
 const STOP = Symbol('stop');
 
 export function sendUpdate(peer: AcpClientPeer, sessionId: string, update: SessionUpdate): Promise<void> {
-  return peer.notify('session/update', { sessionId, update });
+  return peer.notify('session/update', sanitizeDisplay({ sessionId, update }));
 }
 
 /**
