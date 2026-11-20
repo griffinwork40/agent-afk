@@ -13,7 +13,11 @@ export const GOLDEN_MODEL = 'o3';
 export function substitute(value: unknown, root: string, sessionId: string): unknown {
   if (typeof value === 'string') {
     if (value === persistedId) return sessionId;
-    return value.replace(/\/workspace(?:\/([\w.-]+))?/g, (_match, file: string | undefined) => file ? path.join(root, file) : root);
+    // Replace /workspace and /workspace/seg1/seg2/... with the real root,
+    // rebuilding the path with the platform separator so Windows CI gets
+    // backslashes throughout (e.g. /workspace/.git/config → C:\tmp\x\.git\config).
+    return value.replace(/\/workspace((?:\/[\w.-]+)*)/g, (_match, rest: string) =>
+      rest.length > 0 ? path.join(root, ...rest.slice(1).split('/')) : root);
   }
   if (Array.isArray(value)) return value.map(item => substitute(item, root, sessionId));
   if (value && typeof value === 'object') {
