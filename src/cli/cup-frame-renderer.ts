@@ -49,6 +49,7 @@ import { displayWidth } from './display.js';
 import { cup, ERASE_LINE, SYNC_START, SYNC_END, CURSOR_SHOW } from './cup-frame-renderer.escapes.js';
 import { CupCursorTracker } from './cup-frame-renderer.cursor.js';
 import { CupWriteBatcher } from './cup-frame-renderer.batcher.js';
+import { sanitizeFrameContent } from './cup-frame-renderer.sanitize.js';
 
 export class CupFrameRenderer {
   private readonly stream: NodeJS.WriteStream & Writable;
@@ -92,7 +93,10 @@ export class CupFrameRenderer {
    * so the physical row count can never drift between them.
    */
   private static wrapToPhysicalLines(content: string, width: number): string[] {
-    const raw = content.endsWith('\n') ? content : `${content}\n`;
+    // Sanitize before wrapping so measure() and paint share printable geometry.
+    // Tabs survive until hardWrapToWidth expands them to spaces.
+    const safe = sanitizeFrameContent(content);
+    const raw = safe.endsWith('\n') ? safe : `${safe}\n`;
     const wrapped = hardWrapToWidth(raw, width);
     const allLines = wrapped.split('\n');
     while (allLines.length > 0 && allLines[allLines.length - 1] === '') {
@@ -221,7 +225,8 @@ export class CupFrameRenderer {
     // cursor has pending wrap; EL0 there can erase the last (possibly wide) glyph.
     // Do not reset SGR: unclosed/cross-row styles must continue onto later text.
     // Their erased tails intentionally use the ENDING background, not the old
-    // erase-first STARTING background; style-closed rows remain cell-identical.
+    // erase-first STARTING background. Printable graphemes with closed SGR
+    // styles remain cell-identical; row controls/non-SGR escapes are stripped.
     // Blank rows (including shrink pads) still get EL0 from column 1, clearing
     // any external committed-band paint in the footprint without a row cache.
     for (let i = 0; i < lineCount; i++) {
