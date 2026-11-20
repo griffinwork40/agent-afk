@@ -9,7 +9,7 @@
  */
 
 import type { ProviderEvent } from '../provider.js';
-import type { ToolEventMin } from '../done-evidence.js';
+import { isPatchApplyDryRun, type ToolEventMin } from '../done-evidence.js';
 
 type ToolUseStartEvent = Extract<ProviderEvent, { type: 'tool.use.start' }>;
 type ToolOutputEvent = Extract<ProviderEvent, { type: 'tool.output' }>;
@@ -20,7 +20,7 @@ type ToolOutputEvent = Extract<ProviderEvent, { type: 'tool.output' }>;
  * here leaks across turns.
  */
 export interface ToolEventAccumulator {
-  /** Names of tools that succeeded this turn, in order (daemon Done probe). */
+  /** Successful tool names, excluding patch_apply dry-run previews (daemon Done probe). */
   _successfulToolNames?: string[];
   /** toolUseId -> flattened input captured at `tool.use.start`. */
   _pendingToolInputs?: Map<string, string>;
@@ -52,9 +52,9 @@ export function recordToolUseStart(acc: ToolEventAccumulator, event: ToolUseStar
 }
 
 /**
- * Record a finished tool call. Policy-free: which tools count as evidence is
- * decided by the consumer (`done-evidence.ts`), not here. A tool with no name
- * (some synthesized OpenAI Codex events omit it) is skipped.
+ * Record a finished tool call. Keep every event in the full history, but omit
+ * patch_apply dry-run previews from the successful-name summary. Consumers
+ * still decide which names count as evidence. Nameless synthesized calls are skipped.
  */
 export function recordToolOutput(acc: ToolEventAccumulator, event: ToolOutputEvent): void {
   if (!event.toolName) return;
@@ -68,5 +68,9 @@ export function recordToolOutput(acc: ToolEventAccumulator, event: ToolOutputEve
     ...(inputRaw !== undefined ? { inputRaw } : {}),
     isError,
   });
-  if (!isError) (acc._successfulToolNames ??= []).push(event.toolName);
+  const isDryRun = event.toolName === 'patch_apply' &&
+    isPatchApplyDryRun({ toolName: event.toolName, input: '', inputRaw });
+  if (!isError && !isDryRun) {
+    (acc._successfulToolNames ??= []).push(event.toolName);
+  }
 }

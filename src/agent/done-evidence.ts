@@ -49,7 +49,7 @@ export interface ToolEventMin {
  * as a real write) when the field is absent or unparseable — the conservative
  * direction (a real write is always counted, a spurious dry-run skip is safe).
  */
-function isPatchApplyDryRun(e: ToolEventMin): boolean {
+export function isPatchApplyDryRun(e: ToolEventMin): boolean {
   if (!e.inputRaw) return false;
   try {
     const parsed: unknown = JSON.parse(e.inputRaw);

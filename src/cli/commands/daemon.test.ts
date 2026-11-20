@@ -15,6 +15,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Command } from 'commander';
+import { transformProviderEvent, type TransformDeps } from '../../agent/session/stream-consumer.js';
 
 // ---------------------------------------------------------------------------
 // Mocks — isolate filesystem, network, and long-running async calls
@@ -205,6 +206,65 @@ describe('afk daemon (CLI integration)', () => {
 
   afterEach(() => {
     consoleSpy.mockRestore();
+  });
+
+  // Exercise the real daemon.action probe captured at its startDaemon boundary,
+  // using metadata emitted by the real stream consumer (not a copied probe).
+  it.each([
+    { label: 'ONLY patch preview', toolName: 'patch_apply', inputRaw: '{"dry_run":true}', content: '{"status":"dry_run"}', names: [], unverified: true },
+    { label: 'ONLY applied patch', toolName: 'patch_apply', inputRaw: '{"dry_run":false}', content: '{"status":"applied"}', names: ['patch_apply'], unverified: false },
+    { label: 'patch with default apply mode', toolName: 'patch_apply', inputRaw: '{}', names: ['patch_apply'], unverified: false },
+    { label: 'patch with missing raw input', toolName: 'patch_apply', names: ['patch_apply'], unverified: false },
+    { label: 'patch with malformed raw input', toolName: 'patch_apply', inputRaw: '{', names: ['patch_apply'], unverified: false },
+    { label: 'patch with string true', toolName: 'patch_apply', inputRaw: '{"dry_run":"true"}', names: ['patch_apply'], unverified: false },
+    { label: 'write_file alone', toolName: 'write_file', inputRaw: '{"dry_run":true}', names: ['write_file'], unverified: false },
+    { label: 'edit_file alone', toolName: 'edit_file', names: ['edit_file'], unverified: false },
+    { label: 'bash alone', toolName: 'bash', names: ['bash'], unverified: false },
+    { label: 'read_file alone', toolName: 'read_file', names: ['read_file'], unverified: true },
+    { label: 'other tool', toolName: 'custom_tool', names: ['custom_tool'], unverified: true },
+    { label: 'failed patch', toolName: 'patch_apply', inputRaw: '{"dry_run":false}', isError: true, names: [], unverified: true },
+  ])('daemon Done probe: $label', async ({ toolName, inputRaw, content, isError, names, unverified }) => {
+    const signals = ['SIGINT', 'SIGTERM'] as const;
+    const listenersBefore = signals.map((signal) => new Set(process.listeners(signal)));
+    try {
+      await runDaemon(); // registerDaemonCommand invokes runDaemonAction
+    } finally {
+      signals.forEach((signal, index) => {
+        for (const listener of process.listeners(signal)) {
+          if (!listenersBefore[index]!.has(listener)) process.removeListener(signal, listener);
+        }
+      });
+    }
+    const probe = mockStartDaemon.mock.calls[0]?.[0]?.doneUnverifiedProbe;
+    expect(probe).toBeTypeOf('function');
+    const deps: TransformDeps = {
+      conversationHistory: [],
+      getSessionMetadata: () => ({ sessionId: 'done-probe', model: 'sonnet', permissionMode: 'default' }),
+      setSessionMetadata: vi.fn(),
+      updateSessionIdentity: vi.fn(),
+      resolveInitialization: vi.fn(),
+      setLastResponseMetadata: vi.fn(),
+    };
+    transformProviderEvent({
+      type: 'tool.use.start', toolUseId: 'tool-1', toolName, toolInput: 'test input',
+      ...(inputRaw !== undefined ? { toolInputRaw: inputRaw } : {}),
+    }, deps);
+    transformProviderEvent({
+      type: 'tool.output', toolUseId: 'tool-1', toolName, content: content ?? 'ok',
+      ...(isError !== undefined ? { isError } : {}),
+    }, deps);
+    const result = transformProviderEvent({
+      type: 'turn.completed',
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, stopReason: 'end_turn' },
+    }, deps);
+    expect(result?.type).toBe('done');
+    if (result?.type !== 'done') throw new Error('Expected turn metadata');
+    const successfulToolNames = result.metadata?.successfulToolNames ?? [];
+    expect(probe!({ responseText: '**Done**\n- Shipped the change.', successfulToolNames })).toBe(unverified);
+    expect(successfulToolNames).toEqual(names);
+    // The richer event history still includes the preview/error for other consumers.
+    expect(deps._turnToolEvents).toHaveLength(1);
+    expect(deps._turnToolEvents?.[0]?.toolName).toBe(toolName);
   });
 
   it('runs with no flags — sessionstart trigger, no fabricated default task', async () => {
