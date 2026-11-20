@@ -84,7 +84,7 @@ describe('D19: isolation relocates children wherever it is declared', () => {
     it(`${tool} ${JSON.stringify(input)} arms the unknown-cwd rule`, async () => {
       const t = setup();
       await ask(t.gate, t.requests, tool, input as Record<string, unknown>);
-      const child = t.gate.forChild!({ route: 'subagent', depth: 1 });
+      const child = t.gate.forChild!({ route: 'agent', depth: 1 });
       const r = await Promise.race([child('list_directory', {}, opts('l1')), flush().then(() => 'pending' as const)]);
       expect(r).toBe('pending');
     });
@@ -92,12 +92,12 @@ describe('D19: isolation relocates children wherever it is declared', () => {
   it('isolation "none" does not arm the rule', async () => {
     const t = setup();
     await ask(t.gate, t.requests, 'agent', { prompt: 'p', isolation: 'none' });
-    const child = t.gate.forChild!({ route: 'subagent', depth: 1 });
+    const child = t.gate.forChild!({ route: 'agent', depth: 1 });
     expect(await child('list_directory', {}, opts('l1'))).toEqual({ behavior: 'allow' });
   });
   it('a child that delegates into an isolated worktree arms the rule for grandchildren', async () => {
     const t = setup();
-    const child = t.gate.forChild!({ route: 'subagent', depth: 1, cwd });
+    const child = t.gate.forChild!({ route: 'agent', depth: 1, cwd });
     const p = child('compose', { nodes: [{ id: 'n', prompt: 'p', isolation: 'worktree' }] }, opts('c1'));
     await flush();
     t.requests[0]!.resolve({ outcome: { outcome: 'selected', optionId: 'allow_once' } });
@@ -115,7 +115,7 @@ describe('D19: a continued agent inherits an unseen cwd', () => {
     await flush();
     t.requests[0]!.resolve({ outcome: { outcome: 'selected', optionId: 'allow_once' } });
     expect(await p).toEqual({ behavior: 'allow' });
-    const child = t.gate.forChild!({ route: 'subagent', depth: 1 });
+    const child = t.gate.forChild!({ route: 'agent', depth: 1 });
     const r = await Promise.race([child('glob', { pattern: '**/*' }, opts('g1')), flush().then(() => 'pending' as const)]);
     expect(r).toBe('pending');
   });
