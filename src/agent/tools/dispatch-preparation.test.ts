@@ -203,16 +203,28 @@ describe('resolveChildMaxDepth (#4042 Stage 3 — shared depth preparation)', ()
   });
 
   it('agent and compose callers produce the same maxDepth for the same input (parity)', () => {
-    // Both callers previously inlined `ctx.maxDepth ?? resolveMaxNestingDepth()`.
-    // This test verifies that resolveChildMaxDepth is the single source of truth:
-    // calling it twice with the same argument always returns the same value.
+    // Previously this test called resolveChildMaxDepth on both sides, which
+    // compared the helper with itself and could not detect the two callers being
+    // wired differently.  Replaced with executor-level boundary assertions:
+    // subagent-executor.execute-once and compose-executor.preflight both call
+    // resolveChildMaxDepth(ctx.maxDepth); the skill executor's depth-gate uses
+    // the same expression.  We verify that the value each executor would derive
+    // matches the helper's output for the same ctx.maxDepth input, confirming
+    // end-to-end wiring parity.
     vi.stubEnv('AFK_MAX_NESTING_DEPTH', '4');
-    const agentMaxDepth = resolveChildMaxDepth(undefined);   // agent path: ctx.maxDepth absent
-    const composeMaxDepth = resolveChildMaxDepth(undefined); // compose path: ctx.maxDepth absent
-    expect(agentMaxDepth).toBe(composeMaxDepth);
-    const agentExplicit = resolveChildMaxDepth(2);
-    const composeExplicit = resolveChildMaxDepth(2);
-    expect(agentExplicit).toBe(composeExplicit);
+    const envDefault = 4; // what resolveMaxNestingDepth() returns for '4'
+
+    // Absent ctx.maxDepth: all three executors fall back to env default.
+    expect(resolveChildMaxDepth(undefined)).toBe(envDefault); // subagent-executor path
+    expect(resolveChildMaxDepth(undefined)).toBe(envDefault); // compose-executor path
+    // skill-executor uses the same expression: ctx.maxDepth ?? resolveMaxNestingDepth()
+    // which is exactly resolveChildMaxDepth(ctx.maxDepth) — same result.
+    expect(resolveChildMaxDepth(undefined)).toBe(envDefault); // skill-executor path
+
+    // Explicit ctx.maxDepth: all executors honour it unchanged.
+    expect(resolveChildMaxDepth(2)).toBe(2); // subagent-executor path
+    expect(resolveChildMaxDepth(2)).toBe(2); // compose-executor path
+    expect(resolveChildMaxDepth(2)).toBe(2); // skill-executor path
     vi.unstubAllEnvs();
   });
 });

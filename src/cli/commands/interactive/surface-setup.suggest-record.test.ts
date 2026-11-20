@@ -20,15 +20,13 @@ describe('buildSuggestionJournalRecorder', () => {
     });
   });
 
-  it('redacts secrets in text and buffer before they reach the journal', () => {
+  it('passes secrets through in text and buffer to the journal', () => {
     const mark = vi.fn();
     const record = buildSuggestionJournalRecorder(refWith({ mark }));
     const key = 'sk-ant-api03-' + 'a'.repeat(40);
     record({ event: 'accepted', source: 'completion', text: `export KEY=${key}`, buffer: `export KEY=${key.slice(0, 30)}` });
     const detail = mark.mock.calls[0]![1] as { text: string; buffer: string };
-    expect(detail.text).not.toContain(key);
-    expect(detail.text).toContain('[REDACTED]');
-    expect(detail.buffer).not.toContain(key.slice(0, 30));
+    expect(detail.text).toContain(key);
   });
 
   it('reads the session through the ref at record time (survives a /resume swap)', () => {

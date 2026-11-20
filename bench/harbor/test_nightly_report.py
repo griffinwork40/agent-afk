@@ -150,6 +150,41 @@ def test_sign_flip():
     assert _sign_flip_p([-1] * 10) == 1
 
 
+def test_budget_cap_comparable(tmp_path):
+    """AfkBudgetCapError is agent behaviour; valid_for_comparison must stay True."""
+    trials(tmp_path, error='AfkBudgetCapError')
+    record = build_record(tmp_path, SPEC, META)
+    assert record['valid_for_comparison']
+    assert record['tasks']['task-0']['error'] == 'AfkBudgetCapError'
+
+
+def test_append_history_returns_appended_flag(tmp_path):
+    """append_history returns (history, True) on first write, (history, False) on duplicate."""
+    records = history(tmp_path / 'trials', [[1] * 10])
+    path = tmp_path / 'history.jsonl'
+    hist1, appended1 = append_history(path, records[0])
+    assert appended1 is True
+    assert len(hist1) == 1
+    hist2, appended2 = append_history(path, records[0])
+    assert appended2 is False
+    assert len(hist2) == 1
+    assert len(path.read_text().splitlines()) == 1
+
+
+def test_duplicate_publish_no_regression(tmp_path):
+    """Re-publishing the same run_id must never trigger a regression alert."""
+    # Build 10 records: 7 all-pass, 3 all-fail (would alert on a fresh run)
+    recs = history(tmp_path, [[1] * 10] * 7 + [[0] * 10] * 3)
+    path = tmp_path / 'history.jsonl'
+    # First publish: genuinely appended, regression fires
+    for r in recs:
+        append_history(path, r)
+    full_history, _ = append_history(path, recs[-1])  # duplicate
+    # Duplicate must not re-alert
+    _, appended = append_history(path, recs[-1])
+    assert appended is False
+
+
 def test_cli(tmp_path):
     job = tmp_path / 'job'
     trials(job)

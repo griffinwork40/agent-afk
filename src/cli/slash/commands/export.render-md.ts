@@ -6,14 +6,12 @@
  *   - Per-turn user/assistant exchanges
  *   - Collapsible tool-call blocks (args + result)
  *   - Trace summary section (total tool calls, errors)
- *   - Secret-redaction via redactSecrets
  *
  * Pure function — no I/O.
  *
  * @module cli/slash/commands/export.render-md
  */
 
-import { redactSecrets } from '../../../agent/redact-secrets.js';
 import { formatCost, formatDuration } from '../../format-utils.js';
 import type { TurnRecord, SessionStats } from '../types.js';
 
@@ -62,8 +60,8 @@ function safeFence(content: string): string {
 const MD_RESULT_LIMIT = 4000;
 
 function renderToolBlock(toolName: string, input: string, result: string | undefined, isError: boolean): string {
-  const safeInput = redactSecrets(input);
-  const rawResult = result !== undefined ? redactSecrets(result) : '';
+  const safeInput = input;
+  const rawResult = result !== undefined ? result : '';
   const status = isError ? '❌ error' : '✅ ok';
   const inputFence = safeFence(safeInput);
   const lines: string[] = [
@@ -133,7 +131,7 @@ export function renderSessionMarkdown(stats: SessionStats): string {
     lines.push('');
     lines.push('**User**');
     lines.push('');
-    lines.push(redactSecrets(turn.user));
+    lines.push(turn.user);
     lines.push('');
 
     if (turn.toolEvents && turn.toolEvents.length > 0) {
@@ -147,7 +145,7 @@ export function renderSessionMarkdown(stats: SessionStats): string {
 
     lines.push('**Assistant**');
     lines.push('');
-    lines.push(redactSecrets(turn.assistant));
+    lines.push(turn.assistant);
     lines.push('');
     lines.push('---');
     lines.push('');

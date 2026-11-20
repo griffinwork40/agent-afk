@@ -25,8 +25,8 @@ def publish(record: dict, remote: str, work: Path) -> tuple[str, dict]:
     if exists:
         command('git', 'fetch', '--depth=1', 'origin', f'refs/heads/{BRANCH}', cwd=work)
         command('git', 'checkout', '--detach', 'FETCH_HEAD', cwd=work)
-    history = append_history(work / 'history.jsonl', record)
-    decision = regression(history) if history[-1] == record else dict(alert=False, reason='Already recorded')
+    history, appended = append_history(work / 'history.jsonl', record)
+    decision = regression(history) if appended else dict(alert=False, reason='Already recorded')
     text = summary(record, decision)
     command('git', 'config', 'user.name', 'AFK Agent', cwd=work)
     command('git', 'config', 'user.email', 'agent@agentafk.com', cwd=work)
@@ -46,7 +46,7 @@ def report_issue(text: str, repo: str, body: Path):
                                 '--state', 'all', '--limit', '100', '--json', 'number,state'))
     body.write_text(text)
     if issues:
-        issue = issues[-1]  # reuse even if a human closed it; never create nightly duplicates
+        issue = issues[0]  # gh returns newest first; reuse even if a human closed it
         if issue['state'] == 'CLOSED':
             command('gh', 'issue', 'reopen', str(issue['number']), '--repo', repo)
         command('gh', 'issue', 'comment', str(issue['number']), '--repo', repo, '--body-file', str(body))

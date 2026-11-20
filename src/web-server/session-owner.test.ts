@@ -42,9 +42,22 @@ vi.mock('../cli/shared-helpers.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../cli/shared-helpers.js')>();
   return { ...actual };
 });
+// Mocked to avoid heavy provider/MCP wiring in create() tests (#4271).
+vi.mock('./session-owner.wiring.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./session-owner.wiring.js')>();
+  return { ...actual };
+});
+// Mocked so create() can be called without a real API key (#4271).
+vi.mock('../agent/session/agent-session.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../agent/session/agent-session.js')>();
+  return { ...actual };
+});
 
 import { SessionOwner } from './session-owner.js';
 import * as sharedHelpers from '../cli/shared-helpers.js';
+import * as wiringMod from './session-owner.wiring.js';
+import * as agentSessionMod from '../agent/session/agent-session.js';
+import type { AgentConfig } from '../agent/types.js';
 
 function freshOwner(): SessionOwner {
   return new SessionOwner({ model: 'test-model' });
@@ -531,6 +544,79 @@ describe('SessionOwner — completed turns are saved to the session sidecar', ()
     await internals.turns.get('s1');
 
     expect(saveTurn.mock.calls.map((c) => c[0])).toEqual(['hello', '/review 9']);
+  });
+});
+
+/**
+ * SessionOwner.create() — enableFileCheckpointing wiring (#4271).
+ *
+ * Verifies that the AgentConfig passed to AgentSession carries
+ * `enableFileCheckpointing: true` by default and `false` when the owner is
+ * constructed with `fileCheckpoints: false`.
+ *
+ * Both `wireWebSession` (session-owner.wiring.js) and `AgentSession`
+ * (agent-session.js) are mocked at the top-level so create() runs without a
+ * real API key or network. The mocked modules are imported as `wiringMod` and
+ * `agentSessionMod` at the top of this file.
+ */
+describe('SessionOwner.create — enableFileCheckpointing wiring (#4271)', () => {
+  let capturedConfig: AgentConfig | undefined;
+
+  beforeEach(() => {
+    capturedConfig = undefined;
+
+    // Stub resolveBaseSystemPrompt to avoid filesystem/env reads.
+    vi.spyOn(sharedHelpers, 'resolveBaseSystemPrompt').mockReturnValue({
+      prompt: 'stub-prompt',
+      source: 'stub',
+      overlay: undefined,
+    });
+
+    // Stub wireWebSession to return a minimal wiring object that satisfies create().
+    vi.spyOn(wiringMod, 'wireWebSession').mockResolvedValue({
+      provider: { query: vi.fn(), rewindFiles: vi.fn() } as unknown as import('../agent/provider.js').ModelProvider,
+      drainSubagents: vi.fn(),
+      getPendingChildTerminalWrites: vi.fn(() => []),
+      getPendingChildBillingStreams: vi.fn(() => []),
+      memoryStore: { close: vi.fn() } as unknown as import('../agent/memory/memory-store.js').MemoryStore,
+      workspaceStore: { close: vi.fn() } as unknown as import('../agent/workspace/workspace-store.js').WorkspaceStore,
+      systemPrompt: undefined,
+      systemPromptSource: undefined,
+      traceWriter: undefined,
+      mcpManager: undefined,
+      __bindSession: vi.fn(),
+    } as unknown as wiringMod.WebSessionWiringInternal);
+
+    // Stub AgentSession to capture the config and avoid real initialization.
+    vi.spyOn(agentSessionMod, 'AgentSession').mockImplementation(
+      function (config: AgentConfig) {
+        capturedConfig = config;
+        return {
+          close: vi.fn().mockResolvedValue(undefined),
+          waitForInitialization: vi.fn().mockResolvedValue({ sessionId: 'mock-session-id' }),
+          getSessionMetadata: vi.fn().mockReturnValue({ permissionMode: 'default' }),
+          wireStopHook: vi.fn(),
+          queueFrameworkContext: vi.fn(),
+          sessionId: 'mock-session-id',
+        } as unknown as agentSessionMod.AgentSession;
+      } as unknown as typeof agentSessionMod.AgentSession,
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('defaults enableFileCheckpointing to true when fileCheckpoints is not set', async () => {
+    const owner = new SessionOwner({ model: 'test-model' });
+    await owner.create();
+    expect(capturedConfig?.enableFileCheckpointing).toBe(true);
+  });
+
+  it('sets enableFileCheckpointing to false when fileCheckpoints: false is passed', async () => {
+    const owner = new SessionOwner({ model: 'test-model', fileCheckpoints: false });
+    await owner.create();
+    expect(capturedConfig?.enableFileCheckpointing).toBe(false);
   });
 });
 

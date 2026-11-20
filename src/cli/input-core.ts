@@ -39,14 +39,23 @@ export interface InputCoreRange {
  * of that grapheme.
  */
 function graphemeBoundaries(buffer: string): Set<number> {
-  const boundaries = new Set<number>();
+  return new Set(graphemeOffsets(buffer));
+}
+
+/**
+ * Ascending UTF-16 offsets of every grapheme-cluster boundary in `buffer`,
+ * always starting with 0 and ending with `buffer.length`. Segments the
+ * buffer exactly once, so callers that walk many graphemes (word jumps)
+ * stay linear instead of re-segmenting per step.
+ */
+function graphemeOffsets(buffer: string): number[] {
+  const offsets = [0];
   let offset = 0;
-  boundaries.add(0);
   for (const grapheme of splitGraphemes(buffer)) {
     offset += grapheme.length;
-    boundaries.add(offset);
+    offsets.push(offset);
   }
-  return boundaries;
+  return offsets;
 }
 
 function clampIndex(index: number, length: number): number {
@@ -71,11 +80,30 @@ function moveCursor(state: InputCoreState, cursor: number): InputCoreState {
  * Walk backward from `cursor` over a "word" boundary: first skip any
  * trailing whitespace, then skip the run of non-whitespace before it.
  * Mirrors readline's `backward-kill-word` (Option+Delete on macOS).
+ *
+ * Steps by grapheme cluster so multi-code-unit graphemes (emoji, combined
+ * sequences) are never split (#4987). The buffer is segmented once per call
+ * and the boundary list is walked, keeping the operation linear.
  */
 function wordStartBefore(buffer: string, cursor: number): number {
   let i = clampIndex(cursor, buffer.length);
-  while (i > 0 && /\s/.test(buffer.charAt(i - 1))) i--;
-  while (i > 0 && !/\s/.test(buffer.charAt(i - 1))) i--;
+  const offsets = graphemeOffsets(buffer);
+  // k = index of the largest boundary strictly below i (what
+  // previousGraphemeIndex(buffer, i) would return).
+  let k = offsets.length - 1;
+  while (k > 0 && offsets[k]! >= i) k--;
+  while (i > 0) {
+    const prev = offsets[k]!;
+    if (!/\s/.test(buffer.slice(prev, i))) break;
+    i = prev;
+    k--;
+  }
+  while (i > 0) {
+    const prev = offsets[k]!;
+    if (/\s/.test(buffer.slice(prev, i))) break;
+    i = prev;
+    k--;
+  }
   return i;
 }
 
@@ -83,12 +111,31 @@ function wordStartBefore(buffer: string, cursor: number): number {
  * Walk forward from `cursor` over a "word" boundary: skip leading
  * whitespace, then the run of non-whitespace after it.
  * Mirrors readline's `kill-word` (Option+Fn-Delete on macOS).
+ *
+ * Steps by grapheme cluster so multi-code-unit graphemes (emoji, combined
+ * sequences) are never split (#4987). The buffer is segmented once per call
+ * and the boundary list is walked, keeping the operation linear.
  */
 function wordEndAfter(buffer: string, cursor: number): number {
   const len = buffer.length;
   let i = clampIndex(cursor, len);
-  while (i < len && /\s/.test(buffer.charAt(i))) i++;
-  while (i < len && !/\s/.test(buffer.charAt(i))) i++;
+  const offsets = graphemeOffsets(buffer);
+  // k = index of the smallest boundary strictly above i (what
+  // nextGraphemeIndex(buffer, i) would return).
+  let k = 0;
+  while (k < offsets.length - 1 && offsets[k]! <= i) k++;
+  while (i < len) {
+    const next = offsets[k]!;
+    if (!/\s/.test(buffer.slice(i, next))) break;
+    i = next;
+    k++;
+  }
+  while (i < len) {
+    const next = offsets[k]!;
+    if (/\s/.test(buffer.slice(i, next))) break;
+    i = next;
+    k++;
+  }
   return i;
 }
 

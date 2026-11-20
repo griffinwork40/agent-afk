@@ -40,8 +40,10 @@ def build_record(job_dir: Path, spec: dict, metadata: dict) -> dict:
             raise ValueError(f"Invalid reward for {name}")
         if not math.isfinite(reward) or reward not in (0, 1):
             raise ValueError(f"Nonbinary reward for {name}")
-        # Time-limited agent work is behaviour; auth/setup/verifier failures are not.
-        if error and error != "AgentTimeoutError":
+        # Time-limited and budget-capped agent work is behaviour;
+        # auth/setup/verifier failures are not.
+        _BEHAVIOUR_ERRORS = {"AgentTimeoutError", "AfkBudgetCapError"}
+        if error and error not in _BEHAVIOUR_ERRORS:
             valid = False
         tasks[name] = {"reward": float(reward), "error": error}
     safe_meta = {k: metadata[k] for k in
@@ -57,14 +59,20 @@ def load_history(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line] if path.exists() else []
 
 
-def append_history(path: Path, record: dict) -> list[dict]:
+def append_history(path: Path, record: dict) -> tuple[list[dict], bool]:
+    """Append *record* to the JSONL history file if its run_id is new.
+
+    Returns ``(history, appended)`` where *appended* is ``True`` only when
+    the record was actually written.  Callers must gate ``regression()`` on
+    *appended* to prevent re-alerting on a duplicate publish run.
+    """
     history = load_history(path)
     if any(r["metadata"]["run_id"] == record["metadata"]["run_id"] for r in history):
-        return history
+        return history, False
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as stream:
         stream.write(json.dumps(record, sort_keys=True) + "\n")
-    return history + [record]
+    return history + [record], True
 
 
 def _sign_flip_p(deltas: list[float]) -> float:
@@ -135,9 +143,9 @@ def main() -> None:
         args.output.write_text(json.dumps(record, indent=2))
     else:
         record = json.loads(args.record.read_text())
-        history = append_history(args.history, record)
+        history, appended = append_history(args.history, record)
         # A rerun of an already-published run must not re-alert stale history.
-        decision = regression(history) if history[-1] == record else dict(alert=False, reason="Already recorded")
+        decision = regression(history) if appended else dict(alert=False, reason="Already recorded")
         args.summary.write_text(summary(record, decision))
         args.decision.write_text(json.dumps(decision, indent=2))
 

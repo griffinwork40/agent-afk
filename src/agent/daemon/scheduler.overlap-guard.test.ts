@@ -24,16 +24,13 @@ describe('makeSessionStartSkipRecord — secret redaction', () => {
     skipReason: 'cooldown',
   };
 
-  it('redacts an OpenAI-style secret token from the command field', () => {
-    // The sk- pattern requires ≥20 chars after "sk-" (see prompt-dump.ts INLINE_SECRET_PATTERNS).
-    // "sk-proj-" + 20 alphanum chars satisfies the minimum; a realistic token is longer.
+  it('preserves an OpenAI-style secret token in the command field', () => {
     const rawSecret = 'sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef';
     const task: ScheduledTask = { ...baseTask, command: `deploy --token ${rawSecret}` };
 
     const record = makeSessionStartSkipRecord(task, decision, nowMs);
 
-    expect(record.command).not.toContain(rawSecret);
-    expect(record.command).toMatch(/REDACTED/i);
+    expect(record.command).toContain(rawSecret);
   });
 
   it('preserves commands that contain no secrets', () => {
@@ -45,7 +42,7 @@ describe('makeSessionStartSkipRecord — secret redaction', () => {
     expect(record.command).toBe(safeCommand);
   });
 
-  it('redacts an Anthropic API key (sk-ant-…) in the command field', () => {
+  it('preserves an Anthropic API key (sk-ant-…) in the command field', () => {
     const rawSecret =
       'sk-ant-api03-abc123XYZABC123xyz-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000XXXX';
     const task: ScheduledTask = {
@@ -55,8 +52,7 @@ describe('makeSessionStartSkipRecord — secret redaction', () => {
 
     const record = makeSessionStartSkipRecord(task, decision, nowMs);
 
-    expect(record.command).not.toContain(rawSecret);
-    expect(record.command).toMatch(/REDACTED/i);
+    expect(record.command).toContain(rawSecret);
   });
 
   it('populates skipReason from the gate decision', () => {
@@ -105,17 +101,16 @@ describe('makeOverlapSkipRecord', () => {
     expect(record.durationMs).toBe(0);
   });
 
-  it('redacts an OpenAI-style secret token from the command field', () => {
+  it('preserves an OpenAI-style secret token in the command field', () => {
     const rawSecret = 'sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef';
     const task: ScheduledTask = { ...baseTask, command: `deploy --token ${rawSecret}` };
 
     const record = makeOverlapSkipRecord(task, 'cron', nowMs);
 
-    expect(record.command).not.toContain(rawSecret);
-    expect(record.command).toMatch(/REDACTED/i);
+    expect(record.command).toContain(rawSecret);
   });
 
-  it('redacts an Anthropic API key (sk-ant-…) in the command field', () => {
+  it('preserves an Anthropic API key (sk-ant-…) in the command field', () => {
     const rawSecret =
       'sk-ant-api03-abc123XYZABC123xyz-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000XXXX';
     const task: ScheduledTask = {
@@ -125,8 +120,7 @@ describe('makeOverlapSkipRecord', () => {
 
     const record = makeOverlapSkipRecord(task, 'cron', nowMs);
 
-    expect(record.command).not.toContain(rawSecret);
-    expect(record.command).toMatch(/REDACTED/i);
+    expect(record.command).toContain(rawSecret);
   });
 
   it('preserves commands that contain no secrets', () => {

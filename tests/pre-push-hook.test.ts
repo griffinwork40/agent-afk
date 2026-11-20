@@ -175,10 +175,31 @@ describe('direct main push guard', () => {
     } finally { cleanup(result); }
   });
 
+  it('names the offending commit before refusing a disallowed subject', () => {
+    let shortSha = '';
+    const subject = 'fix: accidental direct push';
+    const result = runHook('', { setup(dir) {
+      const base = commit(dir, 'chore(release): base');
+      commit(dir, subject);
+      shortSha = git(dir, 'rev-parse', '--short', 'HEAD');
+      return mainUpdate(commit(dir, 'docs(changelog): prep'), base);
+    } });
+    try {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`pre-push: offending commit: ${shortSha} ${subject}\n${refusal}`);
+      expect(fs.existsSync(result.pnpmLog)).toBe(false);
+    } finally { cleanup(result); }
+  });
+
   it('refuses when the remote range cannot be inspected', () => {
     const result = runHook('', { setup: (dir) => mainUpdate(commit(dir, 'chore(release): v1'), 'f'.repeat(40)) });
-    try { expect(result.status).toBe(1); expect(result.stderr).toContain(refusal); }
-    finally { cleanup(result); }
+    try {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('pre-push: cannot inspect main push range');
+      expect(result.stderr).toContain('git fetch');
+      expect(result.stderr).not.toContain(refusal);
+      expect(fs.existsSync(result.pnpmLog)).toBe(false);
+    } finally { cleanup(result); }
   });
 
   it.each([

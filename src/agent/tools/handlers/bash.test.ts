@@ -947,7 +947,7 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
       const pidMatch = (result.content as string).match(/GRANDCHILD_PID=(\d+)/);
       expect(
         pidMatch,
-        'GRANDCHILD_PID marker missing from the interrupted output: echo did not flush before the 300 ms kill',
+        'GRANDCHILD_PID marker absent from interrupted output (marker not emitted before the 300 ms kill)',
       ).not.toBeNull();
       const grandchildPid = pidMatch![1]!;
 

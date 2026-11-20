@@ -13,6 +13,7 @@
 
 import { access, constants, readFile, writeFile, unlink } from 'fs/promises';
 import nodePath from 'path';
+import { fileURLToPath } from 'url';
 import { getStateDatabasePath, getSettingsPath, getWitnessRoot } from '../../paths.js';
 import { getDaemonLockPath } from '../../agent/daemon-instance.lock.js';
 import { isErrnoCode } from '../../utils/errors.js';
@@ -44,6 +45,8 @@ export interface MemoryStoreDeps {
   dbPath?: string;
   /** Open a SQLite DB and return a row count (or throw). Injected in tests. */
   openAndCount?: (dbPath: string) => Promise<number>;
+  /** Check whether the DB file exists without opening it. Injected in tests. */
+  pathExists?: (dbPath: string) => Promise<boolean>;
 }
 
 /**
@@ -54,6 +57,17 @@ export interface MemoryStoreDeps {
 export async function checkMemoryStore(deps: MemoryStoreDeps = {}): Promise<Check> {
   const dbPath = deps.dbPath ?? getStateDatabasePath();
 
+  const pathExists =
+    deps.pathExists ??
+    (async (p: string) => {
+      try {
+        await access(p, constants.F_OK);
+        return true;
+      } catch (err) {
+        if (isErrnoCode(err, 'ENOENT')) return false;
+        throw err;
+      }
+    });
   const openAndCount =
     deps.openAndCount ??
     (async (p: string) => {
@@ -71,6 +85,13 @@ export async function checkMemoryStore(deps: MemoryStoreDeps = {}): Promise<Chec
     });
 
   try {
+    if (!(await pathExists(dbPath))) {
+      return {
+        name: 'Memory Store (SQLite)',
+        state: 'pass',
+        detail: 'not yet created (will be initialised on first use)',
+      };
+    }
     const count = await openAndCount(dbPath);
     return {
       name: 'Memory Store (SQLite)',
@@ -232,6 +253,10 @@ export interface NodeVersionDeps {
    * dynamic import).  `undefined` (default) means "import semver at runtime".
    */
   satisfies?: ((version: string, range: string) => boolean) | null;
+  /** Module URL for locating package.json. Injected to cover encoded paths. */
+  moduleUrl?: string;
+  /** Read package.json while locating engines.node. Injected in tests. */
+  readPackageFile?: (path: string) => Promise<string>;
 }
 
 export async function checkNodeVersion(deps: NodeVersionDeps = {}): Promise<Check> {
@@ -245,12 +270,13 @@ export async function checkNodeVersion(deps: NodeVersionDeps = {}): Promise<Chec
     // file lives at src/cli/commands/, so ../../.. reaches the repo root.
     // In the published bundle it is at dist/cli.mjs, so ../  reaches the
     // repo root.  Try both candidates (same strategy as version-drift.ts).
-    const searchDir = nodePath.dirname(new URL(import.meta.url).pathname);
+    const searchDir = nodePath.dirname(fileURLToPath(deps.moduleUrl ?? import.meta.url));
     const candidates = ['../../../package.json', '../package.json'];
+    const readPackageFile = deps.readPackageFile ?? ((path: string) => readFile(path, 'utf-8'));
     for (const relative of candidates) {
       try {
         const pkgPath = nodePath.resolve(searchDir, relative);
-        const pkg = JSON.parse(await readFile(pkgPath, 'utf-8')) as {
+        const pkg = JSON.parse(await readPackageFile(pkgPath)) as {
           engines?: { node?: string };
         };
         if (pkg.engines?.node) {

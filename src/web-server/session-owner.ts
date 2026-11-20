@@ -73,6 +73,16 @@ export interface SessionOwnerOptions {
    * directory the operator launched the server in.
    */
   allowArbitraryCwd?: boolean;
+  /**
+   * Enable per-turn file checkpointing for /rewind (#4271).
+   *
+   * Default: `true` (on). Pass `false` to opt out, matching the REPL's
+   * `fileCheckpoints: false` mechanism. When enabled, `write_file`, `edit_file`,
+   * `patch_apply`, and bash calls in git repos snapshot file bytes each turn so
+   * `/rewind → files | both` can restore them. Setting this to `false` leaves
+   * conversation-only rewind available but prevents any file restoration.
+   */
+  fileCheckpoints?: boolean;
 }
 
 /** Owns the lifecycle of every session this process can actually drive. */
@@ -171,12 +181,15 @@ export class SessionOwner {
       hookRegistry: registry,
       permissionMode: this.options.permissionMode ?? 'default',
       provider: wiring.provider,
+      ...(wiring.providerFactory !== undefined ? { providerFactory: wiring.providerFactory } : {}),
       drainSubagents: wiring.drainSubagents,
       getPendingChildTerminalWrites: wiring.getPendingChildTerminalWrites,
       getPendingChildBillingStreams: wiring.getPendingChildBillingStreams,
       ...(wiring.systemPrompt !== undefined ? { systemPrompt: wiring.systemPrompt } : {}),
       ...(wiring.systemPromptSource !== undefined ? { systemPromptSource: wiring.systemPromptSource } : {}),
       ...(wiring.traceWriter !== undefined ? { traceWriter: wiring.traceWriter } : {}),
+      // File checkpointing for /rewind (#4271): default on, opt-out via fileCheckpoints:false.
+      enableFileCheckpointing: this.options.fileCheckpoints !== false,
       // Resume/fork fields — only safe resume-specific keys merged here.
       ...(resumeConfig.resume !== undefined ? { resume: resumeConfig.resume } : {}),
       ...(resumeConfig.sessionId !== undefined ? { sessionId: resumeConfig.sessionId } : {}),

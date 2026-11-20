@@ -1032,3 +1032,27 @@ describe('ISO date validation on addSchedule / updateSchedule', () => {
 
   });
 });
+
+
+describe('failure streak threshold mutation boundary', () => {
+  let dir: string;
+  afterEach(() => { if (dir) rmSyncRetry(dir); });
+  it('persists, forwards, updates, and clears the override', () => {
+    dir = mkdtempSync(join(tmpdir(), 'schedule-streak-'));
+    const path = join(dir, 'schedules.json');
+    const task = addSchedule({ name: 'Streak', command: 'x', cron: '* * * * *', enabled: true, failureStreakThreshold: 7 }, path);
+    expect(toScheduledTask(task).failureStreakThreshold).toBe(7);
+    expect(updateSchedule(task.id, { failureStreakThreshold: 2 }, path)?.failureStreakThreshold).toBe(2);
+    expect(updateSchedule(task.id, { failureStreakThreshold: null }, path)?.failureStreakThreshold).toBeUndefined();
+    expect(loadSchedules(path)[0]?.failureStreakThreshold).toBeUndefined();
+  });
+  it.each([0, -1, 1.5, NaN, Infinity])('rejects invalid threshold %s on add and update', (value) => {
+    dir = mkdtempSync(join(tmpdir(), 'schedule-streak-'));
+    const path = join(dir, 'schedules.json');
+    const base = { name: 'Streak', command: 'x', cron: '* * * * *', enabled: true };
+    expect(() => addSchedule({ ...base, failureStreakThreshold: value }, path)).toThrow(/positive integer/);
+    const task = addSchedule({ ...base, failureStreakThreshold: 7 }, path);
+    expect(() => updateSchedule(task.id, { failureStreakThreshold: value }, path)).toThrow(/positive integer/);
+    expect(loadSchedules(path)[0]?.failureStreakThreshold).toBe(7);
+  });
+});

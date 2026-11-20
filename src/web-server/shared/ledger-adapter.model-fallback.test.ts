@@ -19,11 +19,9 @@ describe('ledgerRecordToItem — model_fallback', () => {
     };
     const item = ledgerRecordToItem(record);
     expect(item).not.toBeUndefined();
-    expect(item?.kind).toBe('notice');
-    if (item?.kind === 'notice') {
-      expect(item.text).toContain('opus');
-      expect(item.text).toContain('sonnet');
-    }
+    expect(item).toMatchObject({
+      kind: 'notice', noticeKind: 'model-fallback', text: record['text'],
+    });
   });
 
   it('gracefully handles missing from/to fields', () => {

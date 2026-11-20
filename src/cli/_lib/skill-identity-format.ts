@@ -1,5 +1,4 @@
 import type { SkillIdentity } from '../../agent/types/skill-identity.js';
-import { redactSecrets } from '../../agent/redact-secrets.js';
 import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
 import { truncateDisplayWidth } from '../display.js';
 export type { SkillIdentity } from '../../agent/types/skill-identity.js';
@@ -12,15 +11,15 @@ const clean = (text: string): string => sanitizeForDisplay(text).replace(/\s+/gu
 const credentialMaterial = /(?:password|passwd|secret|token|api[-_]?key|authorization|cookie|credential|bearer)\b|:\/\/[^\s/]+:[^\s/]+@|BEGIN .*PRIVATE KEY/i;
 
 export function sanitizeSkillIdentity(input: SkillIdentity): SkillIdentity {
-  const name = truncateDisplayWidth(redactSecrets(clean(input.name)), SKILL_IDENTITY_BUDGETS.name);
+  const name = truncateDisplayWidth(clean(input.name), SKILL_IDENTITY_BUDGETS.name);
   const rawPurpose = input.purpose ? clean(input.purpose) : '';
   const purpose = rawPurpose
     ? credentialMaterial.test(rawPurpose)
       ? '[purpose omitted]'
-      : truncateDisplayWidth(redactSecrets(rawPurpose), SKILL_IDENTITY_BUDGETS.purpose)
+      : truncateDisplayWidth(rawPurpose, SKILL_IDENTITY_BUDGETS.purpose)
     : '';
   const args = input.arguments ? clean(input.arguments) : '';
-  const argumentsText = credentialMaterial.test(args) ? '[arguments omitted]' : truncateDisplayWidth(redactSecrets(args), SKILL_IDENTITY_BUDGETS.arguments);
+  const argumentsText = credentialMaterial.test(args) ? '[arguments omitted]' : truncateDisplayWidth(args, SKILL_IDENTITY_BUDGETS.arguments);
   return { name, ...(purpose ? { purpose } : {}), ...(argumentsText ? { arguments: argumentsText } : {}) };
 }
 

@@ -89,3 +89,13 @@ describe('validateScheduledTask — expiresAt ISO validation', () => {
     ).toThrow(/\(got: bad\)/);
   });
 });
+
+
+describe('failure streak threshold validation at registration', () => {
+  it.each([0, -1, 1.5, NaN, Infinity])('rejects %s', (failureStreakThreshold) => {
+    expect(() => validateScheduledTask({ ...baseTask, failureStreakThreshold })).toThrow(/positive integer/);
+  });
+  it('accepts a positive threshold without a small upper cap', () => {
+    expect(() => validateScheduledTask({ ...baseTask, failureStreakThreshold: 1000 })).not.toThrow();
+  });
+});

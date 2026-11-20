@@ -68,6 +68,18 @@ import { logFragmentTokens } from '../shared/prompt-fragment-tokens.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
+/** Compute the includeSkillManifest flag for buildSystemPromptWiring. Mirrors
+ * resolveIncludeSkillManifest in anthropic-direct/provider-query-setup.ts. */
+function resolveIncludeSkillManifest(
+  hasSkillExecutor: boolean,
+  grantsTool: (toolName: string) => boolean,
+): boolean {
+  return skillManifestGranted(
+    hasSkillExecutor,
+    grantsTool,
+    isSkillManifestAlways(),
+  );
+}
 
 export class OpenAICompatibleProvider implements ModelProvider {
   readonly name = PROVIDER_NAME;
@@ -299,10 +311,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // Gate: include iff executor present AND `skill` is not explicitly denied.
       // Uses fail-open fallback for absent callbacks (pre-gate compat). See
       // `skillManifestGranted` in tool-grant.ts for the full rule.
-      includeSkillManifest: skillManifestGranted(
+      includeSkillManifest: resolveIncludeSkillManifest(
         this.providerOpts.skillExecutor !== undefined && this.providerOpts.skillExecutor !== null,
         (toolName) => this.grantsTool(toolName),
-        isSkillManifestAlways(),
       ),
       workspacePromptEnabled: grantsWorkspacePrompt((toolName) => this.grantsTool(toolName)),
       readOnlyMemory: this.providerOpts.readOnlyMemory,

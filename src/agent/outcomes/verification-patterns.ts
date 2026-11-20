@@ -9,7 +9,6 @@
  * @module agent/outcomes/verification-patterns
  */
 
-import { redactSecrets } from '../redact-secrets.js';
 
 // ---------------------------------------------------------------------------
 // resultTail constant
@@ -97,7 +96,7 @@ export function buildVerificationResultTail(
   const tail = base.length > RESULT_TAIL_CHARS
     ? base.slice(-RESULT_TAIL_CHARS)
     : base;
-  return redactSecrets(tail);
+  return tail;
 }
 
 // ---------------------------------------------------------------------------

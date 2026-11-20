@@ -123,3 +123,55 @@ describe('InputCore surrogate-pair safety (#4960)', () => {
     assertNeverMidSurrogate('\u{1F642}\u{1F642}\u{1F642}\u{1F642}\u{1F642}', 4, 0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Word-jump grapheme safety (#4987)
+// ---------------------------------------------------------------------------
+// wordStartBefore / wordEndAfter previously stepped by UTF-16 code units
+// (charAt), which is surrogate-safe but not grapheme-safe. A cursor positioned
+// after the high surrogate of an emoji would leave i pointing mid-grapheme.
+// These tests FAIL on the unfixed code and PASS after the fix.
+// ---------------------------------------------------------------------------
+
+describe('InputCore word-jump grapheme safety (#4987)', () => {
+  // 'hello 🙂 world' — emoji is U+1F642 (two UTF-16 code units, indices 6-7)
+  // Buffer indices: h=0 e=1 l=2 l=3 o=4 SP=5 🙂=[6,7] SP=8 w=9 o=10 r=11 l=12 d=13
+  const BUF = 'hello \u{1F642} world';
+
+  it('deleteWordBackward from after emoji does not split the emoji', () => {
+    // Cursor at index 8 (after emoji, before space+world).
+    // deleteWordBackward should remove the whole emoji as one grapheme, not
+    // split it at the surrogate boundary (index 7).
+    const state = { buffer: BUF, cursor: 8 };
+    const result = InputCore.deleteWordBackward(state);
+    // The emoji must be entirely removed — it must not appear in the remaining buffer.
+    expect(result.buffer).not.toContain('\u{1F642}');
+    expect(result.buffer).toBe('hello  world');
+  });
+
+  it('deleteWordForward from before emoji does not split the emoji', () => {
+    // Cursor at index 6 (start of emoji).
+    // deleteWordForward should consume the whole emoji as one word (non-whitespace run).
+    const state = { buffer: BUF, cursor: 6 };
+    const result = InputCore.deleteWordForward(state);
+    // The emoji must be entirely removed.
+    expect(result.buffer).not.toContain('\u{1F642}');
+    expect(result.buffer).toBe('hello  world');
+  });
+
+  it('moveWordBackward from after emoji lands at emoji start, not mid-surrogate', () => {
+    // Cursor at 8 (after the emoji grapheme). Moving backward over the word
+    // (the emoji itself) must land at index 6, not 7 (mid-surrogate).
+    const state = { buffer: BUF, cursor: 8 };
+    const result = InputCore.moveWordBackward(state);
+    expect(result.cursor).toBe(6);
+  });
+
+  it('moveWordForward from before emoji lands after emoji, not mid-surrogate', () => {
+    // Cursor at 6 (start of emoji). Moving forward over the word must land
+    // at index 8 (after full emoji), not 7 (mid-surrogate).
+    const state = { buffer: BUF, cursor: 6 };
+    const result = InputCore.moveWordForward(state);
+    expect(result.cursor).toBe(8);
+  });
+});

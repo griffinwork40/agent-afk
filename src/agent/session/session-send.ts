@@ -57,6 +57,7 @@ export async function sendMessage(
   deps: SendDeps,
 ): Promise<Message> {
   deps.runner.assertCanSend();
+  const sendId = deps.runner.nextSendId();
   const config = deps.getConfig();
   const timeoutMs = config.timeoutMs ?? DEFAULT_SESSION_TIMEOUT_MS;
 
@@ -104,7 +105,8 @@ export async function sendMessage(
       label: deps.getSessionId() ?? 'session',
     });
   } finally {
-    if (deps.getState() === 'processing') deps.setState('idle');
+    // Only the most recent send releases the busy state (see `hasNewerSend`).
+    if (deps.getState() === 'processing' && !deps.runner.hasNewerSend(sendId)) deps.setState('idle');
   }
 }
 
@@ -154,11 +156,13 @@ export async function* sendMessageStream(
   deps: SendDeps,
 ): AsyncIterableIterator<OutputEvent> {
   deps.runner.assertCanSend();
+  const sendId = deps.runner.nextSendId();
   deps.setState('streaming');
   try {
     yield* withSkillReferenceTelemetry(content, sendMessageStreamInternal(content, deps), deps);
   } finally {
-    if (deps.getState() === 'streaming') deps.setState('idle');
+    // Only the most recent send releases the busy state (see `hasNewerSend`).
+    if (deps.getState() === 'streaming' && !deps.runner.hasNewerSend(sendId)) deps.setState('idle');
   }
 }
 
@@ -200,24 +204,38 @@ export function sendMessageStreamInternal(
   // user actually RESTED in the current mode, so a transient-default stash
   // from `setPermissionMode` must not survive into a later `default → plan`.
   deps.planExit.clearModeBeforeDefault();
-  // A new user turn starts a fresh visible-plan-text window and refusal budget
-  // for the `exit_plan_mode` gate (see plan-text-tracker.ts).
-  deps.planExit.planText.beginTurn();
   // #3442: reduced-surface stderr warning, once per process, at the first real turn.
   warnReducedSurfaceOnTurn(deps.getConfig());
-  return deps.runner.runStream(content, deps.getInputStream());
+  // A new user turn starts a fresh visible-plan-text window and refusal budget
+  // for the `exit_plan_mode` gate (see plan-text-tracker.ts). Reset when the
+  // turn actually starts, not now: an earlier ESC'd turn may still be settling,
+  // and its tail text must not count toward this turn's plan.
+  return deps.runner.runStream(content, deps.getInputStream(), () =>
+    deps.planExit.planText.beginTurn(),
+  );
 }
 
 /**
- * Interrupt an in-progress provider turn. No-op when idle or closed.
+ * Interrupt the turn the session is working on. No-op when idle or closed.
+ *
+ * Contract: the provider is told to stop at most once per turn, and only while
+ * that turn is in flight. Session state cannot tell: it reads `streaming` both
+ * while a send is still waiting for the previous turn to stop and after the
+ * provider has already produced the turn's last event. An interrupt forwarded
+ * then has no turn to act on; the provider parks it and aborts the NEXT turn
+ * before it starts, which ends the provider stream for good. So the runner,
+ * which knows, decides: a send that has not started is cancelled without
+ * touching the provider, and a turn that already ended is left alone.
  */
 export async function interrupt(
-  deps: Pick<SendDeps, 'getState' | 'setState' | 'getProviderQuery'>,
+  deps: Pick<SendDeps, 'getState' | 'setState' | 'getProviderQuery' | 'runner'>,
 ): Promise<void> {
   const state = deps.getState();
   if (state !== 'streaming' && state !== 'processing') return;
+  const target = deps.runner.claimInterrupt();
+  if (target === 'none') return;
   deps.setState('idle');
-  await deps.getProviderQuery().interrupt();
+  if (target === 'provider') await deps.getProviderQuery().interrupt();
 }
 
 /**

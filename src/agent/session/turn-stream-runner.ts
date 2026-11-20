@@ -18,7 +18,12 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { AbortError } from '../../utils/errors.js';
 import { debugLog } from '../../utils/debug.js';
-import { buildFatalDone } from './turn-stream-runner.fatal-done.js';
+import { buildFatalDone, buildInterruptedDone } from './turn-stream-runner.fatal-done.js';
+import {
+  isTerminalProviderEvent,
+  ProviderTurns,
+  type InterruptTarget,
+} from './turn-stream-runner.abandoned-turn.js';
 import { transformProviderEvent, type TransformDeps } from './stream-consumer.js';
 import type { AccountingAccumulator } from './accounting-accumulator.js';
 import type { LedgerLifecycle } from './ledger-lifecycle.js';
@@ -112,14 +117,49 @@ export class TurnStreamRunner {
    * the time the provider calls this seam.
    */
   private _activeDeps: TransformDeps | null = null;
+  /**
+   * The provider turn in flight and the send waiting behind it. The single
+   * source of truth for "is a provider turn still running?", which session
+   * state is not. See turn-stream-runner.abandoned-turn.ts.
+   */
+  private readonly turns: ProviderTurns;
 
   constructor(deps: TurnRunnerDeps) {
     this.deps = deps;
+    this.turns = new ProviderTurns({
+      consume: (event, turnDeps) => this.consumeProviderEvent(event, turnDeps),
+      interruptProvider: () => this.deps.getProviderQuery().interrupt(),
+      recordSyntheticDone: (turn) => this.recordSyntheticDone(turn.turnStartMs, turn.interrupted),
+    });
+    // Every seal path (close, reset, abort) must leave the ledger with an
+    // abandoned turn's `done`, even when it has not finished stopping (#4830).
+    deps.ledger.setBeforeSeal(() => this.turns.seal());
+  }
+
+  /**
+   * Decide what a session interrupt acts on. `provider` means the caller must
+   * forward it; a send still waiting to start has already been cancelled.
+   */
+  claimInterrupt(): InterruptTarget {
+    return this.turns.claimInterrupt();
+  }
+
+  /** Id the next send will get; pair with {@link hasNewerSend}. */
+  nextSendId(): number {
+    return this.turns.nextSendId;
+  }
+
+  /** True when a later send has taken over the session's busy state. */
+  hasNewerSend(id: number): boolean {
+    return this.turns.hasNewerSend(id);
   }
 
   /** Return the current turn's accumulated tool events, or [] when no turn is active. */
   getActiveTurnToolEvents(): readonly ToolEventMin[] {
-    return (this._activeDeps as { _turnToolEvents?: ToolEventMin[] } | null)?._turnToolEvents ?? [];
+    // An abandoned turn is still in flight for the provider after its send has
+    // returned, so fall back to the tracker's view of it.
+    const deps = this._activeDeps ?? this.turns.openDeps;
+    return (deps as { _turnToolEvents?: ToolEventMin[] } | null)?._turnToolEvents ?? [];
   }
 
   /** Pre-turn guard: throws when the session cannot accept a new message. */
@@ -245,13 +285,37 @@ export class TurnStreamRunner {
    * {@link OutputEvent}. Awaits `initPromise` first so the session id exists.
    *
    * Corresponds to `AgentSession.sendMessageStreamInternal`.
+   *
+   * `onTurnStart` runs once this send owns the provider: after any earlier
+   * turn has been read out (its tail events observed) and only if this send was
+   * not cancelled. Per-turn state that provider events feed must be reset here,
+   * not at send time, or a settling turn's tail leaks into this one.
    */
   async *runStream(
     content: string | ContentBlockParam[],
     inputStream: { pushUserMessage: (c: string | ContentBlockParam[]) => void },
+    onTurnStart?: () => void,
   ): AsyncIterableIterator<OutputEvent> {
-    const initPromise = this.deps.getInitPromise();
-    if (initPromise) await initPromise;
+    // Contract: one send owns one provider turn. Wait until the session is
+    // initialized and no earlier turn is in flight BEFORE this message is
+    // pushed, so this send can only ever read its own turn's events. Until
+    // then an interrupt cancels this send instead of reaching the provider.
+    const send = this.turns.beginSend();
+    try {
+      await this.turns.untilClear(send, this.deps.getInitPromise());
+    } catch (err) {
+      this.turns.withdraw(send);
+      throw err;
+    }
+    if (send.cancelled) {
+      // Interrupted, or the conversation ended, before it started: nothing
+      // reached the provider, so there is no turn to record. The consumer
+      // still gets a normal terminal.
+      this.turns.withdraw(send);
+      yield buildInterruptedDone(0);
+      return;
+    }
+    onTurnStart?.();
 
     const effectiveContent = this.withPendingContext(content);
     const historySummary =
@@ -295,88 +359,142 @@ export class TurnStreamRunner {
     // terminal (unchanged from main); the ledger gets exactly one `done` per
     // turn so events.jsonl readers always record cost/duration/stopReason.
     let doneYielded = false;
+    let threw = false;
 
     // Record the wall-clock start of this turn so the synthetic `done` can
     // carry a partial elapsed duration even when the provider never reported one.
     const turnStartMs = Date.now();
+    const iterator = this.deps.getProviderIterator();
+    // No await between the cancellation check above and this line: from here
+    // on an interrupt targets this turn.
+    const turn = this.turns.startTurn(send, deps, iterator, turnStartMs);
 
     try {
       while (true) {
-        const result = await this.deps.getProviderIterator().next();
-        if (result.done) break;
-        const event = result.value;
-        this.deps.observeProviderEvent?.(event);
-        const output = transformProviderEvent(event, deps);
-
-        if (output) {
-          if (output.type === 'done') {
-            doneYielded = true;
-            this.deps.incTurnCount();
-            // A completed turn clears a prior error so the seal status
-            // reflects the FINAL turn's outcome, not any earlier error.
-            this.deps.accounting.clearProviderError();
-
-            // Contract: Stop fires exactly once per top-level turn, from the
-            // session layer, so every surface (REPL, Telegram, daemon/cron,
-            // chat) gets it. It runs BEFORE `done` is yielded, so a surface
-            // never finalizes a turn whose Stop hooks are still running; the
-            // wait is bounded by STOP_HOOK_HANDLER_TIMEOUT_MS. Forks and
-            // un-wired surfaces are no-ops inside dispatchTurnStop.
-            //
-            // Finding 2: when the provider exposes setBeforeTurnEnd AND stop
-            // wiring is active, the provider seam (stop-hook-continuation.ts)
-            // already dispatched Stop BEFORE turn.completed was yielded —
-            // dispatching it again here would fire Stop twice per turn.
-            // Skip dispatchTurnStop in that case.
-            // Finding 2: use the runtime flag set by buildBeforeTurnEnd
-            // when the seam actually fired this turn. The old static check
-            // (`setBeforeTurnEnd !== undefined`) wrongly suppressed dispatch
-            // when the provider exposed the seam but it never ran.
-            const seamAlreadyDispatched =
-              this.deps.getStopWiring?.()?.stopDispatchedBySeam === true;
-            if (!seamAlreadyDispatched) {
-              await dispatchTurnStop({
-                config: this.deps.getConfig(),
-                wiring: this.deps.getStopWiring?.(),
-                sessionId: this.deps.getSessionId(),
-                signal: this.deps.getAbortController().signal,
-                conversationHistory: this.deps.conversationHistory,
-                toolEvents: deps._turnToolEvents ?? [],
-              });
-            }
-          } else if (output.type === 'error') {
-            // Terminal-cause flag: a per-turn provider error must flip the
-            // eventual clean close from `succeeded` to `failed`.
-            this.deps.accounting.markProviderError();
-          }
-          this.deps.ledger.recordEvent(output);
-          this.deps.outputBroadcast.push(output);
-          yield output;
-          if (output.type === 'done' || output.type === 'error') break;
+        const result = await iterator.next();
+        if (result.done) {
+          this.turns.endTurn(turn);
+          break;
         }
+        // Ordering at the terminal event. (1) Mark it BEFORE handling: the
+        // provider has no turn in flight once it has produced its terminal, so
+        // an interrupt from here on must not be forwarded. (2) End the turn
+        // only AFTER handling: a send waiting behind this turn must not start
+        // until the Stop hook has run and the `done` is in the ledger, or the
+        // next turn's records would land ahead of this turn's `done`. (3) End
+        // it BEFORE the yield: a consumer that closes the stream exactly at
+        // the terminal yield has completed the turn, not abandoned it.
+        const terminal = isTerminalProviderEvent(result.value);
+        if (terminal) this.turns.markTerminal(turn);
+        const output = await this.consumeProviderEvent(result.value, deps);
+        if (terminal) this.turns.endTurn(turn);
+        if (output) {
+          if (output.type === 'done') doneYielded = true;
+          yield output;
+        }
+        if (terminal) break;
       }
+    } catch (err) {
+      threw = true;
+      throw err;
     } finally {
-      // Clear the active deps ref when the turn ends (clean, abort, or error).
-      this._activeDeps = null;
+      const stateAtExit = this.deps.getState();
       // Invariant: `finally` is the ONLY path an aborted or timed-out child
       // takes — closing the generator runs it while `break` does not reach it.
-      if (this.deps.getState() === 'streaming') {
+      // A later send may already be waiting behind this turn and own the busy
+      // state; only the most recent send marks the session idle.
+      if (stateAtExit === 'streaming' && !this.turns.hasNewerSend(send.id)) {
         this.deps.setState('idle');
       }
-      // Invariant (#4830): ledger gets exactly one `done` per turn. When the
-      // loop exits via a fatal path (provider 4xx, stream stall, connection
-      // error, budget ceiling, or any unhandled throw) `doneYielded` is still
-      // false. Record a synthetic `done` to the ledger ONLY — no yield, no
-      // outputBroadcast push — so live stream consumers keep `error` as their
-      // single terminal while events.jsonl readers always see a `done` with
-      // stopReason / durationMs. See turn-stream-runner.fatal-done.ts for the
-      // stopReason mapping.
-      if (!doneYielded) {
-        const elapsed = Date.now() - turnStartMs;
-        const signal = this.deps.getAbortController().signal;
-        this.deps.ledger.recordEvent(buildFatalDone(signal, elapsed));
+      // Clear the active deps ref when this send ends (clean, abort, or error),
+      // unless a later send has already installed its own.
+      if (this._activeDeps === deps) this._activeDeps = null;
+      if (this.turns.isOpen(turn) && !turn.terminal && !threw && stateAtExit !== 'closed') {
+        // The consumer closed the stream mid-turn. The session reads the rest;
+        // the real `done` is recorded then, so no synthetic one here (#4830:
+        // exactly one `done` per turn).
+        this.turns.abandon(turn);
+      } else {
+        this.turns.endTurn(turn);
+        // Invariant (#4830): ledger gets exactly one `done` per turn. When the
+        // loop exits via a fatal path (provider 4xx, stream stall, connection
+        // error, budget ceiling, or any unhandled throw) `doneYielded` is still
+        // false. Record a synthetic `done` to the ledger ONLY — no yield, no
+        // outputBroadcast push — so live stream consumers keep `error` as their
+        // single terminal while events.jsonl readers always see a `done` with
+        // stopReason / durationMs. See turn-stream-runner.fatal-done.ts for the
+        // stopReason mapping.
+        if (!doneYielded) this.recordSyntheticDone(turnStartMs);
       }
     }
+  }
+
+  /**
+   * Handle one provider event: transform, per-turn accounting, Stop dispatch,
+   * ledger, broadcast. Returns the output to yield, or null. Shared by the live
+   * loop and abandoned-turn settlement so a turn's events are processed the
+   * same way whether or not a consumer is still reading.
+   */
+  private async consumeProviderEvent(
+    event: ProviderEvent,
+    deps: TransformDeps,
+  ): Promise<OutputEvent | null> {
+    this.deps.observeProviderEvent?.(event);
+    const output = transformProviderEvent(event, deps);
+    if (!output) return null;
+
+    if (output.type === 'done') {
+      this.deps.incTurnCount();
+      // A completed turn clears a prior error so the seal status
+      // reflects the FINAL turn's outcome, not any earlier error.
+      this.deps.accounting.clearProviderError();
+
+      // Contract: Stop fires exactly once per top-level turn, from the
+      // session layer, so every surface (REPL, Telegram, daemon/cron,
+      // chat) gets it. It runs BEFORE `done` is yielded, so a surface
+      // never finalizes a turn whose Stop hooks are still running; the
+      // wait is bounded by STOP_HOOK_HANDLER_TIMEOUT_MS. Forks and
+      // un-wired surfaces are no-ops inside dispatchTurnStop.
+      //
+      // Finding 2: when the provider exposes setBeforeTurnEnd AND stop
+      // wiring is active, the provider seam (stop-hook-continuation.ts)
+      // already dispatched Stop BEFORE turn.completed was yielded —
+      // dispatching it again here would fire Stop twice per turn.
+      // Skip dispatchTurnStop in that case.
+      // Finding 2: use the runtime flag set by buildBeforeTurnEnd
+      // when the seam actually fired this turn. The old static check
+      // (`setBeforeTurnEnd !== undefined`) wrongly suppressed dispatch
+      // when the provider exposed the seam but it never ran.
+      const seamAlreadyDispatched =
+        this.deps.getStopWiring?.()?.stopDispatchedBySeam === true;
+      if (!seamAlreadyDispatched) {
+        await dispatchTurnStop({
+          config: this.deps.getConfig(),
+          wiring: this.deps.getStopWiring?.(),
+          sessionId: this.deps.getSessionId(),
+          signal: this.deps.getAbortController().signal,
+          conversationHistory: this.deps.conversationHistory,
+          toolEvents: deps._turnToolEvents ?? [],
+        });
+      }
+    } else if (output.type === 'error') {
+      // Terminal-cause flag: a per-turn provider error must flip the
+      // eventual clean close from `succeeded` to `failed`.
+      this.deps.accounting.markProviderError();
+    }
+    this.deps.ledger.recordEvent(output);
+    this.deps.outputBroadcast.push(output);
+    return output;
+  }
+
+  /** Ledger-only synthetic `done` for a turn that ended without a real one. */
+  private recordSyntheticDone(turnStartMs: number, interrupted = false): void {
+    const elapsed = Date.now() - turnStartMs;
+    this.deps.ledger.recordEvent(
+      interrupted
+        ? buildInterruptedDone(elapsed)
+        : buildFatalDone(this.deps.getAbortController().signal, elapsed),
+    );
   }
 
   /**
