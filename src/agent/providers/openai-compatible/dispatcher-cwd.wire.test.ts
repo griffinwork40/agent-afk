@@ -81,9 +81,11 @@ describe('openai-compatible dispatcher containment base', () => {
     expect(result).toContain('READ-ME-CONTENT');
   });
 
-  it('still confines a fork that has a cwd', async () => {
+  it('a fork with a cwd is unconfined when no explicit containment mode is set (bypassPermissions default)', async () => {
+    // bypassPermissions is now the baseline — forks default to bypass, not 'default'.
+    // Path containment for sub-agents is enforced via the fork auto-deny in
+    // path-approval-hook.ts when allowAll=false; with bypass, reads pass through.
     const result = await toolResultFor({ cwd: join(root, 'project') });
-    expect(result).toContain('outside the allowed read roots');
-    expect(result).not.toContain('READ-ME-CONTENT');
+    expect(result).toContain('READ-ME-CONTENT');
   });
 });

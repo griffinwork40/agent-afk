@@ -52,12 +52,12 @@ export async function togglePlanMode(
   const current = ctx.stats.permissionMode === 'plan';
   const next = desired !== undefined ? desired : !current;
 
-  // Exiting plan restores the pre-plan mode (falls back to 'default' when none
-  // was captured); entering plan flips to 'plan'. The `?.` guards session-likes
-  // / test doubles that predate getPrePlanMode (it resolves undefined → default).
+  // Exiting plan restores the pre-plan mode (falls back to 'bypassPermissions'
+  // when none was captured); entering plan flips to 'plan'. The `?.` guards
+  // session-likes / test doubles that predate getPrePlanMode.
   const target: PermissionMode = next
     ? 'plan'
-    : (ctx.session.current.getPrePlanMode?.() ?? 'default');
+    : (ctx.session.current.getPrePlanMode?.() ?? 'bypassPermissions');
 
   try {
     await ctx.session.current.setPermissionMode(target);

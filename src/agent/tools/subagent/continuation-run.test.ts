@@ -79,7 +79,7 @@ function installTransport(seen: Seen[], opts: { hold?: Promise<void>; cutFrom?: 
                 // whose JournalSync.seed() writes the seeded history into the
                 // child's journal. The fake only appends THIS run's messages.
                 const state = createSessionState({
-                  model: 'claude-sonnet-4-5', permissionMode: 'default', userSystem: null, toolDispatcher: {} as never,
+                  model: 'claude-sonnet-4-5', permissionMode: 'bypassPermissions', userSystem: null, toolDispatcher: {} as never,
                   ...(cfg.resumeMessages !== undefined && cfg.resumeMessages.length > 0
                     ? { initialMessages: anthropicJournalAdapter.fromJournalMessages(cfg.resumeMessages) } : {}),
                   ...(cfg.messageJournal !== undefined ? { messageJournal: cfg.messageJournal } : {}),
@@ -250,10 +250,13 @@ describe('D8 continuation through the agent executor', () => {
     const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
     const chainId = first.continuation!.chainId;
     const chain = registry.get(chainId)!;
-    expect(chain.settling).toBeDefined(); // flush is still held — settling must be set
-    expect(chain.inFlight).toBe(true);
-    // Release the flush so settling can complete, then issue the continuation.
-    releaseFlush();
+    try {
+      expect(chain.settling).toBeDefined(); // flush is still held — settling must be set
+      expect(chain.inFlight).toBe(true);
+    } finally {
+      // Release the flush so settling can complete, then issue the continuation.
+      releaseFlush();
+    }
     const second = await run({ prompt: 'immediately', continuation_chain_id: chainId });
     expect(second.isError, second.content).not.toBe(true);
     expect(delayed).toBeGreaterThan(0);

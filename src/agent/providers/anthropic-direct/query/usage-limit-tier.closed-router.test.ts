@@ -133,19 +133,42 @@ describe('turnWithUsageLimitRetry — closed-router rotation replay', () => {
 
   it('calls adoptFreshClient before replay when rotation succeeds', async () => {
     tryClosedRouterRotateMock.mockResolvedValue({ rotated: true, kind: 'rotated' });
+
+    // The sentinel client is what adoptFreshClient puts onto runInput.client so
+    // the replay travels on the NEW credential, not the stale one.
+    const sentinelClient = { __sentinel: true } as never;
+    adoptFreshClientMock.mockImplementation(
+      (_ctx: unknown, runInput: RunTurnInput) => {
+        runInput.client = sentinelClient;
+        return Promise.resolve({ swapped: true, accountId: 'acct-new', oldAccountId: 'acct' });
+      },
+    );
+
     // First attempt: 429. Second attempt (replay): success.
     scriptTurns(
       [{ type: 'error', error: limit429() }],
       [done],
     );
 
-    const events = await drain(makeLayer());
+    const input = makeInput();
+    const events = await drain(makeLayer(), input);
 
     // adoptFreshClient must have been called (item 1 fix: rebuild the client).
     expect(adoptFreshClientMock).toHaveBeenCalledTimes(1);
 
     // The turn must have been replayed (runTurn called twice).
     expect(runTurnMock).toHaveBeenCalledTimes(2);
+
+    // The second runTurn call must have received the sentinel client, proving
+    // the replay ran on the adopted credential and not the stale original.
+    const secondCallInput = runTurnMock.mock.calls[1]?.[0] as RunTurnInput;
+    expect(secondCallInput.client).toBe(sentinelClient);
+
+    // adoptFreshClient must have been invoked BEFORE the second runTurn
+    // (ordering check: smaller invocationCallOrder index = called earlier).
+    const adoptOrder = adoptFreshClientMock.mock.invocationCallOrder[0]!;
+    const secondRunOrder = runTurnMock.mock.invocationCallOrder[1]!;
+    expect(adoptOrder).toBeLessThan(secondRunOrder);
 
     // The done event from the replay must surface.
     expect(events.some((e) => e.type === 'turn.completed')).toBe(true);
@@ -169,15 +192,32 @@ describe('turnWithUsageLimitRetry — closed-router rotation replay', () => {
   });
 
   it('calls tryClosedRouterRotate at most once per turn (once-per-turn guard)', async () => {
-    // rotation succeeds but adoptFreshClient fails → falls through to park,
-    // which eventually surfaces the error. The rotation must NOT be retried.
+    // Rotation succeeds and adoption succeeds → the tier replays the turn.
+    // The replayed turn hits a SECOND usage-limit 429, which would re-enter
+    // the rotation block if closedRouterTried were not set. The guard must
+    // prevent a second rotation call, so tryClosedRouterRotate is called
+    // exactly once regardless of how many 429s the replay produces.
     tryClosedRouterRotateMock.mockResolvedValue({ rotated: true, kind: 'rotated' });
-    adoptFreshClientMock.mockResolvedValue(null); // adoption failure
-    scriptTurns([{ type: 'error', error: limit429() }]);
+    adoptFreshClientMock.mockImplementation(
+      (_ctx: unknown, runInput: RunTurnInput) => {
+        runInput.client = { __adopted: true } as never;
+        return Promise.resolve({ swapped: true, accountId: 'acct-new', oldAccountId: 'acct' });
+      },
+    );
+    // First attempt: 429 → triggers rotation + replay.
+    // Second attempt (replay): another 429 → must NOT trigger rotation again.
+    scriptTurns(
+      [{ type: 'error', error: limit429() }],
+      [{ type: 'error', error: limit429() }],
+    );
 
     await drain(makeLayer());
 
     expect(tryClosedRouterRotateMock).toHaveBeenCalledTimes(1);
+    // The second runTurn call must have received the adopted client, proving the
+    // replay ran on the rotated credential and not the stale original.
+    const secondCallInput = runTurnMock.mock.calls[1]?.[0] as RunTurnInput;
+    expect(secondCallInput.client).toStrictEqual({ __adopted: true });
   });
 
   it('falls through to park when rotation returns rotated:false', async () => {

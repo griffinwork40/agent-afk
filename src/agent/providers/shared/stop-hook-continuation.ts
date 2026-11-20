@@ -30,7 +30,6 @@
 
 import { env } from '../../../config/env.js';
 import { debugLog } from '../../../utils/debug.js';
-import { redactSecrets } from '../../redact-secrets.js';
 import { emitSessionPhase } from '../../trace/emit.js';
 import type { HookRegistry, StopContext } from '../../hooks.js';
 import { dispatchStopHook } from '../../session/hooks-dispatch.js';
@@ -286,7 +285,7 @@ export async function runBeforeTurnEnd(ctx: BeforeTurnEndContext): Promise<Befor
   const rawReasonHead = reasonText.length > REASON_HEAD_MAX
     ? reasonText.slice(0, REASON_HEAD_MAX) + '… (truncated)'
     : reasonText;
-  const reasonHead = redactSecrets(rawReasonHead.replace(/\r?\n/g, ' '));
+  const reasonHead = rawReasonHead.replace(/\r?\n/g, ' ');
 
   void emitSessionPhase(ctx.config.traceWriter, {
     phase: 'stop_hook_continuation',

@@ -18,6 +18,7 @@
 
 import { readFileSync, existsSync } from 'fs';
 import { parseToolsConfig } from './json-tier-parse.tools.js';
+import { warnPermissionModeRemoval } from './permission-mode-warning.js';
 import { parseDaemonBlock } from './json-tier-parse.daemon.js';
 import { parseTelegramBlock } from './json-tier-parse.telegram.js';
 import { parseInteractiveBlock } from './json-tier-parse.interactive.js';
@@ -91,8 +92,10 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
     // Validate against the known modes; ignore garbage so a typo can't
     // silently land the session in an unexpected (or dangerous) mode.
     const pm = json.permissionMode;
-    if (pm === 'default' || pm === 'plan' || pm === 'autonomous' || pm === 'bypassPermissions') {
+    if (pm === 'plan' || pm === 'autonomous' || pm === 'bypassPermissions') {
       config.permissionMode = pm;
+    } else if (pm === 'default') {
+      warnPermissionModeRemoval();
     }
   }
 

@@ -6,7 +6,7 @@ vi.mock('../auth/credential-resolver.js', () => ({
 
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import { defaultTierModelFallback } from '../subagent/resolve-child-model.js';
-import { prepareDispatchModel, type DispatchCredentialPolicy } from './dispatch-preparation.js';
+import { prepareDispatchModel, resolveChildMaxDepth, type DispatchCredentialPolicy } from './dispatch-preparation.js';
 import { buildChildConfigWithoutNesting, type BuildChildConfigArgs } from './subagent/child-config.js';
 import { buildComposeDagNode, type BuildComposeDagNodeArgs } from './compose-executor.node-build.js';
 import type { SubagentDAGNode } from '../dag-subagent.js';
@@ -171,5 +171,60 @@ describe('shared dispatch model preparation (#4042)', () => {
     expect(buildChildConfigWithoutNesting(agent)).toMatchObject({ childConfig: { model: 'opus' }, childModelSource: 'namedAgent' });
     agent.parsed.model = 'haiku';
     expect(buildChildConfigWithoutNesting(agent)).toMatchObject({ childConfig: { model: 'haiku' }, childModelSource: 'callSite' });
+  });
+});
+
+describe('resolveChildMaxDepth (#4042 Stage 3 — shared depth preparation)', () => {
+  it('returns an explicit cap unchanged when provided', () => {
+    expect(resolveChildMaxDepth(5)).toBe(5);
+    expect(resolveChildMaxDepth(0)).toBe(0);
+    expect(resolveChildMaxDepth(1)).toBe(1);
+  });
+
+  it('falls back to the env-var default (DEFAULT_MAX_NESTING_DEPTH = 3) when undefined and no env override', () => {
+    // Clear any env override so resolveMaxNestingDepth returns the hardcoded default.
+    vi.stubEnv('AFK_MAX_NESTING_DEPTH', '');
+    expect(resolveChildMaxDepth(undefined)).toBe(3);
+    vi.unstubAllEnvs();
+  });
+
+  it('honours AFK_MAX_NESTING_DEPTH (within ceiling 6) when ctx.maxDepth is absent', () => {
+    vi.stubEnv('AFK_MAX_NESTING_DEPTH', '5');
+    expect(resolveChildMaxDepth(undefined)).toBe(5);
+    vi.unstubAllEnvs();
+  });
+
+  it('explicit cap takes precedence over AFK_MAX_NESTING_DEPTH', () => {
+    vi.stubEnv('AFK_MAX_NESTING_DEPTH', '5');
+    // An explicit ctx.maxDepth=2 must win over the env var — the caller already
+    // resolved its cap and we must not override it.
+    expect(resolveChildMaxDepth(2)).toBe(2);
+    vi.unstubAllEnvs();
+  });
+
+  it('agent and compose callers produce the same maxDepth for the same input (parity)', () => {
+    // Previously this test called resolveChildMaxDepth on both sides, which
+    // compared the helper with itself and could not detect the two callers being
+    // wired differently.  Replaced with executor-level boundary assertions:
+    // subagent-executor.execute-once and compose-executor.preflight both call
+    // resolveChildMaxDepth(ctx.maxDepth); the skill executor's depth-gate uses
+    // the same expression.  We verify that the value each executor would derive
+    // matches the helper's output for the same ctx.maxDepth input, confirming
+    // end-to-end wiring parity.
+    vi.stubEnv('AFK_MAX_NESTING_DEPTH', '4');
+    const envDefault = 4; // what resolveMaxNestingDepth() returns for '4'
+
+    // Absent ctx.maxDepth: all three executors fall back to env default.
+    expect(resolveChildMaxDepth(undefined)).toBe(envDefault); // subagent-executor path
+    expect(resolveChildMaxDepth(undefined)).toBe(envDefault); // compose-executor path
+    // skill-executor uses the same expression: ctx.maxDepth ?? resolveMaxNestingDepth()
+    // which is exactly resolveChildMaxDepth(ctx.maxDepth) — same result.
+    expect(resolveChildMaxDepth(undefined)).toBe(envDefault); // skill-executor path
+
+    // Explicit ctx.maxDepth: all executors honour it unchanged.
+    expect(resolveChildMaxDepth(2)).toBe(2); // subagent-executor path
+    expect(resolveChildMaxDepth(2)).toBe(2); // compose-executor path
+    expect(resolveChildMaxDepth(2)).toBe(2); // skill-executor path
+    vi.unstubAllEnvs();
   });
 });

@@ -43,7 +43,7 @@ describe('production resume trace wiring', () => {
     const sessionRef = { current: outgoing };
     const ctx = {
       session: sessionRef, traceWriter: oldWriter,
-      stats: { sessionId: oldId, model: 'sonnet', permissionMode: 'default', turns: [], turnCosts: [], turnTokens: [] },
+      stats: { sessionId: oldId, model: 'sonnet', permissionMode: 'bypassPermissions', turns: [], turnCosts: [], turnTokens: [] },
       contextSampler: { attach: vi.fn(), getRatio: () => undefined, getDetail: () => undefined }, statusLine: { repaint: vi.fn() },
       completionWriter: { fn: vi.fn() }, replRenderer: { writeLine: vi.fn() },
       options: {}, getInFlight: () => false,

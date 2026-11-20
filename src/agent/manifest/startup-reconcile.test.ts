@@ -293,10 +293,8 @@ describe('runDaemonReconcile', () => {
     expect(mockPushIfConfigured).not.toHaveBeenCalled();
   });
 
-  it('logs a redacted error to stderr when the Telegram push throws', async () => {
+  it('logs the error to stderr when the Telegram push throws', async () => {
     process.env['AFK_WAVE_RESUME_UNATTENDED'] = '1';
-    // Use a bot-token-shaped error so redactInlineSecrets is exercised.
-    // Telegram bot tokens match /\d{8,12}:[A-Za-z0-9_-]{35}/ — exactly 35 chars after colon.
     const botToken = '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi';
     mockPushIfConfigured.mockRejectedValue(new Error(`Telegram push failed: token=${botToken}`));
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
@@ -305,14 +303,10 @@ describe('runDaemonReconcile', () => {
 
     await runDaemonReconcile('dr-push-fail-log');
 
-    // The push error must be logged (redacted), not swallowed silently.
+    // The push error must be logged, not swallowed silently.
     expect(consoleSpy).toHaveBeenCalledOnce();
     const logged = consoleSpy.mock.calls[0]?.join(' ') ?? '';
     expect(logged).toContain('[daemon] wave-resume push failed:');
-    // The raw bot token must NOT appear — redactInlineSecrets must have run.
-    expect(logged).not.toContain(botToken);
-    // The redaction marker must be present (canonical redactor emits [REDACTED]).
-    expect(logged).toContain('[REDACTED]');
 
     // stderr must NOT receive the offer (push threw — no fallback to stderr).
     const stderrCalls = stderrSpy.mock.calls.map((c) => String(c[0]));

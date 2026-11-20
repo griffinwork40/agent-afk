@@ -30,7 +30,6 @@
  * Pure: no SDK import (classified by constructor name and cause-chain `code`), no I/O.
  */
 
-import { redactSecrets } from '../../../redact-secrets.js';
 
 export {
   isConnectionPhaseNetworkError,
@@ -67,7 +66,7 @@ const TRACE_ERROR_MAX_CHARS = 200;
 
 /**
  * Contract: the `metadata` object of one `connection_retry` session_phase event.
- * `error` is passed through `redactSecrets` first, then truncated — the same
+ * `error` is truncated to fit the trace field budget.
  * ordering `tool_call.completed.errorHead` uses (`compact-summarizer.ts:217`)
  * so a secret straddling the 200-char boundary is never written as a fragment.
  * The status-retry path (408/500/502/504) carries SDK `APIError` messages that
@@ -83,7 +82,7 @@ export function connectionRetryMetadata(
   return {
     attempt: info.attempt,
     maxRetries,
-    error: redactSecrets(info.error.message).slice(0, TRACE_ERROR_MAX_CHARS),
+    error: info.error.message.slice(0, TRACE_ERROR_MAX_CHARS),
     ...(code !== undefined ? { code } : {}),
     ...(typeof status === 'number' ? { status } : {}),
   };

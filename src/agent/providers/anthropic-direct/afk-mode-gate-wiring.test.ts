@@ -249,7 +249,7 @@ describe('AnthropicDirectProvider — AFK-mode gate reaches the dispatcher via c
       config: {
         model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
-        permissionMode: 'default',
+        permissionMode: 'bypassPermissions',
         hookRegistry: afkGateRegistry('default'),
       },
     });

@@ -415,6 +415,89 @@ describe('probeNonRebuildableIgnoredFiles — symlinked directories', () => {
   });
 });
 
+/**
+ * Invariant: a symlink NAMED `.afk-scratch` in the worktree root is always
+ * protected, regardless of opt-in state.
+ *
+ * `classifyResolvingSymlinkedDirs` resolves a bare (slash-less) ignored entry
+ * to `<entry>/` when it is a directory on disk. `.afk-scratch` (no slash) would
+ * normally fall through to `protected` without the stat, since the patterns
+ * module only recognises `.afk-scratch/` (with slash). After resolution it
+ * becomes `.afk-scratch/`, which the patterns module classifies `protected`
+ * unconditionally — the probe cannot know whether the creation-time opt-in was
+ * set, so `.afk-scratch/` always protects at the patterns level.
+ *
+ * Two reproduced behaviours worth pinning:
+ *  (a) With only AFK's `/.afk-scratch/` entry in the shared exclude the symlink
+ *      is reported as UNTRACKED (`??`), not ignored (`!!`), so the ignored probe
+ *      never sees it and the tree is preserved by the dirty-status check.
+ *  (b) When a user rule ignores the bare name `.afk-scratch` (without slash)
+ *      git reports it as `!! .afk-scratch`, the probe resolves it to
+ *      `.afk-scratch/`, which classifies `protected`, and the tree is kept.
+ */
+describe('probeNonRebuildableIgnoredFiles — symlink named .afk-scratch', () => {
+  let root: string;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), 'afk-scratch-symlink-'));
+    // A directory that will be pointed to by the symlink, outside the worktree.
+    await mkdir(join(root, 'scratch-target'), { recursive: true });
+    await writeFile(join(root, 'scratch-target', 'pr-body.txt'), 'important');
+    // Worktree with a symlink named `.afk-scratch` pointing at the target dir.
+    await mkdir(join(root, 'wt'), { recursive: true });
+    await symlink('../scratch-target', join(root, 'wt', '.afk-scratch'), 'dir');
+  });
+
+  afterAll(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('a symlink named .afk-scratch reported as `!! .afk-scratch` resolves to protected', async () => {
+    // Git reports the symlinked dir WITHOUT a trailing slash (same as any
+    // symlinked directory). The probe must stat it, see it is a directory, and
+    // reclassify as `.afk-scratch/` → `protected`.
+    const verdict = await probeNonRebuildableIgnoredFiles(
+      mockExec('!! .afk-scratch\n'),
+      join(root, 'wt'),
+    );
+    expect(verdict).toEqual({
+      protect: true,
+      because: 'non-rebuildable-entry',
+      detail: '.afk-scratch',
+    });
+  });
+
+  it('a symlink named .afk-scratch reported as `!! .afk-scratch/` (with slash) is also protected', async () => {
+    // Some git versions may append a slash for a symlinked directory.
+    // `.afk-scratch/` is classified `protected` directly, without a stat.
+    const verdict = await probeNonRebuildableIgnoredFiles(
+      mockExec('!! .afk-scratch/\n'),
+      join(root, 'wt'),
+    );
+    expect(verdict).toEqual({
+      protect: true,
+      because: 'non-rebuildable-entry',
+      detail: '.afk-scratch/',
+    });
+  });
+
+  it('the target directory outside the worktree is unaffected when the tree is kept', async () => {
+    // Keeping the tree means not running `git worktree remove --force`, so
+    // the symlink target survives. We confirm the file is still there after
+    // the probe returns protect:true.
+    const verdict = await probeNonRebuildableIgnoredFiles(
+      mockExec('!! .afk-scratch\n'),
+      join(root, 'wt'),
+    );
+    expect(verdict.protect).toBe(true);
+    // The target outside the worktree is untouched — probe is read-only.
+    const content = await import('node:fs/promises').then((m) =>
+      m.readFile(join(root, 'scratch-target', 'pr-body.txt'), 'utf-8'),
+    );
+    expect(content).toBe('important');
+  });
+});
+
 describe('probeNonRebuildableIgnoredFiles — SwiftPM .build/ directory', () => {
   it('returns protect:false when .build/ contains only compiler output', async () => {
     // .build/ is inspectable, so the probe expands it; compiled artifacts are all opaque/inspectable

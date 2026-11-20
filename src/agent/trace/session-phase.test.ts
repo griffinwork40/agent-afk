@@ -398,6 +398,8 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     context_pressure_wind_down: true,
     catalog_model_upgrade: true,
     hook_block_repeat_tripped: true,
+    endpoint_semaphore_wait: true,
+    denial_circuit_breaker_tripped: true,
     billing_settled: true,
     subagent_model_fallback: true,
     model_fallback: true,

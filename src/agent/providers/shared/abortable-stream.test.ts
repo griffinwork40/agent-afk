@@ -348,10 +348,14 @@ describe('abortableStream', () => {
     expect(await pull1).toEqual({ value: 1, done: false });
 
     // Advance timers to prove the watchdog does not fire spuriously while the
-    // session remains paused between pulls (#4864).
+    // session remains paused between pulls (#4864). The spy counts alone do not
+    // prove suspension — the signal must also still be live (not aborted).
     await vi.advanceTimersByTimeAsync(25 * 60 * 1_000);
     expect(suspendSpy).toHaveBeenCalledTimes(1);
     expect(resumeTimerSpy).toHaveBeenCalledTimes(1);
+    // The turn signal must still be live — the watchdog was suspended, so it
+    // must not have fired during the inter-pull gap (#4987 / #4638).
+    expect(ac.signal.aborted).toBe(false);
 
     // ── Pull #2 ──────────────────────────────────────────────────────────────
     const pull2 = gen.next();

@@ -149,7 +149,7 @@ describe('CronScheduler + budget gate', () => {
 
     // Telemetry persisted to disk
     const lines = readFileSync(telemetryPath, 'utf-8').trim().split('\n');
-    const parsed = JSON.parse(lines[lines.length - 1]) as TelemetryRecord;
+    const parsed = lines.map((line) => JSON.parse(line) as TelemetryRecord).find((row) => row.status === 'skipped')!;
     expect(parsed.skipReason).toBe('budget-over');
     expect(parsed.taskId).toBe('budget-over-task');
 
@@ -275,7 +275,7 @@ describe('CronScheduler + budget gate', () => {
     const notifications: TelemetryRecord[] = [];
     const scheduler = new CronScheduler({
       telemetryPath,
-      onTaskComplete: (record) => notifications.push(record),
+      onTaskComplete: (record) => { notifications.push(record); },
     });
 
     scheduler.register({
@@ -332,7 +332,7 @@ describe('CronScheduler + budget gate: one alert per episode', () => {
       telemetryPath: join(dir, 'forge-telemetry.jsonl'),
       sessionFactory: () => fakeSession as unknown as import('../session/agent-session.js').AgentSession,
       // fireOnTaskComplete applies the notifyOn filter before this callback.
-      onTaskComplete: (record) => delivered.push(record),
+      onTaskComplete: (record) => { delivered.push(record); },
     });
     for (const id of ['a', 'b']) {
       scheduler.register({ taskId: id, command: 'run', trigger: 'cron', cronExpression: '* * * * *', executor: 'agent' });

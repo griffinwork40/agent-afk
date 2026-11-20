@@ -45,7 +45,7 @@ function makeStats(turns: TurnRecord[]): SessionStats {
     turnTokens: [],
     turns,
     model: 'sonnet',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
   } as unknown as SessionStats;
 }
 

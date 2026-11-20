@@ -146,7 +146,7 @@ describe('anthropic-direct journal wiring — compaction and rewind', () => {
     process.env[KEEP] = '1'; // audit-env-access: allow — test isolation
     const journal = new FakeJournal();
     const state = createSessionState({
-      model: 'claude-sonnet-4-5', permissionMode: 'default', userSystem: null, toolDispatcher: dispatcher,
+      model: 'claude-sonnet-4-5', permissionMode: 'bypassPermissions', userSystem: null, toolDispatcher: dispatcher,
       initialMessages: [u('q1'), a('a1'), u('q2'), a('a2'), u('q3'), a('a3')],
       messageJournal: journal,
     });
@@ -173,7 +173,7 @@ describe('anthropic-direct journal wiring — compaction and rewind', () => {
       const toolResult = (id: string): MessageParam => ({ role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: big }] });
       const journal = new FakeJournal();
       const state = createSessionState({
-        model: 'claude-sonnet-4-5', permissionMode: 'default', userSystem: null, toolDispatcher: dispatcher,
+        model: 'claude-sonnet-4-5', permissionMode: 'bypassPermissions', userSystem: null, toolDispatcher: dispatcher,
         initialMessages: [u('q1'), toolUse('t1'), toolResult('t1'), a('a1')],
         messageJournal: journal,
       });
@@ -200,7 +200,7 @@ describe('anthropic-direct journal wiring — compaction and rewind', () => {
   it('rewind emits truncate(rewind) at the divergence and a rewind mark', () => {
     const journal = new FakeJournal();
     const state = createSessionState({
-      model: 'claude-test', permissionMode: 'default', userSystem: null, toolDispatcher: dispatcher,
+      model: 'claude-test', permissionMode: 'bypassPermissions', userSystem: null, toolDispatcher: dispatcher,
       initialMessages: [u('q1'), a('a1'), u('q2'), a('a2')],
       messageJournal: journal,
     });

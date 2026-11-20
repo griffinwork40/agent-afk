@@ -293,8 +293,8 @@ export const MISC_ENV_REGISTRY = [
       'behavior applies. Requires `closed-router` to be on PATH. Default: unset (disabled).',
     type: 'boolean',
     required: false,
-    category: 'auth',
-    secret: true,
+    example: '1',
+    category: 'misc',
   },
 
   // ── Observability / OTLP export ───────────────────────────────────────────

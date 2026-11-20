@@ -592,6 +592,75 @@ describe('worktree handler — remove guards', () => {
   });
 });
 
+// Item 4 (handler path): the `worktree` tool `remove` action on a scratch-only tree.
+// The existing remove tests cover .env and dirty/clean/force paths. These tests pin
+// that the ignored-file probe on `.afk-scratch/` lines is the decisive signal when
+// a tree's only content is scratch files, and that the scratchDisposable opt-in
+// (read by the probe from meta) controls whether the removal is allowed or refused.
+describe('worktree handler — remove with .afk-scratch/ (item 4)', () => {
+  // A scratch-only tree WITHOUT scratchDisposable opt-in must be refused: the
+  // probe sees `!! .afk-scratch/file` and has no opt-in meta to skip it.
+  it('refuses removal of a scratch-only tree without scratchDisposable opt-in', async () => {
+    const wtPath = join(afkRoot, 'scratch-no-optin');
+    await fs.mkdir(wtPath, { recursive: true });
+    // No .afk-worktree-meta.json written — missing meta → no opt-in.
+    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath)}\n`, (call) => {
+      if (call.args.includes('--ignored')) {
+        return { stdout: '!! .afk-scratch/\n!! .afk-scratch/notes.md\n', stderr: '' };
+      }
+      if (call.args.includes('status')) return { stdout: '', stderr: '' };
+      return undefined;
+    }));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'remove', path: 'scratch-no-optin' }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('non-rebuildable ignored files');
+    expect(mock.calls.some((c) => c.args.includes('remove'))).toBe(false);
+  });
+
+  // A scratch-only tree WITH scratchDisposable: true in meta IS allowed.
+  // The probe reads the meta, sees the opt-in, and skips .afk-scratch/ lines.
+  it('allows removal of a scratch-only tree with scratchDisposable opt-in', async () => {
+    const wtPath = join(afkRoot, 'scratch-opted-in');
+    await fs.mkdir(wtPath, { recursive: true });
+    await fs.writeFile(
+      join(wtPath, '.afk-worktree-meta.json'),
+      JSON.stringify({ owner: 'agent', scratchDisposable: true, createdAt: new Date().toISOString(), baseSha: 'abc' }),
+    );
+    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath)}\n`, (call) => {
+      if (call.args.includes('--ignored')) {
+        return { stdout: '!! .afk-scratch/\n!! .afk-scratch/pr-body.md\n', stderr: '' };
+      }
+      if (call.args.includes('status')) return { stdout: '', stderr: '' };
+      return undefined;
+    }));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'remove', path: 'scratch-opted-in' }, SIGNAL);
+    expect(result.isError).toBeUndefined();
+    const removeCall = mock.calls.find((c) => c.args.includes('remove'));
+    expect(removeCall).toBeDefined();
+  });
+
+  // force: true bypasses the probe entirely, so even without opt-in the tree
+  // is removed. The existing force tests cover this for .env; pin it for scratch.
+  it('force removes a scratch-only tree without opt-in when force: true is passed', async () => {
+    const wtPath = join(afkRoot, 'scratch-force');
+    await fs.mkdir(wtPath, { recursive: true });
+    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath)}\n`, (call) => {
+      if (call.args.includes('--ignored')) {
+        return { stdout: '!! .afk-scratch/\n!! .afk-scratch/secret.md\n', stderr: '' };
+      }
+      if (call.args.includes('status')) return { stdout: '', stderr: '' };
+      return undefined;
+    }));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'remove', path: 'scratch-force', force: true }, SIGNAL);
+    expect(result.isError).toBeUndefined();
+    const removeCall = mock.calls.find((c) => c.args.includes('remove'));
+    expect(removeCall?.args).toContain('--force');
+  });
+});
+
 describe('worktree handler — errors surface as isError', () => {
   it('git failures return isError instead of throwing', async () => {
     const wtPath = join(afkRoot, 'boom');
