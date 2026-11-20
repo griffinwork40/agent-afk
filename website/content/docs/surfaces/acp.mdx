@@ -166,7 +166,7 @@ Edit tools emit `diff` content items alongside text results. Each diff has this 
 
 `remote_agent` runs on a separate machine. Its tool calls are not covered by this session's approval bridge; the title says so.
 
-A subagent given its own working directory has its relative paths checked against that directory and is asked when they leave the session `cwd`. Where the subagent's directory is not known yet (a worktree-isolated `compose` node), its calls with a relative path or no path are asked once a delegation to another directory has been allowed.
+A subagent given its own working directory has its relative paths checked against that directory and is asked when they leave the session `cwd`. Where the subagent's directory is not known (an `agent` call or `compose` node run with worktree isolation, whose checkout holds the whole repository, or a continued `agent` chain), its calls with a relative path or no path are asked once such a delegation has been allowed.
 
 ## Permissions
 
@@ -177,18 +177,15 @@ Before executing any tool that requires consent, the server sends a `session/req
 | Read and search tools targeting a path inside `cwd` | Auto-allow |
 | Read and search tools with no filesystem path (memory, state, session listings, etc.) | Auto-allow |
 | Read and search tools targeting a path outside `cwd` | Ask, with absolute path shown |
-| `git_read` that can print file content from outside `cwd` (`HEAD:../file` style revisions, object ids, patches with no path inside `cwd`, `cat-file -p`) | Ask |
+| `git_read` that can print file content from outside `cwd` (`HEAD:../file` style revisions, object ids, `show` or `grep` of a ref that is not provably a commit, patches with no path inside `cwd`, any `cat-file -p`, a `%(raw)` format) | Ask |
 | `git_read` metadata, or content limited to paths inside `cwd` | Auto-allow |
 | `worktree list` | Auto-allow |
 | Write tools, `bash`, `test_run`, web tools, delegation tools, MCP tools, unknown tools | Ask |
 | `--dangerously-skip-permissions` | Skip the bridge entirely |
 
-`options` always includes `allow_once` and `reject_once`. `allow_always` is offered for write and other consent-requiring tools, with these exceptions:
+`options` always includes `allow_once` and `reject_once`. `allow_always` is offered only for the file editing tools `write_file`, `edit_file` and `patch_apply`, and only when every path the call names is inside `cwd` and the call carries no argument the server does not recognise for that tool. Every other tool is asked every time with allow once or reject only: `bash`, `test_run`, delegation tools (`agent`, `skill`, `compose`, `remote_agent`), `model_complete`, `image_generate`, `image_edit`, mutating `worktree` actions, web tools, every MCP tool and any tool not named here.
 
-- Not offered for `bash`.
-- Not offered for delegation tools (`agent`, `skill`, `compose`, `remote_agent`).
-- Not offered when the request was triggered because the path is outside `cwd`.
-- A remembered `allow_always` grant for a tool never covers a call of that tool that targets a path outside `cwd`; that call is always asked again.
+- A remembered `allow_always` grant covers a later call of the same tool only under the same conditions. A call that targets a path outside `cwd`, or that carries an argument the server does not recognise, is asked again.
 
 Grants are per-session and per tool name, shared between the session and its in-process children. They are not persisted across sessions.
 

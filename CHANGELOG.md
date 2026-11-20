@@ -46,11 +46,22 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
   tools that target a path outside the session directory are asked rather than
   auto-allowed, with the absolute path shown. Write tools continue to be asked
   regardless of path.
-- **`allow_always` restrictions.** The always-allow option is not offered for
-  `bash`, delegation tools (`agent`, `skill`, `compose`, `remote_agent`), or any
-  request triggered because a path is outside `cwd`. A remembered always-allow
-  grant never covers a call targeting a path outside `cwd`; that call is always
-  asked again.
+- **`allow_always` is limited to the file editing tools.** Only `write_file`,
+  `edit_file` and `patch_apply` can be always-allowed, and only for a call whose
+  every path is inside `cwd` and that carries no unrecognised argument. Every
+  other tool, including `bash`, delegation tools, `model_complete`, the image
+  tools, `worktree`, web tools and every MCP tool, is asked every time. A
+  remembered grant never covers a call targeting a path outside `cwd` or
+  carrying an unrecognised argument; that call is asked again. This closes a
+  bypass where one harmless always-allow let `model_complete`, `image_edit`,
+  `image_generate` or `worktree` read, upload or overwrite any file unasked.
+- **Subagents in a worktree are asked.** Calls with a relative path or no path
+  made by children of an `agent` or `compose` delegation with worktree
+  isolation, or of a continued `agent` chain, are asked, because their checkout
+  can lie outside the session `cwd`.
+- **`git_read` of a ref that may name a file is asked.** `show` and `grep` of a
+  revision that is not provably a commit, any `cat-file -p`, and `%(raw)`
+  formats are asked, because a tag can point at a file outside `cwd`.
 - **Permission callback semantics tightened.** A permission callback result is
   treated as allow only when it is an explicit, well-formed allow object.
   Malformed, missing, or unexpected results are treated as deny.
