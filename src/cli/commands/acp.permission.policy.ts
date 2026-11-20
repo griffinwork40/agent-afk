@@ -89,6 +89,8 @@ export function buildPendingStart(
   for (const p of outside) {
     if (path.isAbsolute(p) && !locations.some((l) => l.path === p)) locations.push({ path: p });
   }
+  const suffix = delegationSuffix(toolName);
+  if (suffix !== '' && title.endsWith(suffix)) title = title.slice(0, -suffix.length);
   if (outside.length > 0 && !outside.some((p) => title.includes(p))) title = `${title} ${outside[0]}`;
   const rawInput = rawInputOf(input);
   // Same display bounds as a stream start (acp.translate), then the suffix is enforced regardless.
@@ -103,7 +105,6 @@ export function buildPendingStart(
     content: [],
     locations,
   });
-  const suffix = delegationSuffix(toolName);
   if (suffix !== '' && !start.title.endsWith(suffix)) start.title += suffix;
   if (prefix !== '') start.title = `${prefix} ${start.title}`;
   return start;

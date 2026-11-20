@@ -154,6 +154,8 @@ Tools on the auto-allow list that take no filesystem path stay auto-allowed. The
 
 If one of these is called with a path-like argument, that argument is still checked.
 
+A delegation call that runs its children in another directory (an `agent` or `remote_agent` `cwd`, or a `compose` node `cwd`) shows that directory in its title when it is outside the session `cwd`. The child origin does not carry the child's directory, so once such a delegation is allowed, every later child call whose target depends on the child's own directory (no path argument, or a relative one) is asked for the rest of the session instead of auto-allowed. Absolute paths inside the session `cwd` stay auto-allowed.
+
 Before requesting consent, await sending `tool_call` with `status: "pending"`. Then send the agent-to-client request `session/request_permission` with `sessionId`, `toolCall` and `options`. `toolCall` repeats at least the same `toolCallId`, title, name when known, kind, pending status and available raw input. `options` contains, in order:
 
 1. `{ "optionId": "allow_once", "name": "Allow once", "kind": "allow_once" }`.

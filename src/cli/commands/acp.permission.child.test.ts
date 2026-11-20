@@ -115,6 +115,29 @@ describe('D9 child approval lifecycle', () => {
   });
 });
 
+describe('D10 children relocated by a delegation cwd', () => {
+  it('after an agent call with its own cwd, child relative and no-path reads are asked', async () => {
+    const t = setup();
+    const child = t.gate.forChild!({ route: 'agent', depth: 1 });
+    expect(await child('grep', { pattern: 'x' }, opts('g0'))).toEqual({ behavior: 'allow' });
+    const p = t.gate.canUseTool('agent', { prompt: 'p', cwd: path.dirname(outside) }, opts('a1'));
+    await untilRequests(t.requests, 1);
+    expect((t.requests[0]!.params as { toolCall: { title: string } }).toolCall.title)
+      .toBe(`agent ${path.dirname(outside)} (each subagent tool call is asked separately)`);
+    t.requests[0]!.resolve(pick('allow_once'));
+    expect(await p).toEqual({ behavior: 'allow' });
+    void child('grep', { pattern: 'x' }, opts('g1'));
+    await untilRequests(t.requests, 2);
+    expect(await child('read_file', { file_path: path.join(cwd, 'a.txt') }, opts('r1'))).toEqual({ behavior: 'allow' });
+  });
+  it('compose node cwd values are shown and relocate children', async () => {
+    const t = setup();
+    void t.gate.canUseTool('compose', { nodes: [{ id: 'n', prompt: 'p', cwd: outside }] }, opts('c1'));
+    await untilRequests(t.requests, 1);
+    expect((t.requests[0]!.params as { toolCall: { title: string } }).toolCall.title).toContain(outside);
+  });
+});
+
 describe('D11 grants', () => {
   it('are shared with children and never cover an outside-cwd call', async () => {
     const t = setup();

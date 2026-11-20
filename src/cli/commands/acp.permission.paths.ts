@@ -79,6 +79,23 @@ function scanGlobPattern(pattern: unknown, base: string | undefined, root: strin
   }
 }
 
+/** True when a delegation input relocates its children away from the session cwd. */
+export function relocatesChildren(toolName: string, input: Record<string, unknown>, cwd: string | undefined): boolean {
+  if (input['cwd'] !== undefined && !(usableCwd(cwd) && typeof input['cwd'] === 'string'
+    && path.resolve(cwd, input['cwd']) === path.resolve(cwd))) return true;
+  return toolName === 'compose' && Array.isArray(input['nodes']) && input['nodes'].some((n) => isRecord(n) && n['cwd'] !== undefined);
+}
+
+/** A call whose effective target depends on the caller's own cwd: no path argument, or a relative one. */
+export function dependsOnCallerCwd(input: Record<string, unknown>): boolean {
+  const present = PATH_KEYS.filter((k) => input[k] !== undefined);
+  if (present.length === 0) return true;
+  return present.some((k) => {
+    const v = input[k];
+    return (Array.isArray(v) ? v : [v]).some((x) => typeof x !== 'string' || !path.isAbsolute(x));
+  });
+}
+
 /**
  * Every target of this call that is not lexically inside `cwd`, as absolute
  * paths where resolvable. Empty means no argument leaves the session directory
@@ -99,6 +116,10 @@ export function outsidePaths(toolName: string, input: Record<string, unknown>, c
   if (toolName === 'glob') scanGlobPattern(input['pattern'], base, root, out);
   if (toolName === 'patch_apply' && Array.isArray(input['changes'])) {
     for (const change of input['changes']) scanValue(isRecord(change) ? change['path'] : undefined, root, root, out);
+  }
+  // compose nodes may each name their own cwd.
+  if (toolName === 'compose' && Array.isArray(input['nodes'])) {
+    for (const node of input['nodes']) if (isRecord(node) && node['cwd'] !== undefined) scanValue(node['cwd'], root, root, out);
   }
   if (toolName === 'git_read' && input['args'] !== undefined) {
     const args = input['args'];

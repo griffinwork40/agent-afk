@@ -11,6 +11,7 @@ import type {
 import { buildPendingStart, outsideTargets, permissionOptions, requiresAsk } from './acp.permission.policy.js';
 import type { ChildToolOrigin } from '../../agent/tools/nesting.can-use-tool.js';
 import { childPrefix } from './acp.permission.labels.js';
+import { dependsOnCallerCwd, relocatesChildren } from './acp.permission.paths.js';
 import { AcpPeerClosedError } from './acp.rpc-peer.js';
 
 export const PERMISSION_TIMEOUT_MS = 120_000;
@@ -111,6 +112,12 @@ interface GateState {
   childSeq: number;
   /** Child decisions still running, so the turn can wait for their cards to close. */
   childInFlight: Set<Promise<unknown>>;
+  /**
+   * Set once a delegation that runs children in another directory is allowed.
+   * The child origin carries no cwd, so from then on a child read whose target
+   * depends on its own cwd (relative or absent path) is asked, not auto-allowed.
+   */
+  childCwdUnknown: boolean;
 }
 
 /** Who is asking: the top-level session (stream closes the card) or a forked child (gate closes it). */
@@ -185,12 +192,17 @@ async function decide(
   if (st.opts.skip === true) return allow();
   const name = typeof toolName === 'string' ? toolName : '';
   const input = isRecord(rawInput) ? rawInput : {};
-  if (!requiresAsk(name, input, st.opts.cwd)) return allow();
-  if (grantCovers(st, name, input)) {
+  const relocated = who.child !== undefined && st.childCwdUnknown && dependsOnCallerCwd(input);
+  if (!relocated && !requiresAsk(name, input, st.opts.cwd)) return allow();
+  if (!relocated && grantCovers(st, name, input)) {
     // A child's granted call has no stream card to move; it just runs (D13).
     return who.child ? (signal.aborted ? denyResult('aborted') : allow()) : runGranted(st, name, input, signal, toolUseID);
   }
-  if (!who.child) return askClient(st, name, input, signal, toolUseID);
+  if (!who.child) {
+    const verdict = await askClient(st, name, input, signal, toolUseID);
+    if (verdict.behavior === 'allow' && relocatesChildren(name, input, st.opts.cwd)) st.childCwdUnknown = true;
+    return verdict;
+  }
   if (!turnLive(st)) return denyResult('no_active_turn');
   const cardId = `child-${++st.childSeq}-${toolUseID}`;
   const child = who.child;
@@ -262,6 +274,7 @@ export function createAcpPermissionGate(
 ): AcpPermissionGate {
   const st: GateState = {
     peer, sessionId, opts, granted: new Set(), pending: new Set(), childSeq: 0, childInFlight: new Set(),
+    childCwdUnknown: false,
   };
   const gated = (who: Asker): CanUseTool => async (toolName, input, options) => {
     try {
