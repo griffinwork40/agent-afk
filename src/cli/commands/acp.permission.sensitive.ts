@@ -28,6 +28,10 @@ import type { PathFlavor } from './acp.permission.paths.js';
 //    instruction file the prompt loader reads (cli/config/afk-md-tier.ts via
 //    paths.ts getProjectAfkMdPath / getUserAfkMdPath). Under win32 the 8.3
 //    short name `AFK~N` counts as `.afk`.
+//  - agent instructions and definitions: any `.claude` segment
+//    (agent/agents/registry.ts:270 scans `<cwd>/.claude/agents/` for
+//    Claude Code compatible project-scoped agent definition files).
+//    Under win32 the 8.3 short name `CLAUDE~N` counts as `.claude`.
 // The project files are matched at any depth, since a child may run elsewhere.
 // Precedence: git internals, then command-running config, then instructions.
 export const GIT_MARKER = '(git internals)';
@@ -40,6 +44,7 @@ const AFK_CONFIG_FILES = new Set(['settings.json', 'worktree-setup.json']);
 const SHORT_GIT = /^git(?:att|mod)?~\d+$/;
 const INSTRUCTION_FILES = new Set(['afk.md']);
 const SHORT_AFK = /^afk~\d+$/;
+const SHORT_CLAUDE = /^claude~\d+$/;
 
 function fold(segment: string, p: PathFlavor): string {
   const lower = segment.replace(/[A-Z]/g, (c) => c.toLowerCase());
@@ -65,7 +70,9 @@ export function sensitiveMarker(raw: string, base: string | undefined, p: PathFl
     if (CONFIG_FILES.has(last) || (parent === '.afk' && AFK_CONFIG_FILES.has(last))) return CONFIG_MARKER;
   }
   const isAfk = (s: string): boolean => s === '.afk' || (p.sep === '\\' && SHORT_AFK.test(s));
-  const isAgent = (segs: string[]): boolean => segs.some(isAfk) || INSTRUCTION_FILES.has(segs[segs.length - 1] ?? '');
+  const isClaude = (s: string): boolean => s === '.claude' || (p.sep === '\\' && SHORT_CLAUDE.test(s));
+  const isAgent = (segs: string[]): boolean =>
+    segs.some(isAfk) || segs.some(isClaude) || INSTRUCTION_FILES.has(segs[segs.length - 1] ?? '');
   return lists.some(isAgent) ? AGENT_MARKER : '';
 }
 
