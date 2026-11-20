@@ -11,7 +11,7 @@
 import { env } from '../../config/env.js';
 import { mkdirSync, appendFileSync, existsSync } from 'fs';
 import { resolve, dirname, isAbsolute } from 'path';
-import { redactSecrets as redactSecretsCanonical, looksLikeFilesystemPath } from '../redact-secrets.js';
+
 
 export type PromptShape = 'string' | 'string[]' | 'preset' | 'undefined';
 
@@ -60,31 +60,48 @@ export const DUMP_FILE_BANNER =
 const SECRET_KEY_PATTERN = /key|token|secret|password|credential|auth/i;
 
 /**
+ * True when a generic-rule match is a filesystem/URL path rather than an opaque
+ * secret. The generic token class includes `/`, `_`, `-` — the characters a
+ * path is built from — so a long bare path would otherwise be redacted.
+ *
+ * A run is a path only when ALL hold:
+ *   1. it contains a `/` separator, and
+ *   2. it carries none of base64's exclusive chars (`+`, `=`) — classic base64
+ *      (JWT sigs aside) is a secret, not a path, so a run with `+`/`=` is redacted;
+ *   3. no single `/`-delimited segment is itself a long opaque token — i.e. a
+ *      secret fused into a path segment (`/tmp/uploads/<44-char token>`) is
+ *      redacted, not spared. "Long opaque token" = ≥32 chars, mixing letters
+ *      and digits, with no dotted extension.
+ *
+ * Originally lived in redact-secrets.ts; moved here as a file-local helper
+ * after the redactSecrets module was removed (issue #4xxx).
+ */
+export function looksLikeFilesystemPath(run: string): boolean {
+  if (!run.includes('/') || /[+=]/.test(run)) return false;
+  const isOpaqueTokenSegment = (seg: string): boolean =>
+    seg.length >= 32 && !seg.includes('.') && /[A-Za-z]/.test(seg) && /[0-9]/.test(seg);
+  return !run.split('/').some(isOpaqueTokenSegment);
+}
+
+/**
  * Inline secret patterns used to redact high-risk strings inside arbitrary
- * text fields (system prompt, message content).  Covers (via canonical delegate):
- *   - Bearer tokens: bare `Bearer <value>` and `Authorization: Bearer <value>`
- *   - Anthropic API keys: sk-ant-* (≥8-char payload)
- *   - OpenAI / generic sk-* keys
- *   - AWS access key IDs: AKIA…, ASIA…, etc.
- *   - Slack bot tokens: xoxb-*, xoxa-*, etc.
- *   - Telegram bot tokens: <digits>:<35 alphanum>
- *   - JWT tokens, generic ≥32-char opaque blobs
- * Plus locally (NAME=value env-style patterns specific to prompt-dump context):
+ * text fields (system prompt, message content). Covers NAME=value env-style
+ * patterns specific to the prompt-dump context:
  *   - Generic KEY=value pairs where the value looks like a high-entropy secret
  *     (≥16 chars of non-whitespace after the '=').
  *
- * Invariant (issue #949): matching on the key NAME alone with no check on
- * the value's shape masks non-secret path values in full, e.g.
- * `AUTH_TOKEN_PATH=/Users/me/.config/app/token.json`. `pathGuardedRedact`
- * spares a value ONLY when the variable name has a `PATH` or `FILE` segment,
- * the optionally quoted value starts with `/` or `~/`, AND
- * `looksLikeFilesystemPath` also holds. The name and prefix checks are required, not
- * redundant: `looksLikeFilesystemPath` alone accepts
- * `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY` (an AWS secret access key —
- * has `/`, no `+`/`=`, every segment under the 32-char opaque threshold),
- * which would unmask a live credential. Requiring an explicit path-oriented
- * name also keeps slash-prefixed passwords and tokens masked. Ambiguous values
- * stay redacted.
+ * // Invariant: matching on the key NAME alone with no check on the value's
+ * // shape masks non-secret path values in full, e.g.
+ * // `AUTH_TOKEN_PATH=/Users/me/.config/app/token.json`. `pathGuardedRedact`
+ * // spares a value ONLY when the variable name has a `PATH` or `FILE` segment,
+ * // the optionally quoted value starts with `/` or `~/`, AND
+ * // `looksLikeFilesystemPath` also holds. The name and prefix checks are
+ * // required, not redundant: `looksLikeFilesystemPath` alone accepts
+ * // `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY` (an AWS secret access key —
+ * // has `/`, no `+`/`=`, every segment under the 32-char opaque threshold),
+ * // which would unmask a live credential. Requiring an explicit path-oriented
+ * // name also keeps slash-prefixed passwords and tokens masked. Ambiguous
+ * // values stay redacted.
  */
 function pathGuardedRedact(m: RegExpMatchArray): string {
   // Both capture groups are structural requirements of the regexes this is used
@@ -121,11 +138,7 @@ function pathGuardedRedact(m: RegExpMatchArray): string {
   return `${name}=<REDACTED length=${value.length}>`;
 }
 
-// NAME=value patterns that are NOT covered by the canonical `redactSecrets`.
-// redactSecrets handles: sk-ant, sk- (non-ant), Bearer, JWT, AWS IAM IDs,
-// xox tokens, Telegram bot tokens, and generic ≥32-char opaque blobs.
-// This set adds only the env-style `NAME=<value>` shapes specific to the
-// prompt-dump context (system prompt text, options.env values).
+// NAME=value patterns for the prompt-dump context (system prompt text, options.env values).
 const INLINE_NAME_VALUE_PATTERNS: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
   // Generic TOKEN=<value ≥16 chars> — catches OPENAI_API_KEY=, TELEGRAM_BOT_TOKEN=, etc.
   // (The existing generic pattern already covers most of these; this is belt-and-suspenders
@@ -143,11 +156,8 @@ const INLINE_NAME_VALUE_PATTERNS: Array<[RegExp, (m: RegExpMatchArray) => string
  * Apply inline secret redaction to a string.
  *
  * Applies the NAME=value env-style patterns specific to the prompt-dump
- * context first (so the name-aware path guard sees `NAME=<value>` before the
- * generic rule can absorb it), then delegates to the canonical
- * {@link redactSecrets} (bare and Authorization-header Bearer tokens, sk-ant
- * (≥8-char payload), sk- non-ant, JWT, AWS IAM IDs, Slack xox tokens,
- * Telegram bot tokens, and generic ≥32-char opaque blobs).
+ * context (so the name-aware path guard sees `NAME=<value>` before a generic
+ * rule can absorb it).
  *
  * Returns a new string with matched secrets replaced by redaction markers.
  */
@@ -164,10 +174,7 @@ export function redactInlineSecrets(text: string): string {
       return replacer(m);
     });
   }
-  // Then pass through the canonical redactor to cover sk-ant, sk- (non-ant),
-  // Bearer, JWT, AWS IAM IDs, Slack xox tokens, Telegram bot tokens, and the
-  // generic ≥32-char opaque-blob rule — shapes not covered by NAME=value patterns.
-  return redactSecretsCanonical(result);
+  return result;
 }
 
 /**

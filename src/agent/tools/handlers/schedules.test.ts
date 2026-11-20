@@ -37,6 +37,36 @@ describe('create_schedule handler', () => {
     rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
   });
 
+  it('sets, lists, updates and clears the streak threshold with live-sync parity', async () => {
+    const daemon = await startDaemon({ port: 0, handoffMaintenanceIntervalMs: 0 });
+    try {
+      await createScheduleHandler({ name: 'Streak', command: '/x', cron: '59 23 31 12 *', failureStreakThreshold: 7 }, fakeSignal);
+      expect(loadSchedules()[0]?.failureStreakThreshold).toBe(7);
+      const tasks = async () => await (await fetch(`http://localhost:${daemon.port}/tasks`)).json() as Array<{ failureStreakThreshold?: number }>;
+      expect((await tasks())[0]?.failureStreakThreshold).toBe(7);
+      expect(JSON.parse((await listSchedulesHandler({}, fakeSignal)).content as string)[0].failureStreakThreshold).toBe(7);
+      await updateScheduleHandler({ taskId: 'streak', failureStreakThreshold: 2 }, fakeSignal);
+      expect(loadSchedules()[0]?.failureStreakThreshold).toBe(2);
+      expect((await tasks())[0]?.failureStreakThreshold).toBe(2);
+      await updateScheduleHandler({ taskId: 'streak', failureStreakThreshold: null }, fakeSignal);
+      expect(loadSchedules()[0]?.failureStreakThreshold).toBeUndefined();
+      expect((await tasks())[0]?.failureStreakThreshold).toBeUndefined();
+    } finally { await daemon.stop(); }
+  });
+
+  it.each([0, -1, 1.5, '3', null])('rejects invalid create threshold %s', async (failureStreakThreshold) => {
+    const result = await createScheduleHandler({ name: 'Bad streak', command: '/x', cron: '* * * * *', failureStreakThreshold }, fakeSignal);
+    expect(result.isError).toBe(true);
+    expect(loadSchedules()).toHaveLength(0);
+  });
+
+  it.each([0, -1, 1.5, '3'])('rejects invalid update threshold %s before writing', async (failureStreakThreshold) => {
+    await createScheduleHandler({ name: 'Streak', command: '/x', cron: '* * * * *', failureStreakThreshold: 5 }, fakeSignal);
+    const result = await updateScheduleHandler({ taskId: 'streak', failureStreakThreshold }, fakeSignal);
+    expect(result.isError).toBe(true);
+    expect(loadSchedules()[0]?.failureStreakThreshold).toBe(5);
+  });
+
   it('writes file and returns correct shape', async () => {
     const result = await createScheduleHandler(
       { name: 'Test Task', command: '/test', cron: '0 2 * * *' },

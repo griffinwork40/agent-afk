@@ -213,10 +213,11 @@ export async function processInlineEvent(
       debugLog('[telegram] model-fallback notice: routeFromCtx returned undefined — notice not delivered', event.text);
       return false;
     }
-    await ctx.telegram.sendMessage(route.chatId, event.text, sendOptions(route)).catch((err: unknown) => {
+    await ctx.telegram.sendMessage(route.chatId, event.text, sendOptions(route)).then(() => {
+      debugLog('[telegram] model-fallback notice delivered to chatId', route.chatId, '—', event.text);
+    }).catch((err: unknown) => {
       debugLog('[telegram] model-fallback notice send failed:', err);
     });
-    debugLog('[telegram] model-fallback notice delivered to chatId', route.chatId, '—', event.text);
     return false;
   }
 

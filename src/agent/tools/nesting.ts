@@ -182,7 +182,7 @@ export function createStubParentSession(
 //
 // 'procedure_write' is deliberately NOT included: there is no analogous safe subset — a
 // procedure is either written or not. Per-skill opt-in remains the intended route.
-export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'memory_update', ...WORKSPACE_CHILD_TOOL_NAMES, 'agent', 'skill', 'state_get', 'state_query'];
+export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'memory_update', ...WORKSPACE_CHILD_TOOL_NAMES, 'agent', 'skill', 'state_get', 'state_query', 'artifact_publish'];
 
 // Recon allowlist for a READ-ONLY skill's forked child. This is the tool half
 // of read-only-skill enforcement (the bash half is the dispatcher's

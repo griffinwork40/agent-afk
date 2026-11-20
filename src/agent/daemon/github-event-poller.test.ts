@@ -21,8 +21,12 @@ import {
   MAX_SEEN_FOR_TESTS,
   type GhRunner,
   type GithubEventType,
+  type GithubPollerTickRecord,
 } from './github-event-poller.js';
 import type { QueuedTask } from './queue-store.js';
+import * as queueStore from './queue-store.js';
+import * as atomicWrite from '../../utils/atomic-write.js';
+import * as paths from '../../paths.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -30,15 +34,20 @@ import type { QueuedTask } from './queue-store.js';
 
 let queueDir: string;
 let stateDir: string;
+let telemetryDir: string;
 
 beforeEach(() => {
   queueDir = mkdtempSync(join(tmpdir(), 'afk-gh-poller-q-'));
   stateDir = mkdtempSync(join(tmpdir(), 'afk-gh-poller-s-'));
+  telemetryDir = mkdtempSync(join(tmpdir(), 'afk-gh-poller-t-'));
+  // Also isolate pollers that exercise the default telemetry-path branch.
+  vi.spyOn(paths, 'getTelemetryPath').mockReturnValue(join(telemetryDir, 'telemetry.jsonl'));
 });
 
 afterEach(() => {
   rmSync(queueDir, { recursive: true, force: true });
   rmSync(stateDir, { recursive: true, force: true });
+  rmSync(telemetryDir, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
 
@@ -72,8 +81,21 @@ function makePoller(ghRunner: GhRunner, events: GithubEventType[] = ['pr_comment
     commandTemplate: 'Handle {{event_type}} in {{repo}} (id: {{event_id}})',
     queueDir,
     stateDir,
+    telemetryPath: join(telemetryDir, 'telemetry.jsonl'),
     ghRunner,
   });
+}
+
+function readTelemetryRecords(): GithubPollerTickRecord[] {
+  const p = join(telemetryDir, 'telemetry.jsonl');
+  try {
+    return readFileSync(p, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as GithubPollerTickRecord);
+  } catch {
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -595,5 +617,178 @@ describe('GithubEventPoller — dedup survives a restart (#4039)', () => {
     await poller2.tick();
     // Only the new event (id=2) should be enqueued.
     expect(readQueuedTasks()).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Structured telemetry per tick (#4039)
+// ---------------------------------------------------------------------------
+
+describe('GithubEventPoller — structured telemetry per tick (#4039)', () => {
+  it('writes one telemetry record per tick with correct surface and repo', async () => {
+    const runner = makePrCommentRunner([
+      { id: 10, body: 'hi', html_url: 'https://github.com/owner/repo/pull/1#comment-10', created_at: '2026-01-01T00:00:00Z' },
+    ]);
+    const poller = makePoller(runner, ['pr_comment']);
+    await poller.tick();
+
+    const records = readTelemetryRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]?.surface).toBe('github-event-poller');
+    expect(records[0]?.repo).toBe('owner/repo');
+    expect(records[0]?.events).toEqual(['pr_comment']);
+  });
+
+  it('records fetched, enqueued, and skipped counts', async () => {
+    const runner = makePrCommentRunner([
+      { id: 1, body: 'a', html_url: 'u1', created_at: '2026-01-01T00:00:00Z' },
+      { id: 2, body: 'b', html_url: 'u2', created_at: '2026-01-02T00:00:00Z' },
+    ]);
+    const poller = makePoller(runner, ['pr_comment']);
+
+    // First tick: both events are new — fetched=2, enqueued=2, skipped=0.
+    await poller.tick();
+    const r1 = readTelemetryRecords();
+    expect(r1).toHaveLength(1);
+    expect(r1[0]?.fetched).toBe(2);
+    expect(r1[0]?.enqueued).toBe(2);
+    expect(r1[0]?.skipped).toBe(0);
+
+    // Second tick: same events already seen — fetched=2, enqueued=0, skipped=2.
+    await poller.tick();
+    const r2 = readTelemetryRecords();
+    expect(r2).toHaveLength(2);
+    expect(r2[1]?.fetched).toBe(2);
+    expect(r2[1]?.enqueued).toBe(0);
+    expect(r2[1]?.skipped).toBe(2);
+  });
+
+  it('records a fetchError when a fetch throws', async () => {
+    const runner: GhRunner = async () => { throw new Error('network failure'); };
+    const poller = makePoller(runner, ['pr_comment']);
+    await poller.tick();
+
+    const records = readTelemetryRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]?.fetchError).toContain('network failure');
+    expect(records[0]?.fetched).toBe(0);
+    expect(records[0]?.enqueued).toBe(0);
+  });
+
+  it.each([1, 2])('records partial counts and rethrows the original error when enqueue %i fails', async (failAt) => {
+    const comments = [{ id: 1, body: 'seen', html_url: 'u1', created_at: '' }];
+    const poller = makePoller(makePrCommentRunner(comments));
+    await poller.tick();
+    comments.push(
+      { id: 2, body: 'new', html_url: 'u2', created_at: '' },
+      { id: 3, body: 'newer', html_url: 'u3', created_at: '' },
+    );
+    const originalError = new Error('queue unavailable');
+    const realEnqueue = queueStore.enqueue;
+    let calls = 0;
+    const enqueueSpy = vi.spyOn(queueStore, 'enqueue').mockImplementation((...args) => {
+      if (++calls === failAt) throw originalError;
+      return realEnqueue(...args);
+    });
+
+    // Probe the processing boundary: tick() must still catch this exact error.
+    await expect((poller as unknown as { _poll(): Promise<void> })._poll()).rejects.toBe(originalError);
+    const records = readTelemetryRecords();
+    expect(records).toHaveLength(2);
+    expect(records[1]).toMatchObject({
+      fetched: 3, enqueued: failAt - 1, skipped: 1, tickError: originalError.message,
+    });
+    expect(readQueuedTasks()).toHaveLength(failAt);
+    enqueueSpy.mockImplementation(() => { throw originalError; });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(poller.tick()).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith('[github-event-poller] poll error: queue unavailable');
+    expect(readTelemetryRecords()).toHaveLength(3);
+    enqueueSpy.mockRestore();
+    // A subsequent tick can run and retries events whose state was not saved.
+    await poller.tick();
+    expect(readTelemetryRecords()).toHaveLength(4);
+    expect(readTelemetryRecords()[3]).toMatchObject({ fetched: 3, enqueued: 2, skipped: 1 });
+  });
+
+  it('records successful enqueues and preserves the original saveSeen error', async () => {
+    const comments = [{ id: 1, body: 'seen', html_url: 'u1', created_at: '' }];
+    const poller = makePoller(makePrCommentRunner(comments));
+    await poller.tick();
+    comments.push(
+      { id: 2, body: 'new', html_url: 'u2', created_at: '' },
+      { id: 3, body: 'newer', html_url: 'u3', created_at: '' },
+    );
+    const originalError = new Error('dedup disk full');
+    const realWrite = atomicWrite.atomicWriteFile;
+    vi.spyOn(atomicWrite, 'atomicWriteFile').mockImplementation((path, ...args) => {
+      if (path === join(stateDir, 'github-event-poller-seen.json')) throw originalError;
+      return realWrite(path, ...args);
+    });
+
+    await expect((poller as unknown as { _poll(): Promise<void> })._poll()).rejects.toBe(originalError);
+    const records = readTelemetryRecords();
+    expect(records).toHaveLength(2);
+    expect(records[1]).toMatchObject({
+      fetched: 3, enqueued: 2, skipped: 1, tickError: originalError.message,
+    });
+    expect(readQueuedTasks()).toHaveLength(3);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(poller.tick()).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith('[github-event-poller] poll error: dedup disk full');
+    expect(readTelemetryRecords()).toHaveLength(3);
+  });
+
+  it('creates the absent default telemetry parent even on an empty tick', async () => {
+    const telemetryPath = join(telemetryDir, 'absent', 'framework', 'forge-telemetry.jsonl');
+    vi.spyOn(paths, 'getTelemetryPath').mockReturnValue(telemetryPath);
+    const poller = new GithubEventPoller({
+      repo: 'owner/repo', events: ['pr_comment'], commandTemplate: 'handle',
+      queueDir, stateDir, ghRunner: async () => [],
+    });
+    await poller.tick();
+    const records = readFileSync(telemetryPath, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ fetched: 0, enqueued: 0, skipped: 0 });
+  });
+
+  it('does not stall polling when telemetry path resolution fails', async () => {
+    vi.spyOn(paths, 'getTelemetryPath').mockImplementation(() => { throw new Error('invalid framework path'); });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const runner = vi.fn<GhRunner>().mockResolvedValue([]);
+    const poller = new GithubEventPoller({
+      repo: 'owner/repo', events: ['pr_comment'], commandTemplate: 'handle',
+      queueDir, stateDir, ghRunner: runner,
+    });
+    await expect((poller as unknown as { _poll(): Promise<void> })._poll()).resolves.toBeUndefined();
+    await poller.tick();
+    await poller.tick();
+    expect(runner).toHaveBeenCalledTimes(3);
+    expect(errorSpy.mock.calls).toEqual(Array.from({ length: 3 }, () => ['[github-event-poller] telemetry write failed']));
+  });
+
+  it('keeps telemetry append failures nonfatal without replacing a processing error', async () => {
+    const poller = new GithubEventPoller({
+      repo: 'owner/repo', events: ['pr_comment'], commandTemplate: 'handle',
+      queueDir, stateDir, telemetryPath: telemetryDir,
+      ghRunner: makePrCommentRunner([{ id: 1, body: 'new', html_url: 'u1', created_at: '' }]),
+    });
+    const originalError = new Error('enqueue failed too');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const enqueueSpy = vi.spyOn(queueStore, 'enqueue').mockImplementation(() => { throw originalError; });
+    await expect((poller as unknown as { _poll(): Promise<void> })._poll()).rejects.toBe(originalError);
+    enqueueSpy.mockRestore();
+    await expect(poller.tick()).resolves.toBeUndefined();
+    await expect(poller.tick()).resolves.toBeUndefined();
+    expect(readQueuedTasks()).toHaveLength(1);
+  });
+
+  it('record timestamp is an ISO string', async () => {
+    const poller = makePoller(async () => [], ['pr_comment']);
+    await poller.tick();
+
+    const records = readTelemetryRecords();
+    expect(records).toHaveLength(1);
+    expect(new Date(records[0]?.timestamp ?? '').toISOString()).toBe(records[0]?.timestamp);
   });
 });

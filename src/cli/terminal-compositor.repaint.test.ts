@@ -79,17 +79,17 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       writes.clear();
       c.setOverlay('OVERLAY_LAST_LINE');
       const out = writes.all();
-      // CupFrameRenderer writes one CUP+ERASE+content per frame line, so byte
+      // CupFrameRenderer writes one CUP+content+EL0 per frame line, so byte
       // order in the captured stream reflects top-to-bottom row order.
       const overlayIdx = out.indexOf('OVERLAY_LAST_LINE');
       const inputIdx = out.lastIndexOf('> ');
       expect(overlayIdx).toBeGreaterThanOrEqual(0);
       expect(inputIdx).toBeGreaterThan(overlayIdx);
       // The gap row's CUP+ERASE pair must appear between the overlay and the
-      // input row write — i.e., `\x1b[22;1H\x1b[2K` followed immediately by
+      // input row write — i.e., `\x1b[22;1H\x1b[K` followed immediately by
       // a CUP for row 23. This is the empty content slot CupFrameRenderer
       // emits for the blank gap line.
-      const gapPattern = '\x1b[22;1H\x1b[2K\x1b[23;1H';
+      const gapPattern = '\x1b[22;1H\x1b[K\x1b[23;1H';
       expect(out).toContain(gapPattern);
       const gapIdx = out.indexOf(gapPattern);
       expect(gapIdx).toBeGreaterThan(overlayIdx);

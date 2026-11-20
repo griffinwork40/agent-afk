@@ -100,6 +100,7 @@ A result with `daemonSynced: false` means the change is saved but was not applie
 | `maxAttempts` | Total attempts for one scheduled agent run, including the first. Integer 1 to 5; default 1 disables retries. |
 | `retryDelayMs` | Retry base delay, 1,000 to 300,000 milliseconds; default 30,000. Exponential backoff doubles it per retry, capped at five minutes. |
 | `notifyOn` | `failure` (default), `always`, or `never` for Telegram completion notifications. The CLI equivalent is `--notify`. |
+| `failureStreakThreshold` | Positive integer consecutive-failure threshold for escalation; default 3. CLI: `--failure-streak-threshold`. Pass `null` to `update_schedule` to clear the override. |
 | `notifyChat` | Numeric chat ID or configured chat alias. It must resolve to an allowed chat; an invalid override falls back to default routing with a warning. |
 | `cwd` | Existing directory, absolute or beginning with `~/`. Expanded at save time. |
 
@@ -118,6 +119,34 @@ afk schedule add \
   --cwd "$PWD" \
   --notify always
 ```
+
+## Failure streaks and schedule health
+
+`error` and `blocked` runs advance a task's streak. Skipped runs neither advance nor reset it; a success resets it. The daemon issues one escalation decision at `failureStreakThreshold`, re-escalates every 10 further failures, and issues one recovery notice on the first success after escalation. Ordinary per-failure notices continue according to `notifyOn`; after escalation they include the count and start time. `notifyOn: "never"` suppresses escalation and recovery pushes too, without hiding the streak in telemetry.
+
+Set a task's threshold at creation:
+
+```bash
+afk schedule add --name "nightly check" --command "Run tests" --cron "0 2 * * *" --failure-streak-threshold 5
+```
+
+The `create_schedule` and `update_schedule` tools also accept `failureStreakThreshold`. The setting is saved and forwarded to a running daemon; inspect sync warnings if it cannot be applied live.
+
+```bash
+afk schedule list
+afk schedule health --threshold 3
+```
+
+`afk schedule list` shows last status, streak count, failing-since timestamp and effective threshold, including a live streak followed by skips. `afk schedule health` checks enabled tasks using each task's configured threshold first; `--threshold` is only the fallback (default 3). A breach exits non-zero. A task with no runs is shown as **no runs yet**, not failed, when the bounded history covers its lifetime. If older history is outside the scan and the task's creation time cannot prove it is new, health reports **no recent runs found** (indeterminate) and exits non-zero. Legacy history without a success/snapshot boundary is a lower bound: at or above threshold it is breached; below threshold it is **indeterminate** and also exits non-zero. A success establishes a healthy boundary.
+
+Run rows in `forge-telemetry.jsonl` carry an additive `failureStreak` snapshot: `count`, `failingSince`, `escalated` (decision issued, not delivery success), `extraFailures`, `lastError`, and `exact`. Skips carry it forward. The daemon hydrates each task from its newest snapshot on first use after restart; legacy rows are scanned back to a success boundary. A crash or failed append before persistence cannot guarantee exactly-once notices.
+
+Notification facts are separate:
+
+- The run's `notificationDecision` contains `state` (`due`, `not-due`, or `suppressed`), `kind` (`completion`, `failure`, `escalation`, `re-escalation`, or `recovery`), and any `reason` (`policy-never`, `policy-failure`, or `no-callback`). Undefined legacy `notifyOn` means always notify.
+- After the callback settles, a separate `recordType: "notification-delivery"` row contains `runId`, `taskId`, `triggeredAt`, `settledAt`, `kind`, `target` (resolved chat ID or IDs; null when unknown), and `outcome` (`delivered`, `failed`, `unconfigured`, or `unknown`). A void callback or a missing settlement after shutdown is **unknown**, never proof of success. Delivery never blocks writing the run.
+
+`afk schedule logs` and `get_schedule_history` return run rows only, not delivery rows. Inspect the telemetry JSONL and match `runId` to inspect delivery outcomes. Old rows without these additive fields still load; the legacy `notifySent` marker is not delivery confirmation.
 
 ## Pause, resume, or remove a schedule
 

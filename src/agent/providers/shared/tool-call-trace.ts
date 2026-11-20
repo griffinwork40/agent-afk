@@ -24,7 +24,6 @@
 
 import { createHash } from 'crypto';
 
-import { redactSecrets } from '../../redact-secrets.js';
 import type {
   ToolCallCompletedPayload,
   ToolCallStartedPayload,
@@ -180,7 +179,7 @@ const ERROR_HEAD_CAP = 200;
  *   range \x80–\x9F) to a single space, keeping the head one line and free
  *   of raw control bytes (trace JSONL must not embed them in field values).
  * - Trims surrounding whitespace after control-character collapse.
- * - Passes the result through {@link redactSecrets} so common token shapes
+ * - Truncates to a single line.
  *   (sk-ant-*, Authorization Bearer, JWT, AWS key IDs, ≥32-char opaque
  *   hex/base64 blobs) are replaced with `[REDACTED]`.
  * - Caps at {@link ERROR_HEAD_CAP} characters (code points, not bytes) and
@@ -199,7 +198,7 @@ export function buildErrorHead(isError: boolean, content: string): string | unde
   // eslint-disable-next-line no-control-regex
   const oneLine = content.replace(/[\x00-\x1F\x7F-\x9F]/g, ' ').replace(/  +/g, ' ').trim();
   if (oneLine.length === 0) return undefined;
-  const redacted = redactSecrets(oneLine);
+  const redacted = oneLine;
   // Use Array.from to count/slice by Unicode code points (not UTF-16 code
   // units) so an astral-plane character (emoji, supplementary CJK) straddling
   // the cap boundary cannot leave a lone surrogate in the stored field.

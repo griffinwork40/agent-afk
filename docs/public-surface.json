@@ -458,6 +458,11 @@
     },
     {
       "kind": "command",
+      "name": "afk schedule health",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "command",
       "name": "afk schedule list",
       "source": "src/cli/commands/schedule.ts"
     },
@@ -860,6 +865,11 @@
       "kind": "env",
       "name": "AFK_ALLOW_PROJECT_MCP",
       "source": "src/config/env.mcp.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_ARTIFACT_SESSION_LIMIT",
+      "source": "src/config/env.auth.ts"
     },
     {
       "kind": "env",
@@ -3683,6 +3693,11 @@
     },
     {
       "kind": "flag",
+      "name": "afk schedule add --failure-streak-threshold",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
       "name": "afk schedule add --help",
       "source": "src/cli/commands/schedule.ts"
     },
@@ -3709,6 +3724,16 @@
     {
       "kind": "flag",
       "name": "afk schedule enable --help",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule health --help",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule health --threshold",
       "source": "src/cli/commands/schedule.ts"
     },
     {
@@ -4724,6 +4749,11 @@
     {
       "kind": "tool",
       "name": "artifact_list",
+      "source": "src/agent/tools/schemas.artifact.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "artifact_publish",
       "source": "src/agent/tools/schemas.artifact.ts"
     },
     {

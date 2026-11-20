@@ -26,6 +26,7 @@ import { getRoutingDecisionsPath } from '../../paths.js';
 import { readTailMb } from './daemon.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
 import type { InsightsOptions } from '../types.js';
+import { TOOL_USE_LOOP_CAPPED } from '../../agent/providers/shared/tool-loop-cap.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -238,7 +239,7 @@ export function aggregateSubagentOutcomes(
 
     bucket.count += 1;
     if (status === 'succeeded') bucket.successes += 1;
-    if (stopReason === 'tool_use_loop_capped') bucket.capHits += 1;
+    if (stopReason === TOOL_USE_LOOP_CAPPED) bucket.capHits += 1;
     if (stopReason.includes('timeout') || status === 'timeout') bucket.timeouts += 1;
     if (durationMs > 0) bucket.durations.push(durationMs);
   }

@@ -56,8 +56,8 @@ describe('LSP spawn-time exit guardian', () => {
         // The server and grandchild inherit root as cwd. Windows termination is
         // asynchronous, so their cwd handles can briefly outlive the kill request.
         // Node ≥22 rmSync does not retry an initial rmdir EBUSY; async rm does,
-        // with approximately linear backoff (observed ~27 s worst case on Node 22;
-        // the exact schedule is an internal implementation detail, not documented).
+        // with approximately linear backoff (computed bound ~27.5 s for maxRetries: 10,
+        // retryDelay: 500 ms under a linear schedule; exact schedule is not documented).
         // The test timeout is set generously to accommodate the full retry budget
         // plus the spawnSync (≤15 s) and poll (≤5 s) phases above.
         await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });

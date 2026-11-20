@@ -110,6 +110,7 @@ import { homeAliasSpellings, restrictedRootSpellings } from './bash-restriction-
 import { isProvablyReadOnly } from './bash-restriction-hook.readonly-gate.js';
 import { EXACT_REF_TAIL, scrubSshPubKeyRefs } from './bash-restriction-hook.pubkey-scrub.js';
 import { safeRealpath } from '../handlers/write-denylist.js';
+import { decidePathAccess } from '../handlers/path-policy.js';
 
 /**
  * Interpreter denylist regex. Matches `<interpreter> -<flag>` where flag is
@@ -327,38 +328,67 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
 
     for (const sub of restrictedSubstrings) {
       if (mentionsRestrictedRoot(scanned, sub, home)) {
-        const sanctionedHint = sanctionedAlternativeHint(sub);
-        if (!headless) {
-          return {
-            decision: 'block',
-            ruleId: 'bash-restriction.restricted-path',
-            reason:
-              `Bash command references a restricted path (${sub}). ` +
-              sanctionedHint +
-              'For sensitive paths, use read_file / write_file / edit_file — ' +
-              'those tools support per-call user approval via an inline prompt. ' +
-              'If you genuinely need a shell command for this path, ask the user ' +
-              'to grant it via `/allow-dir <path>` first.',
-          };
-        }
-        // Headless: no interactive approval path; block unconditionally.
-        return {
-          decision: 'block',
-          ruleId: 'bash-restriction.restricted-path',
-          reason:
-            `Bash command references a restricted path (${sub}) on a headless surface ` +
-            '(daemon / afk chat / subagent / thread). ' +
-            sanctionedHint +
-            'Direct shell access to credential and config ' +
-            'paths is blocked to prevent prompt-injection bypass of the typed-tool ' +
-            'write-denylist. ' +
-            'Use the typed file tools (read_file, write_file, edit_file) ' +
-            'or run the command interactively where a human can approve it.',
-        };
+        return restrictedPathBlock(sub, headless);
       }
     }
 
     return {};
+  };
+}
+
+/**
+ * Build the check-2 block decision for a matched restricted-root substring.
+ *
+ * Contract: every lexical match blocks. `decidePathAccess` is consulted ONLY
+ * to annotate the message with the shared credential-floor match (#3847).
+ * Its allow/deny result does not control the bash block decision.
+ *
+ * `sub` is the matched absolute root candidate (as-spelled or realpath-resolved),
+ * not a parsed command operand. No scope is passed — floor-only annotation.
+ * Interactive grant filtering already happened in `deriveRestrictedSubstrings`;
+ * headless surfaces deliberately use the unfiltered set.
+ *
+ * `decidePathAccess` returns `deny/credential` for paths in BUILTIN_READ_DENYLIST
+ * (the shared floor) and `allow` for bash-only extras outside it (e.g.
+ * `~/Library/Application Support`, `LaunchAgents`, `~/.config/gh` dir-wide).
+ * Both classes block; the credential vs. extra distinction is surfaced via
+ * a parenthetical floor annotation without replacing the matched root.
+ * All pre-migration allow/deny outcomes are pinned by
+ * `bash-restriction-hook.check2-policy.test.ts`.
+ */
+function restrictedPathBlock(sub: string, headless: boolean): HookDecision {
+  const credFloor = decidePathAccess(sub, 'read');
+  const sanctionedHint = sanctionedAlternativeHint(sub);
+  // Preserve the lexical root; canonical / broader operator matches are context,
+  // not a replacement for what the bash scanner matched.
+  const floorHint = credFloor.kind === 'deny' && credFloor.reason === 'credential'
+    ? ` (credential floor: ${credFloor.matched})` : '';
+  if (!headless) {
+    return {
+      decision: 'block',
+      ruleId: 'bash-restriction.restricted-path',
+      reason:
+        `Bash command references a restricted path (${sub})${floorHint}. ` +
+        sanctionedHint +
+        'For sensitive paths, use read_file / write_file / edit_file — ' +
+        'those tools support per-call user approval via an inline prompt. ' +
+        'If you genuinely need a shell command for this path, ask the user ' +
+        'to grant it via `/allow-dir <path>` first.',
+    };
+  }
+  // Headless: no interactive approval path; block unconditionally.
+  return {
+    decision: 'block',
+    ruleId: 'bash-restriction.restricted-path',
+    reason:
+      `Bash command references a restricted path (${sub})${floorHint} on a headless surface ` +
+      '(daemon / afk chat / subagent / thread). ' +
+      sanctionedHint +
+      'Direct shell access to credential and config ' +
+      'paths is blocked to prevent prompt-injection bypass of the typed-tool ' +
+      'write-denylist. ' +
+      'Use the typed file tools (read_file, write_file, edit_file) ' +
+      'or run the command interactively where a human can approve it.',
   };
 }
 

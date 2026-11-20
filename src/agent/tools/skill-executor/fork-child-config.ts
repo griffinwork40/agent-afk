@@ -15,12 +15,12 @@ import { SubagentManager } from '../../subagent.js';
 import { resolveChildManagerReadRoots } from '../../subagent-read-scope.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import {
-  resolveMaxNestingDepth,
   RECON_ALLOWED_TOOLS,
   buildReadOnlyReconProvider,
   createStubParentSession,
   buildSkillRestrictedProvider,
 } from '../nesting.js';
+import { resolveChildMaxDepth } from '../dispatch-preparation.js';
 import { SubagentExecutor } from '../subagent-executor.js';
 import type { SkillExecutorInternals } from './types.js';
 import type { MessageJournal } from '../../journal/types.js';
@@ -119,7 +119,7 @@ export function buildForkedChildConfig(
 ): { childConfig: AgentConfig; childManager: SubagentManager | undefined } {
   const { ctx, currentCwd } = internals;
   const depth = ctx.depth ?? 0;
-  const maxDepth = ctx.maxDepth ?? resolveMaxNestingDepth();
+  const maxDepth = resolveChildMaxDepth(ctx.maxDepth);
   const childConfig: AgentConfig = { ...baseConfig, depth: depth + 1, maxDepth }; // #2266
 
   // Invariant (single source of truth for effective allowlist):

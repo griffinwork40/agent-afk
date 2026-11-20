@@ -19,6 +19,8 @@ import type { SpineNode } from '@/lib/topology-types';
 // builder filters by kind === 'tool' | 'subagent', so notices pass through
 // harmlessly without affecting topology linking.
 const EXECUTION_KINDS = new Set(['tool', 'subagent', 'notice']);
+const isExecutionItem = (item: TranscriptItem): boolean => EXECUTION_KINDS.has(item.kind)
+  && !(item.kind === 'notice' && item.noticeKind === 'model-fallback');
 
 // Items that are prose/text (rendered individually)
 const TEXT_KINDS = new Set(['user', 'assistant', 'thinking', 'error', 'stopped', 'bg_job']);
@@ -48,7 +50,7 @@ export function groupIntoSpineSlots(items: TranscriptItem[]): SpineSlot[] {
     // neither set (e.g. a new ledger kind) renders as text rather than
     // looping forever on an empty execution run — that froze the tab when
     // `stopped` was added without being listed here.
-    if (TEXT_KINDS.has(item.kind) || !EXECUTION_KINDS.has(item.kind)) {
+    if (TEXT_KINDS.has(item.kind) || !isExecutionItem(item)) {
       slots.push({ kind: 'text', item });
       i++;
       continue;
@@ -58,7 +60,7 @@ export function groupIntoSpineSlots(items: TranscriptItem[]): SpineSlot[] {
     const run: TranscriptItem[] = [];
     while (i < items.length) {
       const cur = items[i];
-      if (cur === undefined || !EXECUTION_KINDS.has(cur.kind)) break;
+      if (cur === undefined || !isExecutionItem(cur)) break;
       run.push(cur);
       i++;
     }

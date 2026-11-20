@@ -115,6 +115,7 @@ export function aggregateDaemonTelemetry(options: InsightsOptions): DaemonAggreg
   });
 
   for (const record of records) {
+    if (record['recordType'] === 'notification-delivery') continue;
     // Filter by triggeredAt (ISO string → epoch ms)
     const triggeredAtRaw = record['triggeredAt'];
     if (typeof triggeredAtRaw !== 'string') continue;

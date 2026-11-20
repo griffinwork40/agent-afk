@@ -157,8 +157,8 @@ export async function readTelemetryHistory(
         continue;
       }
       if (
-        record !== null &&
-        typeof record === 'object' &&
+        record !== null && typeof record === 'object' &&
+        (record as Record<string, unknown>)['recordType'] !== 'notification-delivery' &&
         (record as Record<string, unknown>)['taskId'] === taskId
       ) {
         matching.push(record);

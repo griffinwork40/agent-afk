@@ -16,6 +16,8 @@ import { handleCommandError } from '../errors/index.js';
 import { startDaemon } from '../../agent/daemon.js';
 import { getQueueDir } from '../../paths.js';
 import { pushIfConfigured } from '../../telegram/push.js';
+import { resolveConfiguredNotifyTargets } from '../../telegram/notify-routing.js';
+import type { CompletionCallback } from '../../agent/daemon/scheduler.notification.js';
 import {
   resolveDaemonHost,
   resolveDaemonTimeoutMs,
@@ -50,7 +52,6 @@ import {
 } from './daemon.js';
 import { parseTerminalState } from './interactive/terminal-state.js';
 import { DONE_EVIDENCE_TOOLS } from './interactive/afk-push.js';
-import type { TaskCompletionDetails, TelemetryRecord } from '../../agent/daemon/scheduler.js';
 import { writeServiceStartupSidecar } from '../../service/version-skew.js';
 import { getVersion } from '../version.js';
 
@@ -101,13 +102,13 @@ function appendPersistedSchedules(tasks: ScheduledTask[]): void {
 }
 
 /** Build the onTaskComplete callback for startDaemon. */
-function makeTaskCompleteHandler(verifyDone: boolean): (record: TelemetryRecord, details?: TaskCompletionDetails) => void {
-  return (record, details) => {
-    const target = resolveNotifyChatTarget(details?.notifyChat, record.taskId);
-    void pushIfConfigured(
-      formatTaskCompletion(record, details, verifyDone),
-      { markdown: true, ...(target !== undefined ? { target } : {}) },
-    ).catch(() => undefined);
+export function makeTaskCompleteHandler(verifyDone: boolean): CompletionCallback {
+  return async (record, details) => {
+    const target = resolveNotifyChatTarget(details?.notifyChat, record.taskId) ?? resolveConfiguredNotifyTargets();
+    try {
+      const results = await pushIfConfigured(formatTaskCompletion(record, details, verifyDone), { markdown: true, target });
+      return { target, outcome: results === null ? 'unconfigured' : results.every((r) => r.ok) ? 'delivered' : 'failed' };
+    } catch { return { target, outcome: 'failed' }; }
   };
 }
 

@@ -39,8 +39,11 @@ describe('LedgerLifecycle.seal waits for the session-meta sidecar write', () => 
 
     let sealed = false;
     const sealing = life.seal('close').then(() => { sealed = true; });
-    // Give the ledger stream ample time to open and end on its own.
-    await new Promise((r) => setTimeout(r, 200));
+    // Drain the microtask queue — seal() is async and awaits the held
+    // writeSessionMeta promise, so it cannot have resolved yet regardless of
+    // how long we wait. Using microtask drainage instead of a fixed sleep
+    // makes the assertion deterministic: no wall-clock dependency.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
     expect(sealed).toBe(false);
 
     gate.release();

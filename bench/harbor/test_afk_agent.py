@@ -571,3 +571,41 @@ class TestBuildConfigWriteCommand:
         cfg = json.loads(match.group(1))
         assert cfg["models"]["local"]["id"] == "qwen-3.8-27b"
         assert cfg["models"]["local"]["contextWindow"] == 128000
+
+
+# ---------------------------------------------------------------------------
+# Tests: AfkBudgetCapError — ERROR_PATTERNS classification
+# ---------------------------------------------------------------------------
+
+class TestAfkBudgetCapError:
+    """AfkBudgetCapError must be in AfkAgent.ERROR_PATTERNS so that the
+    budget-cap exit message is classified as behaviour, not infra failure."""
+
+    def test_budget_cap_in_error_patterns(self):
+        from bench.harbor.afk_agent import AfkAgent, AfkBudgetCapError
+        pattern_exceptions = [p.exception for p in AfkAgent.ERROR_PATTERNS]
+        assert AfkBudgetCapError in pattern_exceptions
+
+    def test_budget_cap_pattern_matches_afk_message(self):
+        import re
+        from bench.harbor.afk_agent import AfkAgent, AfkBudgetCapError
+        # Find the pattern for AfkBudgetCapError
+        pattern = next(
+            p.pattern for p in AfkAgent.ERROR_PATTERNS
+            if p.exception is AfkBudgetCapError
+        )
+        compiled = re.compile(pattern, re.IGNORECASE)
+        # Exact message from src/cli/errors/classifier.ts:120
+        msg = "Session stopped: cost ceiling reached ($3.1416 of $5.0000 limit)."
+        assert compiled.search(msg), f"Pattern {pattern!r} did not match: {msg!r}"
+
+    def test_budget_cap_pattern_does_not_match_unrelated(self):
+        import re
+        from bench.harbor.afk_agent import AfkAgent, AfkBudgetCapError
+        pattern = next(
+            p.pattern for p in AfkAgent.ERROR_PATTERNS
+            if p.exception is AfkBudgetCapError
+        )
+        compiled = re.compile(pattern, re.IGNORECASE)
+        assert not compiled.search("Session stopped: timeout after 900s")
+        assert not compiled.search("API Error: 500 Internal server error")

@@ -23,6 +23,7 @@ import { realpathSync } from 'node:fs';
 import { env } from '../../config/env.js';
 import { registerCleanup } from '../../utils/cleanupRegistry.js';
 import { LspClient, LspClientError } from './client.js';
+import { CrashLoopGuard, getOrCreateGuard } from './crash-loop-guard.js';
 import type { ServerSpec } from './server-spec.js';
 
 /**
@@ -32,6 +33,13 @@ import type { ServerSpec } from './server-spec.js';
  * without leaving a never-initializing process behind.
  */
 export const ABANDONED_START_GRACE_MS = 1_000;
+
+/**
+ * A client exit within this long of its latest request timeout is treated as
+ * fallout of that already-counted timeout, not a new crash-loop incident. A
+ * later exit (the timeout does not kill the client) is counted.
+ */
+export const TIMEOUT_EXIT_FALLOUT_MS = 5_000;
 
 /** Default idle shutdown: 5 minutes without a request. */
 export const DEFAULT_LSP_IDLE_SHUTDOWN_MS = 300_000;
@@ -57,6 +65,11 @@ export interface LspServerPoolOptions {
   readonly abandonedStartGraceMs?: number;
   /** Override client construction (tests). */
   readonly startClient?: (spec: ServerSpec, root: string) => Promise<LspClient>;
+  /**
+   * Override crash-loop guard construction (tests). Called with the pool key
+   * whenever a new guard is needed. Default: `getOrCreateGuard(key)`.
+   */
+  readonly guardFor?: (key: string) => CrashLoopGuard;
 }
 
 interface Entry {
@@ -100,10 +113,19 @@ export class LspServerPool {
    * Return a ready client for (`spec`, `root`), starting one if needed.
    * Rejects with `LspClientError` on spawn failure, crash during start,
    * timeout, or abort. Never returns a dead client.
+   *
+   * Rejects with `LspClientError` kind `'exited'` when the crash-loop guard
+   * has tripped for this server (3 crashes within 120 s): the caller should
+   * silently degrade rather than retry.
    */
   async acquire(spec: ServerSpec, root: string, opts: AcquireOptions = {}): Promise<LspClient> {
     if (opts.signal?.aborted) throw new LspClientError('aborted', 'Aborted');
     const key = poolKey(spec, root);
+    // Check crash-loop guard before attempting any spawn.
+    const guard = (this.opts.guardFor ?? getOrCreateGuard)(key);
+    if (guard.failed) {
+      throw new LspClientError('exited', 'LSP server disabled: crash-loop guard tripped');
+    }
     let entry = this.entries.get(key);
     if (entry?.client && !entry.client.alive) {
       this.evict(entry);
@@ -113,11 +135,11 @@ export class LspServerPool {
       entry.lastAcquiredAt = Date.now();
       return entry.client;
     }
-    if (!entry) entry = this.createEntry(key, spec, realpathOr(root));
+    if (!entry) entry = this.createEntry(key, spec, realpathOr(root), guard);
     return this.waitForStart(entry, opts);
   }
 
-  private createEntry(key: string, spec: ServerSpec, root: string): Entry {
+  private createEntry(key: string, spec: ServerSpec, root: string, guard: CrashLoopGuard): Entry {
     const entry: Entry = {
       key, client: null, starting: null, waiters: 0,
       abortStart: new AbortController(), idleTimer: null, abandonTimer: null,
@@ -137,12 +159,37 @@ export class LspServerPool {
         }
         entry.client = client;
         entry.lastAcquiredAt = Date.now();
-        client.onExit(() => { if (this.entries.get(key) === entry) this.evict(entry); });
+        // Each timed-out request counts; an exit shortly after one is its
+        // fallout, not a new incident. A tripping timeout evicts the hung
+        // client (evict-first, so its exit is not counted again).
+        let lastTimeoutAt: number | null = null;
+        client.onRequestTimeout(() => {
+          if (this.entries.get(key) !== entry) return;
+          lastTimeoutAt = Date.now();
+          if (guard.recordCrash()) this.evict(entry);
+        });
+        client.onExit(() => {
+          if (this.entries.get(key) === entry) {
+            const fallout = lastTimeoutAt !== null && Date.now() - lastTimeoutAt <= TIMEOUT_EXIT_FALLOUT_MS;
+            if (!fallout) guard.recordCrash();
+            this.evict(entry);
+          }
+        });
         this.scheduleIdle(entry);
         return client;
       },
       (err: unknown) => {
-        if (this.entries.get(key) === entry) this.evict(entry);
+        if (this.entries.get(key) === entry) {
+          // A failed shared start counts once here, never per acquirer.
+          // RULE: only genuine start failures count — process crash/exit during
+          // start, or the client's own initialize deadline. A start abandoned by
+          // callers (grace-killed) never reaches here as an incident; by the time
+          // this rejection lands the entry is already evicted, so the guard
+          // check below is skipped. Cancellation and missing binaries excluded.
+          const lspErr = err instanceof LspClientError ? err : null;
+          if (!lspErr || (lspErr.kind !== 'spawn' && lspErr.kind !== 'aborted')) guard.recordCrash();
+          this.evict(entry);
+        }
         throw err instanceof LspClientError ? err : new LspClientError('spawn', 'Failed to spawn LSP server');
       },
     );
@@ -184,6 +231,8 @@ export class LspServerPool {
         entry.abandonTimer = setTimeout(() => {
           entry.abandonTimer = null;
           if (entry.starting && entry.waiters === 0 && this.entries.get(entry.key) === entry) {
+            // Grace-killed starts are never incidents: callers' patience says
+            // nothing about server health.
             entry.abortStart.abort();
             this.evict(entry);
           }

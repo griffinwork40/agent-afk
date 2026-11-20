@@ -87,9 +87,12 @@ describe('runFirstRunDetector', () => {
   let stderrSpy: ReturnType<typeof vi.spyOn>;
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let originalIsTTY: boolean | undefined;
+  const originalStdoutTTY = process.stdout.isTTY;
 
   beforeEach(() => {
     originalIsTTY = process.stdin.isTTY;
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    vi.stubEnv('AFK_DAEMON_TASK', undefined);
     vi.clearAllMocks();
     stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
@@ -102,7 +105,31 @@ describe('runFirstRunDetector', () => {
       configurable: true,
       writable: true,
     });
+    Object.defineProperty(process.stdout, 'isTTY', { value: originalStdoutTTY, configurable: true });
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it.each(['daemon', 'farm'])('never prompts unattended %s even with terminals', async (name) => {
+    vi.mocked(loadCredential).mockReturnValue(undefined);
+    vi.mocked(preloadClaudeKeychainOAuth).mockResolvedValue(undefined);
+    vi.mocked(providerForModel).mockReturnValue('anthropic-direct');
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+    await runFirstRunDetector(commandFor(name));
+    expect(runAuthWizard).not.toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('refuses a service-like redirected stdout even when stdin is a terminal', async () => {
+    vi.mocked(loadCredential).mockReturnValue(undefined);
+    vi.mocked(preloadClaudeKeychainOAuth).mockResolvedValue(undefined);
+    vi.mocked(providerForModel).mockReturnValue('anthropic-direct');
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+    Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true });
+    await runFirstRunDetector(commandFor());
+    expect(runAuthWizard).not.toHaveBeenCalled();
+    expect(stderrSpy).toHaveBeenCalledWith('agent-afk: No Anthropic credential found. Run `afk login` to authenticate.\n');
+    expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
   it('skips the wizard when a credential is already present', async () => {

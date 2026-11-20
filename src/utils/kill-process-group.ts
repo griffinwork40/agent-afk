@@ -11,9 +11,12 @@
  * MSYS2 children may not be recorded as Windows descendants, so callers must
  * not rely on pipe EOF as proof that every child was killed.
  *
- * Guards: pid must be a positive integer (never 0 — `process.kill(-0, …)`
- * would signal THIS process's own group on POSIX). Errors from already-dead
- * processes are silently swallowed.
+ * Guards: pid must be an integer greater than 1. `process.kill(-0, …)` would
+ * signal THIS process's own group, and `process.kill(-1, …)` is POSIX for
+ * "every process the caller may signal", which ends the whole user session.
+ * A mocked `ChildProcess` with `pid: 1` reached this path from a test on
+ * 2026-11-18 and did exactly that. Errors from already-dead processes are
+ * silently swallowed.
  *
  * @module utils/kill-process-group
  */
@@ -32,9 +35,17 @@ export interface KillProcessGroupDeps {
 }
 
 /**
+ * True only for a pid that is safe to signal as a group: rejects 0, 1,
+ * negatives, NaN and non-integers. See the module header for why 1 matters.
+ */
+function isGroupKillablePid(pid: number): boolean {
+  return Number.isInteger(pid) && pid > 1;
+}
+
+/**
  * Kill an entire process group (POSIX) or process tree (Windows).
  *
- * @param pid - The PID of the group leader / root process. Must be > 0.
+ * @param pid - The PID of the group leader / root process. Must be > 1.
  * @param signal - Signal to send on POSIX. Ignored on Windows (`taskkill /F`
  *   always sends an unconditional terminate). Defaults to `'SIGKILL'`.
  */
@@ -43,7 +54,7 @@ export function killProcessGroup(
   signal: NodeJS.Signals = 'SIGKILL',
   deps: KillProcessGroupDeps = {},
 ): void {
-  if (pid <= 0) return;
+  if (!isGroupKillablePid(pid)) return;
   try {
     if ((deps.platform ?? process.platform) === 'win32') {
       // /T is best-effort: MSYS2 children may be absent from the Windows tree.
@@ -82,7 +93,7 @@ export async function killProcessGroupAndWait(
   deps: KillProcessGroupDeps = {},
   timeoutMs = 5_000,
 ): Promise<void> {
-  if (pid <= 0) return;
+  if (!isGroupKillablePid(pid)) return;
   if ((deps.platform ?? process.platform) !== 'win32') {
     killProcessGroup(pid, signal, deps);
     return;

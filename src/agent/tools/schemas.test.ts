@@ -18,9 +18,9 @@ import { filterBackgroundToolDefs } from './process-job-tools.js';
 import type { AnthropicToolDef } from './types.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 49 tools', () => {
-    // 24 invariant core + 25 optional tail = 49
-    expect(builtinToolSchemas).toHaveLength(49);
+  it('contains exactly 50 tools', () => {
+    // 24 invariant core + 26 optional tail = 50
+    expect(builtinToolSchemas).toHaveLength(50);
   });
 
   it('exports the expected tool names', () => {
@@ -62,11 +62,12 @@ describe('builtinToolSchemas', () => {
       'remote_agent',
       'web_scrape',
       'web_request',
-      // -- Optional tail (24..48) --
+      // -- Optional tail (24..49) --
       // registry-filtered: absent when artifact registry is not wired
       'artifact_get',
       'artifact_list',
       'artifact_read',
+      'artifact_publish',
       // registry-filtered: absent when no background registry is wired
       'cancel_background_job',
       'send_message_to_agent',
@@ -104,7 +105,7 @@ describe('builtinToolSchemas', () => {
     const surfaceFiltered = ['ask_question', 'terminal_font_size', 'clipboard_read', 'clipboard_write'];
     const registryFiltered = ['cancel_background_job', 'send_message_to_agent', 'get_background_job_health'];
     // registry-filtered: absent when artifact registry is not wired
-    const artifactFiltered = ['artifact_get', 'artifact_list', 'artifact_read'];
+    const artifactFiltered = ['artifact_get', 'artifact_list', 'artifact_read', 'artifact_publish'];
     const optionalTools = new Set([
       ...Object.values(groups).flat(),
       ...surfaceFiltered,
@@ -181,6 +182,10 @@ describe('builtinToolSchemas', () => {
       'model_complete',
       'read_journal',
       'artifact_list',
+      // `artifact_publish` — exactly one of path/content is required, but both
+      // are optional in the JSON Schema; the handler enforces the mutual-exclusion
+      // at call time (same pattern as model_complete and web_scrape).
+      'artifact_publish',
     ]);
     for (const tool of builtinToolSchemas) {
       expect(tool.input_schema.required).toBeDefined();

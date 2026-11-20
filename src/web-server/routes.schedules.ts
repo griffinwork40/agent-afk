@@ -8,6 +8,7 @@
  * truth; a failed sync is surfaced, never thrown.
  */
 
+import { parseFailureStreakThreshold } from '../agent/daemon/failure-streak-threshold.js';
 import type { ServerResponse } from 'node:http';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -132,6 +133,8 @@ export async function handleCreateSchedule(
     return;
   }
   const resolvedCwd = cwdCreate.resolved;
+  const streak = parseFailureStreakThreshold(isRecord(body) ? body : {});
+  if (!streak.ok) { sendJson(res, 400, { error: 'bad_request', message: streak.error }); return; }
   const retry = parseTaskRetryFields(isRecord(body) ? body : {});
   if (!retry.ok) {
     sendJson(res, 400, { error: 'bad_request', message: retry.error });
@@ -146,6 +149,7 @@ export async function handleCreateSchedule(
     notifyOn: notifyOn as ScheduledTaskConfig['notifyOn'],
     ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
     ...retry.value,
+    ...streak.value,
     enabled,
   });
 
@@ -227,6 +231,8 @@ export async function handleUpdateSchedule(
     return;
   }
   const resolvedCwd = cwdUpdate.resolved;
+  const streak = parseFailureStreakThreshold(isRecord(body) ? body : {}, true);
+  if (!streak.ok) { sendJson(res, 400, { error: 'bad_request', message: streak.error }); return; }
   const retry = parseTaskRetryFields(isRecord(body) ? body : {});
   if (!retry.ok) {
     sendJson(res, 400, { error: 'bad_request', message: retry.error });
@@ -244,6 +250,7 @@ export async function handleUpdateSchedule(
     ...(enabled !== undefined ? { enabled } : {}),
     ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
     ...retry.value,
+    ...streak.value,
   });
   if (!updated) {
     sendJson(res, 404, { error: 'not_found', message: `schedule ${id} not found` });

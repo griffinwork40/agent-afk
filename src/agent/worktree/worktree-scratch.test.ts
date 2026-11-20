@@ -167,6 +167,42 @@ describe('ensureAfkExcludes', () => {
     expect(excludeHasMetaEntry('.afk-worktree-meta.json\r\n')).toBe(true);
     expect(excludeHasMetaEntry('# .afk-worktree-meta.json\n')).toBe(false);
   });
+
+  // Item 1: CRLF line endings throughout the exclude file.
+  it('missingAfkExcludes returns empty when both entries are present in a CRLF file', () => {
+    const crlf = `# git's default exclude file\r\n${AFK_SCRATCH_EXCLUDE_PATTERN}\r\n${AFK_META_EXCLUDE_PATTERN}\r\n`;
+    expect(missingAfkExcludes(crlf)).toEqual([]);
+  });
+
+  it('missingAfkExcludes finds both missing entries in a CRLF file that has neither', () => {
+    const crlf = '# comment\r\nfoo/\r\nbar/\r\n';
+    expect(missingAfkExcludes(crlf)).toContain(AFK_SCRATCH_EXCLUDE_PATTERN);
+    expect(missingAfkExcludes(crlf)).toContain(AFK_META_EXCLUDE_PATTERN);
+  });
+
+  it('ensureAfkExcludes appends missing entries exactly once into a CRLF-formatted file', async () => {
+    // Write an exclude file that uses Windows line endings throughout.
+    const crlfContent = `# git default\r\nfoo/\r\n`;
+    await fs.writeFile(join(repo, '.git', 'info', 'exclude'), crlfContent);
+    expect(await ensureAfkExcludes(execFile, repo)).toBe(true);
+    const content = await readExclude();
+    // Idempotent: calling again must not duplicate.
+    expect(await ensureAfkExcludes(execFile, repo)).toBe(true);
+    const content2 = await readExclude();
+    expect(content2.split('\n').filter((l) => l.trimEnd() === AFK_SCRATCH_EXCLUDE_PATTERN)).toHaveLength(1);
+    expect(content2.split('\n').filter((l) => l.trimEnd() === AFK_META_EXCLUDE_PATTERN)).toHaveLength(1);
+    // Original CRLF content is preserved.
+    expect(content).toContain('foo/');
+    expect(content2).toContain('foo/');
+  });
+
+  it('recognises both entries when they appear on CRLF lines (anchored and unanchored)', () => {
+    // Both the anchored pattern and the unanchored spelling must be detected.
+    expect(excludeHasScratchEntry(`${AFK_SCRATCH_EXCLUDE_PATTERN}\r\n`)).toBe(true);
+    expect(excludeHasScratchEntry(`.afk-scratch/\r\n`)).toBe(true);
+    expect(excludeHasMetaEntry(`${AFK_META_EXCLUDE_PATTERN}\r\n`)).toBe(true);
+    expect(excludeHasMetaEntry(`.afk-worktree-meta.json\r\n`)).toBe(true);
+  });
 });
 
 describe('teardown in a repo that does NOT gitignore the meta file', () => {
@@ -297,5 +333,75 @@ describe('isolated-worktree teardown with .afk-scratch/', () => {
     const result = await teardownIsolatedWorktree({ execFile, repoRoot: repo, worktreePath: wt });
     expect(result).toMatchObject({ removed: false, preserved: true, reason: 'ignored-local-state', ignoredDetail: 'commit-msg.local.txt' });
     expect(await isLocked(wt)).toBe(true);
+  });
+
+  // Item 2: a tracked `.afk-scratch/` directory in an opted-in worktree.
+  //
+  // When `.afk-scratch/` is committed (tracked) and the shared exclude is in
+  // place, new files added inside it are IGNORED by git (reported as `!!`
+  // lines, not `??`). The probe skips `!!` lines that start with `.afk-scratch/`
+  // for opted-in trees (worktree-ignored-probe.ts:217), so an opted-in tree
+  // with only new ignored files inside the tracked dir is REMOVED — same as
+  // the untracked-scratch case. Modified TRACKED files inside the dir still
+  // appear in `git status --porcelain` as ` M`, making the tree dirty and
+  // preserved regardless of opt-in.
+  it('opted-in: new ignored files inside a tracked .afk-scratch/ are skipped, tree is removed', async () => {
+    // Commit .afk-scratch/ into the main repo so the worktree branch starts
+    // with a tracked scratch dir and no commits-ahead offset.
+    await fs.mkdir(join(repo, '.afk-scratch'));
+    await fs.writeFile(join(repo, '.afk-scratch', '.keep'), '');
+    // The shared exclude isn't set yet (no managed tree exists), so add freely.
+    await git(repo, ['add', '.afk-scratch/.keep']);
+    await git(repo, ['commit', '-q', '-m', 'track scratch dir in base']);
+    const wt = await makeManagedTree('tracked-scratch-ignored-files');
+    // The managed tree now starts with a committed .afk-scratch/ and the
+    // shared exclude is in place. New files inside are ignored by git.
+    await fs.writeFile(join(wt, '.afk-scratch', 'pr-body.txt'), 'disposable');
+    // Confirm git sees the new file as ignored, not untracked.
+    const statusOut = await git(wt, ['status', '--porcelain', '--ignored']);
+    expect(statusOut).toContain('!! .afk-scratch/pr-body.txt');
+    // For the opted-in tree the probe skips it → removed.
+    const result = await teardownIsolatedWorktree({ execFile, repoRoot: repo, worktreePath: wt });
+    expect(result).toEqual({ removed: true, preserved: false });
+    expect(existsSync(wt)).toBe(false);
+  });
+
+  it('a modified tracked file inside .afk-scratch/ preserves the tree (dirty path, not ignored probe)', async () => {
+    // Same base setup: .afk-scratch/ is tracked in the repo.
+    await fs.mkdir(join(repo, '.afk-scratch'), { recursive: true });
+    await fs.writeFile(join(repo, '.afk-scratch', 'notes.md'), 'original');
+    await git(repo, ['add', '.afk-scratch/notes.md']);
+    await git(repo, ['commit', '-q', '-m', 'track scratch file in base']);
+    const wt = await makeManagedTree('tracked-scratch-modified');
+    // Modify the tracked file — git reports it as dirty. The exact XY code
+    // depends on whether the base commit is an ancestor of the worktree HEAD
+    // (` M` = worktree-modified, `M ` = staged); either way the line contains M.
+    await fs.writeFile(join(wt, '.afk-scratch', 'notes.md'), 'edited — keep this');
+    const statusOut = await git(wt, ['status', '--porcelain']);
+    expect(statusOut).toMatch(/M/);
+    const result = await teardownIsolatedWorktree({ execFile, repoRoot: repo, worktreePath: wt });
+    expect(result).toEqual({ removed: false, preserved: true, reason: 'dirty' });
+    expect(await fs.readFile(join(wt, '.afk-scratch', 'notes.md'), 'utf-8')).toBe('edited — keep this');
+  });
+
+  it('non-opted-in: new ignored files inside a tracked .afk-scratch/ still protect the tree', async () => {
+    // Same tracked setup, but the worktree has no scratchDisposable opt-in.
+    await fs.mkdir(join(repo, '.afk-scratch'), { recursive: true });
+    await fs.writeFile(join(repo, '.afk-scratch', '.keep'), '');
+    await git(repo, ['add', '.afk-scratch/.keep']);
+    await git(repo, ['commit', '-q', '-m', 'track scratch dir in base']);
+    // Create a plain (non-managed) worktree: no opt-in meta.
+    const wt = join(repo, '.afk-worktrees', 'tracked-scratch-no-optin');
+    await git(repo, ['worktree', 'add', '-q', '-b', 'afk/tracked-scratch-no-optin', wt]);
+    // Ensure the shared exclude is in place (simulates a sibling managed tree).
+    await makeManagedTree('sibling-optin');
+    // Now add a file inside the tracked .afk-scratch/ — it is ignored by git.
+    await fs.writeFile(join(wt, '.afk-scratch', 'secret.md'), 'do not delete');
+    const statusOut = await git(wt, ['status', '--porcelain', '--ignored']);
+    expect(statusOut).toContain('!! .afk-scratch/secret.md');
+    // Without opt-in the probe must NOT skip .afk-scratch/ → protected.
+    const result = await removeManagedWorktreeGuarded({ execFile, repoRoot: repo, worktreePath: wt });
+    expect(result).toMatchObject({ removed: false, reason: 'ignored-local-state' });
+    expect(await fs.readFile(join(wt, '.afk-scratch', 'secret.md'), 'utf-8')).toBe('do not delete');
   });
 });

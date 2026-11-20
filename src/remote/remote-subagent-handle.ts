@@ -135,6 +135,8 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
   private _status: SubagentStatus = 'idle';
   private _durationMs: number | undefined;
   private _inFlight: Promise<unknown> | null = null;
+  /** Stored so concurrent cancel() calls join the same settling promise (#4965). */
+  private _cancelling: Promise<void> | null = null;
   private readonly _controller: AbortController;
   private readonly _request: RemoteRunRequest;
   private readonly _deps: RemoteRunDeps;
@@ -281,6 +283,10 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
 
   async cancel(): Promise<void> {
     if (this._status === 'cancelled') return;
+    // A second concurrent cancel() joins the first one's settling promise
+    // rather than returning immediately before the in-flight has resolved
+    // (#4965). Without this, the second caller observes a half-settled handle.
+    if (this._cancelling) return this._cancelling;
     this._status = 'cancelled';
     // Aborting the controller propagates the abort signal into runRemoteAgent,
     // which then sends `kill <pid>` on the remote (best-effort).
@@ -290,7 +296,10 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
     // AbortController signal causes runRemoteAgent to resolve quickly, so this
     // does not block indefinitely. Swallow any error — it has already been
     // reflected in _status by the run promise's own catch branch.
-    if (this._inFlight) await this._inFlight.catch(() => undefined);
+    this._cancelling = this._inFlight
+      ? this._inFlight.catch(() => undefined).then(() => undefined)
+      : Promise.resolve();
+    return this._cancelling;
   }
 
   async teardown(
