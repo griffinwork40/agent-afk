@@ -12,6 +12,24 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: `afk acp` now speaks Agent Client Protocol v1 over stdio.** The
+  previous home-grown JSON-RPC wire format is removed. Any client built against
+  the old format will stop working. Migrate by connecting with any ACP v1
+  compatible client. The normative protocol reference is
+  [agentclientprotocol.com](https://agentclientprotocol.com); the AFK-specific
+  wire contract is in `docs/acp-profile.md`. Key differences from the old
+  format: `initialize` now takes an integer `protocolVersion` (not a string);
+  `session/new` requires `cwd` and `mcpServers` (not optional); `session/prompt`
+  takes a content-block array (not a bare string); `session/cancel` is a
+  notification with no id (not a request); update notifications use
+  `sessionUpdate` as the discriminator (not `type`); the `done` response carries
+  only `stopReason` (not a `costUsd` field). Clients that embedded the old
+  format must rewrite their integration against the profile. See
+  `docs/acp.md` for the user guide and wire examples. The ACP surface currently
+  supports Anthropic models only.
+
 ## [5.360.0] - 2026-11-19
 
 ### Added

@@ -1,0 +1,265 @@
+---
+title: "Connect an editor with afk acp"
+description: "Start the ACP v1 JSON-RPC server over stdio and drive AFK from any Agent Client Protocol compatible editor or front end."
+---
+
+`afk acp` starts a JSON-RPC 2.0 server over stdio that speaks [Agent Client Protocol v1](https://agentclientprotocol.com). Any ACP v1 compatible editor or front end can drive AFK as an agent backend: send prompts, receive streaming tool-call progress and diffs, approve or reject tool use, cancel turns, and load or resume saved sessions.
+
+The previous home-grown wire format used by earlier `afk acp` releases is removed. Clients that spoke the old format must migrate to ACP v1.
+
+## Start the server
+
+```bash
+afk acp
+```
+
+The server reads newline-delimited JSON from stdin and writes newline-delimited JSON to stdout. All AFK wiring, tools, hooks, memory, skills, and state is inherited automatically.
+
+Common options:
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-m, --model <model>` | configured default | Model for every session on this server |
+| `--max-turns <n>` | `10` | Maximum agent turns per prompt |
+| `--dangerously-skip-permissions` | off | Skip all permission prompts for every session (see [Permissions](#permissions)) |
+
+<Callout type="warn">
+`afk acp` currently runs Anthropic models only. The `--model` flag selects a Claude model. This restriction may be lifted in a future release.
+</Callout>
+
+## Connect Zed
+
+Zed supports ACP v1 external agents natively. Register AFK as a custom agent by opening Agent Settings (`agent: open settings`), navigating to the External Agents page, clicking **Add Agent**, and choosing **Add Custom Agent**. Add this entry to the `agent_servers` block in your Zed settings file:
+
+```json
+{
+  "agent_servers": {
+    "afk": {
+      "type": "custom",
+      "command": "afk",
+      "args": ["acp"],
+      "env": {}
+    }
+  }
+}
+```
+
+After saving, AFK appears in the new-thread menu in the Agent Panel and Threads Sidebar. Zed does not charge for external agents; auth, model selection, and billing are owned by AFK.
+
+Source: [Zed External Agents documentation](https://zed.dev/docs/ai/external-agents) (verified 2026-11-20).
+
+For any other ACP v1 client, follow that client's documentation for registering a custom agent that runs `afk acp` over stdio.
+
+## Session lifecycle
+
+<Steps>
+<Step>
+
+### Initialize
+
+Send `initialize` once, before any session method. `protocolVersion` must be the integer `1`.
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"my-client","version":"1.0.0"}}}
+```
+
+AFK returns `protocolVersion: 1` regardless of the integer the client requests. A string such as `"1.0"` is invalid.
+
+```json
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"name":"afk","title":"AFK","version":"6.0.0"},"authMethods":[],"agentCapabilities":{"loadSession":true,"promptCapabilities":{"image":false,"audio":false,"embeddedContext":true},"mcpCapabilities":{"http":false,"sse":false},"sessionCapabilities":{"resume":{},"close":{}}}}}
+```
+
+</Step>
+<Step>
+
+### Create a session
+
+`session/new` takes required `cwd` (absolute path, at or below the server's launch directory) and `mcpServers` (array of stdio entries, each with `name`, `command`, `args`, `env`). HTTP and SSE MCP entries are rejected. An empty array is valid.
+
+```json
+{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/workspace","mcpServers":[]}}
+```
+
+```json
+{"jsonrpc":"2.0","id":2,"result":{"sessionId":"11111111-1111-4111-8111-111111111111"}}
+```
+
+</Step>
+<Step>
+
+### Send a prompt and read updates
+
+`session/prompt` takes `sessionId` and `prompt` as an array of content blocks. Text blocks are the most common:
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"11111111-1111-4111-8111-111111111111","prompt":[{"type":"text","text":"Hello"}]}}
+```
+
+The server streams `session/update` notifications (no `id`) until the turn ends, then sends the final response (carries the request `id`):
+
+```json
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"...","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello!"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"...","update":{"sessionUpdate":"usage_update","used":1024,"size":200000,"cost":{"amount":0.01,"currency":"USD"}}}}
+{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}
+```
+
+Sessions are stateful. Additional `session/prompt` calls on the same `sessionId` continue the conversation with full context.
+
+</Step>
+<Step>
+
+### Close
+
+```json
+{"jsonrpc":"2.0","id":4,"method":"session/close","params":{"sessionId":"..."}}
+```
+
+```json
+{"jsonrpc":"2.0","id":4,"result":{}}
+```
+
+</Step>
+</Steps>
+
+## Update types
+
+| `sessionUpdate` | Key fields | Description |
+| --- | --- | --- |
+| `agent_message_chunk` | `content.text` | Incremental assistant text |
+| `agent_thought_chunk` | `content.text` | Provider reasoning, only when available |
+| `user_message_chunk` | `content.text` | During session replay only |
+| `tool_call` | `toolCallId`, `title`, `name`, `kind`, `status`, `rawInput`, `locations` | First announcement of a tool call |
+| `tool_call_update` | `toolCallId`, changed fields | Status change or accumulated result |
+| `usage_update` | `used`, `size`, optional `cost` | Context tokens used and window size |
+
+`used` is the current context-window token count. `size` is the model's context window. `cost.amount` is the cumulative session cost in USD when available. If either token count is unavailable, the entire usage update is omitted.
+
+## Tool calls and diffs
+
+The `kind` field classifies the tool's intent for display:
+
+| Kind | Examples |
+| --- | --- |
+| `read` | `read_file`, `list_directory`, `grep`, `glob` |
+| `edit` | `write_file`, `edit_file`, `patch_apply` |
+| `execute` | `bash`, `test_run` |
+| `fetch` | `web_scrape`, `web_request` |
+| `search` | `memory_search`, `workspace_query` |
+| `think` | `agent`, `skill`, `compose`, `remote_agent` |
+| `other` | MCP tools and everything else |
+
+Read and search tools begin at `in_progress`. Tools that require consent begin at `pending` and wait for a permission decision. After execution, `status` moves to `completed` or `failed`.
+
+Edit tools emit `diff` content items alongside text results. Each diff has this shape:
+
+```json
+{"type":"diff","path":"/absolute/path","oldText":"old line","newText":"new line"}
+```
+
+`ToolCallUpdate.content` replaces the whole collection. The server carries earlier diffs forward in every subsequent update, so the final result does not erase a diff already displayed.
+
+Delegation tools (`agent`, `skill`, `compose`, `remote_agent`) append ` (subagent will act without further prompts)` to their title. Approving a delegation tool is a single consent covering everything that subagent does, without further GUI prompts. The subagent still observes its own tool allowlist and path restrictions.
+
+## Permissions
+
+Before executing any tool that requires consent, the server sends a `session/request_permission` request (an agent-to-client request with an `acp:N` id). The client must reply before the tool runs.
+
+| Tool class | Decision |
+| --- | --- |
+| Read and search tools | Auto-allow |
+| `worktree list` | Auto-allow |
+| Write tools, `bash`, `test_run`, web tools, delegation tools, MCP tools, unknown tools | Ask |
+| `--dangerously-skip-permissions` | Skip the bridge entirely |
+
+`options` always includes `allow_once` and `reject_once`. `allow_always` is offered for every tool except `bash`. An `allow_always` grant covers that exact tool name for the rest of the live session and is not persisted.
+
+```json
+{"jsonrpc":"2.0","id":"acp:1","method":"session/request_permission","params":{"sessionId":"...","toolCall":{...},"options":[{"optionId":"allow_once","name":"Allow once","kind":"allow_once"},{"optionId":"allow_always","name":"Always allow edit_file in this session","kind":"allow_always"},{"optionId":"reject_once","name":"Reject","kind":"reject_once"}]}}
+```
+
+Reply with one of these outcome shapes:
+
+```jsonc
+// allow once
+{"jsonrpc":"2.0","id":"acp:1","result":{"outcome":{"outcome":"selected","optionId":"allow_once"}}}
+
+// reject
+{"jsonrpc":"2.0","id":"acp:1","result":{"outcome":{"outcome":"selected","optionId":"reject_once"}}}
+
+// cancel the whole turn
+{"jsonrpc":"2.0","id":"acp:1","result":{"outcome":{"outcome":"cancelled"}}}
+```
+
+A rejected tool produces a failed `tool_call_update` with text `Permission denied: rejected`. The model may continue after an ordinary rejection. A cancelled outcome stops the turn with `stopReason: "cancelled"`. Unanswered requests time out after 120 seconds with an explicit deny.
+
+Writes are confined to the session `cwd` and its descendants. A path outside that directory is denied before it reaches the permission bridge.
+
+<Callout type="warn">
+`--dangerously-skip-permissions` is a server-wide setting. Every session on this server runs without permission prompts. Use only in a trusted, externally sandboxed environment. The flag provides no sandbox of its own.
+</Callout>
+
+## Cancellation
+
+`session/cancel` is a notification with no `id` and no response:
+
+```json
+{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"..."}}
+```
+
+For an active turn, the server stops model and tool work, flushes final updates, and resolves the prompt with `stopReason: "cancelled"`. When cancelling while a permission request is outstanding, the client must also answer that request with the cancelled outcome:
+
+```jsonc
+{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"..."}}
+{"jsonrpc":"2.0","id":"acp:1","result":{"outcome":{"outcome":"cancelled"}}}
+```
+
+Cancellation of an idle or unknown session is a no-op.
+
+## Load and resume
+
+`session/load` restores a saved session by `sessionId`, replays its human-visible history as `session/update` notifications in journal order, and returns `{}`. It requires `cwd` and `mcpServers`. Historical tools are never re-executed. Clear existing displayed history before load to avoid duplicates.
+
+`session/resume` restores without replay and returns `{}`. `mcpServers` is optional on resume; omitting it is equivalent to an empty array.
+
+Both methods return resource-not-found (`-32002`) for unknown ids, and invalid-request (`-32600`) if the session is already active.
+
+## Error codes
+
+| Code | Meaning |
+| --- | --- |
+| `-32700` | Parse error (malformed JSON or line over 1 MiB) |
+| `-32600` | Invalid request |
+| `-32601` | Method not found |
+| `-32602` | Invalid params |
+| `-32002` | Resource not found (unknown session id) |
+| `-32603` | Internal error (details logged to stderr only) |
+
+Cancellation is not an error. It produces a successful response with `stopReason: "cancelled"`.
+
+## Limitations
+
+- Anthropic models only on this surface (open question Q-B in the profile).
+- No image or audio input blocks.
+- No HTTP or SSE MCP transports.
+- No additional workspace directories beyond `cwd`.
+- No system-prompt override.
+- No session listing or deletion.
+- No ACP plan mode.
+- No model fallback for the ACP surface.
+- Writes outside `cwd` are denied; there is no GUI path-approval bridge.
+- Approving a delegation tool (`agent`, `skill`, `compose`, `remote_agent`) is a single consent for what that subagent does without further GUI prompts.
+
+## Smoke test
+
+```bash
+printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"test","version":"0"}}}\n{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"'"$(pwd)"'","mcpServers":[]}}\n' \
+  | afk acp
+```
+
+## Related
+
+<Cards>
+  <Card title="Run afk from scripts and CI" href="/guides/headless" description="Use afk chat for one-shot runs with JSON or NDJSON output." />
+  <Card title="Permissions" href="/configuration/permissions" description="Understand permission modes and how approvals work." />
+  <Card title="ACP profile (implementers)" href="https://github.com/agentclientprotocol/agent-client-protocol" description="Protocol reference at agentclientprotocol.com." />
+</Cards>
