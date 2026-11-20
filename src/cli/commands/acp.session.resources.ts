@@ -31,7 +31,10 @@ export class AcpSessionResources {
 
   private async releaseAll(): Promise<void> {
     // D17: a hung owner is abandoned after its deadline so the rest still release.
-    for (const dispose of this.disposers.reverse()) await withDeadline(dispose, this.deadlineMs);
+    // Iterate a reversed copy so the registration order of this.disposers is never
+    // mutated: a caller or subclass that inspects the array after release sees it
+    // in its original order.
+    for (const dispose of [...this.disposers].reverse()) await withDeadline(dispose, this.deadlineMs);
   }
 }
 
