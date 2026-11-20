@@ -7,7 +7,7 @@
  * @module cli/commands/acp.permission.grants
  */
 import path from 'node:path';
-import { isContained } from './acp.permission.paths.js';
+import { driveless, isContained, type PathFlavor } from './acp.permission.paths.js';
 
 // Contract: each entry was written from the tool's real handler, not its name.
 //  - write_file (handlers/write-file.ts parseWriteFileInput, resolveAndContain):
@@ -67,9 +67,9 @@ export function isGrantable(toolName: string): boolean {
   return GRANTABLE.has(toolName);
 }
 
-function insideLocation(raw: unknown, base: string, root: string): boolean {
+function insideLocation(raw: unknown, base: string, root: string, p: PathFlavor): boolean {
   if (typeof raw !== 'string' || raw.length === 0 || raw.includes('\u0000') || raw.startsWith('~')) return false;
-  return isContained(root, path.resolve(base, raw));
+  return !driveless(raw, p) && isContained(root, p.resolve(base, raw), p);
 }
 
 /**
@@ -79,15 +79,16 @@ function insideLocation(raw: unknown, base: string, root: string): boolean {
  */
 export function grantFits(
   toolName: string, input: Record<string, unknown>, cwd: string | undefined, callerCwd?: string,
+  p: PathFlavor = path,
 ): boolean {
   const entry = GRANTABLE.get(toolName);
   if (entry === undefined) return false;
-  if (typeof cwd !== 'string' || !path.isAbsolute(cwd) || cwd.includes('\u0000')) return false;
-  if (callerCwd !== undefined && (!path.isAbsolute(callerCwd) || callerCwd.includes('\u0000'))) return false;
+  if (typeof cwd !== 'string' || !p.isAbsolute(cwd) || cwd.includes('\u0000') || driveless(cwd, p)) return false;
+  if (callerCwd !== undefined && (!p.isAbsolute(callerCwd) || callerCwd.includes('\u0000') || driveless(callerCwd, p))) return false;
   if (!Object.keys(input).every((k) => entry.keys.has(k))) return false;
   const locations = entry.locations(input);
   if (locations === undefined) return false;
-  const root = path.resolve(cwd);
-  const base = callerCwd === undefined ? root : path.resolve(callerCwd);
-  return locations.every((raw) => insideLocation(raw, base, root));
+  const root = p.resolve(cwd);
+  const base = callerCwd === undefined ? root : p.resolve(callerCwd);
+  return locations.every((raw) => insideLocation(raw, base, root, p));
 }
