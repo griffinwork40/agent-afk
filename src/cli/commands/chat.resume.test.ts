@@ -49,7 +49,7 @@ const mockCreateSessionStats = vi.fn(() => ({
   turnTokens: [] as Array<{ input: number; output: number; cache: number }>,
   turns: [] as import('../slash/types.js').TurnRecord[],
   model: 'sonnet' as import('../../agent/types.js').AgentModelInput,
-  permissionMode: 'default',
+  permissionMode: 'bypassPermissions',
 }));
 const mockRecordTurn = vi.fn(() => ({
   user: '',
@@ -266,7 +266,7 @@ describe('afk chat — --resume / --continue / --session-id', () => {
       turnTokens: [],
       turns: [],
       model: 'sonnet',
-      permissionMode: 'default',
+      permissionMode: 'bypassPermissions',
     });
     mockRecordTurn.mockReturnValue({ user: '', assistant: '', timestamp: Date.now() });
     // Reset stdin to non-TTY so message args work without stdin logic firing.
@@ -403,7 +403,7 @@ describe('afk chat — --resume / --continue / --session-id', () => {
       turnTokens: [] as Array<{ input: number; output: number; cache: number }>,
       turns: [] as import('../slash/types.js').TurnRecord[],
       model: 'sonnet' as const,
-      permissionMode: 'default',
+      permissionMode: 'bypassPermissions',
     };
     mockCreateSessionStats.mockReturnValue(statsObj);
     // Simulate recordTurn incrementing totalTurns
@@ -435,7 +435,7 @@ describe('afk chat — --resume / --continue / --session-id', () => {
       turnTokens: [] as Array<{ input: number; output: number; cache: number }>,
       turns: [] as import('../slash/types.js').TurnRecord[],
       model: 'sonnet' as const,
-      permissionMode: 'default',
+      permissionMode: 'bypassPermissions',
     };
     mockCreateSessionStats.mockReturnValue(statsObj);
     mockRecordTurn.mockImplementation(() => {
@@ -466,7 +466,7 @@ describe('afk chat — --resume / --continue / --session-id', () => {
       turnTokens: [] as Array<{ input: number; output: number; cache: number }>,
       turns: [] as import('../slash/types.js').TurnRecord[],
       model: 'sonnet' as const,
-      permissionMode: 'default',
+      permissionMode: 'bypassPermissions',
     };
     mockCreateSessionStats.mockReturnValue(statsObj);
     mockRecordTurn.mockImplementation(() => {

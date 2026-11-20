@@ -528,6 +528,8 @@ Save an Anthropic API key or OAuth token for afk to use
 
 Usage: `afk login [options] [token]`
 
+Aliases: `setup`
+
 Guide: [api-keys](/configuration/api-keys)
 
 ### Arguments
@@ -1386,11 +1388,12 @@ Guide: [scheduling](/guides/scheduling)
 | Command | Description |
 | --- | --- |
 | `add` | Add a new scheduled task |
-| `list` | List all scheduled tasks |
+| `list` | List all scheduled tasks with last-run status |
 | `remove` | Permanently remove a scheduled task |
 | `enable` | Enable a scheduled task |
 | `disable` | Disable a scheduled task |
 | `logs` | Show recent execution history for a task |
+| `health` | Show tasks in a consecutive-failure streak; exits non-zero when any breach the threshold |
 
 ## `afk schedule add`
 
@@ -1410,13 +1413,14 @@ Guide: [scheduling](/guides/scheduling)
 | `--executor <type>` | agent \| shell (default: agent) | `"agent"` |
 | `--trigger <mode>` | cron \| sessionstart \| both | `"cron"` |
 | `--notify <when>` | failure \| always \| never | `"failure"` |
+| `--failure-streak-threshold <n>` | Consecutive failures before escalation (positive integer; default 3) |  |
 | `--cwd <path>` | Per-task working directory (absolute path or ~/…) |  |
 | `--disabled` | Add in disabled state | `false` |
 | `-h, --help` | display help for command |  |
 
 ## `afk schedule list`
 
-List all scheduled tasks
+List all scheduled tasks with last-run status
 
 Usage: `afk schedule list [options]`
 
@@ -1507,6 +1511,21 @@ Guide: [scheduling](/guides/scheduling)
 | Flags | Description | Default |
 | --- | --- | --- |
 | `-n, --limit <n>` | Number of records to show | `"10"` |
+| `-h, --help` | display help for command |  |
+
+## `afk schedule health`
+
+Show tasks in a consecutive-failure streak; exits non-zero when any breach the threshold
+
+Usage: `afk schedule health [options]`
+
+Guide: [scheduling](/guides/scheduling)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--threshold <n>` | Fallback streak threshold (default 3) | `"3"` |
 | `-h, --help` | display help for command |  |
 
 ## `afk bg`

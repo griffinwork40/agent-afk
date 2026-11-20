@@ -58,6 +58,8 @@
  * @module agent/prompt-experiment
  */
 
+import { env } from '../config/env.js';
+
 /**
  * ## Wiring status
  *
@@ -71,7 +73,6 @@
  * Until then, all sessions see the default prompt regardless of whether
  * `AFK_PROMPT_EXPERIMENT` is set.
  */
-import { env } from '../config/env.js';
 
 /**
  * Returns true when `AFK_PROMPT_EXPERIMENT` is set to `name` (exact,

@@ -43,7 +43,7 @@ function makeCtx(statsOverrides: Partial<SessionStats> = {}): { ctx: SlashContex
     turnTokens: [],
     turns: [],
     model: 'sonnet',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     cwd: '/some/cwd',
     ...statsOverrides,
   } as SessionStats;

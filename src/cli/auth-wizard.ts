@@ -1,7 +1,9 @@
 import { palette } from './palette.js';
 import { getEnvConfigPath } from '../paths.js';
 import { upsertEnvVar } from '../utils/envFile.js';
-import { promptSecret } from '../utils/prompt-secret.js';
+import { promptAuthSecret } from './auth-wizard.prompt.js';
+import { guidedToken } from './auth-wizard.guided.js';
+import { isDaemonRunning } from './auth-wizard.daemon.js';
 
 /**
  * Re-export the surface-agnostic `.env` upsert primitive. The canonical home
@@ -17,7 +19,7 @@ export { upsertEnvVar };
  * the token is never written to the terminal, scrollback, or session logs.
  */
 export function promptToken(): Promise<string> {
-  return promptSecret('Anthropic API key or OAuth token: ');
+  return promptAuthSecret('Anthropic API key or OAuth token: ');
 }
 
 /**
@@ -28,7 +30,7 @@ export function promptToken(): Promise<string> {
  * @param token - Optional pre-supplied token; if omitted, the user is prompted.
  */
 export async function runAuthWizard(token?: string): Promise<void> {
-  const inputToken = token ?? (await promptToken());
+  const inputToken = token ?? (await guidedToken(promptToken));
   if (!inputToken) {
     console.error(palette.error('No token provided. Nothing saved.'));
     process.exit(1);
@@ -49,5 +51,9 @@ export async function runAuthWizard(token?: string): Promise<void> {
   upsertEnvVar(envPath, envVarName, inputToken, keysToRemove);
 
   console.log(palette.success(`✓ Saved ${envVarName} to ${envPath}`));
-  console.log(palette.meta('Restart any running afk daemon to pick up the new token.'));
+  // Only relevant to someone who already runs a daemon, never to a first-time user.
+  if (isDaemonRunning()) {
+    console.log(palette.meta('Restart any running afk daemon to pick up the new token.'));
+  }
+  console.log(palette.success('Signed in. Type afk chat "hello" to get started.'));
 }

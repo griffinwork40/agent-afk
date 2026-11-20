@@ -9,11 +9,12 @@
  *
  * Invariant: head-read only. Sidecars carry the full `turns` array and reach
  * multiple MB, and the session list is polled, so parsing up to 100 of them
- * per request is not acceptable. `saveSession` writes `name` as the second
- * key (right after `sessionId`, before `turns`) with `JSON.stringify(x, null,
- * 2)`, so a top-level key is a line indented by exactly two spaces. Matching
- * only that indentation, and only before the `"turns"` key, keeps a nested
- * `name` field (e.g. inside a tool event) from ever being mistaken for it.
+ * per request is not acceptable. `saveSession` writes `name` near the top of
+ * the object (after `sessionId` and any close-time fields, before `turns`)
+ * with `JSON.stringify(x, null, 2)`, so a top-level key is a line indented by
+ * exactly two spaces. Matching only that indentation, and only before the
+ * `"turns"` key, keeps a nested `name` field (e.g. inside a tool event) from
+ * ever being mistaken for it.
  *
  * @module web-server/session-name-head
  */

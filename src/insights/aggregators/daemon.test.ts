@@ -56,6 +56,11 @@ function makeRecord(overrides: Record<string, unknown> = {}): string {
 // ---------------------------------------------------------------------------
 
 describe('aggregateDaemonTelemetry', () => {
+  it('does not aggregate delivery outcomes as runs, even with a status field', () => {
+    writeTelemetry([makeRecord(), makeRecord({ recordType: 'notification-delivery', outcome: 'failed', status: 'error' })]);
+    const result = aggregateDaemonTelemetry({ days: 30, afkHome: tmpRoot });
+    expect(result.totalRuns).toBe(1); expect(result.errorCount).toBe(0);
+  });
   it('counts recovered success by status, independently of gateBlocks', () => {
     writeTelemetry([makeRecord({ gateBlocks: 1, gateRecoveryNote: 'Recovered',
       gateBlockCalls: [{ blockedTool: 'bash', followingTools: ['read_file'] }] })]);

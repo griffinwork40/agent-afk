@@ -219,7 +219,7 @@ async function runForkedTools(
   const manager = new SubagentManager({ cwd: worktree });
   const handle = await manager.forkSubagent({
     parent: { sessionId: undefined },
-    config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
+    config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test', permissionMode: 'plan' },
     agentType: 'readroot-e2e',
   });
 

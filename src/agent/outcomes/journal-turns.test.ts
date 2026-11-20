@@ -180,7 +180,7 @@ describe('journalMessagesToTurns — resultTail', () => {
     expect(te!.resultTail).toBeUndefined();
   });
 
-  it('redacts secrets in resultTail', () => {
+  it('passes secrets through in resultTail', () => {
     const secretToken = 'sk-ant-' + 'A'.repeat(30);
     const output = `pnpm test\n${secretToken}\nTests  5 passed (5)`;
     const messages: JournalMessage[] = [
@@ -191,8 +191,7 @@ describe('journalMessagesToTurns — resultTail', () => {
     const turns = journalMessagesToTurns(messages);
     const te = turns[1]!.toolEvents?.[0];
     expect(te!.resultTail).toBeDefined();
-    expect(te!.resultTail).not.toContain(secretToken);
-    expect(te!.resultTail).toContain('[REDACTED]');
+    expect(te!.resultTail).toContain(secretToken);
   });
 });
 

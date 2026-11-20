@@ -43,16 +43,16 @@ export const artifactReadTool: AnthropicToolDef = {
 
 export const artifactPublishTool: AnthropicToolDef = {
   name: 'artifact_publish', category: 'write', concurrencySafe: false,
-  description: 'Register a local file or inline UTF-8 content in the content-addressed artifact registry, returning a stable ID and metadata. Accepts either `path` (an existing file the model already has read access to) or `content` (inline string, max 64 KiB). Exactly one must be supplied. Path authorization uses the existing session read roots — IDs do not grant new access. Per-session publish cap controlled by AFK_ARTIFACT_SESSION_LIMIT (default 50). Every call is recorded in the effect ledger for audit.',
+  description: 'Register a local file or inline UTF-8 content in the content-addressed artifact registry, returning a stable ID and metadata. Accepts either `path` (an existing file the model already has read access to) or `content` (inline string, max 64 KiB). Exactly one must be supplied. Path authorization uses the existing session read roots — IDs do not grant new access. Per-actor session publish cap controlled by AFK_ARTIFACT_SESSION_LIMIT (default 50); calls without a session ID share a process-wide allowance.',
   input_schema: {
     type: 'object',
     properties: {
       path: { type: 'string', description: 'Absolute or session-relative path to an existing file to register. Mutually exclusive with `content`.' },
       content: { type: 'string', description: 'Inline UTF-8 string content to register (max 64 KiB). Mutually exclusive with `path`.' },
-      media_type: { type: 'string', description: 'MIME type (e.g. `text/markdown`, `application/json`). Required for inline content; inferred from file extension for path inputs.' },
+      media_type: { type: 'string', description: 'MIME type (e.g. `text/markdown`, `application/json`). Optional: defaults to `application/octet-stream` for inline content; inferred from file extension for path inputs.' },
       retention: { type: 'string', description: 'Retention policy: `permanent` (never swept), `session` (default, swept with originating session), or `ttl:<ms>` (evict after given milliseconds from registration).' },
       inputs: { type: 'array', items: { type: 'string' }, description: 'Stable IDs of input artifacts this was derived from (lineage). Each entry must match `art_<32hex>`.' },
-      tags: { type: 'object', description: 'Free-form string key/value tags for filtering and discovery.' },
+      tags: { type: 'object', description: 'String key/value tags for filtering and discovery (max 16 tags; keys and values max 256 characters).' },
     },
     required: [],
   },

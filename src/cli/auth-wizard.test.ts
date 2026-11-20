@@ -35,7 +35,7 @@ describe('promptToken — S1 no-echo regression', () => {
   };
 
   const mockStdout = {
-    write: vi.fn(),
+    write: vi.fn(() => { callOrder.push('write'); }),
   };
 
   let originalStdin: NodeJS.ReadStream & { fd: 0 };
@@ -71,6 +71,12 @@ describe('promptToken — S1 no-echo regression', () => {
     expect(setRawModeIdx).toBeGreaterThanOrEqual(0);
     expect(onDataIdx).toBeGreaterThanOrEqual(0);
     expect(setRawModeIdx).toBeLessThan(onDataIdx);
+  });
+
+  it('disables terminal echo before publishing the paste prompt', async () => {
+    const { promptToken } = await import('./auth-wizard.js');
+    await promptToken();
+    expect(callOrder.indexOf('setRawMode(true)')).toBeLessThan(callOrder.indexOf('write'));
   });
 
   it('setRawMode(true) is called at least once', async () => {

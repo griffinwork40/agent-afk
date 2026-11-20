@@ -21,7 +21,6 @@ import type { BackgroundAgentRegistry } from './background-registry.js';
 import { oneShotCompletion } from './providers/whatif-api.js';
 import { withTransientRetry } from './providers/shared/transient-retry.js';
 import { traceExhaustedRetry } from './providers/shared/transient-retry.trace.js';
-import { redactSecrets } from './redact-secrets.js';
 import type { TraceSink } from './trace/index.js';
 
 export interface SummaryEntry {
@@ -72,11 +71,9 @@ const SYSTEM_PROMPT =
   'Be concrete: name specific tools used, files examined, decisions made. ' +
   'Avoid filler ("appears to be working on…").';
 
-// Secret-redaction helper moved to ./redact-secrets.js so lightweight
 // externalization sinks (session-ledger, telegram streaming) can reuse the
 // same patterns without pulling this module's provider-call dependency graph.
 // Re-exported here for back-compat with existing importers and tests.
-export { redactSecrets };
 
 export class BackgroundSummarizer {
   private readonly registry: BackgroundAgentRegistry;
@@ -263,7 +260,7 @@ export class BackgroundSummarizer {
       // boundary is the `bgSummaries` opt-in flag in afk.config.json — operators
       // must consciously enable summarisation and thereby accept that a redacted
       // transcript tail will leave the local process.
-      const transcriptText = redactSecrets(rawTail);
+      const transcriptText = rawTail;
 
       const userPrompt =
         `Transcript tail:\n<transcript>\n${transcriptText}\n</transcript>`;

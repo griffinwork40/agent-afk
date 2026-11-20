@@ -142,16 +142,16 @@ A text result includes `bytes_read`, `truncated`, and `next_offset` when more by
 
 Register a local file or inline UTF-8 content in the content-addressed artifact registry. Returns a stable `art_<32hex>` ID and bounded metadata. Supply exactly one of `path` or `content`.
 
-Path inputs must be accessible via the existing session read roots — `artifact_publish` does not grant new access. Inline content is bounded at 64 KiB; larger outputs should be written to disk first. Each registered artifact is immutable; new versions are new artifacts with lineage. Per-session publish cap is controlled by `AFK_ARTIFACT_SESSION_LIMIT` (default 50).
+Path inputs must be accessible via the existing session read roots — `artifact_publish` does not grant new access. Inline content is bounded at 64 KiB; larger outputs should be written to disk first. Each registered artifact is immutable; new versions are new artifacts with lineage. Per-actor session publish cap is controlled by `AFK_ARTIFACT_SESSION_LIMIT` (default 50); each subagent session has its own allowance. Calls without a session ID share a process-wide fallback allowance. In-flight publishes reserve a slot; failures release it.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `path` | string | ✓ or `content` | Existing file to register. Mutually exclusive with `content`. |
 | `content` | string | ✓ or `path` | Inline UTF-8 string to register (max 64 KiB). Mutually exclusive with `path`. |
-| `media_type` | string | | MIME type (e.g. `text/markdown`, `application/json`). Required for inline content; inferred from extension for path inputs. |
+| `media_type` | string | | MIME type (e.g. `text/markdown`, `application/json`). Optional: defaults to `application/octet-stream` for inline content; inferred from extension for path inputs. |
 | `retention` | string | | `permanent` (never swept), `session` (default, swept with originating session), or `ttl:<ms>` (evict after given milliseconds from registration). |
 | `inputs` | array | | Stable IDs of input artifacts this was derived from (lineage). Each entry must match `art_<32hex>`. Max 16 entries. |
-| `tags` | object | | Free-form string key/value tags for filtering and discovery. |
+| `tags` | object | | String key/value tags for filtering and discovery. Max 16 tags; keys and values max 256 characters. |
 
 Returns bounded metadata: `id`, `uri`, `hash`, `size`, `media_type`, `retention`, `created_at`, and `producer`. Arbitrary tags and full lineage are not echoed back.
 

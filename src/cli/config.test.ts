@@ -1463,9 +1463,9 @@ describe('loadConfig() — permissionMode default (new-install bypass)', () => {
     expect(loadConfig().permissionMode).toBe(DEFAULT_CLI_PERMISSION_MODE);
   });
 
-  it('honors an explicit permissionMode: "default" (re-enable containment)', () => {
-    mockConfig({ permissionMode: 'default' });
-    expect(loadConfig().permissionMode).toBe('default');
+  it('honors an explicit permissionMode: "bypassPermissions"', () => {
+    mockConfig({ permissionMode: 'bypassPermissions' });
+    expect(loadConfig().permissionMode).toBe('bypassPermissions');
   });
 
   it('honors an explicit permissionMode: "plan"', () => {
@@ -1478,9 +1478,9 @@ describe('loadConfig() — permissionMode default (new-install bypass)', () => {
     expect(loadConfig().permissionMode).toBe('bypassPermissions');
   });
 
-  it('an explicit overrides.permissionMode still wins over the default', () => {
-    mockConfig({});
-    expect(loadConfig({ permissionMode: 'default' }).permissionMode).toBe('default');
+  it('an explicit overrides.permissionMode still wins over the json config', () => {
+    mockConfig({ permissionMode: 'plan' });
+    expect(loadConfig({ permissionMode: 'bypassPermissions' }).permissionMode).toBe('bypassPermissions');
   });
 
   it('resolveCliPermissionMode() returns the bypass default when unset, and the config value when set', () => {

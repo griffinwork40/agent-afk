@@ -322,7 +322,8 @@ describe('query() characterization (#824) — runtime-state identity fields', ()
         config: { ...BASE_CONFIG, permissionMode: 'plan' },
       }),
     );
-    // plan / autonomous are RESTRICTIVE, so they must not read as 'elevated'.
+    // plan / autonomous are RESTRICTIVE, so they bucket to 'default' (not 'elevated').
+    // The awareness snapshot uses 'elevated' | 'default' — not raw PermissionMode strings.
     expect(snapshotFrom(events).self?.permissionMode).toBe('default');
   });
 });

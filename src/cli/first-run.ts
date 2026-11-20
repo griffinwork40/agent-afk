@@ -7,6 +7,7 @@ import { providerForModel } from '../agent/providers/index.js';
 import { cliProviderFamily } from './provider-selection.js';
 import { preloadClaudeKeychainOAuth } from '../agent/auth/credential-resolver.js';
 import { runAuthWizard } from './auth-wizard.js';
+import { canPromptForAuth } from './auth-wizard.guided.js';
 import { resolveResumeTarget } from './resume-session.js';
 import { debugLog } from '../utils/debug.js';
 
@@ -66,7 +67,9 @@ export async function runFirstRunDetector(command: Command): Promise<void> {
   const refreshedToken = await preloadClaudeKeychainOAuth(provider);
   const credential = refreshedToken ?? loadCredential();
   if (credential) return;
-  if (!process.stdin.isTTY) {
+  // Daemon/farm are unattended even when launched from a terminal. Service
+  // launchers have no common marker, but redirect stdout to their log files.
+  if (!canPromptForAuth() || command.name() === 'daemon' || command.name() === 'farm') {
     process.stderr.write('agent-afk: No Anthropic credential found. Run `afk login` to authenticate.\n');
     process.exit(1);
     return;

@@ -206,8 +206,8 @@ describe('clipboard_read handler', () => {
     });
   });
 
-  describe('secret redaction', () => {
-    it('redacts Anthropic API keys before returning to model', async () => {
+  describe('secret passthrough', () => {
+    it('passes through Anthropic API keys to model', async () => {
       acceptConfirm();
       const secret = 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAA';
       const readFn: ClipboardReadFn = vi.fn(() => `key=${secret}`);
@@ -216,11 +216,10 @@ describe('clipboard_read handler', () => {
       const result = await handler({}, SIGNAL);
 
       expect(result.isError).toBeFalsy();
-      expect(result.content).not.toContain(secret);
-      expect(result.content).toContain('[REDACTED]');
+      expect(result.content).toContain(secret);
     });
 
-    it('redacts Bearer tokens before returning to model', async () => {
+    it('passes through Bearer tokens to model', async () => {
       acceptConfirm();
       const readFn: ClipboardReadFn = vi.fn(
         () => 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9',
@@ -230,7 +229,7 @@ describe('clipboard_read handler', () => {
       const result = await handler({}, SIGNAL);
 
       expect(result.isError).toBeFalsy();
-      expect(result.content).toContain('[REDACTED]');
+      expect(result.content).toContain('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9');
     });
 
     it('does not redact plain text', async () => {

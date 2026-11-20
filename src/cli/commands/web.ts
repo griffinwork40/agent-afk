@@ -43,7 +43,8 @@ export function registerWebCommand(program: Command): void {
         // Invariant: the owner is what makes this surface more than a viewer.
         // Without it `owned` stays empty, every session reports read-only, and
         // POST /api/sessions answers 501 — see startWebServer's `owner` option.
-        const model = options.model ?? String(loadConfig().model);
+        const cfg = loadConfig();
+        const model = options.model ?? String(cfg.model);
         // Invariant: imported LAZILY. SessionOwner pulls in AgentSession and the
         // whole memory/hook stack; importing it at module scope would load that
         // graph on EVERY `afk` invocation just to register this command, and it
@@ -56,6 +57,8 @@ export function registerWebCommand(program: Command): void {
           ...(options.bypassPermissions === true
             ? { permissionMode: 'bypassPermissions' as const }
             : {}),
+          // Default on; `fileCheckpoints: false` in afk.config.json opts out (#4271).
+          ...(cfg.fileCheckpoints === false ? { fileCheckpoints: false } : {}),
         });
 
         const handle = await startWebServer({

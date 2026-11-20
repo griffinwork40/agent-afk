@@ -69,7 +69,7 @@ function harness(opts: { peer?: boolean; bg?: boolean; typed?: string; initial?:
     }),
   };
   const ctx = {
-    initialInput: opts.initial, options: { maxTurns: '10' }, stats: { permissionMode: 'default' },
+    initialInput: opts.initial, options: { maxTurns: '10' }, stats: { permissionMode: 'bypassPermissions' },
     session: { current: { waitForInitialization: async () => ({}),
       takePendingPlanExitSeed: vi.fn().mockResolvedValueOnce(opts.plan ? { message: opts.plan, mode: 'default' } : undefined),
     } }, replRenderer: { writeLine: writes }, statusLine: { rearm: vi.fn() },

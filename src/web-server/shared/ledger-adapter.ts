@@ -50,7 +50,7 @@ export type TranscriptItem =
       durationMs?: number;
     }
   | { kind: 'error'; id: string; message: string }
-  | { kind: 'notice'; id: string; text: string }
+  | { kind: 'notice'; id: string; text: string; noticeKind?: 'model-fallback' }
   | { kind: 'stopped'; id: string; text: string }
   | {
       kind: 'subagent';
@@ -225,7 +225,10 @@ export function settleRunningTools(toolIndex?: ToolIndex): void {
 function modelFallbackItem(record: LedgerRecordLike): TranscriptItem {
   const from = str(record['from']) ?? '?';
   const to   = str(record['to'])   ?? '?';
-  return { kind: 'notice', id: nextId('n'), text: `ℹ Model switched: ${from} → ${to}` };
+  return {
+    kind: 'notice', id: nextId('n'), noticeKind: 'model-fallback',
+    text: str(record['text']) ?? `ℹ Model switched: ${from} → ${to}`,
+  };
 }
 
 /**

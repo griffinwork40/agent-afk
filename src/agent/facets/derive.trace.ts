@@ -25,6 +25,7 @@
  */
 
 import { SessionCostAccumulator } from '../trace/cost.js';
+import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
 
 /** The subset of trace `closure` reasons that trigger a downgrade. */
 export type DowngradableClosureReason = 'budget_exceeded' | 'iteration_cap' | 'truncated';
@@ -118,7 +119,7 @@ export function parseTraceSignals(content: string): TraceSignals {
         const p = payload as Record<string, unknown>;
         if (
           p['transition'] === 'succeeded' &&
-          p['stopReason'] === 'tool_use_loop_capped'
+          p['stopReason'] === TOOL_USE_LOOP_CAPPED
         ) {
           hasSubagentBudgetExhaustion = true;
         }

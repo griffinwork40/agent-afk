@@ -7,6 +7,9 @@ import {
   checkWitnessDir,
 } from './doctor-checks.subsystem.js';
 import { constants } from 'fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 // ---------------------------------------------------------------------------
 // checkMemoryStore
@@ -16,6 +19,7 @@ describe('checkMemoryStore', () => {
   it('passes when openAndCount succeeds', async () => {
     const result = await checkMemoryStore({
       dbPath: '/fake/kv.db',
+      pathExists: async () => true,
       openAndCount: async () => 5,
     });
     expect(result.state).toBe('pass');
@@ -23,9 +27,25 @@ describe('checkMemoryStore', () => {
     expect(result.detail).toContain('5');
   });
 
+  it('passes without opening a store that has not been created in a fresh home', async () => {
+    let opened = false;
+    const result = await checkMemoryStore({
+      dbPath: '/fresh-home/.afk/state/kv/kv.db',
+      pathExists: async () => false,
+      openAndCount: async () => {
+        opened = true;
+        return 0;
+      },
+    });
+    expect(result.state).toBe('pass');
+    expect(result.detail).toContain('not yet created');
+    expect(opened).toBe(false);
+  });
+
   it('passes (not yet created) when ENOENT is thrown', async () => {
     const result = await checkMemoryStore({
       dbPath: '/fake/kv.db',
+      pathExists: async () => true,
       openAndCount: async () => {
         const err = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
         throw err;
@@ -38,6 +58,7 @@ describe('checkMemoryStore', () => {
   it('warns when openAndCount throws a non-ENOENT error', async () => {
     const result = await checkMemoryStore({
       dbPath: '/fake/kv.db',
+      pathExists: async () => true,
       openAndCount: async () => {
         throw new Error('disk I/O error');
       },
@@ -162,6 +183,24 @@ describe('checkNodeVersion', () => {
     });
     expect(result.state).toBe('warn');
     expect(result.detail).toContain('engines.node not found');
+  });
+
+  it('reads package.json from a percent-encoded module URL path', async () => {
+    // Built per platform: a bare `file:///fake%20install/...` is not an absolute
+    // file URL on Windows, where a drive letter is required.
+    const moduleUrl = pathToFileURL(join(tmpdir(), 'fake install', 'dist', 'cli.mjs')).href;
+    expect(moduleUrl).toContain('fake%20install');
+    const result = await checkNodeVersion({
+      moduleUrl,
+      currentVersion: 'v22.22.2',
+      readPackageFile: async (path) => {
+        expect(path).toContain('fake install');
+        expect(path).not.toContain('%20');
+        return JSON.stringify({ engines: { node: range } });
+      },
+    });
+    expect(result.state).toBe('pass');
+    expect(result.detail).toContain(range);
   });
 
   it('warns when satisfies is not available', async () => {

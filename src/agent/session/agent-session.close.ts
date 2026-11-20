@@ -10,7 +10,7 @@
 
 import type { ProviderEvent, ProviderQuery } from '../provider.js';
 import type { AgentConfig } from '../types.js';
-import { RESET_DRAIN_TIMEOUT_MS } from '../timeout.js';
+import { RESET_DRAIN_TIMEOUT_MS, raceWithDrainTimeout } from '../timeout.js';
 import type { JournalLifecycle } from './journal-lifecycle.js';
 import type { SessionShutdown } from './session-shutdown.js';
 import type { SessionStateManager } from './session-state.js';
@@ -49,11 +49,7 @@ export async function drainAndFinalizeClose(deps: CloseDrainDeps): Promise<void>
   }
   await deps.providerIterator.return?.();
   if (deps.initPromise) {
-    try {
-      await Promise.race([deps.initPromise, new Promise((resolve) => setTimeout(resolve, RESET_DRAIN_TIMEOUT_MS))]);
-    } catch {
-      // ignore
-    }
+    await raceWithDrainTimeout(deps.initPromise, RESET_DRAIN_TIMEOUT_MS);
   }
   try {
     await deps.journal.close();

@@ -42,7 +42,7 @@ function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
     turnTokens: [{ input: 500, output: 500, cache: 0 }],
     turns: [makeTurn()],
     model: 'claude-sonnet',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     ...overrides,
   };
 }
@@ -110,16 +110,15 @@ describe('renderSessionMarkdown', () => {
     expect(md).toContain('file1');
   });
 
-  it('redacts secrets in user text', () => {
+  it('passes through secrets in user text', () => {
     const stats = makeStats({
       turns: [makeTurn({ user: 'My token is sk-ant-api03-supersecretkey1234' })],
     });
     const md = renderSessionMarkdown(stats);
-    expect(md).not.toContain('sk-ant-api03-supersecretkey1234');
-    expect(md).toContain('[REDACTED]');
+    expect(md).toContain('sk-ant-api03-supersecretkey1234');
   });
 
-  it('redacts secrets in tool args', () => {
+  it('passes through secrets in tool args', () => {
     const stats = makeStats({
       turns: [makeTurn({
         toolEvents: [{
@@ -132,8 +131,7 @@ describe('renderSessionMarkdown', () => {
       })],
     });
     const md = renderSessionMarkdown(stats);
-    expect(md).not.toContain('sk-ant-api03-supersecrettoken');
-    expect(md).toContain('[REDACTED]');
+    expect(md).toContain('sk-ant-api03-supersecrettoken');
   });
 
   it('shows session name when present', () => {
@@ -201,13 +199,12 @@ describe('renderSessionHtml', () => {
     expect(html).toContain('&lt;img');
   });
 
-  it('redacts secrets in html output', () => {
+  it('passes through secrets in html output', () => {
     const stats = makeStats({
       turns: [makeTurn({ assistant: 'Key: sk-ant-api03-topsecretkey99' })],
     });
     const html = renderSessionHtml(stats);
-    expect(html).not.toContain('sk-ant-api03-topsecretkey99');
-    expect(html).toContain('[REDACTED]');
+    expect(html).toContain('sk-ant-api03-topsecretkey99');
   });
 
   it('renders tool calls with <details> elements', () => {

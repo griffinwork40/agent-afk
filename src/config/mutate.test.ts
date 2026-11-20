@@ -153,10 +153,10 @@ describe('config mutation engine', () => {
         HumanOnlyKeyRefused,
       );
       // afk config set (human surface) opts in → allowed, validated, persisted.
-      const r = setConfigValue('permissionMode', 'default', { filePath: jsonFile, allowHumanOnly: true });
+      const r = setConfigValue('permissionMode', 'plan', { filePath: jsonFile, allowHumanOnly: true });
       expect(r.class).toBe('human');
-      expect(r.value).toBe('default');
-      expect(JSON.parse(readFileSync(jsonFile, 'utf-8')).permissionMode).toBe('default');
+      expect(r.value).toBe('plan');
+      expect(JSON.parse(readFileSync(jsonFile, 'utf-8')).permissionMode).toBe('plan');
     });
   });
 

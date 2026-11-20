@@ -8,9 +8,13 @@ AFK needs credentials for a hosted model, but a local OpenAI-compatible server m
 ## Anthropic
 
 <Steps>
-<Step>Run `afk login` in a terminal and enter an Anthropic API key or existing OAuth token at the masked prompt. This command does not open a browser OAuth flow.</Step>
+<Step>Run `afk setup` (an alias for `afk login`) in a terminal. An existing Claude Code login is detected automatically. Otherwise, the guided sign-in explains how to create an API key in the [Anthropic console](https://console.anthropic.com). afk is free; Anthropic bills for API usage. Paste the key or an existing OAuth token at the hidden prompt. Nothing appears while you paste; press Enter to continue. This command does not open a browser OAuth flow.</Step>
 <Step>Start a new AFK session. Restart a running daemon to pick up the new credential.</Step>
 </Steps>
+
+Interactive sign-in asks before treating an unfamiliar format or another provider's key as an Anthropic key, so gateway credentials remain supported. It makes one tiny API request before saving an API key; Anthropic can bill for that request. A rejected key is not saved, and sign-in stops after three attempts. A recognized key with no credit is saved with a billing link. If the provider cannot be reached or the result is unknown, you can choose to save anyway. OAuth tokens are saved without a live check and checked on your first message. Custom Anthropic endpoints are respected.
+
+The guided prompt requires both stdin and stdout to be interactive terminals. Daemon and farm startup never offer it. Explicit `afk login <token>` remains an unchecked, non-prompting path for existing automation, but avoid inline secrets in shell history.
 
 `afk login` stores an `sk-ant-oat` token as `CLAUDE_CODE_OAUTH_TOKEN`, or other input as `ANTHROPIC_API_KEY`, in `~/.afk/config/afk.env`. It removes a stale value of the other type. Anthropic resolution prefers `ANTHROPIC_API_KEY`, then `CLAUDE_CODE_OAUTH_TOKEN`, then available Keychain OAuth state. You can instead set `ANTHROPIC_API_KEY` in the process environment or enter it through `afk config env set ANTHROPIC_API_KEY` (masked prompt). Do not put a key inline in a shell command.
 

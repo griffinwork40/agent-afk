@@ -3,7 +3,7 @@
  *
  * Telegram-host analogue of the REPL `/afk` (src/cli/afk-mode-toggle.ts). Flips
  * the chat session's permission mode to 'autonomous' (raised autonomy: works
- * without asking on reversible work) or back to 'default'. The afk-mode safety
+ * without asking on reversible work) or back to 'bypassPermissions'. The afk-mode safety
  * gate — now registered on Telegram (see the hook-registry wiring in
  * src/telegram.ts) — enforces the ceiling and reads the session's live mode.
  *
@@ -14,8 +14,8 @@
  * surface. Decision record: docs/afk-telegram-native-host.md.
  *
  * Restart posture: the mode is runtime-only and NOT persisted — a bot restart
- * safe-degrades the chat back to 'default' (it never silently resumes autonomous
- * after a crash). Re-run /afk on to re-arm.
+ * safe-degrades the chat back to 'bypassPermissions' (it never silently resumes
+ * autonomous after a crash). Re-run /afk on to re-arm.
  */
 
 import type { Context } from 'telegraf';
@@ -31,7 +31,7 @@ const AFK_ON_COPY =
   'High-risk / irreversible ops are REFUSED (not one-tap approvable) and surfaced ' +
   'as an Asking summary for you to handle deliberately. Send /afk off to stop.';
 
-const AFK_OFF_COPY = '○ AFK mode OFF — default permissions restored.';
+const AFK_OFF_COPY = '○ AFK mode OFF — standard permissions restored.';
 
 export async function handleAfk(
   ctx: Context,
@@ -60,7 +60,7 @@ export async function handleAfk(
       return;
     }
 
-    await session.setPermissionMode(desired ? 'autonomous' : 'default');
+    await session.setPermissionMode(desired ? 'autonomous' : 'bypassPermissions');
     await ctx.reply(desired ? AFK_ON_COPY : AFK_OFF_COPY);
   } catch (error) {
     log('AFK toggle error:', error);

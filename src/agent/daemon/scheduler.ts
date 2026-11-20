@@ -12,7 +12,9 @@
  * @module agent/daemon/scheduler
  */
 
-import { appendFileSync } from 'node:fs';
+import { writeRunTelemetry } from './scheduler.telemetry.js';
+import type { CompletionCallback, NotificationDecision } from './scheduler.notification.js';
+import type { StreakSnapshot } from './scheduler.streak-history.js';
 import * as cron from 'node-cron';
 import { IdleDetector } from './idle-detector.js';
 import { recoverDaemonQueues } from './pull-recovery.js';
@@ -43,12 +45,11 @@ import {
   executePullTick,
   fireOnTaskComplete,
   type PullTickContext,
-  type FireOnTaskCompleteOptions,
 } from './scheduler.pull-tick.js';
-import { errorMessage } from '../../utils/errors.js';
 import { makeCwdErrorRecord, snapshotInFlightTasks, makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
 import { ensureTelemetrySink, probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
+import { FailureStreakTracker } from './scheduler.failure-streak.js';
 import { evaluateRunAtGate, applyAutoDisable, warnMalformedDate } from './scheduler.runat-gate.js';
 import { overlapKeyOf } from './handoff-resume-context.js';
 
@@ -80,7 +81,7 @@ export interface SchedulerOptions {
    * record may not have been persisted to the telemetry file. Callers that require
    * durability guarantees must verify the write independently.
    */
-  onTaskComplete?: (record: TelemetryRecord, details?: TaskCompletionDetails) => void | Promise<void>;
+  onTaskComplete?: CompletionCallback;
   /**
    * Poll interval (ms) for the pull-trigger queue. When > 0, `startPullLoop()`
    * will set up a `setInterval` that dequeues one task per tick when idle.
@@ -152,6 +153,9 @@ export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
 type TelemetryStatus = 'success' | 'error' | 'skipped' | 'blocked';
 
 export interface TelemetryRecord extends GateRecoveryFields, ModelFallbackFields {
+  runId?: string;
+  failureStreak?: StreakSnapshot;
+  notificationDecision?: NotificationDecision;
   taskId: string;
   command: string;
   trigger: TelemetryTrigger;
@@ -178,6 +182,12 @@ export interface TelemetryRecord extends GateRecoveryFields, ModelFallbackFields
    * into retries (`maxAttempts > 1`); absent = single attempt, as before.
    */
   attempts?: number;
+  /** Legacy decision marker, read for migration only; never proof of delivery.
+   * New run rows use notificationDecision and separate notification-delivery rows.
+   */
+  notifySent?: 'failure' | 'escalation' | 're-escalation' | 'recovery' | 'none';
+  /** Compatibility alias for failureStreak.failingSince, including first failures and skips. */
+  failingSince?: string;
 }
 
 export interface TaskCompletionDetails {
@@ -236,6 +246,8 @@ export class CronScheduler {
   private readonly overlapAlerts = new OverlapAlertLatch();
   /** One Telegram alert per daemon process for a non-writable telemetry file. */
   private readonly telemetryAlerts = new TelemetryAlertLatch();
+  /** Per-task consecutive-failure streak tracker (#5146). Read by `afk schedule health`. */
+  readonly failureStreaks = new FailureStreakTracker();
   /** Aborted by `stop()` so an in-progress retry backoff ends promptly (#3243). */
   private shutdownController = new AbortController();
   // TODO(#337-hook): hook-driven dequeue path will share isDequeuing mutex
@@ -283,6 +295,7 @@ export class CronScheduler {
       void Promise.resolve(entry.cronTask.destroy()).catch(() => undefined);
     }
     this.registry.delete(taskId);
+    this.failureStreaks.forget(taskId);
   }
 
   list(): ScheduledTask[] {
@@ -619,24 +632,9 @@ export class CronScheduler {
     return this.options.telemetryPath ?? getTelemetryPath();
   }
 
-  private writeTelemetry(
-    record: TelemetryRecord,
-    task?: ScheduledTask,
-    details?: TaskCompletionDetails,
-  ): void {
-    // Persist doneUnverified (#2307): only written when true; absent = not unverified.
-    const persistedRecord: TelemetryRecord = details?.doneUnverified === true ? { ...record, doneUnverified: true } : record;
-    try {
-      appendFileSync(this.telemetryPath(), `${JSON.stringify(persistedRecord)}\n`, 'utf-8');
-    } catch (err) {
-      // Telemetry write failure must not crash the daemon or suppress the
-      // completion push — log and fall through so fireOnTaskComplete still runs.
-      // eslint-disable-next-line no-console
-      console.error(`[daemon] telemetry write failed: ${errorMessage(err)}`);
-    }
-    // Contract: persistedRecord is passed unconditionally — if appendFileSync
-    // threw above, the record may not be on disk (see CronSchedulerOptions.onTaskComplete).
-    const opts: FireOnTaskCompleteOptions = { onTaskComplete: this.options.onTaskComplete };
-    fireOnTaskComplete(persistedRecord, opts, task, details);
+  private writeTelemetry(record: TelemetryRecord, task?: ScheduledTask, details?: TaskCompletionDetails): void {
+    writeRunTelemetry(this.telemetryPath(), this.failureStreaks, this.options.onTaskComplete, record, task, details);
+    if (!this.registry.has(record.taskId)) this.failureStreaks.forget(record.taskId);
   }
+
 }

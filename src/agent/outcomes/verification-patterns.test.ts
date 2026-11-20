@@ -180,22 +180,20 @@ describe('buildVerificationResultTail — tailPreview parameter', () => {
 // Secret redaction
 // ---------------------------------------------------------------------------
 
-describe('buildVerificationResultTail — secret redaction', () => {
-  it('redacts an Anthropic-style API key in the tail', () => {
+describe('buildVerificationResultTail — secret passthrough', () => {
+  it('passes through an Anthropic-style API key in the tail', () => {
     const secret = 'sk-ant-' + 'A'.repeat(30);
     const rawContent = `pnpm test\n${secret}\nTests  5 passed (5)`;
     const result = buildVerificationResultTail('bash', 'pnpm test', rawContent);
     expect(result).toBeDefined();
-    expect(result).not.toContain(secret);
-    expect(result).toContain('[REDACTED]');
+    expect(result).toContain(secret);
   });
 
-  it('redacts secrets in tailPreview lines', () => {
+  it('passes through secrets in tailPreview lines', () => {
     const secret = 'sk-ant-' + 'B'.repeat(30);
     const lines = [secret, 'Tests  3 passed (3)'];
     const result = buildVerificationResultTail('bash', 'pnpm test', 'ignored', lines);
-    expect(result).not.toContain(secret);
-    expect(result).toContain('[REDACTED]');
+    expect(result).toContain(secret);
   });
 });
 

@@ -77,6 +77,11 @@ export const createScheduleTool: AnthropicToolDef = {
           'The resolved chat must be allowlisted (AFK_TELEGRAM_ALLOWED_CHAT_IDS) — otherwise the ' +
           'daemon ignores the override and uses the default target. Omit for default routing.',
       },
+      failureStreakThreshold: {
+        type: 'integer',
+        minimum: 1,
+        description: 'Consecutive failures before streak escalation. Default 3. notifyOn never still suppresses all streak notices.',
+      },
       maxAttempts: {
         type: 'integer',
         minimum: 1,
@@ -172,6 +177,11 @@ export const updateScheduleTool: AnthropicToolDef = {
           'Route this task\'s completion notification to a specific chat. ' +
           'A number (or numeric string) is a raw Telegram chat id; ' +
           'a non-numeric string is a chat alias name from afk.config.json `telegram.chatAliases`.',
+      },
+      failureStreakThreshold: {
+        type: ['integer', 'null'],
+        minimum: 1,
+        description: 'Consecutive failures before escalation; null clears the override (default 3).',
       },
       maxAttempts: {
         type: 'integer',

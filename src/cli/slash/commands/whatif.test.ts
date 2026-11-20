@@ -95,7 +95,7 @@ function makeCtx(): { ctx: SlashContext; lines: string[]; errors: string[] } {
     turnTokens: [],
     turns: [],
     model: 'claude-sonnet-4-5',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
   };
   const ctx: SlashContext = {
     session: { current: {} } as unknown as SlashContext['session'],

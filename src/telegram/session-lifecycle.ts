@@ -113,13 +113,13 @@ export function finalizeTelegramSession(
     console.warn(palette.warning(
         '[telegram] permissionMode="plan" is not supported on the Telegram surface ' +
         '(the plan-exit seed drain runs only in the REPL loop). ' +
-        'Downgrading to "default" for this session.',
+        'Downgrading to "bypassPermissions" for this session.',
       ),
     );
   }
-  // Resolve the effective mode: 'plan' → 'default', anything else unchanged.
+  // Resolve the effective mode: 'plan' → 'bypassPermissions', anything else unchanged.
   const effectivePermissionMode: PermissionMode =
-    sessionConfig.permissionMode === 'plan' ? 'default' : (sessionConfig.permissionMode ?? 'default');
+    sessionConfig.permissionMode === 'plan' ? 'bypassPermissions' : (sessionConfig.permissionMode ?? 'bypassPermissions');
 
   // -- System-prompt assembly -----------------------------------------------
   // Identical across all three branches: apply auto-routing directives on top

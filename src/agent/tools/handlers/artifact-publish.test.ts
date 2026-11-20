@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createArtifactPublishHandler } from './artifact-publish.js';
 import { createArtifactHandlers } from './artifact.js';
 import { artifactGet } from '../../artifact-registry/store.js';
+import { env } from '../../../config/env.js';
 import { CHILD_ALLOWED_TOOLS } from '../nesting.js';
 import { builtinToolSchemas } from '../schemas.js';
 
@@ -63,6 +64,24 @@ describe('artifact_publish inline content', () => {
     // Tags and inputs must NOT be echoed back
     expect(result.tags).toBeUndefined();
     expect(result.inputs).toBeUndefined();
+  });
+
+  it('defaults the MIME type for inline content when omitted', async () => {
+    const result = await json({ content: 'default type' });
+    expect(result.media_type).toBe('application/octet-stream');
+  });
+
+  it('accepts exactly 64 KiB of multi-byte UTF-8 content', async () => {
+    const result = await json({ content: '😀'.repeat(16 * 1024), media_type: 'text/plain' });
+    expect(result.size).toBe(64 * 1024);
+  });
+
+  it('accepts bounded tags at the key, value and count limits', async () => {
+    const tags = Object.fromEntries(Array.from({ length: 16 }, (_, i) => [
+      String(i).padEnd(256, 'k'), 'v'.repeat(256),
+    ]));
+    const result = await json({ content: 'tag bounds', tags });
+    expect(artifactGet(result.id, indexPath)?.tags).toEqual(tags);
   });
 
   it('assigns permanent retention when requested', async () => {
@@ -163,6 +182,23 @@ describe('artifact_publish input validation', () => {
     expect(result.isError).toBe(true);
   });
 
+  it.each(['é', '界', '😀'])('rejects content above 64 KiB in UTF-8 bytes (%s)', async (character) => {
+    const content = character.repeat(Math.floor(64 * 1024 / Buffer.byteLength(character)) + 1);
+    const result = await call({ content, media_type: 'text/plain' });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('UTF-8 bytes');
+  });
+
+  it.each([
+    { ['k'.repeat(257)]: 'value' },
+    { key: 'v'.repeat(257) },
+    Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`key${i}`, 'value'])),
+  ])('rejects oversized tags (%j)', async (tags) => {
+    const result = await call({ content: 'hi', tags });
+    expect(result.isError).toBe(true);
+    await expect(stat(indexPath)).rejects.toThrow();
+  });
+
   it('rejects an invalid retention value', async () => {
     const result = await call({ content: 'hi', media_type: 'text/plain', retention: 'never' });
     expect(result.isError).toBe(true);
@@ -183,7 +219,7 @@ describe('artifact_publish input validation', () => {
 describe('artifact_publish quota admission', () => {
   it('enforces AFK_ARTIFACT_SESSION_LIMIT per session', async () => {
     // Use a very low cap via the env mock.
-    const envModule = await import('../../../config/env.js');
+    const envModule = { env };
     const original = Object.getOwnPropertyDescriptor(envModule.env, 'AFK_ARTIFACT_SESSION_LIMIT');
 
     // Create a low-quota handler with its own counter by calling the factory
@@ -212,26 +248,58 @@ describe('artifact_publish quota admission', () => {
     }
   });
 
-  it('does not enforce quota when sessionId is absent', async () => {
-    // No sessionId in context — quota tracking is skipped.
-    const result = await json({ content: 'no session', media_type: 'text/plain' });
-    expect(result.id).toMatch(/^art_[0-9a-f]{32}$/);
+  it('shares a process-wide fallback quota when sessionId is absent', async () => {
+    vi.resetModules();
+    const { env } = await import('../../../config/env.js');
+    const { createArtifactPublishHandler: create } = await import('./artifact-publish.js');
+    vi.spyOn(env, 'AFK_ARTIFACT_SESSION_LIMIT', 'get').mockReturnValue('1');
+    try {
+      const first = await create({ storeDir, indexPath })({ content: 'fallback' }, signal);
+      expect(first.isError).toBeUndefined();
+      expect(JSON.parse(first.content as string).producer.session_id).toBeUndefined();
+      const second = await create({ storeDir, indexPath })({ content: 'fallback2' }, signal, {} as never);
+      expect(second.isError).toBe(true);
+      expect(second.content).toContain('cap reached');
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
-  it('does not count a failed publish against the quota', async () => {
-    const envModule = await import('../../../config/env.js');
-    vi.spyOn(envModule.env, 'AFK_ARTIFACT_SESSION_LIMIT', 'get').mockReturnValue('1');
+  it('reserves the last slot before concurrent path validation awaits', async () => {
+    vi.spyOn(env, 'AFK_ARTIFACT_SESSION_LIMIT', 'get').mockReturnValue('1');
     try {
-      const sessionId = `test-rollback-${Date.now()}`;
-      const ctx = { sessionId };
+      const filePath = join(root, 'concurrent.txt');
+      await writeFile(filePath, 'concurrent');
+      const ctx = { sessionId: root, resolveBase: root, readRoots: [root] };
+      const results = await Promise.all(Array.from({ length: 2 }, () =>
+        makeHandler()({ path: filePath }, signal, ctx as never)));
+      expect(results.filter(result => !result.isError)).toHaveLength(1);
+      expect(results.filter(result => result.isError)).toHaveLength(1);
+      expect(results.find(result => result.isError)?.content).toContain('cap reached');
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it.each(['authorization', 'directory', 'stat', 'store'])('releases quota after %s failure', async (failure) => {
+    vi.spyOn(env, 'AFK_ARTIFACT_SESSION_LIMIT', 'get').mockReturnValue('1');
+    try {
+      const ctx = { sessionId: root, resolveBase: root, readRoots: [root] };
       const h = makeHandler();
-      // Publish a valid artifact — succeeds and uses the one slot.
-      const r1 = await h({ content: 'ok', media_type: 'text/plain' }, signal, ctx as never);
-      expect(r1.isError).toBeUndefined();
-      // Second valid attempt is rejected (cap=1 reached).
-      const r2 = await h({ content: 'ok2', media_type: 'text/plain' }, signal, ctx as never);
-      expect(r2.isError).toBe(true);
-      expect(r2.content).toContain('cap reached');
+      const path = failure === 'directory' ? root : join(root, 'missing.txt');
+      const failedHandler = failure === 'store'
+        ? createArtifactPublishHandler({ storeDir, indexPath: root })
+        : failure === 'authorization' ? makeHandler({ cwd: join(root, 'narrow') }) : h;
+      const failed = await failedHandler(
+        failure === 'store' ? { content: 'store failure' } : { path }, signal,
+        (failure === 'authorization' ? { ...ctx, readRoots: [join(root, 'narrow')] } : ctx) as never,
+      );
+      expect(failed.isError).toBe(true);
+      const result = await h({ content: 'after failure' }, signal, ctx as never);
+      expect(result.isError, result.content as string).toBeUndefined();
+      const capped = await h({ content: 'over cap' }, signal, ctx as never);
+      expect(capped.isError).toBe(true);
+      expect(capped.content).toContain('cap reached');
     } finally {
       vi.restoreAllMocks();
     }
