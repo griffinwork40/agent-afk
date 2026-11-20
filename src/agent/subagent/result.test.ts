@@ -245,9 +245,10 @@ describe('isTerminalStopReason — buffered-partial branch stale-reason gate (#3
     // from isTerminalStopReason. They ARE in isIncompleteStopReason (see the
     // SOFT_DEADLINE_WIND_DOWN / OVERLOAD_EXHAUSTED / CONTEXT_PRESSURE_WIND_DOWN
     // describe blocks below), so a wound-down child gets the [PARTIAL RESULT]
-    // banner. The design is: terminal=false means the next-round abort writes
-    // STREAM_INCOMPLETE over the stale wind-down reason; incomplete=true means
-    // the parent-visible banner still fires on the salvaged partial.
+    // banner. The design is: terminal=false means handle.streaming.ts assigns
+    // STREAM_INCOMPLETE unconditionally (not via ??=) over any stale stop
+    // reason when no terminal message arrives; incomplete=true means the
+    // parent-visible banner still fires on the salvaged partial.
     expect(isTerminalStopReason(TOOL_USE_LOOP_CAPPED)).toBe(false);
     expect(isTerminalStopReason(SOFT_DEADLINE_WIND_DOWN)).toBe(false);
     expect(isTerminalStopReason(CONTEXT_PRESSURE_WIND_DOWN)).toBe(false);
