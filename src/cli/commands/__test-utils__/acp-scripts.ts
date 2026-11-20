@@ -83,11 +83,16 @@ export function scriptFor(stem: string, root: string): GoldenScript {
         input: { path: path.join(root, '..') }, result: 'acp-golden/' })];
       break;
     case 'resume':
+    case 'load-live-session':
       turns = [turn('Continue', text('Continuing.'))];
+      break;
+    case 'session-cwd-outside-launch':
+      turns = [turn('Hello', text('Hello from outside the launch directory.'))];
       break;
     case 'load-replay':
     case 'close-idempotent':
     case 'bad-version-negotiation':
+    case 'error-session-data':
       turns = [];
       break;
     default: throw new Error(`A6 missing internal script for ${stem}`);

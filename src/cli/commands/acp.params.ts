@@ -1,5 +1,5 @@
 /**
- * Validation of ACP session-setup params (profile §2, §8): cwd containment
+ * Validation of ACP session-setup params (profile §2, §8): cwd shape
  * and conversion of the wire stdio MCP array into AFK's name-keyed config.
  * A4 may reuse {@link convertMcpServers}.
  *
@@ -19,10 +19,11 @@ export class AcpInvalidParams extends Error {
 }
 
 /**
- * Invariant: cwd must be an absolute, existing directory whose canonical path
- * (symlinks resolved) is the server launch directory or a descendant.
+ * Invariant: cwd must be an absolute, existing directory; it is canonicalised
+ * once (symlinks resolved). D14: it need not be under the server's launch
+ * directory; the approval policy, not containment, protects the session.
  */
-export function validateCwd(raw: unknown, serverCwd: string): string {
+export function validateCwd(raw: unknown): string {
   if (typeof raw !== 'string' || !path.isAbsolute(raw)) throw new AcpInvalidParams('cwd must be absolute');
   let resolved: string;
   try {
@@ -31,11 +32,6 @@ export function validateCwd(raw: unknown, serverCwd: string): string {
   } catch (err) {
     if (err instanceof AcpInvalidParams) throw err;
     throw new AcpInvalidParams(`cwd does not exist: ${raw}`);
-  }
-  let root: string;
-  try { root = realpathSync(serverCwd); } catch { root = serverCwd; }
-  if (resolved !== root && !resolved.startsWith(root.endsWith(path.sep) ? root : root + path.sep)) {
-    throw new AcpInvalidParams(`cwd is outside server working directory: ${resolved}`);
   }
   return resolved;
 }
@@ -98,7 +94,7 @@ export interface SessionSetup {
  * session/resume (`needsId` true). Resume may omit mcpServers (treated as []).
  */
 export function parseSessionSetup(
-  params: unknown, serverCwd: string, mode: 'new' | 'load' | 'resume',
+  params: unknown, mode: 'new' | 'load' | 'resume',
 ): SessionSetup {
   if (typeof params !== 'object' || params === null) throw new AcpInvalidParams('params must be an object');
   const p = params as Record<string, unknown>;
@@ -112,7 +108,7 @@ export function parseSessionSetup(
   const rawMcp = mode === 'resume' && p['mcpServers'] === undefined ? [] : p['mcpServers'];
   const wireMcp = parseMcpServers(rawMcp);
   const mcpServers = convertMcpServers(wireMcp);
-  const cwd = validateCwd(p['cwd'], serverCwd);
+  const cwd = validateCwd(p['cwd']);
   if (mode === 'new') return { cwd, wireMcp, mcpServers };
   const sessionId = p['sessionId'];
   if (typeof sessionId !== 'string' || sessionId === '') throw new AcpInvalidParams('sessionId required');

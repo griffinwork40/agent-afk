@@ -61,8 +61,9 @@ describe('ACP restore through the real load module', () => {
       { jsonrpc: '2.0', id: 2, method: 'session/load', params: { sessionId: missing, cwd: root, mcpServers: [] } },
       { jsonrpc: '2.0', id: 3, method: 'session/resume', params: { sessionId: missing, cwd: root } },
     ], 0);
-    expect(load).toEqual({ jsonrpc: '2.0', id: 2, error: { code: -32002, message: 'Resource not found' } });
-    expect(resume).toEqual({ jsonrpc: '2.0', id: 3, error: { code: -32002, message: 'Resource not found' } });
+    // D16: the client's own id comes back as error data.
+    expect(load).toEqual({ jsonrpc: '2.0', id: 2, error: { code: -32002, message: 'Resource not found', data: { sessionId: missing } } });
+    expect(resume).toEqual({ jsonrpc: '2.0', id: 3, error: { code: -32002, message: 'Resource not found', data: { sessionId: missing } } });
     expect(buildAcpSession).not.toHaveBeenCalled();
   });
 

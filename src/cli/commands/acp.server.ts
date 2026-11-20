@@ -32,8 +32,6 @@ export interface AcpServerOptions {
   dangerouslySkipPermissions?: boolean;
   /** Diagnostics sink; defaults to stderr. Never stdout. */
   log?: (line: string) => void;
-  /** Launch directory used for cwd containment; defaults to process.cwd(). */
-  serverCwd?: string;
   /** How long a cancelled turn keeps draining queued updates (ms). */
   cancelGraceMs?: number;
 }
@@ -41,7 +39,7 @@ export interface AcpServerOptions {
 function toErrorFrame(ctx: ServerContext, id: RpcRequest['id'], err: unknown): RpcFrame {
   if (err instanceof AcpError) {
     if (err.detail) ctx.log(`[acp] request ${String(id)} failed: ${err.detail}`);
-    return errorResponse(id, err.code);
+    return errorResponse(id, err.code, err.data);
   }
   ctx.log(`[acp] request ${String(id)} failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
   return errorResponse(id, INTERNAL_ERROR);
@@ -82,7 +80,7 @@ export async function runAcpServer(options: AcpServerOptions): Promise<void> {
       ...(options.dangerouslySkipPermissions !== undefined ? { dangerouslySkipPermissions: options.dangerouslySkipPermissions } : {}),
       ...(options.cancelGraceMs !== undefined ? { cancelGraceMs: options.cancelGraceMs } : {}),
     },
-    peer, serverCwd: options.serverCwd ?? process.cwd(), initialized: false,
+    peer, initialized: false,
     sessions: new Map(), restoring: new Set(), promptWrites: new Map(), log,
   };
   const inflight = new Set<Promise<void>>();
