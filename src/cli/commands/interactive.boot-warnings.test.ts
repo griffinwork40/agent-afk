@@ -99,6 +99,10 @@ vi.mock('../config.js', () => ({
   loadConfig: vi.fn(() => ({ interactive: {} })),
 }));
 
+vi.mock('../config/permission-mode-warning.js', () => ({
+  flushDeferredPermissionModeWarnings: vi.fn(),
+}));
+
 vi.mock('../update-checker.js', () => ({
   printUpdateBanner: vi.fn(),
 }));
@@ -125,6 +129,7 @@ vi.mock('ora', () => ({
 // ---------------------------------------------------------------------------
 
 import { registerInteractiveCommand } from './interactive.js';
+import { flushDeferredPermissionModeWarnings } from '../config/permission-mode-warning.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -263,6 +268,7 @@ describe('afk interactive — bootstrap warnings survive the startup clear (#745
       ' the override replaces both';
 
     const writes = await runAndCapture([warning]);
+    expect(flushDeferredPermissionModeWarnings).toHaveBeenCalledOnce();
 
     const clearIdx = writes.findIndex((w) => w.includes(CLEAR));
     const warnIdx = writes.findIndex((w) => w.includes('overrides built-in agent'));

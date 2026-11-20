@@ -18,6 +18,7 @@
 
 import { readFileSync, existsSync } from 'fs';
 import { parseToolsConfig } from './json-tier-parse.tools.js';
+import { warnPermissionModeRemoval } from './permission-mode-warning.js';
 import { parseDaemonBlock } from './json-tier-parse.daemon.js';
 import { parseTelegramBlock } from './json-tier-parse.telegram.js';
 import { parseInteractiveBlock } from './json-tier-parse.interactive.js';
@@ -94,10 +95,7 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
     if (pm === 'plan' || pm === 'autonomous' || pm === 'bypassPermissions') {
       config.permissionMode = pm;
     } else if (pm === 'default') {
-      // eslint-disable-next-line no-console -- one-shot operator UX warning
-      console.warn(
-        '[afk] permissionMode "default" was removed. The session will run in bypassPermissions. Set "permissionMode": "plan" for a read-only session.',
-      );
+      warnPermissionModeRemoval();
     }
   }
 

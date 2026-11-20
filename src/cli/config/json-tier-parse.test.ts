@@ -10,6 +10,11 @@ import { writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { parseJsonConfigFile } from './json-tier-parse.js';
+import {
+  _resetPermissionModeWarnCache,
+  deferPermissionModeWarnings,
+  flushDeferredPermissionModeWarnings,
+} from './permission-mode-warning.js';
 
 function writeConfig(dir: string, obj: unknown): string {
   const p = join(dir, 'afk.config.json');
@@ -22,11 +27,13 @@ describe('parseJsonConfigFile — permissionMode', () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    _resetPermissionModeWarnCache();
     tmpDir = mkdtempSync(join(tmpdir(), 'afk-json-tier-test-'));
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
   afterEach(() => {
+    _resetPermissionModeWarnCache();
     warnSpy.mockRestore();
     rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -36,8 +43,26 @@ describe('parseJsonConfigFile — permissionMode', () => {
     const result = parseJsonConfigFile(p);
     expect(result).toBeDefined();
     expect(result!.config.permissionMode).toBeUndefined();
+    expect(parseJsonConfigFile(p)!.config.permissionMode).toBeUndefined();
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy.mock.calls[0]![0]).toContain('default');
+  });
+
+  it('defers the removal warning until flushed and never prints it twice', () => {
+    const p = writeConfig(tmpDir, { permissionMode: 'default' });
+    deferPermissionModeWarnings();
+    deferPermissionModeWarnings();
+    expect(parseJsonConfigFile(p)!.config.permissionMode).toBeUndefined();
+    parseJsonConfigFile(p);
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    flushDeferredPermissionModeWarnings();
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      '[afk] permissionMode "default" was removed. The session will run in bypassPermissions. Set "permissionMode": "plan" for a read-only session.',
+    );
+    flushDeferredPermissionModeWarnings();
+    parseJsonConfigFile(p);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
   it('permissionMode "bypassPermissions" is accepted and emits no warning', () => {
