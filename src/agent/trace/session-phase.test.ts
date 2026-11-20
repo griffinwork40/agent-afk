@@ -406,6 +406,8 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     prompt_fragment_sizes: true,
     ratelimit_unified_state: true,
     auth_retry_outcome: true,
+    closed_router_rotate: true,
+    endpoint_semaphore_wait: true,
   };
 
   it('the Zod enum contains exactly the union members (no drift either way)', () => {

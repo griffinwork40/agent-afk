@@ -116,13 +116,15 @@ export async function tryClosedRouterRotate(
 
     void emitSessionPhase(traceWriter, {
       phase: 'closed_router_rotate',
-      metadata: { kind: 'error', reason: 'unexpected-kind', receivedKind: JSON.stringify(kind) },
+      metadata: { kind: 'error', reason: 'unexpected-kind', receivedKind: JSON.stringify(kind) ?? 'undefined' },
     });
     return { rotated: false, kind: 'error' };
   } catch (err) {
     // Log a fixed message + exit code — do NOT echo the raw child error message,
     // which may include child-process stderr and could contain credential material.
-    const exitCode = err instanceof Error && 'code' in err ? (err as NodeJS.ErrnoException).code : undefined;
+    // Omit timeout's null code; preserve spawn strings and numeric exit codes.
+    const rawCode = err instanceof Error && 'code' in err ? (err as NodeJS.ErrnoException).code : undefined;
+    const exitCode = rawCode !== null && rawCode !== undefined ? rawCode : undefined;
     void emitSessionPhase(traceWriter, {
       phase: 'closed_router_rotate',
       metadata: { kind: 'error', reason: 'subprocess-failed', ...(exitCode !== undefined ? { exitCode } : {}) },
