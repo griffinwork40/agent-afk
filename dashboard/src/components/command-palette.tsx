@@ -10,6 +10,9 @@
  *   navigation items switch views. Arrow keys move, Enter selects (cmdk).
  * - Filtering scores each item's keywords with `fuzzyScore`; the item value is
  *   an opaque id and never matched.
+ * - Commands are grouped: recently-used first, then native commands, then
+ *   skills. Summaries are capped at SUMMARY_CAP chars in the display but the
+ *   full text remains searchable via `keywords`.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Command } from 'cmdk';
@@ -37,9 +40,42 @@ const itemClass = cn(
 );
 const groupClass = 'px-2 [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-foreground/70';
 
+// ---------------------------------------------------------------------------
+// Recent-command tracking (localStorage, same pattern as afk:draft:*)
+// ---------------------------------------------------------------------------
+
+const RECENT_KEY = 'afk:palette:recent-commands';
+const MAX_RECENT = 5;
+/** Cap displayed summaries; full text remains in `keywords` for search. */
+export const SUMMARY_CAP = 60;
+
+export function getRecentCommands(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    return raw ? (JSON.parse(raw) as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function recordRecentCommand(name: string): void {
+  try {
+    const list = getRecentCommands().filter((n) => n !== name);
+    list.unshift(name);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, MAX_RECENT)));
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
 export function CommandPalette({ onNavigate, sessions = [], onSelectSession, onInsertCommand }: CommandPaletteProps) {
   const [open, setOpen] = useState(false);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
+  const [recentNames, setRecentNames] = useState<string[]>([]);
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
   // Toggle on Cmd+K / Ctrl+K. Remember the focus owner BEFORE the input steals it.
@@ -60,6 +96,7 @@ export function CommandPalette({ onNavigate, sessions = [], onSelectSession, onI
   useEffect(() => {
     if (!open || !onInsertCommand) return;
     let cancelled = false;
+    setRecentNames(getRecentCommands());
     fetchCommands().then((cmds) => { if (!cancelled) setCommands(cmds ?? []); }).catch(() => undefined);
     return () => { cancelled = true; };
   }, [open, onInsertCommand]);
@@ -76,6 +113,35 @@ export function CommandPalette({ onNavigate, sessions = [], onSelectSession, onI
   if (!open) return null;
 
   const runnable = commands.filter((c) => c.web !== 'gated');
+
+  // Partition into recent / native / skills groups.
+  const recentSet = new Set(recentNames);
+  const recent = recentNames
+    .map((n) => runnable.find((c) => c.name === n))
+    .filter((c): c is SlashCommand => c !== undefined);
+  const natives = runnable.filter((c) => c.kind === 'native' && !recentSet.has(c.name));
+  const skills  = runnable.filter((c) => c.kind === 'skill'  && !recentSet.has(c.name));
+
+  function renderCommand(c: SlashCommand, groupPrefix: string) {
+    const name = formatSlashCommandName(c.name);
+    const displaySummary = c.summary.length > SUMMARY_CAP
+      ? `${c.summary.slice(0, SUMMARY_CAP)}…`
+      : c.summary;
+    return (
+      <Command.Item
+        key={`${groupPrefix}:${c.name}`}
+        value={`command:${c.name}`}
+        keywords={[name, c.summary]}
+        onSelect={() => { recordRecentCommand(c.name); close(false); onInsertCommand?.(`${name} `); }}
+        className={itemClass}
+      >
+        <SquareSlash className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="shrink-0 font-mono text-xs">{name}</span>
+        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{displaySummary}</span>
+      </Command.Item>
+    );
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center px-3 pt-[15vh]"
@@ -131,19 +197,21 @@ export function CommandPalette({ onNavigate, sessions = [], onSelectSession, onI
               </Command.Group>
             )}
 
-            {onInsertCommand && runnable.length > 0 && (
+            {onInsertCommand && recent.length > 0 && (
+              <Command.Group heading="Recent" className={groupClass}>
+                {recent.map((c) => renderCommand(c, 'recent'))}
+              </Command.Group>
+            )}
+
+            {onInsertCommand && natives.length > 0 && (
               <Command.Group heading="Commands" className={groupClass}>
-                {runnable.map((c) => {
-                  const name = formatSlashCommandName(c.name);
-                  return (
-                    <Command.Item key={c.name} value={`command:${c.name}`} keywords={[name, c.summary]}
-                      onSelect={() => { close(false); onInsertCommand(`${name} `); }} className={itemClass}>
-                      <SquareSlash className="h-4 w-4 shrink-0 text-muted-foreground" />
-                      <span className="shrink-0 font-mono text-xs">{name}</span>
-                      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{c.summary}</span>
-                    </Command.Item>
-                  );
-                })}
+                {natives.map((c) => renderCommand(c, 'native'))}
+              </Command.Group>
+            )}
+
+            {onInsertCommand && skills.length > 0 && (
+              <Command.Group heading="Skills" className={groupClass}>
+                {skills.map((c) => renderCommand(c, 'skill'))}
               </Command.Group>
             )}
 
