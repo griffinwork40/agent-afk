@@ -28,8 +28,8 @@ export function registerAcpCommand(program: Command): void {
     .option('-m, --model <model>', 'model to use for sessions (default: configured default)')
     .option(
       '--max-turns <n>',
-      'maximum agent turns per prompt (default: 10)',
-      '10',
+      'maximum messages sent per session (0 = uncapped; default: 0)',
+      '0',
     )
     // Fix #1: add --dangerously-skip-permissions flag
     .option(
