@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { requiresAsk } from './acp.permission.policy.js';
 import { createReadFileHandler } from '../../agent/tools/handlers/read-file.js';
@@ -77,7 +77,7 @@ describe('unproven 3: glob brace expansion', () => {
 
 describe('unproven 4: re-anchoring the working directory', () => {
   it('no ACP source module re-anchors the session cwd (setCwd, setResolveBase, chdir)', () => {
-    const dir = path.dirname(new URL(import.meta.url).pathname);
+    const dir = path.dirname(fileURLToPath(import.meta.url));
     const sources = fs.readdirSync(dir).filter((f) => f.startsWith('acp') && f.endsWith('.ts') && !f.endsWith('.test.ts'));
     expect(sources.length).toBeGreaterThan(5);
     for (const f of sources) {

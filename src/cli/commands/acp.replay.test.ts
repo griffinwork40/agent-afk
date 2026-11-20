@@ -142,7 +142,7 @@ describe('buildReplayUpdates', () => {
       locations: [{ path: file, line: 1 }], rawOutput: 'old\n',
     });
     // Relative paths resolve against the restored session cwd, as for a live call.
-    expect(grep).toMatchObject({ title: 'grep', kind: 'search', locations: [{ path: path.join(ws, 'src') }] });
+    expect(grep).toMatchObject({ title: `grep "x" in ${path.join(ws, 'src')}`, kind: 'search', locations: [{ path: path.join(ws, 'src') }] });
   });
 
   it('a nameless historical call gets the generic live display, never a bare empty title', () => {

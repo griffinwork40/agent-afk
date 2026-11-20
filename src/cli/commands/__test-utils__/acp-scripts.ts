@@ -68,6 +68,10 @@ export function scriptFor(stem: string, root: string): GoldenScript {
     case 'permission-allow-always-then-skip':
       turns = [turn('Write new.txt', write(root)), turn('Write second.txt', write(root, 'tool-2', true))];
       break;
+    case 'grant-git-internals-asked':
+      turns = [turn('Write new.txt', write(root)), turn('Edit the git config', { kind: 'tool', id: 'tool-2',
+        name: 'write_file', input: { file_path: path.join(root, '.git', 'config'), content: '[core]\n' }, result: 'Wrote 7 bytes' })];
+      break;
     case 'cancel-during-stream':
       turns = [turn('Say hello', text('Hello'), { kind: 'await-abort' })];
       break;

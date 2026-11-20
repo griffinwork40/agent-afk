@@ -44,6 +44,9 @@ The standalone contract test does not execute the server or the tools. It verifi
 | `session-cwd-outside-launch` | D14: the server is launched from a directory that does not contain the session `cwd`; the session is created and a turn completes |
 | `load-live-session` | D15: a session created on this connection is loaded twice without closing (each load replays its history before replying `{}`), resumed (no replay), then prompted on the same live handle |
 | `error-session-data` | D16: unknown session on prompt, load and resume, and a prompt to a closed session, return `-32002` with `data.sessionId` set to the client's id; an invalid params error carries no data |
+| `grant-git-internals-asked` | After "always allow" for `write_file`, a write to `.git/config` is asked again, titled `(git internals)`, with no always option (profile section 6, sensitive targets) |
+
+Card titles describe the call (profile section 5): the delegation fixtures show the agent type and task (`agent research-agent "Do it"`), the subagent's call shows its command (`bash ls`), and `tool-bash-failed` shows `bash exit 1`.
 
 The target behavior and ordering rules are in `docs/acp-profile.md`. These fixtures freeze the migration contract, not the old server's current behavior. Tests of permission failures, prompt media normalization, malformed transport and implementation seams belong to their later owner lanes; valid golden frames are not malformed-input fixtures.
 
