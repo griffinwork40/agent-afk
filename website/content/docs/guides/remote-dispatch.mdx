@@ -116,13 +116,13 @@ The launcher does not forward a local `--max-budget-usd` value. Configure budget
 
 ## Stop a watched REPL from your phone
 
-Phone control is separate from SSH dispatch. The Telegram bot can watch a local REPL that has armed `/afk on`, then send it a signed abort request.
+Phone control is separate from SSH dispatch. The Telegram bot can watch a local REPL and send it a signed abort request.
 
 <Steps>
 <Step>
-### Arm the session
+### Start the REPL session
 
-Complete a turn in that REPL so it has a session ID, then run `/afk on`.
+Complete a turn in that REPL so it has a session ID.
 </Step>
 <Step>
 ### Watch from Telegram
@@ -136,7 +136,7 @@ Send `/abort` **to the Telegram bot** to stop the currently watched REPL's activ
 </Step>
 </Steps>
 
-The REPL's abort watcher accepts only a request signed for that session. A missing signing key makes remote abort unavailable rather than accepting an unsigned request. `/afk off` clears AFK presence, restores keyboard-only handling, and stops the abort watcher; the bot stops its corresponding watch when presence clears or disappears.
+The REPL's abort watcher accepts only a request signed for that session. A missing signing key makes remote abort unavailable rather than accepting an unsigned request. The bot stops its corresponding watch when presence clears or disappears.
 
 <Callout type="info">
 Presence discovery reads the bot machine's local AFK state. It does not discover arbitrary SSH hosts or make a detached `remote_agent` run appear as a watched interactive REPL. Telegram `/abort` is not a universal remote process killer, and it is not a REPL slash command for choosing any session on another machine.

@@ -8,16 +8,6 @@
  * Both onShiftTab handlers (the persistent compositor in `surface-setup.ts` and
  * the readLine fallback in `loop-iteration.ts`) call this.
  *
- * Invariant: AFK (`autonomous`) is deliberately NOT in the ring. Entering AFK
- * runs heavy, non-idempotent machinery — Telegram push-budget reset, swapping the
- * elicitation handler to the ledger channel, starting an abort-watcher, setting a
- * presence marker (all in `toggleAfkMode`) — that must not fire on a transient
- * keypress pass-through. AFK stays on the `/afk` command. The one concession: if
- * the session is ALREADY in `autonomous` (the operator ran `/afk on`), Shift+Tab
- * exits AFK via `toggleAfkMode(ctx, false)` — which runs the full teardown — and
- * lands on `default`. So the key does something sensible from AFK without ever
- * ENTERING it; the next press resumes the ring at `default → plan`.
- *
  * Contract: `plan`/`bypass`/`default` transitions are pure `setPermissionMode`
  * flips. The plan-mode gate and the bypass allow-all are keyed off
  * `permissionMode` alone with no enter/exit machinery, so the ring sets the mode
@@ -28,14 +18,12 @@
  * failure contract.
  */
 
-import { toggleAfkMode } from './afk-mode-toggle.js';
 import { palette } from './palette.js';
 import type { SlashContext } from './slash/types.js';
 import { errorMessage } from '../utils/errors.js';
 
 /**
- * The Shift+Tab ring. `autonomous` (AFK) is intentionally excluded — see the
- * module-level invariant. Order is load-bearing: `default → plan` preserves the
+ * The Shift+Tab ring. Order is load-bearing: `default → plan` preserves the
  * historical "first press from the prompt enters plan" muscle memory, and the
  * wrap `bypassPermissions → default` keeps the cycle forward-only.
  */
@@ -79,18 +67,10 @@ function emitCycleCopy(ctx: SlashContext, mode: CycleMode): void {
 }
 
 /**
- * Advance one step through the permission-mode ring. See module doc for the
- * AFK-exit concession and the failure contract.
+ * Advance one step through the permission-mode ring.
  */
 export async function cyclePermissionMode(ctx: SlashContext): Promise<void> {
   const cur = ctx.stats.permissionMode;
-
-  // AFK is not a ring stop. If we are in it (operator ran `/afk on`), exit
-  // cleanly via the helper that runs the teardown, landing on `default`.
-  if (cur === 'autonomous') {
-    await toggleAfkMode(ctx, false);
-    return;
-  }
 
   const idx = PERMISSION_CYCLE.indexOf(cur as CycleMode);
   // idx === -1 for any out-of-ring mode (acceptEdits/dontAsk/auto) → (−1+1)=0 →

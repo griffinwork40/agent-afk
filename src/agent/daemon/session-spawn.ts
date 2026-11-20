@@ -208,21 +208,13 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     undefined,
     'daemon',
     undefined,
-    // Always pass a mode getter so createAfkModeGate registers. Daemon ticks
-    // run autonomously by definition — pass 'autonomous' unconditionally.
-    // Because no elicitation handler is installed on this surface, high-risk
-    // ops degrade to the hard-block path (the gate's "no operator reachable"
-    // degrade). promptForApproval: false enforces this; it mirrors the Telegram
-    // posture (always-on, no deliberate human arming). See afk-mode-gate.ts.
-    (): 'autonomous' => 'autonomous',
+    // Always pass a mode getter so plan-mode gate registers.
+    (): 'bypassPermissions' => 'bypassPermissions',
     loadHooksConfig({ cwd: agentCwd }),
     {
       cwd: agentCwd,
       sessionId,
       ...(hookTraceWriter !== undefined ? { traceWriter: hookTraceWriter } : {}),
-      // Hard-block posture: no operator is reachable on a daemon tick.
-      // High-risk ops are refused immediately rather than queued for approval.
-      afkPromptForApproval: false,
       // Issue #3464: supply the running task's own id so the risk classifier
       // can carve out self-disable (cancel_schedule / update_schedule with
       // enabled:false) as 'medium'. This value comes from the scheduler, not

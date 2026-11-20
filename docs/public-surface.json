@@ -4368,11 +4368,6 @@
     },
     {
       "kind": "slash",
-      "name": "/afk",
-      "source": "src/cli/slash/commands/afk.ts"
-    },
-    {
-      "kind": "slash",
       "name": "/afk-md",
       "source": "src/cli/slash/commands/afk-md.ts"
     },

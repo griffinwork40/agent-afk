@@ -154,7 +154,7 @@ describe('coerceConfigValue', () => {
     expect(coerceConfigValue(spec, 'bypassPermissions')).toEqual({ ok: true, value: 'bypassPermissions' });
     expect(coerceConfigValue(spec, 'default')).toEqual({ ok: true, value: 'default' });
     expect(coerceConfigValue(spec, 'plan')).toEqual({ ok: true, value: 'plan' });
-    expect(coerceConfigValue(spec, 'autonomous')).toEqual({ ok: true, value: 'autonomous' });
+    expect(coerceConfigValue(spec, 'autonomous').ok).toBe(false);
     expect(coerceConfigValue(spec, 'yolo').ok).toBe(false);
   });
   it('number arrays accept arrays and csv strings', () => {

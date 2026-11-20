@@ -786,7 +786,7 @@ describe('runReplLoop — terminal-state gate integration (#565)', () => {
     ];
 
     const ctx = makeCtx();
-    ctx.stats.permissionMode = 'autonomous';
+    ctx.stats.permissionMode = 'bypassPermissions';
     mockTurnWithStopInjection(ctx, TERMINAL_STATE_GATE_CORRECTION);
 
     await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
@@ -799,8 +799,8 @@ describe('runReplLoop — terminal-state gate integration (#565)', () => {
     expect(secondText.trimEnd().endsWith('next turn')).toBe(true);
   });
 
-  it('the registered gate stays silent outside autonomous mode (human watching)', async () => {
-    // No injection simulated (session layer gate would not fire in default mode).
+  it('the registered gate stays silent when disabled (human watching)', async () => {
+    // No injection simulated (session layer gate would not fire when isEnabled returns false).
     surfaceState.readLineQueue = [
       { text: 'ship it', attachments: [] },
       { text: 'next turn', attachments: [] },
@@ -828,7 +828,7 @@ describe('runReplLoop — terminal-state gate integration (#565)', () => {
     ];
 
     const ctx = makeCtx();
-    ctx.stats.permissionMode = 'autonomous';
+    ctx.stats.permissionMode = 'bypassPermissions';
     // First turn: session layer fires Stop with injection.
     mockTurnWithStopInjection(ctx, TERMINAL_STATE_GATE_CORRECTION);
     // Second turn: no injection (gate budget exhausted in session layer).

@@ -92,15 +92,6 @@ describe('AnthropicDirectProvider — live /bypass toggle changes effective enfo
         expect(liveDispatcherAllowAll(q), `dispatcher:${mode}`).toBe(false);
       }
 
-      // AFK (autonomous) is path-containment-bypassed like bypassPermissions: it
-      // must NOT fire keyboard-blocking path-approval prompts while the operator
-      // is away. The afk-mode-gate (risk-classifier ceiling) is the safety layer
-      // in AFK, not path containment. Both enforcement reads flip to
-      // allowAll=true so the dispatcher and the path-approval hook agree.
-      await q.setPermissionMode('autonomous');
-      expect(provider.getGrants().allowAll, 'provider:autonomous').toBe(true);
-      expect(liveDispatcherAllowAll(q), 'dispatcher:autonomous').toBe(true);
-
       await q.close?.();
     } finally {
       rmSync(baseDir, { recursive: true, force: true });

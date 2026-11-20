@@ -99,7 +99,7 @@ Guide: [chat](/surfaces/chat)
 | `--mcp-config <path>` | Path to an additional MCP config file (highest priority — merges over ~/.afk/config/mcp.json, project-local .mcp.json, and plugin-contributed configs). File format identical to mcp.json. |  |
 | `--resume <id>` | Resume a persisted session by id |  |
 | `--continue` | Continue the most recent persisted session in cwd |  |
-| `--permission-mode <mode>` | Permission mode: default\|acceptEdits\|bypassPermissions\|plan\|dontAsk\|auto\|autonomous. Overrides afk.config.json permissionMode. Does not affect ask_question. |  |
+| `--permission-mode <mode>` | Permission mode: default\|acceptEdits\|bypassPermissions\|plan\|dontAsk\|auto. Overrides afk.config.json permissionMode. Does not affect ask_question. |  |
 | `--dangerously-skip-permissions` | Force bypass mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation (permissionMode=bypassPermissions). Disable persistently with `afk config set permissionMode default`. Does not affect ask_question. |  |
 | `-s, --stream` | [no-op] reserved; use --format stream-json for headless streaming | `false` |
 | `-f, --format <format>` | Output format (text\|json\|stream-json) | `"text"` |
@@ -511,7 +511,7 @@ Guide: [repl](/surfaces/repl)
 | `--mcp-config <path>` | Path to an additional MCP config file (highest priority — merges over ~/.afk/config/mcp.json, project-local .mcp.json, and plugin-contributed configs). File format identical to mcp.json. |  |
 | `--resume <id>` | Resume a persisted session by id |  |
 | `--continue` | Continue the most recent persisted session in cwd |  |
-| `--permission-mode <mode>` | Permission mode: default\|acceptEdits\|bypassPermissions\|plan\|dontAsk\|auto\|autonomous. Overrides afk.config.json permissionMode. Does not affect ask_question. |  |
+| `--permission-mode <mode>` | Permission mode: default\|acceptEdits\|bypassPermissions\|plan\|dontAsk\|auto. Overrides afk.config.json permissionMode. Does not affect ask_question. |  |
 | `--dangerously-skip-permissions` | Force bypass mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation. Toggle live with Shift+Tab (permission-mode cycle); disable persistently with `afk config set permissionMode default`. Does not affect ask_question. |  |
 | `--thinking-ui <mode>` | Thinking display mode: summary\|live\|digest\|off. Default live. Also: AFK_THINKING_UI env, or interactive.thinkingUi in afk.config.json. |  |
 | `--debug` | Show SDK init metadata on startup; enables /debug command | `false` |

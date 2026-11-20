@@ -28,7 +28,6 @@ import {
 import { translateResponsesEvent, type ResponsesStreamEvent } from '../responses-translate.js';
 import { isClaudeFamilyModel, type WireMode } from '../responses-config.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../../shared/plan-mode-addendum.js';
-import { AFK_MODE_ADDENDUM_TEXT } from '../../shared/afk-mode-addendum.js';
 import {
   TOOL_USE_LOOP_CAPPED,
   WIND_DOWN_NOTE,
@@ -217,18 +216,12 @@ export async function* runIteration(
     vision,
   });
 
-  // Inject plan-mode / AFK-mode posture addendum onto the system message.
-  if (messages[0]?.role === 'system') {
-    const addendum =
-      ctx.currentPermissionMode === 'plan' ? PLAN_MODE_ADDENDUM_TEXT :
-      ctx.currentPermissionMode === 'autonomous' ? AFK_MODE_ADDENDUM_TEXT :
-      null;
-    if (addendum !== null) {
-      messages[0] = {
-        ...messages[0],
-        content: (messages[0].content as string) + '\n\n' + addendum,
-      };
-    }
+  // Inject plan-mode posture addendum onto the system message.
+  if (messages[0]?.role === 'system' && ctx.currentPermissionMode === 'plan') {
+    messages[0] = {
+      ...messages[0],
+      content: (messages[0].content as string) + '\n\n' + PLAN_MODE_ADDENDUM_TEXT,
+    };
   }
 
   // Wind-down round: append the budget note to THIS request only.

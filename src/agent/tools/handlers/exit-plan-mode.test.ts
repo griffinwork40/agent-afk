@@ -361,16 +361,14 @@ describe('AgentSession plan-exit seed bridge', () => {
     await session.close();
   });
 
-  it('does not capture autonomous (AFK) as a restorable pre-plan mode → restore falls back', async () => {
+  it('captures bypassPermissions as a restorable pre-plan mode → restore returns bypass', async () => {
     const { provider } = capturingProvider();
     const session = new AgentSession({ model: 'sonnet', apiKey: 'test-key', provider });
     await session.waitForInitialization();
 
-    await session.setPermissionMode('autonomous');
+    await session.setPermissionMode('bypassPermissions');
     await session.setPermissionMode('plan');
-    // 'autonomous' is reset to undefined (AFK is not restorable by a bare flip)
-    // so an approved exit falls back to 'default'.
-    expect(session.getPrePlanMode()).toBeUndefined();
+    expect(session.getPrePlanMode()).toBe('bypassPermissions');
 
     await session.close();
   });

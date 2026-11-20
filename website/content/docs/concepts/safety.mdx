@@ -11,7 +11,7 @@ AFK combines permission policy, tool-specific checks, hooks, retry guards, and r
 |---|---|
 | `default` | Keeps typed-file path containment and can ask for access outside granted roots |
 | `plan` | Adds a planning gate that restricts mutating work |
-| `autonomous` | Avoids ordinary path prompts but gates classified high-risk operations |
+
 | `bypassPermissions` | Disables typed-file path containment and its approval prompt |
 
 New CLI installations with no configured permission mode start in `bypassPermissions`, not `default`. Bypass does not mean every other hook or guard is disabled. See [permissions](/configuration/permissions) for mode selection, bash restrictions, and the exact boundaries.
@@ -22,17 +22,13 @@ A git worktree isolates repository changes, not network access, credentials, or 
 
 ## Approve a high-risk action from your phone
 
-The autonomous-mode gate uses the tool risk classifier before execution. Examples of high-risk work include destructive shell commands, writes escaping the workspace, and schedule mutations. Routine reversible work can continue without asking about every tool call.
+The daemon uses the tool risk classifier before execution. Examples of high-risk work include destructive shell commands, writes escaping the workspace, and schedule mutations. Routine reversible work can continue without asking about every tool call.
 
 <Steps>
 <Step>
 ### Connect the operator channel
 
-Configure [Telegram](/surfaces/telegram), then enable AFK mode in the interactive session:
-
-```text
-/afk on
-```
+Configure [Telegram](/surfaces/telegram) and start the bot or daemon.
 
 See [unattended runs](/guides/unattended-runs) for the complete setup.
 </Step>

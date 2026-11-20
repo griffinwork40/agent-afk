@@ -9,7 +9,7 @@ AFK can keep working while you are away, but a background process, a daemon, and
 
 | Need | Use |
 | --- | --- |
-| Leave an interactive session working with phone supervision | The REPL with `/afk on`. |
+| Leave an interactive session working with phone supervision | The REPL with the [daemon](/surfaces/daemon) or the [Telegram bot](/surfaces/telegram). |
 | Run recurring, startup, or one-shot tasks | [Scheduling](/guides/scheduling) with the [daemon](/surfaces/daemon). |
 | Keep the daemon or Telegram bot running after terminal exit | [An OS service](/guides/run-as-service). |
 | Keep a server or long shell command running during a REPL session | [Supervised background processes](/guides/background-processes). |
@@ -32,15 +32,9 @@ afk telegram start
 Complete setup with your own bot token and allowed chat ID. Keep the bot running, or install it through `afk service install telegram`. See the [Telegram guide](/surfaces/telegram) for setup and routing.
 </Step>
 <Step>
-### Establish the session, then arm AFK mode
+### Start the daemon or Telegram bot
 
-Start `afk` in the repository and complete one message so the session has an ID. Then enter:
-
-```text
-/afk on
-```
-
-AFK warns if Telegram is not configured. If you enable it before the first completed message, the phone relay cannot yet bind to a session ID: complete a turn and run `/afk on` again. Do not walk away while the UI says the relay is keyboard-only or its signing key could not be established.
+Start the daemon for headless scheduled work, or run the Telegram bot for interactive phone-supervised sessions. See the [Telegram guide](/surfaces/telegram) for setup and routing. Keep the process running, or install it through `afk service install telegram`.
 </Step>
 <Step>
 ### Give a bounded task
@@ -54,7 +48,7 @@ messages to third parties. Report Done with the changed files and test results,
 or Blocked with the exact dependency that prevents completion.
 ```
 
-Name the working directory, verification command, forbidden effects, and completion evidence. `/afk off` restores default permissions when you return.
+Name the working directory, verification command, forbidden effects, and completion evidence.
 </Step>
 </Steps>
 

@@ -19,10 +19,7 @@ The setting takes effect in new sessions. For a single run, use `afk i --permiss
 | `bypassPermissions` | New-install CLI default. No path containment or out-of-root approval for file tools. |
 | `default` | File tools within granted roots run; access outside them asks for approval on an interactive surface. No per-bash-command confirmation. |
 | `plan` | Read-only investigation, with write-class tools blocked until the plan is approved. |
-| `autonomous` | `/afk` posture with a risk gate that refuses high-risk actions, including for children. |
-
-{/* docs-refs-ignore-next-line */}
-In an interactive session, **Shift+Tab** cycles `default → plan → bypassPermissions → default`. From autonomous mode it exits to `default`. The old `/bypass` slash command is **retired**; use Shift+Tab to enter bypass during a session. `/plan` and `/afk` control their respective modes. The `--dangerously-skip-permissions` flag does not make irreversible actions safe.
+In an interactive session, **Shift+Tab** cycles `default → plan → bypassPermissions → default`. Use Shift+Tab to enter bypass during a session. `/plan` controls plan mode. The `--dangerously-skip-permissions` flag does not make irreversible actions safe.
 
 ## What path approval covers
 

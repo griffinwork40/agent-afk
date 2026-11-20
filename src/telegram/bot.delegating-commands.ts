@@ -10,7 +10,6 @@
 
 import type { Telegraf } from 'telegraf';
 import { handleCwd } from './handlers/commands.js';
-import { handleAfk } from './handlers/afk.js';
 import { handleInbox } from './handlers/inbox.js';
 import { handleInsights } from './handlers/insights.js';
 import { registerFeedbackCommands } from './bot.feedback-commands.js';
@@ -30,12 +29,6 @@ export function registerDelegatingCommands(
     handleCwd(ctx, sessionManager, log)
   );
   registerFeedbackCommands(bot, sessionManager, log);
-  // /afk [on|off] — toggle autonomous mode for this chat's session. On the
-  // always-on host, high-risk ops hard-refuse (not phone-approvable); see
-  // handlers/afk.ts + docs/afk-telegram-native-host.md.
-  bot.command('afk', (ctx) =>
-    handleAfk(ctx, sessionManager, log)
-  );
   // /inbox [release|drop] [<prefix>|all] — list, release, or drop held peer
   // messages when AFK_PEER_INBOUND=hold. Reuses the peer inbox store; peer
   // messages carry no user authority and are not elevated here.

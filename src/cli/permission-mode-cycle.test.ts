@@ -2,25 +2,14 @@
  * Unit tests for the Shift+Tab permission-mode cycle.
  *
  * `cyclePermissionMode` advances the ring default → plan → bypassPermissions →
- * default. AFK (`autonomous`) is excluded from the ring: if the session is
- * already in autonomous, the cycle exits it via `toggleAfkMode(ctx, false)`
- * (mocked here) rather than stepping to a ring mode — never entering AFK on a
- * keypress. plan/bypass/default transitions are pure setPermissionMode flips
+ * default. plan/bypass/default transitions are pure setPermissionMode flips
  * with the same rejection contract as togglePlanMode (leave stats unchanged +
  * surface error).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { cyclePermissionMode, PERMISSION_CYCLE } from './permission-mode-cycle.js';
-import { toggleAfkMode } from './afk-mode-toggle.js';
 import type { SessionStats, SlashContext } from './slash/types.js';
-
-// AFK's heavy enter/exit machinery is out of scope here — stub the helper so we
-// can assert the cycle DELEGATES the autonomous-exit to it (rather than firing a
-// raw setPermissionMode that would leak the abort-watcher / strand presence).
-vi.mock('./afk-mode-toggle.js', () => ({
-  toggleAfkMode: vi.fn(async () => {}),
-}));
 
 function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
   return {
@@ -68,12 +57,11 @@ function makeCtx(opts: {
 
 describe('cyclePermissionMode', () => {
   beforeEach(() => {
-    vi.mocked(toggleAfkMode).mockClear();
+    vi.clearAllMocks();
   });
 
-  it('ring constant excludes autonomous (AFK stays on /afk)', () => {
+  it('ring contains exactly default, plan, and bypassPermissions', () => {
     expect(PERMISSION_CYCLE).toEqual(['default', 'plan', 'bypassPermissions']);
-    expect(PERMISSION_CYCLE as readonly string[]).not.toContain('autonomous');
   });
 
   it('default → plan and emits plan ON copy', async () => {
@@ -109,25 +97,12 @@ describe('cyclePermissionMode', () => {
     expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
     expect(stats.permissionMode).toBe('default');
     expect(ctx.ui.repaintStatusLine).toHaveBeenCalled();
-    // Wrapping out of bypass is a pure ring step — it must NOT touch the AFK
-    // teardown helper (that path is reserved for `autonomous`).
-    expect(toggleAfkMode).not.toHaveBeenCalled();
     // Pin the distinctive default-landing copy ("… approval prompts restored."),
     // not merely the substring "default" (which also appears in the marker glyph
     // and would match almost any output).
     const out = lines.join('\n').toLowerCase();
     expect(out).toContain('default');
     expect(out).toContain('restored');
-  });
-
-  it('autonomous (AFK) → exits via toggleAfkMode(ctx, false), never a raw setPermissionMode', async () => {
-    const stats = makeStats({ permissionMode: 'autonomous' });
-    const { ctx, sess } = makeCtx({ stats });
-
-    await cyclePermissionMode(ctx);
-
-    expect(toggleAfkMode).toHaveBeenCalledWith(ctx, false);
-    expect(sess.setPermissionMode).not.toHaveBeenCalled();
   });
 
   it('out-of-ring mode (e.g. acceptEdits) falls back to default', async () => {
@@ -138,7 +113,6 @@ describe('cyclePermissionMode', () => {
 
     expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
     expect(stats.permissionMode).toBe('default');
-    expect(toggleAfkMode).not.toHaveBeenCalled();
   });
 
   it('leaves permissionMode unchanged and surfaces an error when setPermissionMode rejects', async () => {
