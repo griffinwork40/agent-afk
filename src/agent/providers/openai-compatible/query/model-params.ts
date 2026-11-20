@@ -92,8 +92,9 @@ export function resolveStreamingMaxTokens(
     : { max_tokens: effectiveMax };
 }
 
+/** Returns the caller-supplied mode, falling back to 'bypassPermissions' when none is set. */
 export function normalizePermissionMode(mode: string | undefined): string {
-  return mode ?? 'default';
+  return mode ?? 'bypassPermissions';
 }
 
 /**

@@ -79,7 +79,7 @@ function installTransport(seen: Seen[], opts: { hold?: Promise<void>; cutFrom?: 
                 // whose JournalSync.seed() writes the seeded history into the
                 // child's journal. The fake only appends THIS run's messages.
                 const state = createSessionState({
-                  model: 'claude-sonnet-4-5', permissionMode: 'default', userSystem: null, toolDispatcher: {} as never,
+                  model: 'claude-sonnet-4-5', permissionMode: 'bypassPermissions', userSystem: null, toolDispatcher: {} as never,
                   ...(cfg.resumeMessages !== undefined && cfg.resumeMessages.length > 0
                     ? { initialMessages: anthropicJournalAdapter.fromJournalMessages(cfg.resumeMessages) } : {}),
                   ...(cfg.messageJournal !== undefined ? { messageJournal: cfg.messageJournal } : {}),

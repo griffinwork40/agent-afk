@@ -33,7 +33,7 @@ function makeArgs(over: { cwd?: string; liveCwd?: string } = {}) {
   const args: DispatcherWiringArgs = {
     config,
     model: 'claude-sonnet-4-5',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     surface: 'cli',
     providerName: 'anthropic-direct',
     externalTools: undefined,

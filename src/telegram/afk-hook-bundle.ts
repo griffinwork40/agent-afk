@@ -61,7 +61,7 @@ export function createTelegramAfkHookBundle(
   params: TelegramAfkHookBundleParams,
 ): DefaultHookRegistryResult {
   const { memoryStore, getSession, cwd, traceWriter } = params;
-  const getPermissionMode = () => getSession()?.getSessionMetadata().permissionMode ?? 'default';
+  const getPermissionMode = () => getSession()?.getSessionMetadata().permissionMode ?? 'bypassPermissions';
   const result = createDefaultHookRegistry(
     undefined,
     'telegram',

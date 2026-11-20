@@ -24,9 +24,9 @@ function makeCtx(text: string): { ctx: Context; replies: string[] } {
   return { ctx: ctx as unknown as Context, replies };
 }
 
-function makeSession(mode: 'default' | 'autonomous') {
+function makeSession(mode: 'bypassPermissions' | 'autonomous') {
   let current = mode;
-  const setPermissionMode = vi.fn(async (m: 'default' | 'autonomous') => {
+  const setPermissionMode = vi.fn(async (m: 'bypassPermissions' | 'autonomous') => {
     current = m;
   });
   const session = {
@@ -41,8 +41,8 @@ function makeSM(session: unknown): SessionManager {
 }
 
 describe('handleAfk (/afk on Telegram)', () => {
-  it('/afk on flips a default session to autonomous and surfaces the hard-refuse posture', async () => {
-    const s = makeSession('default');
+  it('/afk on flips a bypassPermissions session to autonomous and surfaces the hard-refuse posture', async () => {
+    const s = makeSession('bypassPermissions');
     const { ctx, replies } = makeCtx('/afk on');
 
     await handleAfk(ctx, makeSM(s.session), () => {});
@@ -54,18 +54,18 @@ describe('handleAfk (/afk on Telegram)', () => {
     expect(joined).toMatch(/REFUSED/);
   });
 
-  it('/afk off restores default', async () => {
+  it('/afk off restores bypassPermissions', async () => {
     const s = makeSession('autonomous');
     const { ctx, replies } = makeCtx('/afk off');
 
     await handleAfk(ctx, makeSM(s.session), () => {});
 
-    expect(s.setPermissionMode).toHaveBeenCalledWith('default');
+    expect(s.setPermissionMode).toHaveBeenCalledWith('bypassPermissions');
     expect(replies.join('\n')).toMatch(/AFK mode OFF/i);
   });
 
   it('bare /afk toggles based on the current mode', async () => {
-    const s = makeSession('default');
+    const s = makeSession('bypassPermissions');
     const { ctx } = makeCtx('/afk');
 
     await handleAfk(ctx, makeSM(s.session), () => {});
@@ -83,20 +83,20 @@ describe('handleAfk (/afk on Telegram)', () => {
     expect(replies.join('\n')).toMatch(/already ON/i);
   });
 
-  it('restart safe-degrades to default: a fresh session for the same chat needs re-arming (handler holds no cross-restart mode state)', async () => {
+  it('restart safe-degrades to bypassPermissions: a fresh session for the same chat needs re-arming (handler holds no cross-restart mode state)', async () => {
     // handlers/afk.ts documents the mode is runtime-only and NOT persisted, so a
-    // bot restart brings the chat back to 'default' and never silently resumes
-    // autonomous. Model a restart of the SAME chat (id 555): arm session1, then
-    // hand /afk a FRESH session at 'default' (exactly what constructTelegramSession
-    // yields — permissionMode omitted). It must RE-ARM (call setPermissionMode +
+    // bot restart brings the chat back to 'bypassPermissions' and never silently
+    // resumes autonomous. Model a restart of the SAME chat (id 555): arm session1,
+    // then hand /afk a FRESH session at 'bypassPermissions' (exactly what
+    // constructTelegramSession yields). It must RE-ARM (call setPermissionMode +
     // print the ON copy), NOT report "already ON". A regression that cached the
     // flip in module/chat state would wrongly short-circuit here.
-    const armed = makeSession('default');
+    const armed = makeSession('bypassPermissions');
     await handleAfk(makeCtx('/afk on').ctx, makeSM(armed.session), () => {});
     expect(armed.setPermissionMode).toHaveBeenCalledWith('autonomous');
 
-    // --- bot restart: a brand-new session for the same chat, mode 'default' ---
-    const afterRestart = makeSession('default');
+    // --- bot restart: a brand-new session for the same chat, mode 'bypassPermissions' ---
+    const afterRestart = makeSession('bypassPermissions');
     const { ctx, replies } = makeCtx('/afk on');
     await handleAfk(ctx, makeSM(afterRestart.session), () => {});
 

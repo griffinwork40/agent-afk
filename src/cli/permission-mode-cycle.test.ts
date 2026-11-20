@@ -1,13 +1,13 @@
 /**
  * Unit tests for the Shift+Tab permission-mode cycle.
  *
- * `cyclePermissionMode` advances the ring default → plan → bypassPermissions →
- * default. AFK (`autonomous`) is excluded from the ring: if the session is
- * already in autonomous, the cycle exits it via `toggleAfkMode(ctx, false)`
- * (mocked here) rather than stepping to a ring mode — never entering AFK on a
- * keypress. plan/bypass/default transitions are pure setPermissionMode flips
- * with the same rejection contract as togglePlanMode (leave stats unchanged +
- * surface error).
+ * `cyclePermissionMode` advances the two-stop ring: plan ↔ bypassPermissions.
+ * `default` has been removed — `bypassPermissions` is the baseline mode.
+ * AFK (`autonomous`) is excluded from the ring: if the session is already in
+ * autonomous, the cycle exits it via `toggleAfkMode(ctx, false)` (mocked here)
+ * rather than stepping to a ring mode — never entering AFK on a keypress.
+ * plan/bypass transitions are pure setPermissionMode flips with the same
+ * rejection contract as togglePlanMode (leave stats unchanged + surface error).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -26,6 +26,7 @@ function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
   return {
     totalTurns: 0,
     totalCostUsd: 0,
+    unpricedTurns: 0,
     totalTokens: 0,
     totalDurationMs: 0,
     sessionStartTime: Date.now(),
@@ -33,7 +34,7 @@ function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
     turnTokens: [],
     turns: [],
     model: 'sonnet',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     ...overrides,
   };
 }
@@ -71,13 +72,14 @@ describe('cyclePermissionMode', () => {
     vi.mocked(toggleAfkMode).mockClear();
   });
 
-  it('ring constant excludes autonomous (AFK stays on /afk)', () => {
-    expect(PERMISSION_CYCLE).toEqual(['default', 'plan', 'bypassPermissions']);
+  it('ring constant is [plan, bypassPermissions] and excludes autonomous', () => {
+    expect(PERMISSION_CYCLE).toEqual(['plan', 'bypassPermissions']);
     expect(PERMISSION_CYCLE as readonly string[]).not.toContain('autonomous');
+    expect(PERMISSION_CYCLE as readonly string[]).not.toContain('default');
   });
 
-  it('default → plan and emits plan ON copy', async () => {
-    const stats = makeStats({ permissionMode: 'default' });
+  it('bypassPermissions → plan and emits plan ON copy', async () => {
+    const stats = makeStats({ permissionMode: 'bypassPermissions' });
     const { ctx, sess, lines } = makeCtx({ stats });
 
     await cyclePermissionMode(ctx);
@@ -100,26 +102,6 @@ describe('cyclePermissionMode', () => {
     expect(lines.join('\n').toLowerCase()).toContain('bypass on');
   });
 
-  it('bypassPermissions → default (wraps) and emits default copy', async () => {
-    const stats = makeStats({ permissionMode: 'bypassPermissions' });
-    const { ctx, sess, lines } = makeCtx({ stats });
-
-    await cyclePermissionMode(ctx);
-
-    expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-    expect(stats.permissionMode).toBe('default');
-    expect(ctx.ui.repaintStatusLine).toHaveBeenCalled();
-    // Wrapping out of bypass is a pure ring step — it must NOT touch the AFK
-    // teardown helper (that path is reserved for `autonomous`).
-    expect(toggleAfkMode).not.toHaveBeenCalled();
-    // Pin the distinctive default-landing copy ("… approval prompts restored."),
-    // not merely the substring "default" (which also appears in the marker glyph
-    // and would match almost any output).
-    const out = lines.join('\n').toLowerCase();
-    expect(out).toContain('default');
-    expect(out).toContain('restored');
-  });
-
   it('autonomous (AFK) → exits via toggleAfkMode(ctx, false), never a raw setPermissionMode', async () => {
     const stats = makeStats({ permissionMode: 'autonomous' });
     const { ctx, sess } = makeCtx({ stats });
@@ -130,15 +112,25 @@ describe('cyclePermissionMode', () => {
     expect(sess.setPermissionMode).not.toHaveBeenCalled();
   });
 
-  it('out-of-ring mode (e.g. acceptEdits) falls back to default', async () => {
+  it('out-of-ring mode (e.g. acceptEdits) falls back to plan (index 0)', async () => {
     const stats = makeStats({ permissionMode: 'acceptEdits' });
     const { ctx, sess } = makeCtx({ stats });
 
     await cyclePermissionMode(ctx);
 
-    expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-    expect(stats.permissionMode).toBe('default');
+    expect(sess.setPermissionMode).toHaveBeenCalledWith('plan');
+    expect(stats.permissionMode).toBe('plan');
     expect(toggleAfkMode).not.toHaveBeenCalled();
+  });
+
+  it('deprecated default mode falls back to plan (index 0)', async () => {
+    const stats = makeStats({ permissionMode: 'default' });
+    const { ctx, sess } = makeCtx({ stats });
+
+    await cyclePermissionMode(ctx);
+
+    expect(sess.setPermissionMode).toHaveBeenCalledWith('plan');
+    expect(stats.permissionMode).toBe('plan');
   });
 
   it('leaves permissionMode unchanged and surfaces an error when setPermissionMode rejects', async () => {
@@ -146,23 +138,24 @@ describe('cyclePermissionMode', () => {
     // rejection must NOT advance stats.permissionMode (the prompt/status line
     // read it back).
     const setPermissionMode = vi.fn().mockRejectedValue(new Error('boom'));
-    const stats = makeStats({ permissionMode: 'default' });
+    const stats = makeStats({ permissionMode: 'bypassPermissions' });
     const { ctx, lines } = makeCtx({ stats, setPermissionMode });
 
     await cyclePermissionMode(ctx);
 
     expect(setPermissionMode).toHaveBeenCalledWith('plan');
-    expect(stats.permissionMode).toBe('default');
+    expect(stats.permissionMode).toBe('bypassPermissions');
     expect(lines.some((l) => l.startsWith('ERROR:'))).toBe(true);
   });
+
   describe('mode-notice routing (toggle, not log)', () => {
     it('routes copy to the live compositor notice and writes nothing to scrollback', async () => {
-      const stats = makeStats({ permissionMode: 'default' });
+      const stats = makeStats({ permissionMode: 'bypassPermissions' });
       const { ctx, lines } = makeCtx({ stats });
       const setModeNotice = vi.fn(() => true);
       ctx.getCompositor = () => ({ setModeNotice }) as unknown as ReturnType<NonNullable<SlashContext['getCompositor']>>;
 
-      await cyclePermissionMode(ctx); // default → plan
+      await cyclePermissionMode(ctx); // bypass → plan
       await cyclePermissionMode(ctx); // plan → bypass
 
       expect(setModeNotice).toHaveBeenCalledTimes(2);
@@ -172,7 +165,7 @@ describe('cyclePermissionMode', () => {
     });
 
     it('falls back to one scrollback line when the compositor is disarmed', async () => {
-      const stats = makeStats({ permissionMode: 'default' });
+      const stats = makeStats({ permissionMode: 'bypassPermissions' });
       const { ctx, lines } = makeCtx({ stats });
       ctx.getCompositor = () => ({ setModeNotice: () => false }) as unknown as ReturnType<NonNullable<SlashContext['getCompositor']>>;
 

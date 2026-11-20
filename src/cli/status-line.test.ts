@@ -1578,7 +1578,7 @@ describe('StatusLine — lastHeldCategory (#3900)', () => {
     const stream = wideStreamLocal(120);
     const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
     status.start(); stream.writes.length = 0;
-    status.repaint({ model: 'sonnet', permissionMode: 'default', lastHeldCategory: 'workspace-write' });
+    status.repaint({ model: 'sonnet', permissionMode: 'bypassPermissions', lastHeldCategory: 'workspace-write' });
     const out = stripped(stream.writes.join(''));
     expect(out).not.toContain('[workspace-write]');
   });

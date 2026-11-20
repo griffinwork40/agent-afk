@@ -11,7 +11,7 @@ describe('session-stats', () => {
     expect(s.totalTurns).toBe(0);
     expect(s.totalCostUsd).toBe(0);
     expect(s.model).toBe('sonnet');
-    expect(s.permissionMode).toBe('default');
+    expect(s.permissionMode).toBe('bypassPermissions');
     expect(s.turns).toEqual([]);
     expect(s.sessionStartTime).toBeGreaterThan(0);
   });

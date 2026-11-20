@@ -557,7 +557,7 @@ describe('TUI rhythm contract — turn-boundary separator (printTurnSeparator)',
       totalCacheWriteTokens: 0,
       totalCacheReadTokens: 0,
       turnTokens: [{ input: 100, output: 50, cache: 0 }],
-      permissionMode: 'default' as const,
+      permissionMode: 'bypassPermissions' as const,
     };
 
     printTurnFooter(meta, stats, write);
