@@ -37,6 +37,7 @@ import type { SkillExecutorContext, SkillExecutorInternals, SkillInput } from '.
 import { isGateSkill, sessionIdentity, truncateTelemetryString } from './skill-executor/telemetry.js';
 import { executeLoadedPluginSkill, executeLoadedRegistrySkill } from './skill-executor/load-mode.js';
 import { executeForkedRegistrySkill, executePluginSkill } from './skill-executor/fork-dispatch.js';
+import { inlineChildGateOpt } from './nesting.can-use-tool.js';
 import { errorMessage } from '../../utils/errors.js';
 import { skillAllowlistRefusal } from './skill-executor/allowlist.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
@@ -412,6 +413,8 @@ export class SkillExecutor {
           ...(this.ctx.workspaceStore !== undefined
             ? { workspaceStore: this.ctx.workspaceStore }
             : {}),
+          // Surface approval gate for the handler's own forks (absent => no key).
+          ...inlineChildGateOpt(this.ctx.childProviderFactory, depth + 1),
         },
       );
     } catch (err) {

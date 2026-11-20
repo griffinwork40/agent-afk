@@ -55,7 +55,7 @@ export function buildForkModelFallback<T>(args: BuildForkModelFallbackArgs<T>): 
   // only when it is the same family; no provider → the session routes itself.
   const rebuildProvider: (() => ModelProvider | undefined) | undefined =
     options.phaseRole === 'read-only'
-      ? () => buildPhaseRestrictedProvider('read-only', toModel, args.workspaceStore)
+      ? () => buildPhaseRestrictedProvider('read-only', toModel, args.workspaceStore, ...(options.config.canUseTool !== undefined ? [options.config.canUseTool] : []))
       : childConfig.provider === undefined
         ? () => undefined
         : spec.buildProvider !== undefined

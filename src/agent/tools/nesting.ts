@@ -32,7 +32,7 @@ import type { BackgroundAgentRegistry } from '../background-registry.js';
 import type { AgentRegistry } from '../agents/types.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
 import type { HookRegistry } from '../hooks.js';
-import { childGateOpt, type ChildGateArgs, type ChildGateOptions } from './nesting.can-use-tool.js';
+import { attachChildGate, childGateOpt, type ChildGateArgs, type ChildGateOptions } from './nesting.can-use-tool.js';
 
 export const DEFAULT_MAX_NESTING_DEPTH = 3;
 
@@ -297,7 +297,9 @@ export interface CreateChildProviderFactoryOptions extends ChildGateOptions {
 export function createChildProviderFactory(
   opts: CreateChildProviderFactoryOptions = {},
 ): (args: ChildProviderFactoryArgs) => ModelProvider {
-  return ({ childExecutor, childSkillExecutor, model, allowedTools, readOnlyBash, customTools, subscribeHandler, origin }) => {
+  // The gate is also registered on the factory itself so depth-cap providers
+  // and inline skill handlers can reach it (nesting.can-use-tool.ts).
+  return attachChildGate(({ childExecutor, childSkillExecutor, model, allowedTools, readOnlyBash, customTools, subscribeHandler, origin }: ChildProviderFactoryArgs): ModelProvider => {
     const providerOpts = {
       // A read-only skill's child passes `allowedTools: RECON_ALLOWED_TOOLS`
       // (no write_file/edit_file); everyone else gets the full CHILD_ALLOWED_TOOLS.
@@ -337,7 +339,7 @@ export function createChildProviderFactory(
       ...providerOpts,
       ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
     });
-  };
+  }, opts.childCanUseTool);
 }
 
 /**
@@ -386,12 +388,14 @@ export function buildReadOnlyReconProvider(
   // store never grants a tool the allowlist omits (see grantsTool). Undefined
   // when workspace is disabled (AFK_WORKSPACE_DISABLED).
   workspaceStore?: WorkspaceStore,
+  // Surface approval gate (nesting.can-use-tool.ts); runs after the allowlist.
+  canUseTool?: CanUseTool,
 ): ModelProvider {
   // Materialize the allowlist per call so test/runtime mutation of the shared
   // array doesn't bleed across siblings (mirrors buildPhaseRestrictedProvider).
   const permissions = { allowedTools: [...(allowedTools ?? RECON_ALLOWED_TOOLS)] };
   const route = providerForModel(typeof model === 'string' ? model : undefined);
-  const store = workspaceStore !== undefined ? { workspaceStore } : {};
+  const store = { ...(workspaceStore !== undefined ? { workspaceStore } : {}), ...(canUseTool !== undefined ? { canUseTool } : {}) };
   if (route === 'openai-compatible') {
     return new OpenAICompatibleProvider({
       permissions,
@@ -764,9 +768,12 @@ export function buildSkillRestrictedProvider(
   // schemas and the dispatcher gate; grantsTool reports false). Trailing
   // optional so all existing positional callers are unaffected.
   workspaceStore?: WorkspaceStore,
+  // Surface approval gate (nesting.can-use-tool.ts); runs after the allowlist.
+  canUseTool?: CanUseTool,
 ): ModelProvider {
   // Materialise once per fork so runtime array mutations don't bleed across siblings.
   const permissions = { allowedTools: [...allowedTools] };
+  const gate = canUseTool !== undefined ? { canUseTool } : {};
   const route = providerForModel(typeof model === 'string' ? model : undefined);
   // readOnlyBash: forwarded when the restricted surface additionally gates
   // mutating shell (named agents with `bash: read-only`, cage cap paths).
@@ -777,12 +784,14 @@ export function buildSkillRestrictedProvider(
       ...(readOnlyBash ? { readOnlyBash: true } : {}),
       ...(openaiBaseUrl !== undefined ? { baseURL: openaiBaseUrl } : {}),
       ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+      ...gate,
     });
   }
   return new AnthropicDirectProvider({
     permissions,
     ...(readOnlyBash ? { readOnlyBash: true } : {}),
     ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+    ...gate,
   });
 }
 
@@ -814,12 +823,16 @@ export function buildPhaseRestrictedProvider(
   // ephemeral per root session), but the provider only advertises and handles
   // them when it holds a store. Undefined when workspace is disabled.
   workspaceStore?: WorkspaceStore,
+  // The fork config's `canUseTool` (e.g. a surface approval gate). A prebuilt
+  // provider ignores `config.canUseTool`, so it must arrive here; runs after
+  // the phase allowlist. Absent => options unchanged.
+  canUseTool?: CanUseTool,
 ): ModelProvider {
   // The allowlist is materialized once per fork so any test or runtime
   // mutation of the array doesn't bleed across sibling subagents.
   const permissions = { allowedTools: [...READ_ONLY_PHASE_TOOLS] };
   const route = providerForModel(typeof model === 'string' ? model : undefined);
-  const store = workspaceStore !== undefined ? { workspaceStore } : {};
+  const store = { ...(workspaceStore !== undefined ? { workspaceStore } : {}), ...(canUseTool !== undefined ? { canUseTool } : {}) };
   if (route === 'openai-compatible') {
     return new OpenAICompatibleProvider({ permissions, ...store });
   }

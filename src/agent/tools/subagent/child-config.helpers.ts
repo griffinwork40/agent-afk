@@ -13,7 +13,8 @@ import { composeUnnamedWorkerPrompt } from '../system-prompt.js';
 import { isChildReplaySafe } from './retry-safety.js';
 import { isChildWriteCapable } from './write-capability.js';
 import { SubagentManager } from '../../subagent.js';
-import { agentChildOrigin } from '../nesting.can-use-tool.js';
+import { agentChildOrigin, chainCanUseTool, childGateFor } from '../nesting.can-use-tool.js';
+import type { CanUseTool } from '../../types.js';
 import type { RegisteredAgent, AgentRegistry } from '../../agents/index.js';
 import type { AgentDefinition } from '../../types/sdk-types.js';
 import type { IAgentSession } from '../../types.js';
@@ -260,6 +261,11 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
     return { childParentSession, childManager, rebuildProvider };
   }
 
+  // Depth-cap / no-factory child: surface gate looked up from the factory
+  // (absent => undefined). Fresh callback per construction, as on the factory path.
+  const capGate = (): CanUseTool | undefined =>
+    childGateFor(args.childProviderFactory, agentChildOrigin(depth + 1, args.namedAgent?.name, args.parsed.id_prefix));
+  const gateArg = (g: CanUseTool | undefined): [CanUseTool] | [] => (g !== undefined ? [g] : []);
   if (effectiveAllowedTools !== undefined || effectiveReadOnlyBash) {
     const rebuildProvider = (model: string): ModelProvider => buildSkillRestrictedProvider(
       effectiveAllowedTools ?? [...CHILD_ALLOWED_TOOLS],
@@ -267,11 +273,15 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
       effectiveReadOnlyBash,
       args.defaultConfig.openaiBaseUrl,
       args.workspaceStore,
+      ...gateArg(capGate()), // trailing arg only when a surface gate is configured
     );
     childConfig.provider = rebuildProvider(String(childConfig.model));
     return { childParentSession: undefined, childManager: undefined, rebuildProvider };
   }
 
+  const gate = capGate();
+  // No prebuilt provider: the session's bare resolver reads config.canUseTool.
+  if (gate !== undefined) childConfig.canUseTool = chainCanUseTool(childConfig.canUseTool, gate);
   return { childParentSession: undefined, childManager: undefined };
 }
 
