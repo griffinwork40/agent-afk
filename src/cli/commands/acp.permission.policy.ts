@@ -6,6 +6,7 @@
  */
 import type { JsonValue, PermissionOption, ToolCallStart, ToolKind } from './acp.wire.js';
 import { toolKind, toolLocations, toolTitle } from './acp.tool-kind.js';
+import { boundedRawInput, boundStartDisplay } from './acp.translate.bounds.js';
 
 /** Known read/search tools auto-allowed with approvals on (profile section 5/6 tables). */
 const AUTO_ALLOW = new Set<string>([
@@ -42,15 +43,11 @@ function safe<T>(fn: () => T, fallback: T): T {
   try { return fn(); } catch { return fallback; }
 }
 
-/** Raw input above this many UTF-8 bytes is omitted so frames fit the 1 MiB line cap (profile section 5). */
-export const MAX_RAW_INPUT_BYTES = 256 * 1024;
-
-/** JSON-clean copy of the input, or undefined when it cannot be serialized or is oversize. */
+/** JSON-clean copy of the input under the translator's raw-input budget, or undefined. */
 function rawInputOf(input: Record<string, unknown>): JsonValue | undefined {
   return safe(() => {
     const text = JSON.stringify(input);
-    if (text === undefined || Buffer.byteLength(text, 'utf8') > MAX_RAW_INPUT_BYTES) return undefined;
-    return JSON.parse(text) as JsonValue;
+    return text === undefined ? undefined : boundedRawInput(JSON.parse(text) as JsonValue);
   }, undefined);
 }
 
@@ -58,16 +55,18 @@ function rawInputOf(input: Record<string, unknown>): JsonValue | undefined {
  * Display start for a call. Display helpers are A2's; any failure falls back to
  * the safe generic shape. The delegation suffix is enforced here regardless.
  */
-export function buildPendingStart(toolCallId: string, toolName: string, input: Record<string, unknown>): ToolCallStart {
+export function buildPendingStart(
+  toolCallId: string, toolName: string, input: Record<string, unknown>, cwd = '',
+): ToolCallStart {
   const named = toolName.length > 0;
   let title = named ? safe(() => toolTitle(toolName, input), toolName) : 'Tool call';
   if (typeof title !== 'string' || title.length === 0) title = named ? toolName : 'Tool call';
-  if (DELEGATION.has(toolName) && !title.endsWith(DELEGATION_SUFFIX)) title += DELEGATION_SUFFIX;
   const kind = named ? safe(() => toolKind(toolName), 'other' as ToolKind) : 'other';
-  // No session cwd is available here: relative paths resolve to nothing and are omitted.
-  const locations = named ? safe(() => toolLocations(toolName, input, ''), []) : [];
+  // Without a session cwd, relative paths resolve to nothing and are omitted.
+  const locations = named ? safe(() => toolLocations(toolName, input, cwd), []) : [];
   const rawInput = rawInputOf(input);
-  return {
+  // Same display bounds as a stream start (acp.translate), then the suffix is enforced regardless.
+  const start = boundStartDisplay({
     sessionUpdate: 'tool_call',
     toolCallId,
     title,
@@ -77,5 +76,7 @@ export function buildPendingStart(toolCallId: string, toolName: string, input: R
     ...(rawInput !== undefined ? { rawInput } : {}),
     content: [],
     locations: Array.isArray(locations) ? locations : [],
-  };
+  });
+  if (DELEGATION.has(toolName) && !start.title.endsWith(DELEGATION_SUFFIX)) start.title += DELEGATION_SUFFIX;
+  return start;
 }

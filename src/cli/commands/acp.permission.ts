@@ -126,7 +126,7 @@ async function askClient(
   const ask: PendingAsk = { cancelled: false, settle: () => { ask.cancelled = true; } };
   st.pending.add(ask);
   try {
-    const start = buildPendingStart(toolUseID, toolName, input);
+    const start = buildPendingStart(toolUseID, toolName, input, st.opts.cwd);
     try { await st.opts.emitToolCall(start); } catch { return denyResult('request_error'); }
     const early = interrupted(signal, ask);
     if (early) return denyResult(early);
@@ -177,7 +177,7 @@ async function runGranted(
   if (signal.aborted) return denyResult('aborted');
   if (typeof toolUseID !== 'string' || toolUseID.length === 0) return denyResult('request_error');
   try {
-    await st.opts.emitToolCall({ ...buildPendingStart(toolUseID, toolName, input), status: 'in_progress' });
+    await st.opts.emitToolCall({ ...buildPendingStart(toolUseID, toolName, input, st.opts.cwd), status: 'in_progress' });
   } catch {
     return denyResult('request_error');
   }

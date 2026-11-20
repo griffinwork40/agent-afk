@@ -110,6 +110,7 @@ function prepareLive(ctx: ServerContext, id: string, setup: SessionSetup): { liv
       skip: false,
       emitToolCall: makeEmitToolCall(live, ctx.peer),
       onCancelled: () => cancelTurn(live, ctx.log),
+      cwd: setup.cwd,
     });
   }
   // The first start of a call that will not ask is in_progress, not pending (profile §5).

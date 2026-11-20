@@ -152,6 +152,8 @@ export interface AcpPermissionOptions {
   emitToolCall(update: ToolCallStart): Promise<void>;
   /** Mark the turn cancelled and interrupt it when permission cancellation originates here. */
   onCancelled(): void;
+  /** Session cwd for relative display locations; absent means relative paths are omitted. */
+  cwd?: string;
 }
 export interface AcpPermissionGate {
   canUseTool: CanUseTool;
