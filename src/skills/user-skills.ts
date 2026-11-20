@@ -185,18 +185,24 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
 
     const manager = new SubagentManager({
       parentAbortSignal: parentSession?.abortSignal,
+      // Forward the parent session's working directory so the forked child
+      // runs in the right project directory, not the server's process.cwd().
+      // On surfaces where the two are the same (REPL, daemon, CLI) this has
+      // no visible effect. On `afk acp` a GUI client names the session
+      // directory independently of the server launch directory, so this is
+      // load-bearing. See SkillExecutionContext.sessionCwd.
+      //
+      // Read-scope note (#547): passing cwd here confines the fork's write
+      // scope to the session directory. The read scope remains open (no
+      // parentReadRoots seeded) so an arbitrary user SKILL.md can still read
+      // outside the worktree (e.g. its own ~/.afk/skills/<name> dir) — the
+      // child ⊇ parent read-scope invariant (#544/#547) is already satisfied
+      // for any parent because read scope is not narrowed.
+      ...(ctx?.sessionCwd !== undefined ? { cwd: ctx.sessionCwd } : {}),
       // Forward the parent's witness writer (when ctx supplies one) so this
       // user-skill's forked sub-agent inherits it and its tool activity —
       // including any permission-denials a restricted user SKILL.md produces —
       // lands in the parent trace. See skills/index.ts SkillExecutionContext.traceWriter.
-      //
-      // Read-scope note (#547): this manager passes no `cwd`, so its fork is
-      // read-open — which already satisfies the child ⊇ parent read-scope
-      // invariant (#544/#547) for any parent. Seeding parentReadRoots from a
-      // CONFINED session would only NARROW the fork (an arbitrary user SKILL.md
-      // may legitimately read outside the worktree, e.g. its own
-      // `~/.afk/skills/<name>` dir), so it is intentionally omitted. Worktree
-      // isolation for user skills (passing cwd) is a separate, pre-existing gap.
       ...(ctx?.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
       // Workspace READ channel: threaded for the same reason as traceWriter, and
       // unaffected by the read-scope note above — the store is ephemeral
