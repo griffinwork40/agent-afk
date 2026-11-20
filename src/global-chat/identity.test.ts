@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -27,11 +27,13 @@ function store(now?: () => number): FileIdentityStore {
 }
 
 /** Builds a valid serialised record (version:1 included). */
-async function validRecord(name = 'alice', noticeVersion = 0, nameChangedAt = 1_000_000): Promise<string> {
+async function validRecord(name = 'alice', acceptedNoticeVersion: number | null = null, nameChangedAt = 1_000_000): Promise<string> {
   const kp = await generateKeyPair();
   const tag = await deriveTag(kp.pubkey);
-  return JSON.stringify({ version: 1, pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag, name, nameChangedAt, noticeVersion });
+  return JSON.stringify({ version: 1, pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag, name, nameChangedAt, acceptedNoticeVersion });
 }
+
+const CORRUPT = '{ bad json';
 
 // ---------------------------------------------------------------------------
 // load()
@@ -70,20 +72,20 @@ describe('FileIdentityStore.load()', () => {
     const kp = await generateKeyPair();
     const tag = await deriveTag(kp.pubkey);
     // No version field
-    await writeFile(filePath, JSON.stringify({ pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 1_000_000, noticeVersion: 0 }));
+    await writeFile(filePath, JSON.stringify({ pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 1_000_000, acceptedNoticeVersion: null }));
     await expect(store().load()).rejects.toThrow();
   });
 
   it('throws for wrong pubkey length', async () => {
     const kp = await generateKeyPair();
     const tag = await deriveTag(kp.pubkey);
-    await writeFile(filePath, JSON.stringify({ version: 1, pubkey: kp.pubkey.slice(0, 32), privateKeyPkcs8: kp.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 1_000_000, noticeVersion: 0 }));
+    await writeFile(filePath, JSON.stringify({ version: 1, pubkey: kp.pubkey.slice(0, 32), privateKeyPkcs8: kp.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 1_000_000, acceptedNoticeVersion: null }));
     await expect(store().load()).rejects.toThrow();
   });
 
   it('throws for mismatched tag', async () => {
     const kp = await generateKeyPair();
-    await writeFile(filePath, JSON.stringify({ version: 1, pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag: '0000', name: 'alice', nameChangedAt: 1_000_000, noticeVersion: 0 }));
+    await writeFile(filePath, JSON.stringify({ version: 1, pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag: '0000', name: 'alice', nameChangedAt: 1_000_000, acceptedNoticeVersion: null }));
     await expect(store().load()).rejects.toThrow();
   });
 
@@ -91,15 +93,41 @@ describe('FileIdentityStore.load()', () => {
     const kp1 = await generateKeyPair();
     const kp2 = await generateKeyPair();
     const tag = await deriveTag(kp1.pubkey);
-    await writeFile(filePath, JSON.stringify({ version: 1, pubkey: kp1.pubkey, privateKeyPkcs8: kp2.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 1_000_000, noticeVersion: 0 }));
+    await writeFile(filePath, JSON.stringify({ version: 1, pubkey: kp1.pubkey, privateKeyPkcs8: kp2.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 1_000_000, acceptedNoticeVersion: null }));
     await expect(store().load()).rejects.toThrow();
   });
 
   it('throws for non-safe-integer nameChangedAt', async () => {
     const kp = await generateKeyPair();
     const tag = await deriveTag(kp.pubkey);
-    await writeFile(filePath, JSON.stringify({ version: 1, pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 1.5, noticeVersion: 0 }));
+    await writeFile(filePath, JSON.stringify({ version: 1, pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 1.5, acceptedNoticeVersion: null }));
     await expect(store().load()).rejects.toThrow();
+  });
+
+  it('throws for invalid acceptedNoticeVersion (zero)', async () => {
+    const kp = await generateKeyPair();
+    const tag = await deriveTag(kp.pubkey);
+    await writeFile(filePath, JSON.stringify({ version: 1, pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 1_000_000, acceptedNoticeVersion: 0 }));
+    await expect(store().load()).rejects.toThrow();
+  });
+
+  it('throws for invalid acceptedNoticeVersion (negative)', async () => {
+    const kp = await generateKeyPair();
+    const tag = await deriveTag(kp.pubkey);
+    await writeFile(filePath, JSON.stringify({ version: 1, pubkey: kp.pubkey, privateKeyPkcs8: kp.privateKeyPkcs8, tag, name: 'alice', nameChangedAt: 1_000_000, acceptedNoticeVersion: -1 }));
+    await expect(store().load()).rejects.toThrow();
+  });
+
+  it('accepts null acceptedNoticeVersion', async () => {
+    await writeFile(filePath, await validRecord('alice', null));
+    const id = await store().load();
+    expect(id).not.toBeNull();
+  });
+
+  it('accepts positive acceptedNoticeVersion', async () => {
+    await writeFile(filePath, await validRecord('alice', 2));
+    const id = await store().load();
+    expect(id).not.toBeNull();
   });
 
   it('throws when file is unreadable (directory at path)', async () => {
@@ -143,15 +171,22 @@ describe('FileIdentityStore.create()', () => {
 
   it('written record includes version:1', async () => {
     await store().create('alice');
-    const raw = await import('node:fs/promises').then(fs => fs.readFile(filePath, 'utf-8'));
+    const raw = await readFile(filePath, 'utf-8');
     const parsed = JSON.parse(raw);
     expect(parsed.version).toBe(1);
+  });
+
+  it('written record has acceptedNoticeVersion null', async () => {
+    await store().create('alice');
+    const raw = await readFile(filePath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    expect(parsed.acceptedNoticeVersion).toBeNull();
   });
 
   it('nameChangedAt uses injected clock on create', async () => {
     const t0 = 9_999_999;
     await store(() => t0).create('alice');
-    const raw = await import('node:fs/promises').then(fs => fs.readFile(filePath, 'utf-8'));
+    const raw = await readFile(filePath, 'utf-8');
     const parsed = JSON.parse(raw);
     expect(parsed.nameChangedAt).toBe(t0);
   });
@@ -163,11 +198,12 @@ describe('FileIdentityStore.create()', () => {
     if (!r2.ok) expect(r2.code).toBe('already_exists');
   });
 
-  it('returns already_exists for corrupt file (never overwrites)', async () => {
-    await writeFile(filePath, '{ bad json');
-    const r = await store().create('alice');
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('already_exists');
+  it('rejects (throws) for corrupt file and leaves bytes intact', async () => {
+    await writeFile(filePath, CORRUPT);
+    await expect(store().create('alice')).rejects.toThrow();
+    // Corrupt bytes must be unchanged
+    const after = await readFile(filePath, 'utf-8');
+    expect(after).toBe(CORRUPT);
   });
 
   it('returns bad_name for invalid name', async () => {
@@ -216,11 +252,11 @@ describe('FileIdentityStore.rename()', () => {
     if (!r.ok) expect(r.code).toBe('not_created');
   });
 
-  it('returns not_created for corrupt file', async () => {
-    await writeFile(filePath, '{ bad json');
-    const r = await store().rename('alice');
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('not_created');
+  it('rejects (throws) for corrupt file and leaves bytes intact', async () => {
+    await writeFile(filePath, CORRUPT);
+    await expect(store().rename('alice')).rejects.toThrow();
+    const after = await readFile(filePath, 'utf-8');
+    expect(after).toBe(CORRUPT);
   });
 
   it('same name is a no-op returning success', async () => {
@@ -330,6 +366,30 @@ describe('FileIdentityStore notice acceptance', () => {
     await store().acceptNotice(1);
     expect(await store().isNoticeAccepted(1)).toBe(true);
   });
+
+  it('acceptNotice rejects zero version', async () => {
+    await expect(store().acceptNotice(0)).rejects.toThrow();
+  });
+
+  it('acceptNotice rejects negative version', async () => {
+    await expect(store().acceptNotice(-1)).rejects.toThrow();
+  });
+
+  it('acceptNotice rejects non-integer version', async () => {
+    await expect(store().acceptNotice(1.5)).rejects.toThrow();
+  });
+
+  it('acceptNotice rejects (throws) for corrupt file and leaves bytes intact', async () => {
+    await writeFile(filePath, CORRUPT);
+    await expect(store().acceptNotice(1)).rejects.toThrow();
+    const after = await readFile(filePath, 'utf-8');
+    expect(after).toBe(CORRUPT);
+  });
+
+  it('isNoticeAccepted rejects (throws) for corrupt file', async () => {
+    await writeFile(filePath, CORRUPT);
+    await expect(store().isNoticeAccepted(1)).rejects.toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -354,8 +414,24 @@ describe('FileIdentityStore.disable()', () => {
     if (r.ok) expect(id!.pubkey).toBe(r.identity.pubkey);
   });
 
+  it('written record has acceptedNoticeVersion null after disable', async () => {
+    await store().create('alice');
+    await store().acceptNotice(2);
+    await store().disable();
+    const raw = await readFile(filePath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    expect(parsed.acceptedNoticeVersion).toBeNull();
+  });
+
   it('disable on missing store is a no-op', async () => {
     await expect(store().disable()).resolves.toBeUndefined();
+  });
+
+  it('disable rejects (throws) for corrupt file and leaves bytes intact', async () => {
+    await writeFile(filePath, CORRUPT);
+    await expect(store().disable()).rejects.toThrow();
+    const after = await readFile(filePath, 'utf-8');
+    expect(after).toBe(CORRUPT);
   });
 });
 
@@ -386,6 +462,18 @@ describe('FileIdentityStore.sign()', () => {
     const canonical = 'afk-global-chat/v1\nhello\nglobal\n1234\n' + r.identity.pubkey + '\nalice';
     const sig = await store().sign(canonical);
     expect(await cryptoVerify(canonical + 'x', sig, r.identity.pubkey)).toBe(false);
+  });
+
+  it('sign error message is generic (no key contents)', async () => {
+    // load() on a corrupt file still throws from #loadRecord; sign wraps further errors generically
+    await writeFile(filePath, CORRUPT);
+    try {
+      await store().sign('test');
+    } catch (err) {
+      const msg = (err as Error).message;
+      expect(msg).not.toContain(filePath);
+      expect(msg.length).toBeGreaterThan(0);
+    }
   });
 });
 

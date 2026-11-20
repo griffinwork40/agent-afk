@@ -3,7 +3,8 @@
  *
  * Rules:
  *   - Missing file  → load() returns null; create() proceeds.
- *   - Corrupt file  → load()/create()/rename()/sign() throw a generic error.
+ *   - Corrupt file  → load()/create()/rename()/sign()/acceptNotice()/disable()
+ *                     all throw a generic error (no path/key contents exposed).
  *   - create() never overwrites any existing or corrupt file.
  *   - All mutations serialise through a promise chain (no interleaved writes).
  *   - atomicWriteFileAsync mode 0600 / mkdirMode 0700 for every write.
@@ -44,8 +45,12 @@ interface IdentityRecord {
   name: string;
   /** Epoch ms of the most recent name change (set by injected clock on create). */
   nameChangedAt: number;
-  /** Highest notice version accepted by this identity, or 0 if none. */
-  noticeVersion: number;
+  /**
+   * Highest notice version explicitly accepted by this identity, or null if
+   * no notice has been accepted (or acceptance was cleared by disable()).
+   * Must be a positive safe integer when non-null.
+   */
+  acceptedNoticeVersion: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -74,15 +79,20 @@ class IdentityCorruptError extends Error {
 function isValidRecord(v: unknown): v is IdentityRecord {
   if (typeof v !== 'object' || v === null) return false;
   const r = v as Record<string, unknown>;
-  return (
-    r['version'] === 1 &&
-    typeof r['pubkey'] === 'string' && /^[0-9a-f]{64}$/.test(r['pubkey']) &&
-    typeof r['privateKeyPkcs8'] === 'string' && r['privateKeyPkcs8'].length > 0 &&
-    typeof r['tag'] === 'string' && /^[0-9a-f]{4}$/.test(r['tag']) &&
-    typeof r['name'] === 'string' && r['name'].length > 0 &&
-    typeof r['nameChangedAt'] === 'number' && Number.isSafeInteger(r['nameChangedAt']) && r['nameChangedAt'] >= 0 &&
-    typeof r['noticeVersion'] === 'number' && Number.isSafeInteger(r['noticeVersion']) && r['noticeVersion'] >= 0
-  );
+  if (
+    r['version'] !== 1 ||
+    typeof r['pubkey'] !== 'string' || !/^[0-9a-f]{64}$/.test(r['pubkey']) ||
+    typeof r['privateKeyPkcs8'] !== 'string' || r['privateKeyPkcs8'].length === 0 ||
+    typeof r['tag'] !== 'string' || !/^[0-9a-f]{4}$/.test(r['tag']) ||
+    typeof r['name'] !== 'string' || r['name'].length === 0 ||
+    typeof r['nameChangedAt'] !== 'number' || !Number.isSafeInteger(r['nameChangedAt']) || r['nameChangedAt'] < 0
+  ) return false;
+  // acceptedNoticeVersion: null OR a positive safe integer
+  const anv = r['acceptedNoticeVersion'];
+  if (anv !== null) {
+    if (typeof anv !== 'number' || !Number.isSafeInteger(anv) || anv <= 0) return false;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -144,15 +154,19 @@ export class FileIdentityStore implements IdentityStore {
   }
 
   // -------------------------------------------------------------------------
-  // Internal: write helper
+  // Internal: write helper — surfaces a generic error on failure
   // -------------------------------------------------------------------------
 
   async #write(record: IdentityRecord): Promise<void> {
-    await atomicWriteFileAsync(
-      this.#filePath,
-      JSON.stringify(record),
-      { mode: 0o600, mkdirMode: 0o700 },
-    );
+    try {
+      await atomicWriteFileAsync(
+        this.#filePath,
+        JSON.stringify(record),
+        { mode: 0o600, mkdirMode: 0o700 },
+      );
+    } catch {
+      throw new Error('Failed to write identity storage');
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -180,18 +194,10 @@ export class FileIdentityStore implements IdentityStore {
 
   async create(name: string): Promise<IdentityResult> {
     return this.#enqueue(async () => {
-      // Probe: absent → proceed; present (healthy or corrupt) → already_exists.
-      let fileAbsent = false;
-      try {
-        await readFile(this.#filePath, 'utf-8');
-        // File readable — healthy or corrupt, do not overwrite.
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-          fileAbsent = true;
-        }
-        // Unreadable (non-ENOENT) — treat as existing to avoid overwriting.
-      }
-      if (!fileAbsent) {
+      // Use #loadRecord: absent → proceed; corrupt → throws (rejects caller);
+      // healthy record present → already_exists.
+      const existing = await this.#loadRecord();
+      if (existing !== null) {
         return { ok: false, code: 'already_exists' } satisfies IdentityResult;
       }
 
@@ -209,7 +215,7 @@ export class FileIdentityStore implements IdentityStore {
         tag,
         name,
         nameChangedAt: this.#now(),
-        noticeVersion: 0,
+        acceptedNoticeVersion: null,
       };
       await this.#write(record);
       return { ok: true, identity: { pubkey: kp.pubkey, tag, name } } satisfies IdentityResult;
@@ -218,12 +224,8 @@ export class FileIdentityStore implements IdentityStore {
 
   async rename(name: string): Promise<IdentityResult> {
     return this.#enqueue(async () => {
-      let record: IdentityRecord | null;
-      try {
-        record = await this.#loadRecord();
-      } catch {
-        return { ok: false, code: 'not_created' } satisfies IdentityResult;
-      }
+      // Corrupt file throws out of #loadRecord — propagates to caller.
+      const record = await this.#loadRecord();
       if (record === null) {
         return { ok: false, code: 'not_created' } satisfies IdentityResult;
       }
@@ -258,32 +260,39 @@ export class FileIdentityStore implements IdentityStore {
   async isNoticeAccepted(version: number): Promise<boolean> {
     const record = await this.#loadRecord();
     if (record === null) return false;
-    return record.noticeVersion >= version;
+    return record.acceptedNoticeVersion !== null && record.acceptedNoticeVersion >= version;
   }
 
   async acceptNotice(version: number): Promise<void> {
+    if (!Number.isSafeInteger(version) || version <= 0) {
+      throw new Error('acceptNotice: version must be a positive integer');
+    }
     return this.#enqueue(async () => {
-      let record: IdentityRecord | null;
-      try { record = await this.#loadRecord(); } catch { return; }
+      // Corrupt file throws — propagates to caller.
+      const record = await this.#loadRecord();
       if (record === null) return;
-      if (record.noticeVersion >= version) return;
-      await this.#write({ ...record, noticeVersion: version });
+      if (record.acceptedNoticeVersion !== null && record.acceptedNoticeVersion >= version) return;
+      await this.#write({ ...record, acceptedNoticeVersion: version });
     });
   }
 
   async disable(): Promise<void> {
     return this.#enqueue(async () => {
-      let record: IdentityRecord | null;
-      try { record = await this.#loadRecord(); } catch { return; }
+      // Corrupt file throws — propagates to caller.
+      const record = await this.#loadRecord();
       if (record === null) return;
-      await this.#write({ ...record, noticeVersion: 0 });
+      await this.#write({ ...record, acceptedNoticeVersion: null });
     });
   }
 
   async sign(canonical: string): Promise<string> {
     const record = await this.#loadRecord();
     if (record === null) throw new Error('No identity: call create() first');
-    const privateKey = await importPrivateKey(record.privateKeyPkcs8);
-    return sign(canonical, privateKey);
+    try {
+      const privateKey = await importPrivateKey(record.privateKeyPkcs8);
+      return await sign(canonical, privateKey);
+    } catch {
+      throw new Error('Failed to sign: identity storage error');
+    }
   }
 }
