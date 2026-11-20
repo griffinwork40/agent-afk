@@ -6,6 +6,7 @@
  * @module cli/commands/acp.permission.paths
  */
 import path from 'node:path';
+import { gitReadReachesOutside } from './acp.permission.git.js';
 
 // Contract: every argument a tool could treat as a filesystem location is
 // scanned, under generic names as well as the obvious ones, so a new path
@@ -127,5 +128,6 @@ export function outsidePaths(toolName: string, input: Record<string, unknown>, c
       out.push('(git repository relocation)');
     }
   }
+  if (toolName === 'git_read' && gitReadReachesOutside(input, root)) out.push('(git content outside the session directory)');
   return [...new Set(out)];
 }
