@@ -27,7 +27,8 @@ import * as acpSession from './acp.session.js';
 import * as translate from './acp.translate.js';
 import * as permission from './acp.permission.js';
 import * as sessionLoad from './acp.session-load.js';
-import { getVersion } from '../version.js';
+import { substitute } from './__test-utils__/acp-replay.js';
+import { isContained } from './acp.permission.paths.js';
 
 const mBuild = vi.mocked(acpSession.buildAcpSession);
 const mClose = vi.mocked(acpSession.closeAcpSession);
@@ -36,7 +37,7 @@ const mGate = vi.mocked(permission.createAcpPermissionGate);
 const mLoad = vi.mocked(sessionLoad.loadAcpSession);
 const mReplay = vi.mocked(sessionLoad.replayHistory);
 
-const WS = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'acp-ws-')));
+const WS = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'acp-ws-')));
 mkdirSync(path.join(WS, 'sub'));
 const FILE_IN_WS = path.join(WS, 'plain.txt');
 writeFileSync(FILE_IN_WS, 'x');
@@ -123,13 +124,15 @@ const note = (method: string, params?: unknown): unknown => ({ jsonrpc: '2.0', m
 
 interface TranscriptLine { direction: 'client_to_agent' | 'agent_to_client'; frame: Record<string, unknown> }
 
-/** Load a golden transcript with the README's substitutions applied. */
-function loadTranscript(stem: string, cwd: string, version: string): TranscriptLine[] {
+/**
+ * Load a golden transcript with the README's substitutions applied to the PARSED
+ * values (the e2e helper's `substitute`), never to the JSON text: a Windows
+ * workspace path holds backslashes, which are escapes inside JSON source.
+ */
+function loadTranscript(stem: string, cwd: string): TranscriptLine[] {
   const url = new URL(`../../../tests/fixtures/acp/transcripts/${stem}.ndjson`, import.meta.url);
-  return readFileSync(url, 'utf-8').split('\n').filter((l) => l.trim()).map((l) => {
-    const text = l.split('"/workspace').join(`"${cwd}`).split('"6.0.0"').join(JSON.stringify(version));
-    return JSON.parse(text) as TranscriptLine;
-  });
+  return readFileSync(url, 'utf-8').split('\n').filter((l) => l.trim())
+    .map((l) => substitute(JSON.parse(l), cwd, FIXTURE_ID) as TranscriptLine);
 }
 
 vi.mock('node:crypto', async (orig) => ({ ...(await orig<typeof import('node:crypto')>()), randomUUID: () => '11111111-1111-4111-8111-111111111111' }));
@@ -202,7 +205,7 @@ function installScript(plans: Plan[]): void {
 }
 
 async function replay(stem: string): Promise<void> {
-  const lines = loadTranscript(stem, WS, getVersion());
+  const lines = loadTranscript(stem, WS);
   const plans = plansFor(lines);
   installFakeGate(plans);
   installScript(plans);
@@ -300,11 +303,13 @@ describe('ACP server — session/new', () => {
   it('D14: accepts an existing cwd outside the server launch directory, canonicalised', async () => {
     const elsewhere = mkdtempSync(path.join(os.tmpdir(), 'acp-elsewhere-'));
     try {
-      expect(path.relative(process.cwd(), realpathSync(elsewhere)).startsWith('..')).toBe(true);
+      // Precondition: outside the launch directory, including on another drive
+      // (Windows CI: checkout on D:, temp on C:, where path.relative is absolute).
+      expect(isContained(process.cwd(), realpathSync.native(elsewhere))).toBe(false);
       const { out } = await run([init, newSession(2, { cwd: elsewhere })]);
       expect(out[1]!.result).toEqual({ sessionId: FIXTURE_ID });
-      expect(mBuild).toHaveBeenCalledWith(expect.objectContaining({ cwd: realpathSync(elsewhere) }));
-      expect(mGate).toHaveBeenCalledWith(expect.anything(), FIXTURE_ID, expect.objectContaining({ cwd: realpathSync(elsewhere) }));
+      expect(mBuild).toHaveBeenCalledWith(expect.objectContaining({ cwd: realpathSync.native(elsewhere) }));
+      expect(mGate).toHaveBeenCalledWith(expect.anything(), FIXTURE_ID, expect.objectContaining({ cwd: realpathSync.native(elsewhere) }));
     } finally { rmSync(elsewhere, { recursive: true, force: true }); }
   });
   it.each([

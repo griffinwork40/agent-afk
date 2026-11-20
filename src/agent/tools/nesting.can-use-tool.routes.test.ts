@@ -46,6 +46,7 @@ import type { SkillExecutorContext } from './skill-executor/types.js';
 import { executePluginSkill } from './skill-executor/fork-dispatch.js';
 import { registerSkill, _resetRegistry } from '../../skills/skill-registry.js';
 import * as promptLoader from '../../skills/_lib/prompt-loader.js';
+import { resetUsageLedgerForTests } from '../usage/usage-ledger.js';
 
 let tmp: string;
 let prevHome: string | undefined;
@@ -64,6 +65,10 @@ beforeEach(() => {
 });
 afterEach(() => {
   for (const p of opened.splice(0)) { try { p.close?.(); } catch { /* already closed */ } }
+  // The usage gate on agent/compose dispatch reads the cross-process usage ledger,
+  // which caches a process-wide kv.db handle once the child provider has created
+  // that file under this AFK_HOME. Close it before removal: Windows refuses (EBUSY).
+  resetUsageLedgerForTests();
   vi.restoreAllMocks();
   _resetRegistry();
   if (prevHome === undefined) delete process.env['AFK_HOME'];

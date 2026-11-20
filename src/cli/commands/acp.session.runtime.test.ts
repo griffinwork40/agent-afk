@@ -22,7 +22,7 @@ let handle: AcpSessionHandle | undefined;
 const requests: Array<{ tools?: Array<{ function?: { name?: string } }>; messages?: unknown[] }> = [];
 
 beforeEach(() => {
-  root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'acp-session-runtime-')));
+  root = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'acp-session-runtime-')));
   vi.spyOn(env, 'AFK_HOME', 'get').mockReturnValue(path.join(root, 'home'));
   vi.spyOn(env, 'AFK_STATE_DIR', 'get').mockReturnValue(path.join(root, 'state'));
   vi.spyOn(env, 'AFK_TRACE_DISABLED', 'get').mockReturnValue(undefined);

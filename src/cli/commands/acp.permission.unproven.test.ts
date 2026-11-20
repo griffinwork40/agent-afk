@@ -20,7 +20,7 @@ let secret = '';
 const SECRET = 'OUTSIDE_SECRET_42';
 
 beforeAll(() => {
-  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'acp-unproven-')));
+  tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'acp-unproven-')));
   cwd = path.join(tmp, 'app');
   fs.mkdirSync(cwd);
   fs.writeFileSync(path.join(cwd, 'inside.txt'), 'inside\n');
