@@ -3,7 +3,7 @@ import { detectSecrets, type SecretKind } from './secret-detect.js';
 
 const samples: [SecretKind, string][] = [
   ['anthropic', 'sk-ant-' + 'a'.repeat(32)], ['openai', 'sk-proj-' + 'a'.repeat(32)],
-  ['openai', 'sk-' + 'a_'.repeat(10)],
+  ['openai', 'sk-' + 'a1'.repeat(10)],
   ...['ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_'].map(prefix => ['github', prefix + 'a'.repeat(36)] as [SecretKind, string]),
   ['github', 'github_pat_' + 'a'.repeat(82)],
   ...['xoxb-', 'xoxp-', 'xoxa-', 'xoxr-', 'xoxs-'].map(prefix => ['slack', prefix + '1234567890-1234567890-abc'] as [SecretKind, string]),
@@ -36,6 +36,7 @@ describe('chat secret detector', () => {
     'UUID 83ab0129-e169-492f-badc-e57c7bc5d2af', 'src/global-chat/crypto.ts',
     'https://example.com/path?q=1234567890123456789012345', '#abcdef #fff',
     'sk-learn is useful', 'the sk- prefix', 'v5.360.0 Node 22.1.0',
+    'sk-learn-compatible-estimator-api',
     'a'.repeat(200), '0123456789abcdef'.repeat(5), 'AKIA short', 'npm_short',
   ])('leaves ordinary developer chat clean: %s', text => expect(detectSecrets(text)).toEqual([]));
 });

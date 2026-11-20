@@ -3,7 +3,10 @@ export const PROTOCOL_ID = 'afk-global-chat/v1';
 export const ROOM = 'global';
 export const MAX_TEXT_CHARS = 500;
 export const MAX_LINKS = 2;
-export const MAX_FRAME_BYTES = 4096;
+/** Cap on a frame a client sends. A post is at most 500 chars plus a 128-hex signature. */
+export const MAX_CLIENT_FRAME_BYTES = 4096;
+/** Cap on a frame the relay sends. A welcome carries up to BACKLOG_SIZE full messages. */
+export const MAX_RELAY_FRAME_BYTES = 262_144;
 export const BACKLOG_SIZE = 50;
 export const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const CLOCK_SKEW_MS = 120_000;

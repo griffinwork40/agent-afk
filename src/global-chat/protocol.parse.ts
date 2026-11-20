@@ -1,5 +1,5 @@
 import {
-  BACKLOG_SIZE, ERROR_CODES, MAX_FRAME_BYTES, PROTOCOL_VERSION,
+  BACKLOG_SIZE, ERROR_CODES, MAX_CLIENT_FRAME_BYTES, MAX_RELAY_FRAME_BYTES, PROTOCOL_VERSION,
   type AdminOp, type Badge, type ClientFrame, type ErrorCode, type Msg,
   type RelayFrame, type RoomMode,
 } from './protocol.js';
@@ -19,10 +19,10 @@ const op = (v: unknown): v is AdminOp => v === 'ban' || v === 'unban' || v === '
 const badge = (v: unknown): v is Badge | undefined => v === undefined || v === 'maintainer';
 const code = (v: unknown): v is ErrorCode => string(v) && ERROR_CODES.some(c => c === v);
 
-function decode(raw: string): unknown {
+function decode(raw: string, maxBytes: number): unknown {
   // Fast reject huge strings before allocating a UTF-8 copy. Each UTF-16 unit costs >= 1 byte.
-  if (typeof raw !== 'string' || raw.length > MAX_FRAME_BYTES
-    || new TextEncoder().encode(raw).length > MAX_FRAME_BYTES) return null;
+  if (typeof raw !== 'string' || raw.length > maxBytes
+    || new TextEncoder().encode(raw).length > maxBytes) return null;
   try { return JSON.parse(raw) as unknown; } catch { return null; }
 }
 function signed(v: ObjectValue): v is ObjectValue & { id: string; ts: number; sig: string } {
@@ -91,13 +91,13 @@ function relay(v: ObjectValue): RelayFrame | null {
 }
 /** Relay ingress. Business policy (name validity, text length, admin arg) is checked later. */
 export function parseClientFrame(raw: string): FrameParseResult<ClientFrame> {
-  const value = decode(raw);
+  const value = decode(raw, MAX_CLIENT_FRAME_BYTES);
   const frame = object(value) ? client(value) : null;
   return frame ? { ok: true, frame } : BAD;
 }
 /** Client ingress. Messages are shape-checked here, not signature-verified. */
 export function parseRelayFrame(raw: string): FrameParseResult<RelayFrame> {
-  const value = decode(raw);
+  const value = decode(raw, MAX_RELAY_FRAME_BYTES);
   const frame = object(value) ? relay(value) : null;
   return frame ? { ok: true, frame } : BAD;
 }

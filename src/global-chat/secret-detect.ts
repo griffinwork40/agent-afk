@@ -5,7 +5,9 @@ export interface SecretSpan { kind: SecretKind; start: number; end: number }
 // Specific formats precede overlapping formats. No entropy or generic length heuristic.
 const PATTERNS: readonly [SecretKind, RegExp][] = [
   ['anthropic', /\bsk-ant-[A-Za-z0-9_-]{20,}/g],
-  ['openai', /\bsk-proj-[A-Za-z0-9_-]{20,}|\bsk-(?!ant-|proj-)[A-Za-z0-9_-]{20,}/g],
+  // The bare `sk-` form must contain a digit so hyphenated prose such as
+  // `sk-learn-compatible-estimator-api` is not mistaken for a key.
+  ['openai', /\bsk-proj-[A-Za-z0-9_-]{20,}|\bsk-(?!ant-|proj-)(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{20,}/g],
   ['github', /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})/g],
   ['slack', /\bxox[bpars]-[A-Za-z0-9-]{20,}/g],
   ['aws', /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g],

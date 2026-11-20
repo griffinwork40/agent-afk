@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseClientFrame, parseRelayFrame } from './protocol.parse.js';
-import { ERROR_CODES, MAX_FRAME_BYTES } from './protocol.js';
+import { BACKLOG_SIZE, ERROR_CODES, MAX_CLIENT_FRAME_BYTES, MAX_RELAY_FRAME_BYTES } from './protocol.js';
 
 const pubkey = 'ab'.repeat(32);
 const id = 'cd'.repeat(16);
@@ -73,11 +73,22 @@ describe('frame parsers', () => {
   ])('rejects invalid relay fields %j', frame => expect(parseRelayFrame(JSON.stringify(frame)).ok).toBe(false));
   it('enforces byte rather than character caps at the boundary', () => {
     const base = JSON.stringify({ t: 'ping', n: 0 });
-    const exact = base + ' '.repeat(MAX_FRAME_BYTES - base.length);
+    const exact = base + ' '.repeat(MAX_CLIENT_FRAME_BYTES - base.length);
     expect(parseClientFrame(exact).ok).toBe(true);
     expect(parseClientFrame(exact + ' ').ok).toBe(false);
-    expect(parseRelayFrame(' '.repeat(MAX_FRAME_BYTES + 1)).ok).toBe(false);
+    expect(parseRelayFrame(' '.repeat(MAX_RELAY_FRAME_BYTES + 1)).ok).toBe(false);
     expect(parseClientFrame(JSON.stringify({ t: 'post', ...signed, text: '🎉'.repeat(1000) })).ok).toBe(false);
+  });
+  it('accepts a welcome carrying a full backlog of maximum-size messages', () => {
+    // 500 three-byte characters is the largest text the length cap allows in UTF-8.
+    const big = { ...signed, pubkey: 'a'.repeat(64), name: 'n'.repeat(16), text: '\u4e2d'.repeat(500) };
+    const welcome = JSON.stringify({
+      t: 'welcome', online: 9, mode: 'open', you: { pubkey: 'a'.repeat(64), name: 'me' },
+      backlog: Array.from({ length: BACKLOG_SIZE }, () => big),
+    });
+    expect(new TextEncoder().encode(welcome).length).toBeGreaterThan(MAX_CLIENT_FRAME_BYTES);
+    expect(new TextEncoder().encode(welcome).length).toBeLessThan(MAX_RELAY_FRAME_BYTES);
+    expect(parseRelayFrame(welcome).ok).toBe(true);
   });
   it('does not enforce business policy before signature verification', () => {
     expect(parseClientFrame(JSON.stringify({ ...hello, name: 'admin' })).ok).toBe(true);

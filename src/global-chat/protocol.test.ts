@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   canonicalAdmin, canonicalHello, canonicalPost, canonicalReport, PROTOCOL_VERSION,
-  PROTOCOL_ID, ROOM, MAX_TEXT_CHARS, MAX_LINKS, MAX_FRAME_BYTES, BACKLOG_SIZE,
+  PROTOCOL_ID, ROOM, MAX_TEXT_CHARS, MAX_LINKS, MAX_CLIENT_FRAME_BYTES, MAX_RELAY_FRAME_BYTES, BACKLOG_SIZE,
   RETENTION_MS, CLOCK_SKEW_MS, REPORT_THRESHOLD, NAME_PATTERN, NAME_CHANGE_INTERVAL_MS,
 } from './protocol.js';
 
 describe('protocol v1', () => {
   it('locks the public constants', () => {
     expect([PROTOCOL_VERSION, PROTOCOL_ID, ROOM]).toEqual([1, 'afk-global-chat/v1', 'global']);
-    expect([MAX_TEXT_CHARS, MAX_LINKS, MAX_FRAME_BYTES, BACKLOG_SIZE]).toEqual([500, 2, 4096, 50]);
+    expect([MAX_TEXT_CHARS, MAX_LINKS, MAX_CLIENT_FRAME_BYTES, MAX_RELAY_FRAME_BYTES, BACKLOG_SIZE])
+      .toEqual([500, 2, 4096, 262144, 50]);
     expect([RETENTION_MS, CLOCK_SKEW_MS, REPORT_THRESHOLD, NAME_CHANGE_INTERVAL_MS])
       .toEqual([604800000, 120000, 3, 86400000]);
     expect(NAME_PATTERN.source).toBe('^[a-z0-9_-]{2,16}$');
