@@ -48,7 +48,7 @@ describe('D9 child approval lifecycle', () => {
     const p = child('bash', { command: 'ls' }, opts('tu-1'));
     await untilRequests(t.requests, 1);
     const req = t.requests[0]!.params as { toolCall: { toolCallId: string; title: string }; options: { optionId: string }[] };
-    expect(req.toolCall.title).toBe('[subagent research-agent] bash');
+    expect(req.toolCall.title).toBe('[subagent research-agent] bash ls');
     expect(req.toolCall.toolCallId).toBe('child-1-tu-1');
     expect(req.options.map((o) => o.optionId)).toEqual(['allow_once', 'reject_once']);
     t.requests[0]!.resolve(pick('allow_once'));
@@ -123,7 +123,7 @@ describe('D10 children relocated by a delegation cwd', () => {
     const p = t.gate.canUseTool('agent', { prompt: 'p', cwd: path.dirname(outside) }, opts('a1'));
     await untilRequests(t.requests, 1);
     expect((t.requests[0]!.params as { toolCall: { title: string } }).toolCall.title)
-      .toBe(`agent ${path.dirname(outside)} (each subagent tool call is asked separately)`);
+      .toBe(`agent "p" ${path.dirname(outside)} (each subagent tool call is asked separately)`);
     t.requests[0]!.resolve(pick('allow_once'));
     expect(await p).toEqual({ behavior: 'allow' });
     void child('grep', { pattern: 'x' }, opts('g1'));
@@ -207,7 +207,7 @@ describe('D11 grants', () => {
     void t.gate.canUseTool('remote_agent', { host: 'h', prompt: 'p' }, opts('ra'));
     await untilRequests(t.requests, 1);
     const req = t.requests[0]!.params as { toolCall: { title: string }; options: { optionId: string }[] };
-    expect(req.toolCall.title).toBe('remote_agent (runs on another machine; its actions are NOT asked in this session)');
+    expect(req.toolCall.title).toBe('remote_agent on h: "p" (runs on another machine; its actions are NOT asked in this session)');
     expect(req.options.map((o) => o.optionId)).toEqual(['allow_once', 'reject_once']);
   });
 });

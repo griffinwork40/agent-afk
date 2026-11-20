@@ -3,6 +3,8 @@ import { inputRecord, resolveDisplayPath, validPath } from './acp.translate.path
 import { delegationSuffix } from './acp.permission.labels.js';
 import { outsidePaths } from './acp.permission.paths.js';
 import path from 'node:path';
+import { oneLine, toolDetail } from './acp.tool-title.js';
+import { sensitiveMarkers } from './acp.permission.sensitive.js';
 
 const readTools = new Set([
   'read_file', 'view_image', 'extract_document', 'json_query', 'list_directory',
@@ -13,7 +15,6 @@ const readTools = new Set([
 const searchTools = new Set(['grep', 'glob', 'memory_search', 'search_witness', 'workspace_query', 'state_query']);
 const editTools = new Set(['write_file', 'edit_file', 'patch_apply']);
 const thinkTools = new Set(['agent', 'skill', 'compose', 'remote_agent', 'model_complete']);
-const delegationTools = new Set(['agent', 'skill', 'compose', 'remote_agent']);
 const filePathTools = new Set(['read_file', 'view_image', 'extract_document', 'write_file', 'edit_file']);
 const pathTools = new Set(['json_query', 'list_directory', 'grep', 'glob']);
 
@@ -29,18 +30,25 @@ export function toolKind(toolName: string): ToolKind {
   return 'other';
 }
 
-/** With a session `cwd`, a relative path is shown resolved to its absolute form (D10). */
+/**
+ * Card title: the tool name, what the call does (bounded, one line; see
+ * acp.tool-title), the delegation suffix, any outside-cwd target (D10) and a
+ * sensitive-target marker. With a session `cwd`, relative paths are shown resolved.
+ */
 export function toolTitle(toolName: string, input?: unknown, cwd?: string): string {
   if (!toolName) return 'Tool call';
-  if (delegationTools.has(toolName)) return `${toolName}${delegationSuffix(toolName)}`;
   const record = inputRecord(input);
   const suffix = filePathTools.has(toolName) ? record['file_path']
     : toolName === 'json_query' || toolName === 'list_directory' ? record['path'] : undefined;
   const shown = validPath(suffix) ? cwd !== undefined ? resolveDisplayPath(suffix, cwd) ?? suffix : suffix : undefined;
-  const title = shown !== undefined ? `${toolName} ${shown}` : toolName;
+  const detail = shown !== undefined ? oneLine(shown) : toolDetail(toolName, record, cwd);
+  let title = detail !== '' ? `${toolName} ${detail}` : toolName;
   // D10: a target outside the session directory is always visible, under any argument name.
   const outside = outsideDisplay(toolName, record, cwd);
-  return outside.length > 0 && !outside.some((p) => title.includes(p)) ? `${title} ${outside[0]}` : title;
+  if (outside.length > 0 && !outside.some((p) => title.includes(p))) title = `${title} ${outside[0]}`;
+  const markers = sensitiveMarkers(toolName, record, cwd !== undefined && path.isAbsolute(cwd) ? cwd : undefined);
+  if (markers.length > 0) title = `${title} ${markers.join(' ')}`;
+  return `${title}${delegationSuffix(toolName)}`;
 }
 
 /** Absolute outside-cwd targets for display; empty without an absolute session cwd. */

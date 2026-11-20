@@ -52,6 +52,8 @@ export function boundedContent(content: ToolCallContent[]): ToolCallContent[] {
 
 /** Display metadata must not bypass raw-input/result transport budgets. */
 export function boundStartDisplay(start: ToolCallStart): ToolCallStart {
+  // A title is one line: control characters and line separators become spaces.
+  start.title = start.title.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' ');
   if (serializedBytes(start.title) > 4096) start.title = 'Tool call';
   if (start.locations && serializedBytes(start.locations) > COLLECTION_BYTES) start.locations = [];
   return start;

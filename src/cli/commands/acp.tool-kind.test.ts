@@ -27,12 +27,12 @@ describe('ACP tool display classification', () => {
     }
     expect(toolTitle('json_query', { path: 'a.json' })).toBe('json_query a.json');
     expect(toolTitle('list_directory', { path: 'src' })).toBe('list_directory src');
-    expect(toolTitle('grep', { path: 'src' })).toBe('grep');
+    expect(toolTitle('grep', { path: 'src' })).toBe('grep in src');
     expect(toolTitle('read_file', { file_path: 5 })).toBe('read_file');
     expect(toolTitle('')).toBe('Tool call');
   });
   it('warns on delegation but not on model_complete', () => {
-    for (const name of ['agent', 'skill', 'compose']) expect(toolTitle(name)).toBe(`${name} (each subagent tool call is asked separately)`);
+    for (const name of ['agent', 'skill', 'compose']) expect(toolTitle(name, {})).toBe(`${name} (each subagent tool call is asked separately)`);
     expect(toolTitle('remote_agent')).toBe('remote_agent (runs on another machine; its actions are NOT asked in this session)');
     expect(toolTitle('model_complete')).toBe('model_complete');
   });
