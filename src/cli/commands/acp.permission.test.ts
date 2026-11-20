@@ -1,3 +1,4 @@
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AcpClientPeer, AcpPermissionOptions, ToolCallStart } from './acp.wire.js';
@@ -22,7 +23,9 @@ import { createTranslatorState, translateOutputEvent } from './acp.translate.js'
 import { permissionOptions, requiresAsk } from './acp.permission.policy.js';
 
 const SID = '11111111-1111-4111-8111-111111111111';
-const WRITE_INPUT = { file_path: '/workspace/new.txt', content: 'hello\n' };
+// A real absolute session directory on every platform (a drive-less `/workspace` is outside on Windows).
+const WS = path.resolve(os.tmpdir(), 'acp-gate-ws');
+const WRITE_INPUT = { file_path: path.join(WS, 'new.txt'), content: 'hello\n' };
 
 interface Ask { params: unknown; signal: AbortSignal | undefined; resolve(v: unknown): void; reject(e: unknown): void }
 type LogEntry = { kind: 'emit'; update: ToolCallStart } | { kind: 'request'; method: string; params: unknown };
@@ -48,7 +51,7 @@ function setup(over: Partial<AcpPermissionOptions> = {}) {
     emitToolCall: vi.fn(async (update: ToolCallStart) => { fp.log.push({ kind: 'emit', update }); }),
     onCancelled,
     // Production always supplies the session cwd; without one every path is outside (fail closed).
-    cwd: path.resolve('/workspace'),
+    cwd: WS,
     ...over,
   };
   const gate = createAcpPermissionGate(fp.peer, SID, opts);
@@ -119,12 +122,12 @@ describe('ACP permission gate: allow paths', () => {
     releaseEmit();
     await untilAsk(t.asks);
     expect(t.log[0]).toEqual({ kind: 'emit', update: {
-      sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: 'write_file /workspace/new.txt', name: 'write_file',
-      kind: 'edit', status: 'pending', rawInput: WRITE_INPUT, content: [], locations: [{ path: '/workspace/new.txt' }],
+      sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: `write_file ${path.join(WS, 'new.txt')}`, name: 'write_file',
+      kind: 'edit', status: 'pending', rawInput: WRITE_INPUT, content: [], locations: [{ path: path.join(WS, 'new.txt') }],
     } });
     expect(t.log[1]).toEqual({ kind: 'request', method: 'session/request_permission', params: {
       sessionId: SID,
-      toolCall: { toolCallId: 'tool-1', title: 'write_file /workspace/new.txt', name: 'write_file', kind: 'edit', status: 'pending', rawInput: WRITE_INPUT },
+      toolCall: { toolCallId: 'tool-1', title: `write_file ${path.join(WS, 'new.txt')}`, name: 'write_file', kind: 'edit', status: 'pending', rawInput: WRITE_INPUT },
       options: permissionOptions('write_file'),
     } });
     t.asks[0]!.resolve(selected('allow_once'));
@@ -148,7 +151,7 @@ describe('ACP permission gate: allow paths', () => {
     await untilAsk(t.asks);
     t.asks[0]!.resolve(selected('allow_always'));
     expectAllow(await p);
-    expectAllow(await call(t.gate, 'write_file', { file_path: '/workspace/second.txt' }, 'tool-2'));
+    expectAllow(await call(t.gate, 'write_file', { file_path: path.join(WS, 'second.txt') }, 'tool-2'));
     expect(t.asks).toHaveLength(1);
     const other = call(t.gate, 'edit_file', WRITE_INPUT, 'tool-3');
     await untilAsk(t.asks, 2);
@@ -163,7 +166,7 @@ describe('ACP permission gate: allow paths', () => {
     t.asks[0]!.resolve(selected('allow_always'));
     expectAllow(await p);
     t.log.length = 0;
-    expectAllow(await call(t.gate, 'write_file', { file_path: '/workspace/second.txt' }, 'tool-2'));
+    expectAllow(await call(t.gate, 'write_file', { file_path: path.join(WS, 'second.txt') }, 'tool-2'));
     expect(t.log).toEqual([{ kind: 'emit', update: expect.objectContaining({
       toolCallId: 'tool-2', name: 'write_file', status: 'in_progress' }) }]);
   });
@@ -211,7 +214,7 @@ describe('ACP permission gate: allow paths', () => {
 
   it('auto-allowed reads never ask or emit', async () => {
     const t = setup();
-    expectAllow(await call(t.gate, 'read_file', { file_path: '/workspace/a' }, 'r1'));
+    expectAllow(await call(t.gate, 'read_file', { file_path: path.join(WS, 'a') }, 'r1'));
     expect(t.log).toEqual([]);
   });
 
@@ -232,7 +235,7 @@ describe('ACP permission gate: allow paths', () => {
 
   it('omits oversize raw input from the start and the request, but still asks', async () => {
     const t = setup();
-    void call(t.gate, 'write_file', { file_path: '/workspace/big', content: 'x'.repeat(300 * 1024) }, 'big');
+    void call(t.gate, 'write_file', { file_path: path.join(WS, 'big'), content: 'x'.repeat(300 * 1024) }, 'big');
     await untilAsk(t.asks);
     expect('rawInput' in (t.log[0] as { update: ToolCallStart }).update).toBe(false);
     expect('rawInput' in (t.asks[0]!.params as { toolCall: object }).toolCall).toBe(false);
@@ -240,25 +243,25 @@ describe('ACP permission gate: allow paths', () => {
 
   it('bounds the pending start exactly as the translator bounds a stream start', async () => {
     const t = setup();
-    const input = { file_path: '/workspace/mid', content: 'x'.repeat(200 * 1024) };
+    const input = { file_path: path.join(WS, 'mid'), content: 'x'.repeat(200 * 1024) };
     void call(t.gate, 'write_file', input, 'mid');
     await untilAsk(t.asks);
     const gateStart = (t.log[0] as { update: ToolCallStart }).update;
     const st = createTranslatorState();
     const [streamStart] = translateOutputEvent({ type: 'chunk', chunk: { type: 'tool_use_detail', toolUseId: 'mid',
-      toolName: 'write_file', toolInput: '', toolInputRaw: JSON.stringify(input) } }, st, { cwd: '/workspace' });
+      toolName: 'write_file', toolInput: '', toolInputRaw: JSON.stringify(input) } }, st, { cwd: WS });
     expect('rawInput' in gateStart).toBe('rawInput' in (streamStart as ToolCallStart));
-    const longName = { file_path: `/workspace/${'d'.repeat(5000)}` };
+    const longName = { file_path: path.join(WS, 'd'.repeat(5000)) };
     void call(t.gate, 'write_file', longName, 'long');
     await untilAsk(t.asks, 2);
     expect((t.log[2] as { update: ToolCallStart }).update.title).toBe('Tool call');
   });
 
   it('resolves relative locations against the session cwd when the gate knows it', async () => {
-    const t = setup({ cwd: '/workspace' });
+    const t = setup({ cwd: WS });
     void call(t.gate, 'write_file', { file_path: 'rel.txt', content: '' }, 'rel');
     await untilAsk(t.asks);
-    expect(display.toolLocations).toHaveBeenCalledWith('write_file', expect.anything(), '/workspace');
+    expect(display.toolLocations).toHaveBeenCalledWith('write_file', expect.anything(), WS);
   });
 
   it('keeps the delegation suffix even when an oversize title is replaced', async () => {

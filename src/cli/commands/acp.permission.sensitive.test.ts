@@ -1,3 +1,4 @@
+import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { grantFits } from './acp.permission.grants.js';
@@ -52,7 +53,7 @@ describe('sensitive write targets (profile section 6)', () => {
     expect(permissionOptions('write_file', true).map((o) => o.optionId)).toEqual(['allow_once', 'reject_once']);
   });
   it('the card title says why', () => {
-    const real = path.resolve('/work/repo');
+    const real = path.resolve(os.tmpdir(), 'acp-title-ws');
     expect(toolTitle('write_file', { file_path: '.git/config' }, real)).toContain(GIT_MARKER);
     expect(toolTitle('edit_file', { file_path: '.afk/settings.json' }, real)).toContain(CONFIG_MARKER);
     expect(toolTitle('patch_apply', { changes: [{ path: 'a' }, { path: '.gitmodules' }] }, real)).toContain(GIT_MARKER);
