@@ -67,14 +67,14 @@ describe('redteam4: sensitive loader coverage', () => {
     expect(sensitiveMarker('.Git/config', cwd)).toBe(GIT_MARKER);
   });
 
-  // --- New gap: .claude/commands is NOT sensitive (documents known gap) ---
-  it('.claude/commands/evil.md is NOT currently sensitive (documented gap)', () => {
-    // This PASSES today because .claude is not in the sensitive list.
-    // It is a defence-in-depth gap: AFK.md/.afk are primary protections.
-    // If this starts failing the gap has been fixed.
-    const marker = sensitiveMarker('.claude/commands/evil.md', cwd);
-    // We document rather than assert this should be non-empty:
-    // change to expect(marker).toBe(AGENT_MARKER) once fixed.
-    expect(typeof marker).toBe('string'); // always passes; gap documented above
+  // --- Fixed in round 4 item 3: .claude segment is now sensitive ---
+  it('.claude/commands/evil.md is sensitive (AGENT_MARKER) — gap fixed', () => {
+    // agent/agents/registry.ts:270 scans <cwd>/.claude/agents/ for project-scoped
+    // agent definitions; .claude/commands/ is under the same segment.  Adding the
+    // .claude segment to the isAgent check closes the defence-in-depth gap.
+    expect(sensitiveMarker('.claude/commands/evil.md', cwd)).toBe(AGENT_MARKER);
+  });
+  it('.claude/agents/my-agent.md is sensitive (AGENT_MARKER)', () => {
+    expect(sensitiveMarker('.claude/agents/my-agent.md', cwd)).toBe(AGENT_MARKER);
   });
 });
