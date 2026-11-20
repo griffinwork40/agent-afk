@@ -51,6 +51,26 @@ export function boundedContent(content: ToolCallContent[]): ToolCallContent[] {
   ];
 }
 
+// Contract: Every human-display field of every agent-to-client frame must pass
+// through escapeInvisible before the frame is written. This function is the ONE
+// choke point that guarantees that; applying it twice is safe because the escape
+// is idempotent (the replacement string '<U+XXXX>' contains only printable ASCII
+// and is therefore left unchanged on a second pass).
+//
+// Frame types emitted by the server and their display fields:
+//   tool_call (ToolCallStart)        — title, locations[].path
+//   tool_call_update (ToolCallUpdate) — title (when present), locations[].path (when present)
+//   session/request_permission        — toolCall.title, toolCall.locations[].path, options[].name
+//
+// Fields that are DATA (byte-exact, never shown verbatim to the human as the
+// action description) are NOT touched here: rawInput, rawOutput, content (message
+// text, tool output, diffs), toolCallId, sessionId, name (tool identifier),
+// kind, status, optionId.  The permission option name IS display text.
+//
+// Inner escaping (oneLine, shellCommandLine, toolTitle) is preserved because it
+// must count toward byte bounds and because outside-path and sensitive markers
+// must survive bounding correctly.  This outer pass is what guarantees coverage
+// for strings assembled or appended after the inner pass runs.
 /** Display metadata must not bypass raw-input/result transport budgets. */
 export function boundStartDisplay(start: ToolCallStart): ToolCallStart {
   // A title is one line: control characters and line separators become spaces,
@@ -61,6 +81,14 @@ export function boundStartDisplay(start: ToolCallStart): ToolCallStart {
     start.title.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' '),
   );
   if (serializedBytes(start.title) > 4096) start.title = 'Tool call';
+  // Escape every path in locations — a filename may legally contain bidi
+  // controls on Linux/macOS and would otherwise mislead the card display.
+  if (start.locations) {
+    start.locations = start.locations.map((loc) => ({
+      ...loc,
+      path: escapeInvisible(loc.path.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' ')),
+    }));
+  }
   if (start.locations && serializedBytes(start.locations) > COLLECTION_BYTES) start.locations = [];
   return start;
 }

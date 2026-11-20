@@ -8,6 +8,7 @@ import path from 'node:path';
 import type { JsonValue, PermissionOption, ToolCallStart, ToolKind } from './acp.wire.js';
 import { toolKind, toolLocations, toolTitle } from './acp.tool-kind.js';
 import { boundedRawInput, boundStartDisplay } from './acp.translate.bounds.js';
+import { escapeInvisible } from './acp.tool-title.js';
 import { outsidePaths } from './acp.permission.paths.js';
 import { delegationSuffix } from './acp.permission.labels.js';
 import { isGrantable } from './acp.permission.grants.js';
@@ -111,6 +112,11 @@ export function buildPendingStart(
     locations,
   });
   if (suffix !== '' && !start.title.endsWith(suffix)) start.title += suffix;
-  if (prefix !== '') start.title = `${prefix} ${start.title}`;
+  // Escape the prefix AFTER boundStartDisplay: the prefix may carry model-
+  // supplied text (e.g. id_prefix from an agent call) that was not seen by the
+  // inner escape pass.  boundStartDisplay is idempotent, so the outer choke
+  // point in boundStartDisplay already covers the title body; this call covers
+  // the appended prefix only.
+  if (prefix !== '') start.title = `${escapeInvisible(prefix)} ${start.title}`;
   return start;
 }
