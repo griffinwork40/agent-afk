@@ -13,6 +13,8 @@
 /** Minimal registry surface: `dispose()` is best-effort and never throws. */
 export interface DisposableContinuationRegistry {
   dispose(): void;
+  /** Returns promises for in-flight worktree release trace writes started by dispose(). */
+  getPendingReleaseWrites(): readonly Promise<void>[];
 }
 
 /**

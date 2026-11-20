@@ -293,7 +293,7 @@ function buildChildSkillFactory(
  * tests) override per-chain round/continuation caps without touching the evict
  * logic.
  */
-export function buildContinuationRegistry(limits?: ContinuationLimits): ContinuationRegistry {
+export function buildContinuationRegistry(traceWriter: TraceSink | undefined, limits?: ContinuationLimits): ContinuationRegistry {
   const registry = new ContinuationRegistry(limits);
   // Release any worktree kept for a chain when it is evicted from the 256-cap
   // or disposed at session end (#4266). Best-effort: the callback never throws.
@@ -303,7 +303,8 @@ export function buildContinuationRegistry(limits?: ContinuationLimits): Continua
     // <repoRoot>/.afk-worktrees/<slug>, so parent of parent is the repo root.
     const repoRoot = repoRootFromWorktreePath(chain.isolatedWorktreePath);
     if (repoRoot === undefined) return;
-    void releaseChainWorktree({ repoRoot, worktreePath: chain.isolatedWorktreePath, chainId: chain.chainId, registry }).catch(() => { /* best-effort */ });
+    const p = releaseChainWorktree({ repoRoot, worktreePath: chain.isolatedWorktreePath, chainId: chain.chainId, registry, traceWriter }).catch(() => { /* best-effort */ });
+    registry.registerReleaseWrite(p);
   };
   return registry;
 }
@@ -365,7 +366,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   const budgetOpt = delegationBudget !== undefined ? { delegationBudget } : {};
   // Continuation chains (docs/subagent-continuation.md, D2): one in-memory
   // registry per root session, shared by reference with nested executors.
-  const continuationRegistry = buildContinuationRegistry();
+  const continuationRegistry = buildContinuationRegistry(traceWriter);
 
   // 1. The single root manager. Every executor below reads through this
   //    instance; a second manager would fork children outside the abort graph

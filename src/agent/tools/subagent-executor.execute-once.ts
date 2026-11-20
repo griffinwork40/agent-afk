@@ -265,7 +265,7 @@ export async function executeOnce(
   const budgetRelease = budgetReceipt?.release;
   const promotionTookBudget = { value: false };
   // #4266: a still-continuable isolated chain keeps its worktree locked for the next link.
-  const onIsolationTeardown = buildIsolationTeardownHook(isolationTeardown, chain, ctx.continuationRegistry, isContinuableChain);
+  const onIsolationTeardown = buildIsolationTeardownHook(isolationTeardown, chain, ctx.continuationRegistry, isContinuableChain, ctx.traceWriter);
   const result = await runForegroundWithPromotion({
     handle,
     signal: call.signal,

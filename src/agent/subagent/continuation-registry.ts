@@ -152,6 +152,8 @@ export class ContinuationRegistry {
    * release still finds it. Entries drop once settled.
    */
   private readonly linkTeardowns = new Map<string, Promise<void>>();
+  /** In-flight worktree release trace-write promises registered by onEvict. */
+  private readonly releaseWrites = new Set<Promise<void>>();
 
   constructor(
     private readonly limits: ContinuationLimits = resolveContinuationLimits(),
@@ -161,6 +163,22 @@ export class ContinuationRegistry {
   /** Number of chains currently held. */
   get size(): number {
     return this.chains.size;
+  }
+
+  /**
+   * Called by the onEvict callback to register a release promise for
+   * seal-time collection via getPendingReleaseWrites(). The promise is
+   * removed automatically once it settles.
+   */
+  registerReleaseWrite(p: Promise<void>): void {
+    this.releaseWrites.add(p);
+    void p.finally(() => { this.releaseWrites.delete(p); });
+  }
+
+  /** Returns in-flight worktree release trace-write promises. Used by
+   *  buildManagerShutdownConfig to merge them into seal()'s pendingWrites. */
+  getPendingReleaseWrites(): readonly Promise<void>[] {
+    return [...this.releaseWrites];
   }
 
   /**
@@ -297,8 +315,8 @@ export class ContinuationRegistry {
   /**
    * Contract: `done` resolves (never rejects) once a link's nested subagents
    * and its handle are torn down. Every worktree release awaits the pending
-   * entry first (releaseChainWorktree), so no release path unlocks or removes
-   * a kept tree while that link's nested subagents may still write to it.
+   * entry first (releaseChainWorktree), up to the subagent drain deadline.
+   * After that deadline release proceeds even if nested teardown is hung.
    * A later link's entry joins any still-pending earlier one.
    */
   trackLinkTeardown(chainId: string, done: Promise<void>): void {

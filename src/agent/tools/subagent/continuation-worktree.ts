@@ -27,6 +27,9 @@ import { basename, dirname } from 'node:path';
 import { execFileAsync as defaultExecFile } from '../../../utils/exec-file.js';
 import { teardownIsolatedWorktree } from '../handlers/worktree-managed.js';
 import { debugLog } from '../../../utils/debug.js';
+import { SUBAGENT_DRAIN_TIMEOUT_MS } from '../../subagent/constants.js';
+import { emitSessionPhase } from '../../trace/emit.js';
+import type { TraceSink } from '../../trace/writer.js';
 import type { ChainRecord, ContinuationRegistry } from '../../subagent/continuation-registry.js';
 
 /**
@@ -59,12 +62,13 @@ export function buildIsolationTeardownHook(
   chain: ChainRecord | undefined,
   registry: ContinuationRegistry | undefined,
   isContinuable: (c: ChainRecord) => boolean,
+  traceWriter?: TraceSink | undefined,
 ): ((td: { repoRoot: string; worktreePath: string }) => Promise<boolean>) | undefined {
   if (isolationTeardown === undefined || chain === undefined || registry === undefined) return undefined;
   if (chain.inputs.isolation !== 'worktree') return undefined;
   return async (td) => {
     if (!isContinuable(chain) || chain.worktreeReleaseRequested === true) return false;
-    return keepWorktreeForChain({ ...td, chainId: chain.chainId, registry });
+    return keepWorktreeForChain({ ...td, chainId: chain.chainId, registry, traceWriter });
   };
 }
 
@@ -80,6 +84,7 @@ export async function keepWorktreeForChain(args: {
   worktreePath: string;
   chainId: string;
   registry: ContinuationRegistry;
+  traceWriter?: TraceSink | undefined;
 }): Promise<boolean> {
   const { repoRoot, worktreePath, chainId, registry } = args;
   try {
@@ -92,13 +97,16 @@ export async function keepWorktreeForChain(args: {
     if (chain === undefined || chain.worktreeReleaseRequested === true) {
       // Chain evicted or session ended during locking: undo it, tear down normally.
       await defaultExecFile('git', ['-C', repoRoot, 'worktree', 'unlock', worktreePath]).catch(() => undefined);
+      traceWorktree(args, 'keep', 'cancelled');
       return false;
     }
     registry.setIsolatedWorktreePath(chainId, worktreePath);
     debugLog(`[isolation] kept worktree ${worktreePath} for chain ${chainId}`);
+    traceWorktree(args, 'keep', 'kept');
     return true;
   } catch (err) {
     debugLog(`[isolation] failed to keep worktree for chain ${chainId}: ${String(err)}`);
+    traceWorktree(args, 'keep', 'lock_failed');
     return false;
   }
 }
@@ -114,12 +122,19 @@ export async function releaseChainWorktree(args: {
   worktreePath: string;
   chainId: string;
   registry: ContinuationRegistry;
+  traceWriter?: TraceSink | undefined;
 }): Promise<void> {
   const { repoRoot, worktreePath, chainId, registry } = args;
   registry.clearIsolatedWorktreePath(chainId);
-  // Invariant: the link's nested subagents finish teardown before the tree is unlocked or removed.
+  // Prefer nested teardown first, but a hung link must not hold the lock forever.
+  const waitStarted = Date.now();
   const nestedTeardown = registry.pendingLinkTeardown(chainId);
-  if (nestedTeardown !== undefined) await nestedTeardown;
+  const waitOutcome = nestedTeardown === undefined ? 'not_needed' : await waitForLinkTeardown(nestedTeardown);
+  const waitMs = Math.max(0, Date.now() - waitStarted);
+  const waitMetadata = { waitMs, waitOutcome };
+  // Emit before git teardown as well, so a timeout remains visible even if git stalls.
+  // Skip when not_needed: no pending link means no wait occurred, so the row adds no signal.
+  if (waitOutcome !== 'not_needed') traceWorktree(args, 'release_wait', waitOutcome, waitMetadata);
   try {
     // Unlock first: teardownIsolatedWorktree refuses locked trees.
     await defaultExecFile('git', [
@@ -128,6 +143,43 @@ export async function releaseChainWorktree(args: {
   } catch {
     // Already unlocked or tree already removed — proceed to teardown.
   }
-  const outcome = await teardownIsolatedWorktree({ repoRoot, worktreePath });
-  debugLog(`[isolation] released chain worktree ${worktreePath}: ${JSON.stringify(outcome)}`);
+  try {
+    const outcome = await teardownIsolatedWorktree({ repoRoot, worktreePath });
+    debugLog(`[isolation] released chain worktree ${worktreePath}: ${JSON.stringify(outcome)}`);
+    traceWorktree(args, 'release', outcome.removed ? 'removed' : outcome.preserved ? 'preserved' : 'failed', {
+      ...waitMetadata,
+      ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
+    });
+  } catch {
+    traceWorktree(args, 'release', 'failed', waitMetadata);
+  }
+}
+
+/** Bound the wait without cancelling the link's own teardown; always clear the timer. */
+async function waitForLinkTeardown(done: Promise<void>): Promise<'settled' | 'timed_out' | 'failed'> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      done.then(() => 'settled' as const, () => 'failed' as const),
+      new Promise<'timed_out'>((resolve) => {
+        timer = setTimeout(() => resolve('timed_out'), SUBAGENT_DRAIN_TIMEOUT_MS);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Best-effort witness rows, like continuation_settle_degraded. No raw error text. */
+function traceWorktree(
+  args: { chainId: string; worktreePath: string; traceWriter?: TraceSink | undefined },
+  operation: 'keep' | 'release_wait' | 'release',
+  outcome: string,
+  metadata: Record<string, string | number | boolean> = {},
+): void {
+  void emitSessionPhase(args.traceWriter, {
+    phase: 'continuation_worktree',
+    metadata: { chainId: args.chainId, worktreePath: args.worktreePath, operation, outcome, ...metadata },
+  });
 }

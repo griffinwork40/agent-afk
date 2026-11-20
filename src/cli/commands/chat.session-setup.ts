@@ -229,7 +229,7 @@ export async function buildChatSession(
     surface: 'cli',
     credentialSource: tryCredentialSourceForModel(String(sessionModel), providerHints),
     apiKey: getApiKeyForModel(sessionModel, providerHints),
-    ...withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor), continuationRegistry),
+    ...withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor, undefined, continuationRegistry), continuationRegistry),
     maxTurns,
     isNonInteractive: true,
     ...(dangerouslySkipPermissions

@@ -101,7 +101,7 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
       model,
       surface: 'cli',
       apiKey,
-      ...withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor), continuationRegistry),
+      ...withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor, undefined, continuationRegistry), continuationRegistry),
       maxTurns,
       isNonInteractive: true,
       permissionMode,

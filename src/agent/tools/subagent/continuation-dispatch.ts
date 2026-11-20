@@ -113,7 +113,7 @@ export interface ChainTerminalArgs {
   journalUsable: boolean;
   endReason: string;
   capture?: (cwd: string) => Promise<WorkspaceCheckpoint>;
-  /** Witness trace for `continuation_settle_degraded` (settling only). */
+  /** Witness trace for degraded settling and kept-worktree release outcomes. */
   traceWriter?: TraceSink | undefined;
 }
 
@@ -150,12 +150,14 @@ export async function recordChainTerminal(args: ChainTerminalArgs): Promise<Work
     // Resolve repoRoot: afk worktrees live at <repoRoot>/.afk-worktrees/<slug>.
     const repoRoot = repoRootFromWorktreePath(worktreePath);
     if (repoRoot === undefined) return checkpoint;
-    void releaseChainWorktree({
+    const p = releaseChainWorktree({
       repoRoot,
       worktreePath,
       chainId: chain.chainId,
       registry,
+      traceWriter: args.traceWriter,
     }).catch(() => { /* best-effort: never throw from terminal bookkeeping */ });
+    registry.registerReleaseWrite(p);
   }
   return checkpoint;
 }

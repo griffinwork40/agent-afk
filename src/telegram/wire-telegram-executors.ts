@@ -158,7 +158,10 @@ export function wireTelegramExecutors(
   };
 
   const getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'] =
-    () => executors.rootManager.getPendingChildTerminalWrites();
+    () => [
+      ...executors.rootManager.getPendingChildTerminalWrites(),
+      ...executors.continuationRegistry.getPendingReleaseWrites(),
+    ];
 
   return {
     executors, backgroundRegistry, bgNotifier, drainSubagents, getPendingChildTerminalWrites, bindSession,

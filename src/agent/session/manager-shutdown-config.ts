@@ -1,5 +1,6 @@
 import type { SubagentManager } from '../subagent.js';
 import type { AgentConfig } from '../types.js';
+import type { DisposableContinuationRegistry } from '../subagent/continuation-dispose.js';
 
 /** Anything that owns forked children whose abandoned streams can still bill. */
 export interface BillingStreamSource {
@@ -24,11 +25,16 @@ export function managerShutdownConfig(
   composeExecutor?: BillingStreamSource,
   /** Override the drain timeout (ms). Defaults to SUBAGENT_DRAIN_TIMEOUT_MS. Tests pass a small value to avoid burning the 5 s ceiling (#3966). */
   drainTimeoutMs?: number,
+  /** Continuation registry whose dispose-path release writes must land before trace seal. */
+  registry?: DisposableContinuationRegistry,
 ): Pick<AgentConfig, 'drainSubagents' | 'getPendingChildTerminalWrites' | 'getPendingChildBillingStreams'> {
   return {
     drainSubagents: (reason) =>
       manager.abortAllAndDrain('session_end', 'user_signal', drainTimeoutMs, reason === 'reset'),
-    getPendingChildTerminalWrites: () => manager.getPendingChildTerminalWrites(),
+    getPendingChildTerminalWrites: () => [
+      ...manager.getPendingChildTerminalWrites(),
+      ...(registry?.getPendingReleaseWrites() ?? []),
+    ],
     getPendingChildBillingStreams: () => pendingChildBillingStreams(manager, composeExecutor),
   };
 }

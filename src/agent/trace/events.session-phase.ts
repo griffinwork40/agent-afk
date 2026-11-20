@@ -156,6 +156,8 @@ export const SessionPhaseNameSchema = z.enum([
   // Continuation chain settling ended degraded (continuation-dispatch.ts).
   // metadata: { chainId, childId, reason }. Must mirror types.session-phase.ts.
   'continuation_settle_degraded',
+  // Kept-chain worktree keep/release outcomes and bounded teardown wait.
+  'continuation_worktree',
   // Per-fragment token-count snapshot at prompt assembly time (#4449).
   // Must mirror the SessionPhaseName union in types.session-phase.ts;
   // session-phase.test.ts parity enforces it.
