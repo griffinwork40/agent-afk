@@ -30,15 +30,18 @@ recreating it. It is a **partial proposal**, not closure of #3847.
 
 Base: `aec7a556c0ab9a234f0256020abaa4c2ef060b7a`.
 
-- **Bash hard restriction hook check 2 credential floor routed through
-  `decidePathAccess`** (#3847 step B). The lexical scan (`mentionsRestrictedRoot`)
-  continues to identify which path a command references; `decidePathAccess` is now
-  the consulted policy point for the credential-floor half of that decision.
+- **Bash hard restriction hook check 2 consults `decidePathAccess` for the
+  message only** (#3847 step B, partial). The lexical scan
+  (`mentionsRestrictedRoot`) identifies the matched root and blocks unconditionally.
+  The policy result does not yet control the block decision.
 - Extracted `restrictedPathBlock(sub, headless)` helper from
   `createBashRestrictionHook` to stay under the 200-line function ceiling. The
   helper calls `decidePathAccess(sub, 'read')` (no scope — floor-only, consistent
-  with check 2's intent) and uses the matched denylist entry as `displayPath` for
-  credential roots, preserving all existing block reason text.
+  with check 2's intent). Originally it replaced the displayed root with the
+  canonical denylist entry. The #5098 follow-up preserves the matched root
+  candidate and adds the policy match in parentheses for credential roots;
+  bash-only extras have no floor annotation. This is not the raw command operand:
+  home references and Windows separators have already been normalized.
 - Behaviour-preserving: `decidePathAccess` returns `deny/credential` for
   BUILTIN_READ_DENYLIST paths and `allow` for bash-only extras (e.g.
   `~/Library/Application Support`, LaunchAgents). Both classes still block — no
@@ -70,9 +73,10 @@ files were increased and all source files remain below 350 code lines.
 
 ## Exact remaining scope (keep issue open)
 
-1. ~~Migrate the bash **hard restriction hook's** credential-floor decision to the
-   policy (equivalence goldens first).~~ **Done in slice 3.**
-   Next: migrate the sensitive root derivation, interactive grant semantics and
+1. Migrate the bash **hard restriction hook's** credential-floor decision to the
+   policy (equivalence goldens first). **Still open:** slice 3 consults the policy
+   only for the message; both policy allow and deny results still block.
+   Migrate the sensitive root derivation, interactive grant semantics and
    headless carve-out logic incrementally. Do not replace heuristics with the
    incomplete advisory token scan: that would drop protections for
    interpreter-assembled, embedded, variable and Windows spellings.

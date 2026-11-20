@@ -328,8 +328,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
 
     for (const sub of restrictedSubstrings) {
       if (mentionsRestrictedRoot(scanned, sub, home)) {
-        const block = restrictedPathBlock(sub, headless);
-        if (block !== undefined) return block;
+        return restrictedPathBlock(sub, headless);
       }
     }
 
@@ -340,42 +339,36 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
 /**
  * Build the check-2 block decision for a matched restricted-root substring.
  *
- * Contract: routes the credential-floor decision through `decidePathAccess`
- * (#3847, step B). The lexical scan (`mentionsRestrictedRoot`) identifies WHICH
- * path the command references; `decidePathAccess` is the single authority on
- * whether `sub` is a credential root under the shared floor.
+ * Contract: every lexical match blocks. `decidePathAccess` is consulted ONLY
+ * to annotate the message with the shared credential-floor match (#3847).
+ * Its allow/deny result does not control the bash block decision.
  *
- * `sub` is an absolute resolved path (`builtinBashSensitiveRoots` and
- * `deriveRestrictedSubstrings` always produce `path.join`-built or
- * `safeRealpath`-resolved absolute paths). No scope is passed — floor-only
- * check — consistent with check 2's intent: grant filtering already happened in
- * `deriveRestrictedSubstrings`, so `sub` only reaches here because no grant
- * covers it.
+ * `sub` is the matched absolute root candidate (as-spelled or realpath-resolved),
+ * not a parsed command operand. No scope is passed — floor-only annotation.
+ * Interactive grant filtering already happened in `deriveRestrictedSubstrings`;
+ * headless surfaces deliberately use the unfiltered set.
  *
  * `decidePathAccess` returns `deny/credential` for paths in BUILTIN_READ_DENYLIST
  * (the shared floor) and `allow` for bash-only extras outside it (e.g.
  * `~/Library/Application Support`, `LaunchAgents`, `~/.config/gh` dir-wide).
  * Both classes block; the credential vs. extra distinction is surfaced via
- * `displayPath` so a later migration step can split them without re-deriving it.
+ * a parenthetical floor annotation without replacing the matched root.
  * All pre-migration allow/deny outcomes are pinned by
  * `bash-restriction-hook.check2-policy.test.ts`.
- *
- * Returns `undefined` only when — in a future split — a sub is explicitly
- * allowed; today it always returns a block decision.
  */
-function restrictedPathBlock(sub: string, headless: boolean): HookDecision | undefined {
+function restrictedPathBlock(sub: string, headless: boolean): HookDecision {
   const credFloor = decidePathAccess(sub, 'read');
   const sanctionedHint = sanctionedAlternativeHint(sub);
-  // Use the matched denylist entry from the policy point for credential roots;
-  // fall back to `sub` for bash-only extras not in the shared floor.
-  const displayPath =
-    credFloor.kind === 'deny' && credFloor.reason === 'credential' ? credFloor.matched : sub;
+  // Preserve the lexical root; canonical / broader operator matches are context,
+  // not a replacement for what the bash scanner matched.
+  const floorHint = credFloor.kind === 'deny' && credFloor.reason === 'credential'
+    ? ` (credential floor: ${credFloor.matched})` : '';
   if (!headless) {
     return {
       decision: 'block',
       ruleId: 'bash-restriction.restricted-path',
       reason:
-        `Bash command references a restricted path (${displayPath}). ` +
+        `Bash command references a restricted path (${sub})${floorHint}. ` +
         sanctionedHint +
         'For sensitive paths, use read_file / write_file / edit_file — ' +
         'those tools support per-call user approval via an inline prompt. ' +
@@ -388,7 +381,7 @@ function restrictedPathBlock(sub: string, headless: boolean): HookDecision | und
     decision: 'block',
     ruleId: 'bash-restriction.restricted-path',
     reason:
-      `Bash command references a restricted path (${displayPath}) on a headless surface ` +
+      `Bash command references a restricted path (${sub})${floorHint} on a headless surface ` +
       '(daemon / afk chat / subagent / thread). ' +
       sanctionedHint +
       'Direct shell access to credential and config ' +
