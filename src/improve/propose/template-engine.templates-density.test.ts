@@ -341,6 +341,68 @@ describe('toolFailureDensityTemplate — cluster rendering safety', () => {
     }
   });
 
+  // ---- PR #5127 review: unquoted paths must not merge across whitespace ----
+
+  /** Renders `text` through every field × renderer combination. */
+  function renderAll(text: string): string[] {
+    const outputs: string[] = [];
+    for (const field of ['normalized', 'sample'] as const) {
+      const cluster = { normalized: 'ENOENT', count: 1, sample: 'ENOENT' };
+      cluster[field] = text;
+      const card = makeToolCard('bash', { errorClusters: [cluster] });
+      for (const render of ['hypothesis', 'fixSketch'] as const) outputs.push(toolFailureDensityTemplate[render](card));
+    }
+    return outputs;
+  }
+
+  it('redacts adjacent unquoted paths with subdirectories separately (no second-username leak)', () => {
+    for (const output of renderAll('ENOENT /Users/fake-alice/a.ts /home/private-bob')) {
+      expect(output).not.toContain('fake-alice');
+      expect(output).not.toContain('private-bob');
+      expect(output).toContain('a.ts');
+    }
+  });
+
+  it('redacts two adjacent unquoted paths that both have subdirectories', () => {
+    for (const output of renderAll('ENOENT /Users/fake-alice/My Project/a.ts /home/fake-bob/b.ts')) {
+      expect(output).not.toMatch(/fake-alice|fake-bob|My Project/);
+      expect(output).toContain('a.ts');
+      expect(output).toContain('b.ts');
+    }
+  });
+
+  it('redacts adjacent Windows and UNC paths separately', () => {
+    const text = String.raw`ENOENT C:\Users\fake-carol\x.ts D:\Users\fake-dan \\srv\share\Users\fake-erin\y.ts`;
+    for (const output of renderAll(text)) {
+      expect(output).not.toMatch(/fake-(?:carol|dan|erin)|srv/);
+      expect(output).toContain('x.ts');
+      expect(output).toContain('y.ts');
+    }
+  });
+
+  it('keeps prose between two paths and redacts both paths', () => {
+    for (const output of renderAll('err /Users/fake-alice/a.ts permission denied /home/fake-bob/secret.ts')) {
+      expect(output).not.toMatch(/fake-alice|fake-bob/);
+      expect(output).toContain('permission denied');
+      expect(output).toContain('a.ts');
+      expect(output).toContain('secret.ts');
+    }
+  });
+
+  it('captures a space-containing directory name but stops before trailing prose and the next path', () => {
+    for (const output of renderAll('open /Users/fake-alice/My Big Project/a.ts failed for /home/fake-bob')) {
+      expect(output).not.toMatch(/fake-alice|fake-bob|My Big Project/);
+      expect(output).toContain('a.ts failed for');
+    }
+  });
+
+  it('matches a long space-separated tail in linear time (no catastrophic backtracking)', () => {
+    const start = performance.now();
+    const outputs = renderAll(`/Users/fake-alice/${'x '.repeat(25_000)}`);
+    expect(performance.now() - start).toBeLessThan(2_000);
+    for (const output of outputs) expect(output).not.toContain('fake-alice');
+  });
+
   it('keeps untrusted labels and samples on one line with safe markdown and hypothesis quotes', () => {
     const hostile = 'ENOENT "quoted" `tick`\r\n## injected **bold** [link](https://invalid.test) <img>';
     const card = makeToolCard('bash', {
