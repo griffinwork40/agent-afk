@@ -1,0 +1,119 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { env } from '../../config/env.js';
+import { fakeHandle, ScriptedSession } from './__test-utils__/acp-fake-session.js';
+import { scriptFor } from './__test-utils__/acp-scripts.js';
+import { AgentFrameValidator, fixtureRoot, schemaErrors, type Row } from './__test-utils__/acp-schema.js';
+import { GoldenConnection, replayGolden } from './__test-utils__/acp-replay.js';
+import { seedHistory } from './__test-utils__/acp-history.js';
+import { loadJournalMessages } from '../../agent/journal/reader.js';
+
+// Only model/tool session construction is replaced. Keep the real teardown helper.
+vi.mock('./acp.session.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('./acp.session.js')>();
+  return { ...actual, buildAcpSession: vi.fn() };
+});
+import { buildAcpSession } from './acp.session.js';
+
+const files = readdirSync(new URL('transcripts/', fixtureRoot)).filter(name => name.endsWith('.ndjson')).sort();
+let temporaryRoot: string;
+let root: string;
+let connections: GoldenConnection[];
+let sessions: ScriptedSession[];
+
+beforeEach(() => {
+  temporaryRoot = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'acp-golden-')));
+  root = temporaryRoot;
+  connections = [];
+  sessions = [];
+  vi.spyOn(process, 'cwd').mockReturnValue(root);
+  vi.spyOn(env, 'AFK_STATE_DIR', 'get').mockReturnValue(path.join(root, 'state'));
+  vi.mocked(buildAcpSession).mockReset();
+});
+afterEach(async () => {
+  // Abort first: even a failed comparison during an outstanding permission must not hang cleanup.
+  for (const session of sessions) session.abort();
+  try { for (const connection of connections) await connection.close(); }
+  finally {
+    vi.restoreAllMocks();
+    rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+});
+function connect(): GoldenConnection {
+  const connection = new GoldenConnection();
+  connections.push(connection);
+  return connection;
+}
+function rowsFor(file: string): Row[] {
+  return readFileSync(new URL(`transcripts/${file}`, fixtureRoot), 'utf8').trim().split('\n')
+    .map(line => JSON.parse(line) as Row);
+}
+
+describe('ACP golden transcripts against the real server (A1/A2/A3/A4 integration)', () => {
+  it('has exactly one independent internal script for every frozen transcript', () => {
+    expect(files).toHaveLength(13);
+    for (const file of files) expect(scriptFor(file.replace('.ndjson', ''), root)).toBeDefined();
+  });
+  for (const file of files) {
+    it(`replays ${file}`, async () => {
+      const stem = file.replace('.ndjson', '');
+      const script = scriptFor(stem, root);
+      vi.mocked(buildAcpSession).mockImplementation(async options => {
+        const handle = fakeHandle(options, script);
+        sessions.push(handle.session as unknown as ScriptedSession);
+        return handle;
+      });
+      if (stem === 'load-replay' || stem === 'resume') seedHistory(root);
+      await replayGolden(connect(), rowsFor(file), root, stem);
+      expect(script.executed, `${stem}: only approved tools execute`).toEqual(
+        stem === 'permission-reject' || stem === 'cancel-during-permission' ? [] :
+          stem === 'permission-allow-always-then-skip' ? ['tool-1', 'tool-2'] :
+            stem.startsWith('tool-') || stem === 'permission-allow-once' ? ['tool-1'] : [],
+      );
+      // Replay may construct a provider but must never execute historical calls.
+      if (stem === 'load-replay') expect(script.asked).toEqual([]);
+    });
+  }
+});
+
+describe('A6 harness self-checks (independent of migration implementation)', () => {
+  it('drives initialize over real streams and validates a deliberately corrupt observed reply', async () => {
+    const connection = connect();
+    const initialize = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: 1 } };
+    connection.send(initialize);
+    const observed = await connection.frameAt(0, 'harness initialize');
+    expect(observed['jsonrpc']).toBe('2.0');
+    expect(observed['id']).toBe(1);
+    expect(observed).toHaveProperty('result');
+    // Passes on old and migrated servers: validation failure is not a permanent old-server assertion.
+    const corrupt = { ...observed, result: { ...observed['result'] as object, protocolVersion: '1.0' } };
+    const validator = new AgentFrameValidator();
+    validator.client(initialize);
+    expect(validator.errors(corrupt).join('\n')).toContain('InitializeResponse');
+    expect(schemaErrors('InitializeResponse', corrupt.result)).toBeDefined();
+  });
+
+  it('seeds a real loadable journal with correlated historical tool blocks', () => {
+    seedHistory(root);
+    const messages = loadJournalMessages('11111111-1111-4111-8111-111111111111');
+    expect(messages).toHaveLength(4);
+    expect(messages?.[1]?.content[0]).toMatchObject({ type: 'tool_use', id: 'tool-1', name: 'read_file' });
+    expect(messages?.[2]?.content[0]).toMatchObject({ type: 'tool_result', toolUseId: 'tool-1' });
+  });
+
+  it('fake tools consult canUseTool and cannot run or emit diffs after denial', async () => {
+    const script = scriptFor('tool-edit-diff', root);
+    const canUseTool = vi.fn(async () => ({ behavior: 'deny' as const, message: 'Permission denied: rejected' }));
+    const session = new ScriptedSession({ model: 'sonnet', maxTurns: 10, cwd: root, canUseTool }, script);
+    const events = [];
+    for await (const event of session.sendMessageStream('Replace old with new in a.txt')) events.push(event);
+    expect(canUseTool).toHaveBeenCalledWith('edit_file', expect.objectContaining({ old_string: 'old' }),
+      expect.objectContaining({ toolUseID: 'tool-1', signal: expect.any(AbortSignal) }));
+    expect(script.executed).toEqual([]);
+    expect(events).toContainEqual({ type: 'chunk', chunk: { type: 'tool_result', toolUseId: 'tool-1',
+      content: 'Permission denied: rejected', isError: true } });
+    expect(events.some(event => event.type === 'chunk' && event.chunk.type === 'tool_diff')).toBe(false);
+  });
+});
