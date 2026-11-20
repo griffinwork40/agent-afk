@@ -164,7 +164,7 @@ export interface AcpPermissionOptions {
 }
 export interface AcpPermissionGate {
   canUseTool: CanUseTool;
-  /** Reserved, absent under D6. Do not install a path-approval GUI handler. */
+  /** Reserved and absent: path approval is replaced by the D10 outside-cwd policy. Do not install a path-approval GUI handler. */
   elicitationHandler?: ElicitationHandler;
   /** Deny pending asks; A1 owns interruption. Does not discard remembered grants. */
   cancelAll(): void;

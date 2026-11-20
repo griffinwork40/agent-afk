@@ -480,7 +480,7 @@ describe('ACP permission gate: cancelAll and late replies', () => {
     expectAllow(await call(t.gate, 'write_file', WRITE_INPUT, 'tool-2'));
   });
 
-  it('never installs a path-approval elicitation handler (D6)', () => {
+  it('never installs a path-approval elicitation handler (D10 replaces path approval)', () => {
     expect(setup().gate.elicitationHandler).toBeUndefined();
   });
 
