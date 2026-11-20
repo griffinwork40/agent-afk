@@ -164,11 +164,11 @@ The `kind` field classifies the tool's intent:
 
 | Kind | Examples |
 |---|---|
-| `read` | `read_file`, `list_directory`, `grep`, `glob` |
+| `read` | `read_file`, `list_directory` |
 | `edit` | `write_file`, `edit_file`, `patch_apply` |
 | `execute` | `bash`, `test_run` |
 | `fetch` | `web_scrape`, `web_request` |
-| `search` | `memory_search`, `workspace_query` |
+| `search` | `grep`, `glob`, `memory_search`, `workspace_query` |
 | `think` | `agent`, `skill`, `compose`, `remote_agent` |
 | `other` | everything else, including all MCP tools |
 
@@ -325,8 +325,8 @@ is invalid params (from `bad-version-negotiation.ndjson`):
 
 | Code | Meaning |
 |---|---|
-| `-32700` | Parse error (malformed JSON or line exceeds 1 MiB) |
-| `-32600` | Invalid request (bad envelope, duplicate initialize, session method before initialize, duplicate active prompt) |
+| `-32700` | Parse error (malformed JSON or invalid UTF-8) |
+| `-32600` | Invalid request (bad envelope, line exceeds 1 MiB, duplicate initialize, session method before initialize, duplicate active prompt) |
 | `-32601` | Method not found |
 | `-32602` | Invalid params (bad cwd, unsupported block type, unsupported MCP transport, nonempty additional roots, non-null system prompt) |
 | `-32002` | Resource not found (unknown session id) |

@@ -7,6 +7,9 @@ import { getVersion } from '../../version.js';
 import { AgentFrameValidator, type Frame, type Row } from './acp-frame-schema.js';
 import { persistedId } from './acp-scripts.js';
 
+/** Server model for golden replay: its verified context window is the transcripts' 200000. */
+export const GOLDEN_MODEL = 'o3';
+
 export function substitute(value: unknown, root: string, sessionId: string): unknown {
   if (typeof value === 'string') {
     if (value === persistedId) return sessionId;
@@ -52,7 +55,9 @@ export class GoldenConnection {
       } catch (error) { this.parseError = new Error(`A1 emitted non-JSON stdout: ${line}`, { cause: error }); }
       this.changed?.();
     });
-    this.done = runAcpServer({ model: 'claude-sonnet-4-5', maxTurns: 10, input: this.input, output: this.output })
+    // The golden usage_update size (200000) must come from a verified MODEL_CONTEXT_LIMITS
+    // entry (profile D2 forbids guessing); `o3` is a 200k entry, `claude-sonnet-4-5` has none.
+    this.done = runAcpServer({ model: GOLDEN_MODEL, maxTurns: 10, input: this.input, output: this.output })
       .catch((error: unknown) => { this.serverError = error; })
       .finally(() => { this.stopped = true; this.changed?.(); });
   }

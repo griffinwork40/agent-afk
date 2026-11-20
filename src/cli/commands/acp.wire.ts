@@ -134,6 +134,12 @@ export interface TranslatorState {
   cumulativeCostUsd?: number;
   /** Once cost is missing, do not claim a complete cumulative cost. */
   costIncomplete?: boolean;
+  /**
+   * A1 sets this from the live gate. False means the call runs without asking
+   * (auto-allow, remembered grant, skip), so its first start is in_progress.
+   * Absent means only read/search kinds start in_progress. Never consulted for a missing name.
+   */
+  requiresConsent?: (toolName: string, input: Record<string, unknown>) => boolean;
 }
 export interface TranslatorContext { cwd: string }
 export type TurnMetadata = ResponseMetadata;
@@ -146,6 +152,8 @@ export interface AcpPermissionOptions {
   emitToolCall(update: ToolCallStart): Promise<void>;
   /** Mark the turn cancelled and interrupt it when permission cancellation originates here. */
   onCancelled(): void;
+  /** Session cwd for relative display locations; absent means relative paths are omitted. */
+  cwd?: string;
 }
 export interface AcpPermissionGate {
   canUseTool: CanUseTool;
@@ -153,4 +161,6 @@ export interface AcpPermissionGate {
   elicitationHandler?: ElicitationHandler;
   /** Deny pending asks; A1 owns interruption. Does not discard remembered grants. */
   cancelAll(): void;
+  /** True when a call of this tool would ask the client now (policy, grants, skip). Pure. */
+  wouldAsk?(toolName: string, input: Record<string, unknown>): boolean;
 }

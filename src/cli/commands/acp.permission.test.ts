@@ -16,6 +16,8 @@ const display = vi.hoisted(() => ({
 vi.mock('./acp.tool-kind.js', () => display);
 
 import { createAcpPermissionGate } from './acp.permission.js';
+import { AcpPeerClosedError } from './acp.rpc-peer.js';
+import { createTranslatorState, translateOutputEvent } from './acp.translate.js';
 import { permissionOptions, requiresAsk } from './acp.permission.policy.js';
 
 const SID = '11111111-1111-4111-8111-111111111111';
@@ -148,6 +150,44 @@ describe('ACP permission gate: allow paths', () => {
     expectDeny(await other, 'rejected');
   });
 
+  it('a remembered grant announces the in_progress transition before allowing', async () => {
+    const t = setup();
+    const p = call(t.gate, 'write_file', WRITE_INPUT, 'tool-1');
+    await untilAsk(t.asks);
+    t.asks[0]!.resolve(selected('allow_always'));
+    expectAllow(await p);
+    t.log.length = 0;
+    expectAllow(await call(t.gate, 'write_file', { file_path: '/workspace/second.txt' }, 'tool-2'));
+    expect(t.log).toEqual([{ kind: 'emit', update: expect.objectContaining({
+      toolCallId: 'tool-2', name: 'write_file', status: 'in_progress' }) }]);
+  });
+
+  it('a remembered grant whose in_progress transition cannot be emitted is denied', async () => {
+    let fail = false;
+    const t = setup({ emitToolCall: vi.fn(async () => { if (fail) throw new Error('closed'); }) });
+    const p = call(t.gate, 'write_file', WRITE_INPUT, 'tool-1');
+    await untilAsk(t.asks);
+    t.asks[0]!.resolve(selected('allow_always'));
+    expectAllow(await p);
+    fail = true;
+    expectDeny(await call(t.gate, 'write_file', WRITE_INPUT, 'tool-2'), 'request_error');
+  });
+
+  it('wouldAsk reports consent need from the policy and remembered grants', async () => {
+    const t = setup();
+    expect(t.gate.wouldAsk?.('read_file', {})).toBe(false);
+    expect(t.gate.wouldAsk?.('worktree', { action: 'list' })).toBe(false);
+    expect(t.gate.wouldAsk?.('write_file', WRITE_INPUT)).toBe(true);
+    expect(t.gate.wouldAsk?.('', {})).toBe(true);
+    const p = call(t.gate, 'write_file', WRITE_INPUT, 'tool-1');
+    await untilAsk(t.asks);
+    t.asks[0]!.resolve(selected('allow_always'));
+    expectAllow(await p);
+    expect(t.gate.wouldAsk?.('write_file', {})).toBe(false);
+    expect(t.gate.wouldAsk?.('edit_file', {})).toBe(true);
+    expect(createAcpPermissionGate(t.peer, SID, { ...t.opts, skip: true }).wouldAsk?.('bash', {})).toBe(false);
+  });
+
   it('a grant for one tool does not resolve an independent pending ask', async () => {
     const t = setup();
     const a = call(t.gate, 'write_file', WRITE_INPUT, 'tool-1');
@@ -190,6 +230,37 @@ describe('ACP permission gate: allow paths', () => {
     await untilAsk(t.asks);
     expect('rawInput' in (t.log[0] as { update: ToolCallStart }).update).toBe(false);
     expect('rawInput' in (t.asks[0]!.params as { toolCall: object }).toolCall).toBe(false);
+  });
+
+  it('bounds the pending start exactly as the translator bounds a stream start', async () => {
+    const t = setup();
+    const input = { file_path: '/workspace/mid', content: 'x'.repeat(200 * 1024) };
+    void call(t.gate, 'write_file', input, 'mid');
+    await untilAsk(t.asks);
+    const gateStart = (t.log[0] as { update: ToolCallStart }).update;
+    const st = createTranslatorState();
+    const [streamStart] = translateOutputEvent({ type: 'chunk', chunk: { type: 'tool_use_detail', toolUseId: 'mid',
+      toolName: 'write_file', toolInput: '', toolInputRaw: JSON.stringify(input) } }, st, { cwd: '/workspace' });
+    expect('rawInput' in gateStart).toBe('rawInput' in (streamStart as ToolCallStart));
+    const longName = { file_path: `/workspace/${'d'.repeat(5000)}` };
+    void call(t.gate, 'write_file', longName, 'long');
+    await untilAsk(t.asks, 2);
+    expect((t.log[2] as { update: ToolCallStart }).update.title).toBe('Tool call');
+  });
+
+  it('resolves relative locations against the session cwd when the gate knows it', async () => {
+    const t = setup({ cwd: '/workspace' });
+    void call(t.gate, 'write_file', { file_path: 'rel.txt', content: '' }, 'rel');
+    await untilAsk(t.asks);
+    expect(display.toolLocations).toHaveBeenCalledWith('write_file', expect.anything(), '/workspace');
+  });
+
+  it('keeps the delegation suffix even when an oversize title is replaced', async () => {
+    const t = setup();
+    display.toolTitle.mockReturnValueOnce('agent '.repeat(1000));
+    void call(t.gate, 'agent', { prompt: 'p' }, 'a');
+    await untilAsk(t.asks);
+    expect((t.log[0] as { update: ToolCallStart }).update.title).toBe('Tool call (subagent will act without further prompts)');
   });
 
   it('a throwing display helper still asks with a safe generic start', async () => {
@@ -246,8 +317,16 @@ describe('ACP permission gate: failure table (section 6)', () => {
     const t = setup();
     const p = call(t.gate, 'write_file', WRITE_INPUT, 'tool-1');
     await untilAsk(t.asks);
-    t.asks[0]!.reject(new Error('ACP peer closed: eof'));
+    t.asks[0]!.reject(new AcpPeerClosedError('eof'));
     expectDeny(await p, 'peer_closed');
+  });
+
+  it('request_error: an untyped error that merely reads like a closed peer is not peer_closed', async () => {
+    const t = setup();
+    const p = call(t.gate, 'write_file', WRITE_INPUT, 'tool-1');
+    await untilAsk(t.asks);
+    t.asks[0]!.reject(new Error('ACP peer closed: eof'));
+    expectDeny(await p, 'request_error');
   });
 
   it('aborted: signal already aborted before the call, nothing is sent', async () => {

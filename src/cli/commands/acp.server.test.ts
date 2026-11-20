@@ -18,7 +18,9 @@ vi.mock('./acp.translate.js', () => ({
   finishTurn: vi.fn(() => ({ updates: [], stopReason: 'end_turn' })),
 }));
 vi.mock('./acp.permission.js', () => ({ createAcpPermissionGate: vi.fn() }));
-vi.mock('./acp.session-load.js', () => ({ loadAcpSession: vi.fn(), replayHistory: vi.fn() }));
+vi.mock('./acp.session-load.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./acp.session-load.js')>(), loadAcpSession: vi.fn(), replayHistory: vi.fn(),
+}));
 
 import { runAcpServer, type AcpServerOptions } from './acp.server.js';
 import * as acpSession from './acp.session.js';
@@ -416,7 +418,8 @@ describe('ACP server — cancel and close', () => {
 
 describe('ACP server — load and resume', () => {
   it('unknown id is resource not found; failed replay releases the session', async () => {
-    mLoad.mockRejectedValueOnce(Object.assign(new Error('no journal'), { code: -32002 }));
+    // The real load module's not-found signal (a class, no numeric code), not an invented coded error.
+    mLoad.mockRejectedValueOnce(new sessionLoad.AcpNotFoundError('Unknown session'));
     mReplay.mockRejectedValueOnce(new Error('corrupt journal /x'));
     const params = { sessionId: FIXTURE_ID, cwd: WS, mcpServers: [] };
     const h = startServer();
@@ -428,6 +431,10 @@ describe('ACP server — load and resume', () => {
     expect(out.slice(1).map((r) => r.error?.code)).toEqual([-32002, -32603, -32002]);
     expect(h.rawOutput()).not.toMatch(/corrupt|journal/);
     expect(mClose).toHaveBeenCalledTimes(1);
+  });
+  it('load replays with the restored canonical cwd so relative tool locations resolve', async () => {
+    await run([init, req(2, 'session/load', { sessionId: FIXTURE_ID, cwd: path.join(WS, 'sub'), mcpServers: [] })]);
+    expect(mReplay).toHaveBeenCalledWith(FIXTURE_ID, expect.anything(), path.join(WS, 'sub'));
   });
   it('resume of an active id is invalid request; resume omits replay and defaults mcpServers to []', async () => {
     const { out } = await run([init, req(2, 'session/resume', { sessionId: FIXTURE_ID, cwd: WS }),

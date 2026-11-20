@@ -48,6 +48,16 @@ describe('ACP stream translation', () => {
     expect(emit(st, { type: 'tool_result', toolUseId: 'edit', content: 'Permission denied: rejected', isError: true })[0]).toMatchObject({ status: 'failed' });
     expect(finish(st).stopReason).toBe('end_turn');
   });
+  it('starts a call in_progress when the session reports it needs no consent (remembered grant, skip, auto-allow)', () => {
+    const st = createTranslatorState();
+    const asked: Array<[string, unknown]> = [];
+    st.requiresConsent = (name, input) => { asked.push([name, input]); return name === 'bash'; };
+    expect(emit(st, detail('write_file', 'w', '{"file_path":"a.txt"}'))[0]).toMatchObject({ status: 'in_progress', kind: 'edit' });
+    expect(asked).toEqual([['write_file', { file_path: 'a.txt' }]]);
+    expect(emit(st, detail('bash', 'b', '{"command":"ls"}'))[0]).toMatchObject({ status: 'pending' });
+    // Missing names must never be presented as already approved.
+    expect(emit(st, detail('', 'x', '{}'))[0]).toMatchObject({ status: 'pending' });
+  });
   it('drops missing ids, defaults missing names, uses cached names, never parses the summary', () => {
     const st = createTranslatorState();
     expect(emit(st, detail('bash', ''))).toEqual([]);

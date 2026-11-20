@@ -122,6 +122,30 @@ describe('buildReplayUpdates', () => {
     expect(updates[2]).toMatchObject({ sessionUpdate: 'agent_message_chunk' });
   });
 
+  it('replayed tool calls use the live display helpers: title, kind and locations', () => {
+    const msgs = [
+      toolUseMsg('tool-1', 'read_file', { file_path: '/workspace/a.txt', offset: 1 }),
+      toolResultMsg('tool-1', 'old\n'),
+      toolUseMsg('tool-2', 'grep', { pattern: 'x', path: 'src' }),
+      toolResultMsg('tool-2', 'src/a.ts:1:x'),
+    ];
+    const [read, grep] = buildReplayUpdates(msgs, '/workspace') as Array<SessionUpdate & { sessionUpdate: 'tool_call' }>;
+    expect(read).toEqual({
+      sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: 'read_file /workspace/a.txt', name: 'read_file',
+      kind: 'read', status: 'completed', rawInput: { file_path: '/workspace/a.txt', offset: 1 },
+      content: [{ type: 'content', content: { type: 'text', text: 'old\n' } }],
+      locations: [{ path: '/workspace/a.txt', line: 1 }], rawOutput: 'old\n',
+    });
+    // Relative paths resolve against the restored session cwd, as for a live call.
+    expect(grep).toMatchObject({ title: 'grep', kind: 'search', locations: [{ path: '/workspace/src' }] });
+  });
+
+  it('a nameless historical call gets the generic live display, never a bare empty title', () => {
+    const [call] = buildReplayUpdates([toolUseMsg('t', '', {}), toolResultMsg('t', 'r')], '/w') as Array<SessionUpdate & { sessionUpdate: 'tool_call' }>;
+    expect(call).toMatchObject({ title: 'Tool call', kind: 'other', locations: [] });
+    expect(call).not.toHaveProperty('name');
+  });
+
   it('pure tool-result user message is skipped (no text)', () => {
     // A user message that is ONLY tool_results has no text to emit.
     const msgs = [

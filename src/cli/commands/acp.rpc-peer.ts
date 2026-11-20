@@ -12,6 +12,14 @@ interface Pending {
   cleanup(): void;
 }
 
+/** Rejection for any outbound request or write on a closed peer (EOF, write failure, shutdown). */
+export class AcpPeerClosedError extends Error {
+  override name = 'AcpPeerClosedError';
+  constructor(readonly reason: string) {
+    super(`ACP peer closed: ${reason}`);
+  }
+}
+
 /** Bidirectional correlation peer. A1 owns implementation and transport writes. */
 export function createAcpRpcPeer(opts: AcpRpcPeerOptions): AcpRpcPeer {
   const pending = new Map<string, Pending>();
@@ -19,7 +27,7 @@ export function createAcpRpcPeer(opts: AcpRpcPeerOptions): AcpRpcPeer {
   let closedReason: string | undefined;
   let chain: Promise<void> = Promise.resolve();
 
-  const closedError = (): Error => new Error(`ACP peer closed: ${closedReason ?? 'closed'}`);
+  const closedError = (): Error => new AcpPeerClosedError(closedReason ?? 'closed');
 
   function close(reason?: string): void {
     if (closedReason !== undefined) return;

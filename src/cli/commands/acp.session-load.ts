@@ -8,6 +8,9 @@
  *   - Replay is NOT performed here; A1 calls replayHistory explicitly after
  *     load, never for resume (see profile §10 last paragraph).
  *
+ * MCP: the wire array is converted by acp.params convertMcpServers, the one
+ * validating converter (duplicate names throw AcpInvalidParams).
+ *
  * replayHistory: emit the display history to the peer.
  *   - Delegates to emitReplayUpdates in acp.replay.ts.
  *   - Throws on peer write failure (caller owns error mapping).
@@ -16,30 +19,12 @@
  */
 
 import { journalExists } from '../../agent/journal/reader.js';
-import type { McpServerConfig } from '../../agent/mcp/types.js';
-import type { AcpClientPeer, LoadSessionRequest, McpServerStdio } from './acp.wire.js';
+import type { AcpClientPeer, LoadSessionRequest } from './acp.wire.js';
+import { convertMcpServers } from './acp.params.js';
 import type { AcpSessionHandle, AcpSessionOptions } from './acp.session.js';
 import { buildAcpSession, closeAcpSession } from './acp.session.js';
 import { resolveAcpId } from './acp.session-map.js';
 import { emitReplayUpdates } from './acp.replay.js';
-
-/** Convert wire McpServerStdio[] to AFK's name-keyed McpServerConfig map. */
-export function convertMcpServers(
-  servers: readonly McpServerStdio[],
-): Record<string, McpServerConfig> {
-  const result: Record<string, McpServerConfig> = {};
-  for (const s of servers) {
-    const envRecord: Record<string, string> = {};
-    for (const e of s.env) envRecord[e.name] = e.value;
-    result[s.name] = {
-      type: 'stdio',
-      command: s.command,
-      args: s.args,
-      env: envRecord,
-    };
-  }
-  return result;
-}
 
 /**
  * Restore only. A1 calls replayHistory before replying to load, never for resume.
@@ -65,6 +50,7 @@ export async function loadAcpSession(
 
   // Build the session with resume=afkId so the provider seeds resumeMessages
   // from the journal, and sessionId=acpId so the wire id stays stable.
+  const converted = convertMcpServers(mcpServers);
   let handle: AcpSessionHandle | undefined;
   try {
     handle = await buildAcpSession({
@@ -72,7 +58,7 @@ export async function loadAcpSession(
       cwd,
       resume: afkId,
       sessionId: acpId,
-      mcpServers: convertMcpServers(mcpServers),
+      mcpServers: converted,
     });
     return handle;
   } catch (err) {
@@ -86,12 +72,13 @@ export async function loadAcpSession(
 /**
  * Resolve the opaque ACP id to its journal, emit display history in order.
  *
- * A1 calls this explicitly for load (not resume). Throws on peer write failure;
+ * A1 calls this explicitly for load (not resume), passing the restored cwd
+ * so relative tool locations resolve as they would for a live call. Throws on peer write failure;
  * caller must release the live session and return internal error to the client.
  */
-export async function replayHistory(sessionId: string, peer: AcpClientPeer): Promise<void> {
+export async function replayHistory(sessionId: string, peer: AcpClientPeer, cwd?: string): Promise<void> {
   const afkId = resolveAcpId(sessionId);
-  await emitReplayUpdates(sessionId, afkId, peer);
+  await emitReplayUpdates(sessionId, afkId, peer, cwd);
 }
 
 /** Sentinel error type so callers can distinguish not-found from internal. */

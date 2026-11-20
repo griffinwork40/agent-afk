@@ -6,6 +6,7 @@ import type {
 } from './acp.wire.js';
 import { toolKind, toolTitle, toolLocations } from './acp.tool-kind.js';
 import { translateDiff } from './acp.diff.js';
+import { inputRecord } from './acp.translate.paths.js';
 import { boundedContent, boundedRawInput, boundedResult, boundStartDisplay, parseToolInput } from './acp.translate.bounds.js';
 
 // Kept on the session state, not in a second global singleton/map. Public
@@ -20,6 +21,12 @@ export function createTranslatorState(): TranslatorState {
 function newTool(name: string): TranslatorToolState {
   const kind = toolKind(name);
   return { name, announced: false, content: [], status: kind === 'read' || kind === 'search' ? 'in_progress' : 'pending' };
+}
+
+/** A call the session will run without asking is already running when first announced. */
+function initialStatus(st: TranslatorState, tool: TranslatorToolState): TranslatorToolState['status'] {
+  if (tool.status !== 'pending' || !tool.name || st.requiresConsent === undefined) return tool.status;
+  return st.requiresConsent(tool.name, inputRecord(tool.input)) ? 'pending' : 'in_progress';
 }
 
 function startTool(id: string, tool: TranslatorToolState, ctx: TranslatorContext): ToolCallStart {
@@ -43,6 +50,7 @@ function translateDetail(chunk: ToolUseDetailChunk, st: TranslatorState, ctx: Tr
   const parsed = parseToolInput(chunk.toolInputRaw);
   if (parsed !== undefined) tool.input = parsed;
   st.tools.set(chunk.toolUseId, tool);
+  if (!existing) tool.status = initialStatus(st, tool);
   if (!tool.announced) return [startTool(chunk.toolUseId, tool, ctx)];
   // Permission may already have painted/approved the call. Enrich a settled
   // detail without emitting a second start or regressing its status.

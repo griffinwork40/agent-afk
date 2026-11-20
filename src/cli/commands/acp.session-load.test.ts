@@ -1,5 +1,5 @@
 /**
- * Tests for acp.session-load.ts — loadAcpSession, replayHistory, convertMcpServers.
+ * Tests for acp.session-load.ts — loadAcpSession, replayHistory, and its use of acp.params convertMcpServers.
  *
  * Uses vi.mock to avoid real session construction, real journal reads, or real
  * network/disk I/O. The session-map is mocked to control id resolution.
@@ -40,8 +40,10 @@ vi.mock('./acp.replay.js', () => ({
   emitReplayUpdates: () => mockEmitReplayUpdates(),
 }));
 
-const { loadAcpSession, replayHistory, convertMcpServers, AcpNotFoundError } =
-  await import('./acp.session-load.js');
+const { loadAcpSession, replayHistory, AcpNotFoundError } = await import('./acp.session-load.js');
+const sessionLoadModule: Record<string, unknown> = await import('./acp.session-load.js');
+// One wire-to-AFK MCP converter for the whole server (the validating one in acp.params).
+const { convertMcpServers, AcpInvalidParams } = await import('./acp.params.js');
 
 const BASE_OPTS = { model: 'claude-sonnet-4-5', maxTurns: 10 } as const;
 
@@ -150,6 +152,14 @@ describe('loadAcpSession — happy path', () => {
     await loadAcpSession(params, BASE_OPTS);
     const call = mockBuildAcpSession.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(call['mcpServers']).toEqual({ srv: { type: 'stdio', command: '/bin/srv', args: [], env: {} } });
+  });
+
+  it('uses the single validating MCP converter: duplicate names are rejected, not overwritten', async () => {
+    expect(sessionLoadModule['convertMcpServers']).toBeUndefined();
+    const dup = { name: 'srv', command: '/bin/srv', args: [], env: [] };
+    await expect(loadAcpSession({ ...BASE_PARAMS, mcpServers: [dup, { ...dup, command: '/bin/other' }] }, BASE_OPTS))
+      .rejects.toBeInstanceOf(AcpInvalidParams);
+    expect(mockBuildAcpSession).not.toHaveBeenCalled();
   });
 });
 
