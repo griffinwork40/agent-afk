@@ -8,9 +8,10 @@
  *
  * Mirrors `browser-screenshot.ts` in structure:
  *   - `ToolResult.image` carries the pixels; base64 stays out of `content`.
- *   - Dimension guard: images exceeding 8000px per side are downscaled for
- *     attachment via `sips` (macOS) or PowerShell System.Drawing (Windows).
- *     The sidecar retains the full-resolution capture.
+ *   - Dimension guard: on macOS, images exceeding 8000px per side are
+ *     downscaled for attachment via `sips`. Windows has no downscale yet and
+ *     falls back to a text-only result. The sidecar retains the
+ *     full-resolution capture.
  *   - Byte cap: base64 payload over MAX_BASE64_BYTES triggers the same
  *     downscale path regardless of pixel dimensions.
  *   - Trace event emitted failure-isolated from dispatch.
@@ -44,16 +45,16 @@
  * No reliable, unit-testable macOS locked-screen detection method was found
  * during Tranche 1 research. Per the owner's instruction: "implement it only
  * if you find a detection method you can justify and unit-test; otherwise
- * leave it out." The check is not built. The spec DP1 answer applies: locked
- * use is "unsupported in v1" (a clean refusal by the OS — screencapture
- * returns an error, which we surface as a CAPTURE_FAILED DesktopBackendError).
+ * leave it out." The check is not built. Locked use is unsupported in v1 (spec
+ * DP1). What `screencapture` does on a locked screen has not been observed:
+ * it may fail, which would surface as CAPTURE_FAILED, or it may return an
+ * image of the lock screen. Neither is handled specially here.
  *
  * @module agent/tools/handlers/desktop-screenshot
  */
 
-import { mkdir, readFile, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { chmod, mkdir, readFile, unlink } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
@@ -222,8 +223,11 @@ async function buildAttachedImage(
     return { dataBase64: capturedBase64, attachedWidth: capturedWidth, attachedHeight: capturedHeight };
   }
 
-  // Attempt downscale.
-  const tmpOut = join(tmpdir(), `afk-desktop-ds-${Date.now()}.png`);
+  // Attempt downscale. The temporary copy is written next to the sidecar,
+  // inside the owner-only screenshots directory, never in the shared OS temp
+  // directory: it is a copy of a private screenshot. downscaleWithSips removes
+  // it after reading.
+  const tmpOut = join(dirname(sidecarPath), `attach-${Date.now()}.png`);
 
   if (process.platform === 'darwin') {
     const buf = await downscaleWithSips(sidecarPath, tmpOut, ATTACHED_LONG_SIDE);
@@ -273,8 +277,25 @@ export function createDesktopScreenshotHandler(opts: DesktopHandlerOptions = {})
     const ts = Date.now();
     const sidecarPath = join(screenshotsDir, `desktop_screenshot_${ts}.png`);
 
-    // Ensure the directory exists with owner-only permissions (0o700).
+    // Invariant: the screenshots directory is owner-only before anything is
+    // written to it. `mkdir` applies `mode` only to directories it creates, so
+    // a directory that already exists with a wider mode is tightened
+    // explicitly. If that fails on POSIX the capture is refused: a full-screen
+    // image must not land in a directory other local users can read. File
+    // modes inside are a second line of defence, not the guarantee.
     await mkdir(screenshotsDir, { recursive: true, mode: 0o700 });
+    if (process.platform !== 'win32') {
+      try {
+        await chmod(screenshotsDir, 0o700);
+      } catch (err) {
+        return {
+          content:
+            `desktop_screenshot refused: could not make the screenshot directory private ` +
+            `(${screenshotsDir}): ${errorMessage(err)}`,
+          isError: true,
+        };
+      }
+    }
 
     const backendInput: DesktopScreenshotInput = {
       displayIndex: parsed.displayIndex,

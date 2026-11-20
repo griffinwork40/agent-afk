@@ -18,6 +18,7 @@ import { isDesktopEnabled, desktopSchemas } from '../../tools/desktop-surface.js
 import { builtinToolSchemas } from '../../tools/schemas.js';
 import type { DesktopBackend, DesktopScreenshotInput } from '../../../desktop/types.js';
 import type { TraceSink } from '../../trace/index.js';
+import { chmod as fsChmod, stat as fsStat } from 'node:fs/promises';
 
 // ---------------------------------------------------------------------------
 // Mock backend helpers
@@ -92,6 +93,26 @@ describe('createDesktopScreenshotHandler()', () => {
     const result = await handler({}, ac.signal);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('aborted');
+  });
+
+  it('tightens a screenshots directory that already exists with a wider mode', async () => {
+    vi.stubEnv('AFK_SESSION_ID', 'test-session-dirmode');
+    const backend = makeBackend();
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const signal = new AbortController().signal;
+
+    // First call creates the directory; widen it, as a pre-existing one could be.
+    await handler({}, signal, { traceWriter: noopTrace, toolUseId: 'tu-dir-1' });
+    const calls = (backend.screenshot as ReturnType<typeof vi.fn>).mock.calls as [DesktopScreenshotInput, string][];
+    const dir = nodePath.dirname(calls[0]![1]);
+    await fsChmod(dir, 0o755);
+
+    const result = await handler({}, signal, { traceWriter: noopTrace, toolUseId: 'tu-dir-2' });
+    expect(result.isError).toBeUndefined();
+    // File modes carry no meaning on Windows; the directory mode is a POSIX guarantee.
+    const mode = (await fsStat(dir)).mode & 0o777;
+    expect(process.platform === 'win32' ? 0o700 : mode).toBe(0o700);
+    vi.unstubAllEnvs();
   });
 
   it('calls the backend with display=0 when no input is supplied', async () => {

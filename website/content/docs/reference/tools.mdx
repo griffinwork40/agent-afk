@@ -438,7 +438,7 @@ The result text is `{ path, bytes, width, height, scaleFactor, displayIndex, log
 | `region.width` | integer | (when region set) | Width in logical pixels (positive, max 32768). |
 | `region.height` | integer | (when region set) | Height in logical pixels (positive, max 32768). |
 
-Images exceeding 8000 px per side or 2 MiB base64 are automatically downscaled before attachment (using `sips` on macOS, PowerShell System.Drawing on Windows). The full-resolution PNG is always preserved as the sidecar. The result reports both the captured dimensions and the attached dimensions when downscaling occurred, plus the ratio between them (for coordinate mapping). If downscaling fails, a text-only result is returned that names the sidecar path.
+On macOS, a capture exceeding 8000 px per side or 2 MiB base64 is downscaled with `sips` before it is attached. The full-resolution PNG is always kept as the sidecar. The result reports both the captured dimensions and the attached dimensions when downscaling occurred, plus the ratio between them (for coordinate mapping). On Windows there is no downscaling yet: an oversized capture returns a text-only result that names the sidecar path. The same text-only result is returned on macOS if downscaling fails.
 
 ---
 
