@@ -86,6 +86,41 @@ describe('formatTerminalStateForTelegram', () => {
       'fallback body text',
     );
   });
+
+  it('marks a done with no Pending bullet as "not stated"', () => {
+    const msg = formatTerminalStateForTelegram(
+      done({ whatWasDone: 'wired the flag', evidence: 'pnpm test passed' }),
+    );
+    expect(msg).toContain('• Pending: not stated');
+  });
+
+  it('shows "Pending: none" when the model wrote none, not "not stated"', () => {
+    const msg = formatTerminalStateForTelegram(
+      done({ whatWasDone: 'wired the flag', deferred: 'none' }),
+    );
+    expect(msg).toContain('• Pending: none');
+    expect(msg).not.toContain('not stated');
+  });
+
+  it('does not mark "not stated" on the rawBody fallback path', () => {
+    const msg = formatTerminalStateForTelegram(done({ rawBody: 'fallback body text' }));
+    expect(msg).not.toContain('not stated');
+  });
+
+  it('never adds "not stated" to blocked or asking', () => {
+    const blocked = formatTerminalStateForTelegram({ kind: 'blocked', rawBody: '', whatBlocks: 'no token' });
+    const asking = formatTerminalStateForTelegram({ kind: 'asking', rawBody: '', question: 'which branch?' });
+    expect(blocked).not.toContain('not stated');
+    expect(asking).not.toContain('not stated');
+  });
+
+  it('places "not stated" before the unverified caveat line', () => {
+    const msg = formatTerminalStateForTelegram(done({ whatWasDone: 'shipped' }), { unverified: true });
+    const pendingAt = msg.indexOf('• Pending: not stated');
+    const caveatAt = msg.indexOf('• ⚠️ Unverified:');
+    expect(pendingAt).toBeGreaterThan(-1);
+    expect(caveatAt).toBeGreaterThan(pendingAt);
+  });
 });
 
 describe('pushTerminalStateToTelegram — rate limiting', () => {
