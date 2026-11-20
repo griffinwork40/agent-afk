@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AcpClientPeer, AcpPermissionOptions, ToolCallStart } from './acp.wire.js';
 import type { PermissionResult } from '../../agent/types/sdk-types.js';
@@ -46,6 +47,8 @@ function setup(over: Partial<AcpPermissionOptions> = {}) {
     skip: false,
     emitToolCall: vi.fn(async (update: ToolCallStart) => { fp.log.push({ kind: 'emit', update }); }),
     onCancelled,
+    // Production always supplies the session cwd; without one every path is outside (fail closed).
+    cwd: path.resolve('/workspace'),
     ...over,
   };
   const gate = createAcpPermissionGate(fp.peer, SID, opts);
@@ -219,7 +222,7 @@ describe('ACP permission gate: allow paths', () => {
     const t = setup();
     void call(t.gate, 'agent', { prompt: 'x' }, 'd1');
     await untilAsk(t.asks);
-    const suffix = 'agent (subagent will act without further prompts)';
+    const suffix = 'agent (each subagent tool call is asked separately)';
     expect((t.log[0] as { update: ToolCallStart }).update.title).toBe(suffix);
     expect((t.asks[0]!.params as { toolCall: { title: string } }).toolCall.title).toBe(suffix);
   });
@@ -260,7 +263,7 @@ describe('ACP permission gate: allow paths', () => {
     display.toolTitle.mockReturnValueOnce('agent '.repeat(1000));
     void call(t.gate, 'agent', { prompt: 'p' }, 'a');
     await untilAsk(t.asks);
-    expect((t.log[0] as { update: ToolCallStart }).update.title).toBe('Tool call (subagent will act without further prompts)');
+    expect((t.log[0] as { update: ToolCallStart }).update.title).toBe('Tool call (each subagent tool call is asked separately)');
   });
 
   it('a throwing display helper still asks with a safe generic start', async () => {
@@ -477,7 +480,7 @@ describe('ACP permission gate: cancelAll and late replies', () => {
     expectAllow(await call(t.gate, 'write_file', WRITE_INPUT, 'tool-2'));
   });
 
-  it('never installs a path-approval elicitation handler (D6)', () => {
+  it('never installs a path-approval elicitation handler (D10 replaces path approval)', () => {
     expect(setup().gate.elicitationHandler).toBeUndefined();
   });
 

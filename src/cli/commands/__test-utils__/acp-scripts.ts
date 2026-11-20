@@ -1,10 +1,13 @@
 import path from 'node:path';
 import type { OutputEvent } from '../../../agent/types/session-types.js';
 import type { DiffPayload } from '../../../utils/diff.js';
+import type { ChildToolOrigin } from '../../../agent/tools/nesting.can-use-tool.js';
 
+/** A tool call a forked child makes while the parent's delegation tool runs (D9). */
+export interface ChildCall { origin: ChildToolOrigin; id: string; name: string; input: Record<string, unknown> }
 export interface ScriptedTool {
   kind: 'tool'; id: string; name: string; input: Record<string, unknown>;
-  result: string; isError?: boolean; diff?: DiffPayload;
+  result: string; isError?: boolean; diff?: DiffPayload; children?: ChildCall[];
 }
 export type ScriptStep = OutputEvent | ScriptedTool | { kind: 'await-abort' };
 export interface ScriptedTurn { prompt: string; steps: ScriptStep[] }
@@ -21,6 +24,10 @@ function write(root: string, id = 'tool-1', second = false): ScriptedTool {
   return { kind: 'tool', id, name: 'write_file',
     input: { file_path: path.join(root, second ? 'second.txt' : 'new.txt'), content: second ? 'next\n' : 'hello\n' },
     result: second ? 'Wrote 5 bytes' : 'Wrote 6 bytes' };
+}
+function delegate(child: Omit<ChildCall, 'origin'>, result: string): ScriptedTool {
+  return { kind: 'tool', id: 'tool-1', name: 'agent', input: { prompt: 'Do it', agent_type: 'research-agent' }, result,
+    children: [{ origin: { route: 'agent', depth: 1, agentType: 'research-agent' }, ...child }] };
 }
 function turn(prompt: string, ...steps: ScriptStep[]): ScriptedTurn {
   return { prompt, steps: [...steps, done] };
@@ -63,6 +70,17 @@ export function scriptFor(stem: string, root: string): GoldenScript {
       break;
     case 'cancel-during-stream':
       turns = [turn('Say hello', text('Hello'), { kind: 'await-abort' })];
+      break;
+    case 'child-approval-allow':
+      turns = [turn('Delegate a listing', delegate({ id: 'tool-c1', name: 'bash', input: { command: 'ls' } }, 'Listed files'))];
+      break;
+    case 'child-approval-reject':
+      turns = [turn('Delegate a write', delegate({ id: 'tool-c1', name: 'write_file',
+        input: { file_path: path.join(root, 'child.txt'), content: 'x\n' } }, 'Subagent could not write'))];
+      break;
+    case 'read-outside-cwd-asked':
+      turns = [turn('List the parent directory', { kind: 'tool', id: 'tool-1', name: 'list_directory',
+        input: { path: path.join(root, '..') }, result: 'acp-golden/' })];
       break;
     case 'resume':
       turns = [turn('Continue', text('Continuing.'))];

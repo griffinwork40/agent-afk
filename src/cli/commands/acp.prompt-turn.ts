@@ -16,6 +16,8 @@ import type {
 export interface ActiveTurn {
   abort: AbortController;
   cancelled: boolean;
+  /** Set once the stream is drained: new child asks are denied (D9). */
+  ending?: boolean;
   /** Settles once the prompt response is decided (never rejects). */
   done: Promise<void>;
 }
@@ -69,10 +71,19 @@ export function makeEmitToolCall(live: LiveSession, peer: AcpClientPeer) {
   return async (update: ToolCallStart): Promise<void> => {
     const known = live.translator.tools.get(update.toolCallId);
     if (known?.announced) {
+      if (known.status === 'completed' || known.status === 'failed') return;
       if (update.status === 'in_progress' && known.status !== 'in_progress') {
         known.status = 'in_progress';
         await sendUpdate(peer, live.id, {
           sessionUpdate: 'tool_call_update', toolCallId: update.toolCallId, status: 'in_progress',
+        });
+      } else if (update.status === 'completed' || update.status === 'failed') {
+        // D9: the gate closes a child-originated card itself (no stream result follows).
+        known.status = update.status;
+        known.content = update.content ?? [];
+        await sendUpdate(peer, live.id, {
+          sessionUpdate: 'tool_call_update', toolCallId: update.toolCallId, status: update.status,
+          content: known.content,
         });
       }
       return;
@@ -171,6 +182,9 @@ export async function runPromptTurn(
     } catch (err) {
       if (!turn.cancelled) throw err;
     }
+    // D9: no child-originated card may stay pending or in progress after the turn.
+    turn.ending = true;
+    try { await live.gate?.endTurn?.(); } catch (err) { deps.log(`[acp] endTurn failed: ${String(err)}`); }
     let finished;
     try {
       finished = finishTurn(live.translator, meta);

@@ -129,4 +129,35 @@ describe('makeEmitToolCall', () => {
     ]);
     expect(live.translator.tools.get('t1')?.announced).toBe(true);
   });
+
+  it('closes a gate-owned card once with its content and never regresses a terminal card (D9)', async () => {
+    const { live } = makeLive(async function* () { /* empty */ });
+    const { peer, sent } = makePeer();
+    const emit = makeEmitToolCall(live, peer);
+    const start = { sessionUpdate: 'tool_call' as const, toolCallId: 'child-1-x', title: '[subagent] bash', name: 'bash', status: 'pending' as const };
+    const content = [{ type: 'content' as const, content: { type: 'text' as const, text: 'Permission denied: rejected' } }];
+    await emit(start);
+    await emit({ ...start, status: 'failed', content });
+    await emit({ ...start, status: 'in_progress' });
+    await emit({ ...start, status: 'completed', content });
+    expect(sent).toEqual([
+      { sessionId: 's1', update: start },
+      { sessionId: 's1', update: { sessionUpdate: 'tool_call_update', toolCallId: 'child-1-x', status: 'failed', content } },
+    ]);
+  });
+});
+
+describe('runPromptTurn child card closing (D9)', () => {
+  it('awaits gate.endTurn after the stream and before the final updates', async () => {
+    const order: string[] = [];
+    const { live } = makeLive(async function* () { yield { type: 'done', metadata: {} } as OutputEvent; });
+    live.gate = { canUseTool: vi.fn() as never, cancelAll: vi.fn(), endTurn: vi.fn(async () => {
+      expect(live.active?.ending).toBe(true);
+      order.push('endTurn');
+    }) };
+    mFinish.mockImplementationOnce(() => { order.push('finish'); return { updates: [], stopReason: 'end_turn' }; });
+    const { peer } = makePeer();
+    expect(await runPromptTurn(live, 'x', { peer, log: () => {} })).toBe('end_turn');
+    expect(order).toEqual(['endTurn', 'finish']);
+  });
 });

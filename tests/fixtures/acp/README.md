@@ -38,6 +38,9 @@ The standalone contract test does not execute the server or the tools. It verifi
 | `resume` | Restore without replay, then continue the conversation |
 | `close-idempotent` | Close an active idle session, repeat, close unknown id |
 | `bad-version-negotiation` | Client offers 0, agent returns supported 1; incompatible client disconnects |
+| `child-approval-allow` | Delegation asked without an always option (D9, D11); the subagent's `bash` call is asked with a `[subagent research-agent]` title and a gate-owned card id, allowed, and its card closed `completed` by the gate before the delegation result |
+| `child-approval-reject` | The subagent's write is asked and rejected; the gate closes its card `failed` with the reason; the delegation itself completes |
+| `read-outside-cwd-asked` | `list_directory` of the parent of the session cwd is asked (D10), starts `pending`, shows the absolute path in title and locations, and offers no always option (D11) |
 
 The target behavior and ordering rules are in `docs/acp-profile.md`. These fixtures freeze the migration contract, not the old server's current behavior. Tests of permission failures, prompt media normalization, malformed transport and implementation seams belong to their later owner lanes; valid golden frames are not malformed-input fixtures.
 

@@ -111,6 +111,7 @@ function prepareLive(ctx: ServerContext, id: string, setup: SessionSetup): { liv
       emitToolCall: makeEmitToolCall(live, ctx.peer),
       onCancelled: () => cancelTurn(live, ctx.log),
       cwd: setup.cwd,
+      turnActive: () => live.active !== undefined && !live.active.cancelled && live.active.ending !== true,
     });
   }
   // The first start of a call that will not ask is in_progress, not pending (profile §5).
@@ -126,6 +127,7 @@ function prepareLive(ctx: ServerContext, id: string, setup: SessionSetup): { liv
     sessionId: id,
     mcpServers: setup.mcpServers,
     ...(live.gate ? { canUseTool: live.gate.canUseTool } : {}),
+    ...(live.gate?.forChild ? { childCanUseTool: live.gate.forChild } : {}),
   };
   return { live, options };
 }

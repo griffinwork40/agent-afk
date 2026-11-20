@@ -32,7 +32,8 @@ describe('ACP tool display classification', () => {
     expect(toolTitle('')).toBe('Tool call');
   });
   it('warns on delegation but not on model_complete', () => {
-    for (const name of ['agent', 'skill', 'compose', 'remote_agent']) expect(toolTitle(name)).toBe(`${name} (subagent will act without further prompts)`);
+    for (const name of ['agent', 'skill', 'compose']) expect(toolTitle(name)).toBe(`${name} (each subagent tool call is asked separately)`);
+    expect(toolTitle('remote_agent')).toBe('remote_agent (runs on another machine; its actions are NOT asked in this session)');
     expect(toolTitle('model_complete')).toBe('model_complete');
   });
   it('resolves relative locations and accepts only positive safe integral offsets', () => {

@@ -25,7 +25,8 @@ function newTool(name: string): TranslatorToolState {
 
 /** A call the session will run without asking is already running when first announced. */
 function initialStatus(st: TranslatorState, tool: TranslatorToolState): TranslatorToolState['status'] {
-  if (tool.status !== 'pending' || !tool.name || st.requiresConsent === undefined) return tool.status;
+  if (!tool.name || st.requiresConsent === undefined) return tool.status;
+  // D10: a read/search kind targeting a path outside the cwd is asked, so it starts pending too.
   return st.requiresConsent(tool.name, inputRecord(tool.input)) ? 'pending' : 'in_progress';
 }
 
@@ -33,7 +34,7 @@ function startTool(id: string, tool: TranslatorToolState, ctx: TranslatorContext
   tool.announced = true;
   const rawInput = boundedRawInput(tool.input);
   return boundStartDisplay({
-    sessionUpdate: 'tool_call', toolCallId: id, title: toolTitle(tool.name, tool.input),
+    sessionUpdate: 'tool_call', toolCallId: id, title: toolTitle(tool.name, tool.input, ctx.cwd),
     ...(tool.name ? { name: tool.name } : {}), kind: toolKind(tool.name),
     status: tool.status, content: [...tool.content], locations: toolLocations(tool.name, tool.input, ctx.cwd),
     ...(rawInput !== undefined ? { rawInput } : {}),

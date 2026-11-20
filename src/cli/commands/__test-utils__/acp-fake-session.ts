@@ -51,6 +51,15 @@ export class ScriptedSession {
     }
     if (this.aborter.signal.aborted) throw new Error('A3 allowed a tool after cancellation');
     this.script.executed.push(tool.id);
+    // A forked child's calls never reach the parent stream; only the child gate sees them (D9).
+    for (const child of tool.children ?? []) {
+      const factory = this.options.childCanUseTool;
+      if (!factory) throw new Error('P1b acp.handlers.ts did not pass childCanUseTool to buildAcpSession');
+      const gate = factory(child.origin);
+      if (!gate) throw new Error('P1b child approval factory returned no callback for a gated session');
+      const verdict = await gate(child.name, child.input, { toolUseID: child.id, signal: this.aborter.signal });
+      if (verdict.behavior === 'allow') this.script.executed.push(`child:${child.id}`);
+    }
     if (tool.diff) yield { type: 'chunk', chunk: { type: 'tool_diff', toolUseId: tool.id, diff: tool.diff } };
     yield { type: 'chunk', chunk: { type: 'tool_result', toolUseId: tool.id,
       content: tool.result, isError: tool.isError === true } };

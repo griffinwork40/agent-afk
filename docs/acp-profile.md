@@ -4,7 +4,7 @@
 
 This is the frozen target contract for the ACP v1 migration, not a claim that the current `afk acp` server implements it. The contract lane adds types, examples and unused stubs. The implementation lanes must satisfy this profile before advertising these capabilities. Protocol reference: <https://agentclientprotocol.com>. The normative schema is `tests/fixtures/acp/schema-v1.json`, upstream commit `d98a032006928dffc465f930638f83815b91ebe3`, stable `schema/v1/schema.json`. The fixture README records verification and licensing.
 
-The schema wins over this profile. This profile narrows optional upstream choices. Coordinator decisions D1 through D7 from Wave 0a override the earlier plan. No AFK-specific `_meta` value is necessary for interoperability. Clients must not interpret implementation seam names as wire fields.
+The schema wins over this profile. This profile narrows optional upstream choices. Coordinator decisions D1 through D7 from Wave 0a override the earlier plan, and decisions D8 through D13 (P1b, `.afk/plans/acp-spikes/P1b-decisions.md`) supersede D5, D6 and D7. No AFK-specific `_meta` value is necessary for interoperability. Clients must not interpret implementation seam names as wire fields.
 
 ## 1. Connection and initialization
 
@@ -34,11 +34,11 @@ The initialization result is:
 
 ## 2. Session creation and identity
 
-`session/new` takes required `cwd` and `mcpServers` and returns `{ "sessionId": "<opaque id>" }`. `cwd` must identify an existing absolute directory. For this migration the existing server containment policy remains: its canonical path must be the server launch directory or a descendant. Resolve symlinks before containment checks. Clients should spawn AFK in the workspace root and use that root as `cwd`. Rejections are invalid params. This is a documented restriction, not a claim of unrestricted ACP workspace support.
+`session/new` takes required `cwd` and `mcpServers` and returns `{ "sessionId": "<opaque id>" }`. `cwd` must identify an existing absolute directory. For this migration the existing server containment policy for the session directory remains: its canonical path must be the server launch directory or a descendant. This restricts which directory a session may be opened in; it does not confine the session's tools (section 6). Resolve symlinks before containment checks. Clients should spawn AFK in the workspace root and use that root as `cwd`. Rejections are invalid params. This is a documented restriction, not a claim of unrestricted ACP workspace support.
 
 The server mints an opaque UUID for the wire `sessionId` (D1). Clients store it unchanged and never derive a filesystem path from it. The implementation seeds the AFK session id with it. If the provider returns another id, the server durably maps the ACP id to the provider's journal id. Subsequent load and resume use that mapping; the wire id does not change. Unknown or unresolvable ids fail with resource not found. The mapping is host-local, not an authentication credential or a portable journal export.
 
-Each stdio MCP entry has required `name`, `command`, `args` and `env`. `command` is an absolute executable path; `args` is an array of strings; `env` is an array of `{ "name": "KEY", "value": "value" }`. An empty `mcpServers` array is valid. Convert entries to AFK's name-keyed MCP configuration and environment record without changing their values. Duplicate server names or duplicate environment names are invalid params, rather than last-write-wins. Reject HTTP or SSE entries as invalid params because those capabilities are false (D3). MCP startup failure fails session setup with a generic internal error and closes partially created resources. Connecting a client-specified executable is the client's explicit setup instruction; later MCP tool calls still ask permission individually.
+Each stdio MCP entry has required `name`, `command`, `args` and `env`. `command` is an absolute executable path; `args` is an array of strings; `env` is an array of `{ "name": "KEY", "value": "value" }`. An empty `mcpServers` array is valid. Convert entries to AFK's name-keyed MCP configuration and environment record without changing their values. Duplicate server names or duplicate environment names are invalid params, rather than last-write-wins. Reject HTTP or SSE entries as invalid params because those capabilities are false (D3). MCP startup failure fails session setup with a generic internal error and closes partially created resources. Servers a client passes in `session/new` (and `session/load` or `session/resume`) are started when the session is created, before any tool approval, and are trusted in the same way as servers named on the AFK command line (D12). This is the protocol's model for a local client the user controls: the executable runs with the user's privileges without a prompt. Tools from any MCP server, whoever configured it, are always asked.
 
 `additionalDirectories` is not advertised. Omitted or empty arrays activate no extra roots; reject nonempty arrays as invalid params. Do not silently grant wider access. Non-null `systemPrompt` is likewise unsupported. `session/load` and `session/resume` apply the same validation and require the original canonical `cwd`. No remembered permission grant survives reconstruction or process restart.
 
@@ -90,18 +90,18 @@ Under D2, `used` is the current context token count (`context_window_tokens` int
 
 ## 5. Tools, kinds, locations and diffs
 
-`toolCallId` is the AFK tool-use id and remains stable across its updates. Suppress early placeholder details (`pending: true` internally). On the first settled detail, emit one `tool_call`. Read/search calls begin `in_progress`; calls that require consent begin `pending`. The permission gate can announce a call before its stream detail; deduplicate by id. After an allow decision, emit `tool_call_update` with `status: "in_progress"` before execution output. A terminal result emits `completed`, or `failed` for a tool error/denial/abort. Do not send a second start for an announced id. Missing names become omitted `name`, title `Tool call`, kind `other`, and must not be auto-allowed. An empty id cannot form a valid correlated lifecycle; drop uncorrelatable events and log to stderr.
+`toolCallId` is the AFK tool-use id and remains stable across its updates. Suppress early placeholder details (`pending: true` internally). On the first settled detail, emit one `tool_call`. Calls that will run without asking (auto-allowed reads inside the `cwd`, remembered grants, skipped approvals) begin `in_progress`; calls that require consent, including a read outside the `cwd`, begin `pending`. The permission gate can announce a call before its stream detail; deduplicate by id. After an allow decision, emit `tool_call_update` with `status: "in_progress"` before execution output. A terminal result emits `completed`, or `failed` for a tool error/denial/abort. Do not send a second start for an announced id. Missing names become omitted `name`, title `Tool call`, kind `other`, and must not be auto-allowed. An empty id cannot form a valid correlated lifecycle: the translator drops uncorrelatable events and the server logs them to stderr.
 
-Parse `toolInputRaw` when it is valid JSON; expose the parsed value as `rawInput`. If absent or malformed, omit `rawInput`, retain the human summary only for display and never use it to infer safe permissions. `rawOutput` is the tool result text, not a client-executable instruction. Limit each result's UTF-8 text to 65,536 bytes, preserving a valid UTF-8 boundary and including a final `\n[truncated]` marker within that budget. Use that same bounded text for the text result content. Do not emit base64 images as tool content while image support is false. The serialized frame still must fit the transport cap: omit oversize raw input, and omit oversize diff collections in favor of bounded text `Diff omitted: exceeds transport limit`. Never truncate serialized JSON bytes.
+Parse `toolInputRaw` when it is valid JSON; expose the parsed value as `rawInput`. If absent or malformed, omit `rawInput`, retain the human summary only for display and never use it to infer safe permissions. `rawOutput` is the tool result text, not a client-executable instruction. Limit each result's UTF-8 text to 65,536 bytes, preserving a valid UTF-8 boundary and including a final `\n[truncated]` marker within that budget. Use that same bounded text for the text result content. Do not emit base64 images as tool content while image support is false. The serialized frame still must fit the transport cap: omit oversize raw input, and omit oversize diff collections in favor of bounded text `Diff omitted: exceeds transport limit`. Never truncate serialized JSON bytes. Tool input above the transport bound is therefore omitted from the tool card and from the permission request, so the user may be approving from the title (and `locations`) alone.
 
 Tool-name mapping uses actual registered names from `src/agent/tools/schemas.*.ts`, plus memory, awareness, workspace and state registries. It is a display classification, not a security classification. A missing or new name defaults to `other` and asks. Tools may be disabled or unavailable on a particular host.
 
 | Real AFK tool names | ACP `kind` | `title` template | `locations` |
 |---|---|---|---|
-| `read_file`, `view_image`, `extract_document` | `read` | `<name> <file_path>` | Absolute `file_path`, optional positive `offset` as `line` |
-| `json_query` | `read` | `json_query <path>` | Absolute `path` |
-| `list_directory` | `read` | `list_directory <path>` | Absolute `path` |
-| `write_file`, `edit_file` | `edit` | `<name> <file_path>` | Absolute `file_path` |
+| `read_file`, `view_image`, `extract_document` | `read` | `<name> <absolute file_path>` | Absolute `file_path`, optional positive `offset` as `line` |
+| `json_query` | `read` | `json_query <absolute path>` | Absolute `path` |
+| `list_directory` | `read` | `list_directory <absolute path>` | Absolute `path` |
+| `write_file`, `edit_file` | `edit` | `<name> <absolute file_path>` | Absolute `file_path` |
 | `patch_apply` | `edit` | `patch_apply` | Each absolute `changes[].path`, in input order |
 | `grep`, `glob` | `search` | `<name>` | Absolute `path` when supplied |
 | `memory_search`, `search_witness`, `workspace_query`, `state_query` | `search` | `<name>` | Empty |
@@ -116,22 +116,23 @@ Tool-name mapping uses actual registered names from `src/agent/tools/schemas.*.t
 | `exit_plan_mode` | `switch_mode` | `exit_plan_mode` | Empty |
 | Every MCP tool and every unlisted name | `other` | `<name>`, or `Tool call` if missing | Empty |
 
-Where a path is unavailable, omit its suffix from the title. Resolve relative paths against session `cwd`, never the server launch directory. Omit invalid locations; do not fabricate a path or line. Delegation titles append ` (subagent will act without further prompts)` to `agent`, `skill`, `compose` and `remote_agent`, both on the start and on the permission request (D5).
+Where a path is unavailable, omit its suffix from the title. Resolve relative paths against session `cwd`, never the server launch directory, and show the resolved absolute path. Omit invalid locations; do not fabricate a path or line. When any argument of a call targets a path outside the session `cwd` (section 6), that absolute path is also appended to the title if not already shown and added to `locations`, whatever the argument is called. Delegation titles append ` (each subagent tool call is asked separately)` to `agent`, `skill` and `compose`, and ` (runs on another machine; its actions are NOT asked in this session)` to `remote_agent`, both on the start and on the permission request (D9). Replay (section 8) uses the same display helpers as a live call.
 
 A result emits a text `content` item shaped `{ "type": "content", "content": { "type": "text", "text": "..." } }`. A diff emits `{ "type": "diff", "path": "<absolute>", "oldText": "...", "newText": "..." }`. For each internal hunk, join context and removed lines with `\n` for `oldText`, context and added lines for `newText`. Do not append a synthetic terminal newline. Use the hunk's file path first, otherwise the input file path; omit a hunk with no resolvable path. These are render-only hunk snapshots, not full-file replacements or instructions to apply a patch. Clients must not write them back to disk. A new-file hunk may omit `oldText`.
 
-Upstream `ToolCallUpdate.content` replaces the collection. The translator must retain previous diffs and include them again with subsequent result content, so the final result does not erase a displayed diff. A late diff after a terminal result is allowed, with accumulated content and no status regression. AFK emits no client terminal references. Subagent-internal tool calls are not forwarded; they appear only within the parent delegation result (D7).
+Upstream `ToolCallUpdate.content` replaces the collection. The translator must retain previous diffs and include them again with subsequent result content, so the final result does not erase a displayed diff. A late diff after a terminal result is allowed, with accumulated content and no status regression. AFK emits no client terminal references. Subagent-internal tool calls are not streamed as their own `tool_call` frames; their results appear only within the parent delegation result (D13, replacing D7). The exception is the approval card of a child-originated permission request (section 6, D9).
 
 ## 6. Permission policy and failure resolution
 
-Approvals are on unless `afk acp` is started with `--dangerously-skip-permissions`. The approval bridge is the `canUseTool` callback and does not depend on which AFK permission mode the session runs in, so this policy survives changes to the set of permission modes. With approvals on, the bridge runs for every top-level tool invocation that reaches it. Earlier hooks and static allowlists may deny before it runs. A bridge allow never overrides those gates or later destructive-command checks. The headless bash floor remains in effect. Permission classifications use real tool names, not a client-supplied `kind` or title.
+Every `afk acp` session runs in AFK's `bypassPermissions` mode, so no path containment applies to the session or its subagents (D8). Approvals are on unless `afk acp` is started with `--dangerously-skip-permissions`, which means exactly one thing: skip the approval bridge. The approval bridge is the `canUseTool` callback and does not depend on the permission mode. With approvals on, the bridge runs for every tool invocation that reaches it, at the top level and in forked children (below). Earlier hooks and static allowlists may deny before it runs. A bridge allow never overrides those gates or later destructive-command checks. The session is built non-interactive (D13): the agent cannot ask the user a free-form question on this surface, and the stricter headless shell rules apply on top of the approval prompt. Permission classifications use real tool names, not a client-supplied `kind` or title.
 
 | Invocation | Decision with approvals on |
 |---|---|
-| Known read/search tools in the table above | Auto-allow, subject to existing gates |
-| `worktree` with action `list` | Auto-allow as an explicit read-only exception |
+| Known read/search tools in the table above, every path argument inside the session `cwd` | Auto-allow, subject to existing gates |
+| The same tools with any path argument outside the session `cwd`, or a path that cannot be resolved | Ask, absolute path in the title and `locations`, no "always allow" |
+| `worktree` with action `list` and no other argument | Auto-allow as an explicit read-only exception |
 | `bash`, `test_run` | Ask |
-| `write_file`, `edit_file`, `patch_apply`, including dry runs | Ask |
+| `write_file`, `edit_file`, `patch_apply`, including dry runs | Ask, absolute path shown |
 | `web_scrape`, `web_request`, regardless of HTTP method | Ask |
 | `agent`, `skill`, `compose`, `remote_agent`, `model_complete` | Ask |
 | Mutating `worktree` actions, or unknown/missing action | Ask |
@@ -139,13 +140,29 @@ Approvals are on unless `afk acp` is started with `--dangerously-skip-permission
 | Every MCP tool, every unknown/missing name, every remaining tool in the table | Ask |
 | `--dangerously-skip-permissions` | Skip the bridge entirely, existing independent gates still apply |
 
+### Outside the session directory (D10)
+
+A read or search tool stays auto-allowed only when every path it targets resolves inside the session `cwd`. A call with no path argument defaults to the `cwd` and is not asked. The check scans every argument a tool could treat as a location, not only the obvious one: `file_path`, `path`, `paths`, `cwd`, `dir`, `directory`, `root`, `file`, `files` and similar names, each element of a list, `patch_apply` change paths, the literal base of a `glob` pattern (an absolute pattern, a `..` segment after the base, or an absolute brace alternative is outside), and `git_read` options that relocate the repository or write a file (`-C`, `--git-dir`, `--work-tree`, `--output`). A value that cannot be resolved lexically (not a string, empty, containing NUL, starting with `~` or pathspec magic `:`, or a session without an absolute `cwd`) counts as outside, so the call is asked. Resolution is lexical: `path.resolve` against the session `cwd`, then a `path.relative` containment check, correct for Windows drive and UNC paths. Symbolic links inside the `cwd` that point outside it are not detected by this check.
+
+Tools on the auto-allow list that take no filesystem path stay auto-allowed. They read AFK's own data, including other sessions', exactly as the terminal does:
+
+* memory and workspace search: `memory_search`, `workspace_query`;
+* state and config: `state_get`, `state_query`, `config_get`;
+* witness, journal and facets: `search_witness`, `read_witness`, `read_journal`, `get_facet`;
+* artifacts: `artifact_get`, `artifact_list`, `artifact_read`;
+* sessions, schedules, jobs and runtime: `list_sessions`, `list_schedules`, `get_schedule_history`, `get_background_job_health`, `get_runtime_state`.
+
+If one of these is called with a path-like argument, that argument is still checked.
+
+A delegation call that runs its children in another directory (an `agent` or `remote_agent` `cwd`, or a `compose` node `cwd`) shows that directory in its title when it is outside the session `cwd`. The child origin does not carry the child's directory, so once such a delegation is allowed, every later child call whose target depends on the child's own directory (no path argument, or a relative one) is asked for the rest of the session instead of auto-allowed. Absolute paths inside the session `cwd` stay auto-allowed.
+
 Before requesting consent, await sending `tool_call` with `status: "pending"`. Then send the agent-to-client request `session/request_permission` with `sessionId`, `toolCall` and `options`. `toolCall` repeats at least the same `toolCallId`, title, name when known, kind, pending status and available raw input. `options` contains, in order:
 
 1. `{ "optionId": "allow_once", "name": "Allow once", "kind": "allow_once" }`.
-2. `{ "optionId": "allow_always", "name": "Always allow <tool> in this session", "kind": "allow_always" }`, omitted for `bash`.
+2. `{ "optionId": "allow_always", "name": "Always allow <tool> in this session", "kind": "allow_always" }`, omitted for `bash`, for delegation tools (`agent`, `skill`, `compose`, `remote_agent`), and for any request asked because it targets a path outside the session `cwd` (D11).
 3. `{ "optionId": "reject_once", "name": "Reject", "kind": "reject_once" }`.
 
-The client responds with `{ "outcome": { "outcome": "selected", "optionId": "allow_once" } }`, another offered option id, or `{ "outcome": { "outcome": "cancelled" } }`. The agent resolves the id against the exact options it offered, never trusts a kind supplied by the client, and never forwards client input rewrites. `allow_always` grants only that exact tool name in this live session. It is not a per-path grant, not a persisted host permission, and not offered for bash (D4, Q-C remains open). Later calls of the same tool skip asking but still pass existing gates. All grants disappear when the gate/session is discarded. Concurrent calls are independent; an already pending question remains pending when another call grants always.
+The client responds with `{ "outcome": { "outcome": "selected", "optionId": "allow_once" } }`, another offered option id, or `{ "outcome": { "outcome": "cancelled" } }`. The agent resolves the id against the exact options it offered, never trusts a kind supplied by the client, and never forwards client input rewrites. `allow_always` grants only that exact tool name in this live session, shared between the session and its subagents (same user, same session). It is not a per-path grant and not a persisted host permission. A remembered grant never covers a call of that tool that targets a path outside the session `cwd`: that call is asked again (D11). Later covered calls of the same tool skip asking but still pass existing gates. All grants disappear when the gate/session is discarded. Concurrent calls are independent; an already pending question remains pending when another call grants always.
 
 | Permission path | Resolution and named denial reason |
 |---|---|
@@ -161,10 +178,27 @@ The client responds with `{ "outcome": { "outcome": "selected", "optionId": "all
 | Outcome `cancelled` | Explicit deny, `cancelled`; turn finishes cancelled |
 | No answer within 120 seconds | Explicit deny, `timeout`; do not hang indefinitely |
 | Pending start cannot be emitted | Explicit deny, `request_error`; do not send an orphaned permission request |
+| Child-originated request with no live prompt turn | Explicit deny, `no_active_turn`; no card and no request (D9) |
+| Missing tool-use id, missing signal, malformed child origin, exception in the policy | Explicit deny (`request_error` or `aborted`), or ask with a generic `[subagent]` label; never an allow |
 
-Denials become a failed tool update with text `Permission denied: <reason>` while the connection is writable. Ordinary denials allow the model to continue; cancellation stops the turn. Shutdown also cancels any active prompt. Never return an undefined or malformed permission result: the current dispatcher treats anything other than explicit deny as allow. This bridge must therefore always return an explicit allow or deny.
+Denials become a failed tool update with text `Permission denied: <reason>` while the connection is writable. Ordinary denials allow the model to continue; cancellation stops the turn. Shutdown also cancels any active prompt. Never return an undefined or malformed permission result. The dispatcher now proceeds only on an explicit allow and treats anything malformed as a deny; this bridge still always returns an explicit allow or deny.
 
-Delegation consent is the single consent for the child's actions without further GUI prompts (D5). Children retain their existing allowlist, path and destructive-command restrictions. This profile does not claim that child providers inherit the bridge. Out-of-cwd writes remain denied while the session keeps path containment (D6); no GUI path-approval handler is installed. If path containment is ever removed from this surface, out-of-cwd writes must be asked through the bridge with the absolute path shown, never auto-allowed (Q-E). A tool blocked by the path hook may never reach the bridge. The skip-permissions flag has its existing path-bypass implications and is an explicit operator opt-out, not an implicit GUI capability.
+### Subagents are asked too (D9)
+
+The session passes a child approval factory (`childCanUseTool`) to executor wiring, so tool calls made by forked children go through the same policy, the same remembered grants and the same client prompt as top-level calls. Approving a delegation tool is not consent for what the subagent then does: each of its tool calls that the policy would ask is asked separately.
+
+A child-originated request is recognisable in the client. Its title is prefixed with the child's origin: the route (`subagent`, `skill`, `compose node`), then the agent type and label when known, then the depth when greater than 1, for example `[subagent research-agent] bash` or `[skill user-skill-review]`. An origin with no detail is labelled `[subagent]`. Its `toolCallId` is minted by the gate (`child-<n>-<tool id>`), so it never collides with a top-level call.
+
+The parent stream never carries a child's tool result, so the gate closes the child's card itself and no child-originated card is left `pending` or `in_progress` when the turn ends. On deny the card ends `failed` with text `Permission denied: <reason>`. On allow it moves to `in_progress` and then ends `completed` with text saying the call was approved, runs inside the named subagent, and that its result is reported by the delegating tool call. The card is closed at decision time rather than when the delegating call finishes because the gate cannot observe the child's own execution, and the delegating call can outlive the turn (background subagents); decision time is the only point at which the state shown is certainly true. A child that asks when no prompt turn is live (for example a background subagent after the turn ended) is denied with reason `no_active_turn` and no card or request is sent, because no update may follow a prompt response. When the parent's stream ends, any child request still awaiting the client is denied with `no_active_turn` and the server waits until every child card is closed before it sends the prompt response; a cancelled turn denies them as `cancelled` the same way. A child call covered by a remembered grant runs without a card.
+
+Covered routes: the `agent` tool at any depth, forked skills (including user skills with `context: fork`, `/audit-fit` and the `/mint` phases), `compose` nodes, depth-cap skill and agent children, and phase-restricted providers. Not covered: a `parallelize` override registered as a plugin skill that forks its own children; `afk farm` workers (a CLI batch command, not reachable from a session's tools as far as known); a depth-cap child with no tool list unless its session falls back to the bare provider resolver; and `remote_agent`, which runs on another machine under that machine's own permissions and is never covered by this session's prompts.
+
+### Session behaviour kept as it is (D13)
+
+* `usage_update` is sent only for models with a verified context window; cost is cumulative and omitted after load or resume (section 4).
+* Any model the CLI can route works; the approval prompt is forwarded for every provider family.
+* `--max-turns` defaults to 0 (no cap) and counts messages per session.
+* Prompt mode is the interactive one, so a GUI session gets the same end-of-turn protocol as the terminal REPL.
 
 ## 7. Cancellation and close during a turn
 
@@ -223,24 +257,20 @@ Translator state is per live session. Its tool map retains announced ids and acc
 
 `emitToolCall` is awaited by A3 before asking; A1 uses the same translator tool map to deduplicate it against stream details and retain name/input information. An already announced pending start is not sent twice. Gate approval must produce the in-progress transition before execution; a repeated start with that status is converted by A1 to `tool_call_update`, not a second start. A3 signals cancellation through `onCancelled` so A1 marks translator cancellation and interrupts the session even if cancellation originated in the permission reply rather than a client notification. `cancelAll()` only cancels current pending asks, not remembered grants; session close discards the gate. A1 owns interruption when it calls `cancelAll()` and the method does not recursively call `onCancelled`. The callback is for permission-originated cancellation only. An exception from `onCancelled` cannot change a deny into an allow.
 
-`AcpSessionOptions` adds optional `canUseTool`, `resume`, `sessionId` and `mcpServers`. The callback is handed to the **provider constructor**, not only the session config: this surface injects a preconstructed provider, so session config alone cannot wire the gate (S2). Other fields pass through to `AgentSession` config unchanged when supplied. `mcpServers` here is AFK's name-keyed configuration, not the wire array. A1 owns conversion and A4 may reuse it. `loadAcpSession` restores only; A1 invokes replay explicitly for load, not resume. Resume callers normalize absent `mcpServers` to `[]` for that internal load signature. Request parameters are authoritative for restored cwd/MCP; options supply model, limits and the gate. No behaviour changes when the optional seam fields are absent.
+`AcpSessionOptions` adds optional `canUseTool`, `childCanUseTool`, `resume`, `sessionId` and `mcpServers`. `childCanUseTool` is the gate's `forChild(origin)` factory, passed to `wireExecutors` (D9). `AcpPermissionOptions.turnActive()` reports whether a prompt turn is live, so a child asking outside a turn is denied. `dangerouslySkipPermissions` only decides whether a gate exists; the permission mode is always `bypassPermissions` (D8). The callback is handed to the **provider constructor**, not only the session config: this surface injects a preconstructed provider, so session config alone cannot wire the gate (S2). Other fields pass through to `AgentSession` config unchanged when supplied. `mcpServers` here is AFK's name-keyed configuration, not the wire array. A1 owns conversion and A4 may reuse it. `loadAcpSession` restores only; A1 invokes replay explicitly for load, not resume. Resume callers normalize absent `mcpServers` to `[]` for that internal load signature. Request parameters are authoritative for restored cwd/MCP; options supply model, limits and the gate. No behaviour changes when the optional seam fields are absent.
 
-## Open questions for G1
+## Resolved and open questions
 
-These remain human decisions, not approvals implied by the frozen profile. Until resolved, D1 through D7 govern the target above.
+Resolved by the P1b decisions (D8 to D13), each reversible before merge:
 
-* **Q-A:** Does harness hardening ship in v6.0 or later: explicit-allow-only dispatcher semantics, forwarding parent `canUseTool` into child providers, and passing `sessionKey` to path-approval elicitation? This profile assumes no GUI prompts inside children and no GUI path-approval bridge.
-* **Q-B:** Keep the hardcoded Claude-only provider for v6.0 and document it, or switch this surface to the provider router (related to #4911)? The contract lane leaves the provider selection unchanged. Protocol capabilities do not promise a model provider.
-* **Q-C:** Never offer `allow_always` for bash (current D4), or allow it per exact command? Current transcripts do not offer it for bash.
-* **Q-D:** Expose AFK plan mode as an ACP session mode? The pinned schema supports it: `NewSessionResponse.modes` (a `SessionModeState` with `currentModeId` and `availableModes`), the `session/set_mode` method and the `current_mode_update` session update. `modes` is optional in `NewSessionResponse` (only `sessionId` is required), and the v6.0 profile omits it.
-* **Q-E:** AFK may reduce its permission modes to plan and bypass. An ACP session with approvals on currently gets path containment from the `default` mode. If that mode is removed, the bridge becomes the only interactive gate: out-of-cwd writes must then be asked, and forwarding the bridge into child providers (Q-A) stops being optional, because an approved subagent would otherwise write anywhere unasked.
+* **Q-A:** explicit-allow-only dispatcher semantics shipped in this branch. Forwarding the bridge into child providers ships (D9). The path-approval session key is not needed: path approval is replaced by the outside-the-directory policy (D10).
+* **Q-B:** resolved, any routed model works (D13).
+* **Q-C:** "always allow" is never offered for bash, and is also withheld for delegation tools and for outside-the-directory requests (D11).
+* **Q-E:** resolved by D8 to D11: sessions run in `bypassPermissions`, subagents are asked, reads and writes outside the session directory are asked with the absolute path shown, and remembered grants never cover them.
 
-Provisional resolutions used for the v6.0 build, each open to reversal before merge:
+Still open:
 
-* Q-A: explicit-allow-only dispatcher semantics ship in v6.0 as a separate small change. Child-provider forwarding and the path-approval session key are follow-ups unless Q-E forces them in.
-* Q-B: attempted after the main lanes integrate. If it is not proven by tests, v6.0 documents the single-provider limit.
-* Q-C: never offered for bash.
-* Q-D: not in v6.0.
+* **Q-D:** Expose AFK plan mode as an ACP session mode? The pinned schema supports it: `NewSessionResponse.modes` (a `SessionModeState` with `currentModeId` and `availableModes`), the `session/set_mode` method and the `current_mode_update` session update. `modes` is optional in `NewSessionResponse` (only `sessionId` is required). Not in this release.
 
 ## Schema-driven clarifications from the original plan
 

@@ -75,7 +75,7 @@ function toolCallUpdate(pair: ToolPair, cwd: string): SessionUpdate {
   return boundStartDisplay({
     sessionUpdate: 'tool_call',
     toolCallId: pair.id,
-    title: toolTitle(pair.name, pair.input),
+    title: toolTitle(pair.name, pair.input, cwd),
     ...(pair.name ? { name: pair.name } : {}),
     kind: toolKind(pair.name),
     status: pair.isError ? 'failed' : 'completed',

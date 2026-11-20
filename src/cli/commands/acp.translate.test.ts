@@ -34,7 +34,7 @@ describe('ACP stream translation', () => {
     const st = createTranslatorState();
     expect(emit(st, { ...detail(), pending: true } as MessageChunk)).toEqual([]);
     expect(st.tools.size).toBe(0);
-    expect(emit(st, detail())).toEqual([{ sessionUpdate: 'tool_call', toolCallId: 't', title: 'read_file a.txt', name: 'read_file', kind: 'read', status: 'in_progress', content: [], locations: [{ path: path.join(cwd, 'a.txt'), line: 1 }], rawInput: { file_path: 'a.txt', offset: 1 } }]);
+    expect(emit(st, detail())).toEqual([{ sessionUpdate: 'tool_call', toolCallId: 't', title: `read_file ${path.join(cwd, 'a.txt')}`, name: 'read_file', kind: 'read', status: 'in_progress', content: [], locations: [{ path: path.join(cwd, 'a.txt'), line: 1 }], rawInput: { file_path: 'a.txt', offset: 1 } }]);
     expect(emit(st, detail())).toEqual([]);
     expect(emit(st, { type: 'tool_result', toolUseId: 't', content: 'old\n' })).toEqual([{ sessionUpdate: 'tool_call_update', toolCallId: 't', status: 'completed', rawOutput: 'old\n', content: [{ type: 'content', content: { type: 'text', text: 'old\n' } }] }]);
     expect(st.tools.get('t')?.name).toBe('read_file');

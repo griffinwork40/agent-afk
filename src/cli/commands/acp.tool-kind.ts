@@ -1,5 +1,8 @@
 import type { ToolCallLocation, ToolKind } from './acp.wire.js';
 import { inputRecord, resolveDisplayPath, validPath } from './acp.translate.paths.js';
+import { delegationSuffix } from './acp.permission.labels.js';
+import { outsidePaths } from './acp.permission.paths.js';
+import path from 'node:path';
 
 const readTools = new Set([
   'read_file', 'view_image', 'extract_document', 'json_query', 'list_directory',
@@ -26,13 +29,24 @@ export function toolKind(toolName: string): ToolKind {
   return 'other';
 }
 
-export function toolTitle(toolName: string, input?: unknown): string {
+/** With a session `cwd`, a relative path is shown resolved to its absolute form (D10). */
+export function toolTitle(toolName: string, input?: unknown, cwd?: string): string {
   if (!toolName) return 'Tool call';
-  if (delegationTools.has(toolName)) return `${toolName} (subagent will act without further prompts)`;
+  if (delegationTools.has(toolName)) return `${toolName}${delegationSuffix(toolName)}`;
   const record = inputRecord(input);
   const suffix = filePathTools.has(toolName) ? record['file_path']
     : toolName === 'json_query' || toolName === 'list_directory' ? record['path'] : undefined;
-  return validPath(suffix) ? `${toolName} ${suffix}` : toolName;
+  const shown = validPath(suffix) ? cwd !== undefined ? resolveDisplayPath(suffix, cwd) ?? suffix : suffix : undefined;
+  const title = shown !== undefined ? `${toolName} ${shown}` : toolName;
+  // D10: a target outside the session directory is always visible, under any argument name.
+  const outside = outsideDisplay(toolName, record, cwd);
+  return outside.length > 0 && !outside.some((p) => title.includes(p)) ? `${title} ${outside[0]}` : title;
+}
+
+/** Absolute outside-cwd targets for display; empty without an absolute session cwd. */
+function outsideDisplay(toolName: string, record: Record<string, unknown>, cwd: string | undefined): string[] {
+  if (cwd === undefined || !validPath(cwd) || !path.isAbsolute(cwd)) return [];
+  try { return outsidePaths(toolName, record, cwd).filter((p) => path.isAbsolute(p)); } catch { return []; }
 }
 
 export function toolLocations(toolName: string, input: unknown, cwd: string): ToolCallLocation[] {
@@ -48,9 +62,10 @@ export function toolLocations(toolName: string, input: unknown, cwd: string): To
   const value = filePathTools.has(toolName) || toolName === 'code_symbols' ? record['file_path']
     : pathTools.has(toolName) ? record['path'] : undefined;
   const resolved = resolveDisplayPath(value, cwd);
-  if (resolved === undefined) return [];
   const offset = record['offset'];
   const line = filePathTools.has(toolName) && typeof offset === 'number' && Number.isSafeInteger(offset) && offset > 0
     ? offset : undefined;
-  return [{ path: resolved, ...(line !== undefined ? { line } : {}) }];
+  const shown: ToolCallLocation[] = resolved === undefined ? [] : [{ path: resolved, ...(line !== undefined ? { line } : {}) }];
+  for (const p of outsideDisplay(toolName, record, cwd)) if (!shown.some((l) => l.path === p)) shown.push({ path: p });
+  return shown;
 }

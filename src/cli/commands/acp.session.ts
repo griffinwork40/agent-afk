@@ -15,6 +15,7 @@ import { getApiKeyForModel, getModel, getDefaultSubagentModel } from '../shared-
 import type { AgentModelInput } from '../../agent/types.js';
 import type { AgentConfig } from '../../agent/types/config-types.js';
 import type { CanUseTool } from './acp.wire.js';
+import type { ChildCanUseToolFactory } from '../../agent/tools/nesting.can-use-tool.js';
 import { connectAcpMcp } from './acp.session.mcp.js';
 import { resolveAcpPrompt } from './acp.session.prompt.js';
 import { createAcpProvider } from './acp.session.provider.js';
@@ -23,11 +24,13 @@ import { AcpSessionResources, onceAcpShutdown } from './acp.session.resources.js
 export interface AcpSessionOptions {
   model: AgentModelInput;
   maxTurns: number;
-  /** When true, sessions run in bypassPermissions mode. */
+  /** D8: skip the approval bridge only. Every ACP session runs in bypassPermissions. */
   dangerouslySkipPermissions?: boolean;
   cwd?: string;
   /** Inject into the provider, not AgentConfig, because this provider is prebuilt. */
   canUseTool?: CanUseTool;
+  /** D9: per-child approval callback factory, passed to executor wiring. */
+  childCanUseTool?: ChildCanUseToolFactory;
   resume?: string;
   sessionId?: string;
   /** Already converted from the wire stdio array to AFK's name-keyed config. */
@@ -44,7 +47,7 @@ export interface AcpSessionHandle {
 
 export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessionHandle> {
   const { model, maxTurns } = opts;
-  const permissionMode = opts.dangerouslySkipPermissions ? 'bypassPermissions' : 'default';
+  const permissionMode = 'bypassPermissions' as const;
   const cwd = opts.cwd ?? process.cwd();
   const resources = new AcpSessionResources();
   try {
@@ -72,6 +75,7 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
       ...(basePrompt !== undefined ? { systemPrompt: basePrompt } : {}),
       ...(operatorOverlay !== undefined ? { operatorOverlay } : {}),
       ...(traceWriter !== undefined ? { traceWriter, skillTraceWriter: traceWriter } : {}),
+      ...(opts.childCanUseTool !== undefined ? { childCanUseTool: opts.childCanUseTool } : {}),
     });
     const shutdown = withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor), continuationRegistry);
     const drainSubagents = onceAcpShutdown(shutdown.drainSubagents);
