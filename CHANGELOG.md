@@ -104,7 +104,13 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
   direction controls, zero-width characters, the tag block, and any remaining
   Unicode format or control character that passed the existing control-character
   filter are replaced with visible escapes of the form `<U+XXXX>` in every
-  string a card shows. `rawInput` fields are left byte-exact.
+  string a card shows, including every `locations[].path` entry and any
+  model-supplied subagent prefix; `rawInput` holds the exact path byte-for-byte.
+- **Writes to `.claude` agent definitions are always asked.** Any path with a
+  `.claude` segment (Claude Code compatible project-scoped agent definition
+  files loaded from `<cwd>/.claude/agents/`) is a sensitive write target, asked
+  every time and never covered by a grant, titled `(agent instructions or
+  definitions)`.
 - **Empty message and thought chunks are no longer sent.**
 - **Permission callback semantics tightened.** A permission callback result is
   treated as allow only when it is an explicit, well-formed allow object.
