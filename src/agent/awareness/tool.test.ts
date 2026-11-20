@@ -24,7 +24,7 @@ function mkSource(): RuntimeStateSource {
       phaseRole: null,
       cwd: '/work',
       model: { provider: 'anthropic-direct', name: 'sonnet' },
-      permissionMode: 'bypassPermissions',
+      permissionMode: 'default',
     }),
     getTools: () => ({
       enabled: ['bash', 'read_file', 'get_runtime_state'],

@@ -33,7 +33,7 @@ function mkSelf(overrides: Partial<RuntimeSelf> = {}): RuntimeSelf {
     phaseRole: null,
     cwd: '/Users/me/project',
     model: { provider: 'anthropic-direct', name: 'claude-sonnet-5' },
-    permissionMode: 'bypassPermissions',
+    permissionMode: 'default',
     ...overrides,
   };
 }
