@@ -19,6 +19,7 @@ import {
 } from './template-engine.templates-density.js';
 import type { FailureCard } from '../schemas.js';
 
+
 function makeToolCard(toolName: string, extra: Record<string, unknown> = {}): FailureCard {
   return {
     schemaVersion: 1,
@@ -30,6 +31,7 @@ function makeToolCard(toolName: string, extra: Record<string, unknown> = {}): Fa
     firstSeen: '2026-05-22T10:00:00.000Z',
     lastSeen: '2026-05-22T10:00:00.000Z',
     occurrenceCount: 3,
+    sightingCount: 0,
     evidence: [],
     notes: [],
     detail: {
@@ -147,5 +149,351 @@ describe('toolFailureDensityTemplate — fixSketch', () => {
     expect(sketch).toContain('afk trace show sess-abc123 --results');
     expect(sketch).not.toContain('--session');
     expect(sketch).not.toContain('--tool sess-abc123');
+  });
+
+  // errorClusters: card WITH clusters surfaces them in fixSketch
+  it('fixSketch includes error-clusters section when card has errorClusters', () => {
+    const card = makeToolCard('bash', {
+      failureCount: 10,
+      errorClusters: [
+        { normalized: 'command blocked by risk classifier', count: 7, sample: 'command blocked by risk classifier (hook: bash-guard)' },
+        { normalized: 'enoent no such file or directory', count: 3, sample: 'ENOENT: no such file or directory, open \'/tmp/foo\'' },
+      ],
+    });
+    const sketch = toolFailureDensityTemplate.fixSketch(card);
+    expect(sketch).toContain('Error clusters');
+    expect(sketch).toContain('command blocked by risk classifier');
+    expect(sketch).toContain('enoent no such file or directory');
+    // sample text is embedded
+    expect(sketch).toContain('bash-guard');
+    // percentage rendered
+    expect(sketch).toContain('70%');
+  });
+
+  // errorClusters: card WITHOUT clusters omits the section (no regression)
+  it('fixSketch has no error-clusters section when errorClusters is absent', () => {
+    const sketch = toolFailureDensityTemplate.fixSketch(makeToolCard('bash'));
+    expect(sketch).not.toContain('Error clusters');
+  });
+
+  // errorClusters: card with empty clusters array omits the section
+  it('fixSketch has no error-clusters section when errorClusters is an empty array', () => {
+    const card = makeToolCard('bash', { errorClusters: [] });
+    const sketch = toolFailureDensityTemplate.fixSketch(card);
+    expect(sketch).not.toContain('Error clusters');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// toolFailureDensityTemplate — hypothesis with errorClusters
+// ---------------------------------------------------------------------------
+
+describe('toolFailureDensityTemplate — cluster rendering safety', () => {
+  const paths = [
+    '/Users/fake-alice/private/project/file.ts',
+    '/home/fake-bob/private/project/file.ts',
+    String.raw`C:\Users\fake-carol\private\project\file.ts`,
+    'C:/Users/fake-dan/private/project/file.ts',
+    '"/Users/fake alice/private project/file.ts"',
+    String.raw`"C:\Users\fake carol\private project\file.ts"`,
+  ];
+
+  for (const field of ['normalized', 'sample'] as const) {
+    for (const render of ['hypothesis', 'fixSketch'] as const) {
+      it(`${render} sanitizes ${field}: POSIX/Windows home paths`, () => {
+        for (const path of paths) {
+          const cluster = { normalized: 'ENOENT', count: 3, sample: 'ENOENT' };
+          cluster[field] = `ENOENT: open ${path}`;
+          const output = toolFailureDensityTemplate[render](makeToolCard('bash', { errorClusters: [cluster] }));
+          expect(output).not.toContain(path);
+          expect(output).not.toMatch(/fake-(?:alice|bob|carol|dan)|fake (?:alice|carol)|private/);
+          expect(output).toContain('ENOENT');
+          expect(output).toContain('file.ts');
+        }
+      });
+    }
+  }
+
+  for (const field of ['normalized', 'sample'] as const) {
+    it(`truncates long ${field} text before rendering in both renderers`, () => {
+      // The cluster sanitizer truncates to 200 chars; verify the output is bounded.
+      const cluster = { normalized: 'ENOENT', sample: 'ENOENT', count: 3 };
+      cluster[field] = `${'error '.repeat(50)}`;
+      const card = makeToolCard('bash', { errorClusters: [cluster] });
+      for (const render of ['hypothesis', 'fixSketch'] as const) {
+        const output = toolFailureDensityTemplate[render](card);
+        expect(output).toContain('ENOENT');
+      }
+    });
+  }
+
+  it('removes home-directory-only usernames and collapses multiple paths in both fields', () => {
+    const home = String.raw`ENOENT /Users/fake-alice /home/fake-bob/ C:\Users\fake-carol\ /root`;
+    const card = makeToolCard('bash', {
+      errorClusters: [{ normalized: home, sample: home, count: 3 }],
+    });
+    for (const render of ['hypothesis', 'fixSketch'] as const) {
+      const output = toolFailureDensityTemplate[render](card);
+      expect(output).not.toMatch(/fake-|\/root|\/Users|\/home|C:\\/);
+      expect(output).toContain('ENOENT');
+    }
+  });
+
+  // ---- Finding #5103-1: path sanitizer gap fixes ----
+
+  it('does NOT match /rootfs, /root2, or /root_home (boundary fix)', () => {
+    // clusterMarkdown encodes chars like _ as HTML entities, so check by basename
+    // which contains no markdown-special characters.
+    const cases: [string, string][] = [
+      ['/rootfs/sentinel-alpha', 'sentinel-alpha'],
+      ['/root2/sentinel-beta', 'sentinel-beta'],
+      ['/root_home/sentinel-gamma', 'sentinel-gamma'],
+    ];
+    for (const field of ['normalized', 'sample'] as const) {
+      for (const [text, basename] of cases) {
+        const cluster = { normalized: 'err', count: 1, sample: 'err' };
+        cluster[field] = `open ${text} failed`;  // text = e.g. /rootfs/sentinel-alpha
+        const output = toolFailureDensityTemplate.fixSketch(
+          makeToolCard('bash', { errorClusters: [cluster] }),
+        );
+        // basename survives (path was not sanitised away)
+        expect(output).toContain(basename);
+        // must NOT have been rewritten to <home>…
+        expect(output).not.toContain('<home>');
+      }
+    }
+  });
+
+  it('still matches bare /root and /root/ (boundary fix does not over-prune)', () => {
+    for (const text of ['/root', '/root/']) {
+      const cluster = { normalized: `ENOENT ${text} perm`, count: 1, sample: `open ${text}` };
+      const card = makeToolCard('bash', { errorClusters: [cluster] });
+      for (const render of ['hypothesis', 'fixSketch'] as const) {
+        const output = toolFailureDensityTemplate[render](card);
+        expect(output).not.toMatch(/\/root/);
+      }
+    }
+  });
+
+  it('sanitizes unquoted POSIX path with space in directory name (space-in-dir fix)', () => {
+    // /Users/alice/My Project/a.ts — username has no space, but directory does
+    const text = '/Users/fake-alice/My Project/a.ts';
+    for (const field of ['normalized', 'sample'] as const) {
+      const cluster = { normalized: 'ENOENT', count: 1, sample: 'ENOENT' };
+      cluster[field] = `open ${text} failed`;
+      const output = toolFailureDensityTemplate.fixSketch(
+        makeToolCard('bash', { errorClusters: [cluster] }),
+      );
+      expect(output).not.toContain('fake-alice');
+      expect(output).not.toContain('My Project');
+      expect(output).toContain('a.ts');
+    }
+  });
+
+  it('sanitizes unquoted Windows path with space in directory name (space-in-dir fix)', () => {
+    const text = String.raw`C:\Users\fake-carol\My Project\a.ts`;
+    for (const field of ['normalized', 'sample'] as const) {
+      const cluster = { normalized: 'ENOENT', count: 1, sample: 'ENOENT' };
+      cluster[field] = `open ${text} failed`;
+      const output = toolFailureDensityTemplate.fixSketch(
+        makeToolCard('bash', { errorClusters: [cluster] }),
+      );
+      expect(output).not.toContain('fake-carol');
+      expect(output).not.toContain('My Project');
+      expect(output).toContain('a.ts');
+    }
+  });
+
+  it('sanitizes UNC home paths (UNC coverage fix)', () => {
+    const text = String.raw`\\fileserver\share\Users\fake-alice\project\secret.ts`;
+    for (const field of ['normalized', 'sample'] as const) {
+      const cluster = { normalized: 'ENOENT', count: 1, sample: 'ENOENT' };
+      cluster[field] = `open ${text} failed`;
+      const output = toolFailureDensityTemplate.fixSketch(
+        makeToolCard('bash', { errorClusters: [cluster] }),
+      );
+      expect(output).not.toContain('fake-alice');
+      expect(output).not.toContain('fileserver');
+      expect(output).toContain('secret.ts');
+    }
+  });
+
+  it('sanitizes quoted UNC path with space (UNC + space fix)', () => {
+    const text = String.raw`"\\fileserver\share\Users\fake alice\My Project\secret.ts"`;
+    for (const field of ['normalized', 'sample'] as const) {
+      const cluster = { normalized: 'ENOENT', count: 1, sample: 'ENOENT' };
+      cluster[field] = `open ${text} failed`;
+      const output = toolFailureDensityTemplate.fixSketch(
+        makeToolCard('bash', { errorClusters: [cluster] }),
+      );
+      expect(output).not.toContain('fake alice');
+      expect(output).not.toContain('fileserver');
+      expect(output).toContain('secret.ts');
+    }
+  });
+
+  // ---- PR #5127 review: unquoted paths must not merge across whitespace ----
+
+  /** Renders `text` through every field × renderer combination. */
+  function renderAll(text: string): string[] {
+    const outputs: string[] = [];
+    for (const field of ['normalized', 'sample'] as const) {
+      const cluster = { normalized: 'ENOENT', count: 1, sample: 'ENOENT' };
+      cluster[field] = text;
+      const card = makeToolCard('bash', { errorClusters: [cluster] });
+      for (const render of ['hypothesis', 'fixSketch'] as const) outputs.push(toolFailureDensityTemplate[render](card));
+    }
+    return outputs;
+  }
+
+  it('redacts adjacent unquoted paths with subdirectories separately (no second-username leak)', () => {
+    for (const output of renderAll('ENOENT /Users/fake-alice/a.ts /home/private-bob')) {
+      expect(output).not.toContain('fake-alice');
+      expect(output).not.toContain('private-bob');
+      expect(output).toContain('a.ts');
+    }
+  });
+
+  it('redacts two adjacent unquoted paths that both have subdirectories', () => {
+    for (const output of renderAll('ENOENT /Users/fake-alice/My Project/a.ts /home/fake-bob/b.ts')) {
+      expect(output).not.toMatch(/fake-alice|fake-bob|My Project/);
+      expect(output).toContain('a.ts');
+      expect(output).toContain('b.ts');
+    }
+  });
+
+  it('redacts adjacent Windows and UNC paths separately', () => {
+    const text = String.raw`ENOENT C:\Users\fake-carol\x.ts D:\Users\fake-dan \\srv\share\Users\fake-erin\y.ts`;
+    for (const output of renderAll(text)) {
+      expect(output).not.toMatch(/fake-(?:carol|dan|erin)|srv/);
+      expect(output).toContain('x.ts');
+      expect(output).toContain('y.ts');
+    }
+  });
+
+  it('keeps prose between two paths and redacts both paths', () => {
+    for (const output of renderAll('err /Users/fake-alice/a.ts permission denied /home/fake-bob/secret.ts')) {
+      expect(output).not.toMatch(/fake-alice|fake-bob/);
+      expect(output).toContain('permission denied');
+      expect(output).toContain('a.ts');
+      expect(output).toContain('secret.ts');
+    }
+  });
+
+  it('captures a space-containing directory name but stops before trailing prose and the next path', () => {
+    for (const output of renderAll('open /Users/fake-alice/My Big Project/a.ts failed for /home/fake-bob')) {
+      expect(output).not.toMatch(/fake-alice|fake-bob|My Big Project/);
+      expect(output).toContain('a.ts failed for');
+    }
+  });
+
+  // ---- PR #5127 review @ 108e960: no home root after a crossed space ----
+
+  it.each([
+    ['at /Users/fake-alice/a.ts imported from file:///home/private-bob'],
+    ['cp /Users/fake-alice/a.ts ./home/private-bob'],
+    ['see /Users/fake-alice/a.ts in x/Users/private-bob'],
+    ['see /Users/fake-alice/a.ts in x/y/home/private-bob'],
+    [String.raw`C:\Users\fake-alice\a.ts in x\Users\private-bob`],
+    [String.raw`/Users/fake-alice/a.ts in x\Documents and Settings\private-bob`],
+    ['/Users/fake-alice/My Dir/sub x/y/z/home/private-bob/k.ts and more'],
+  ])('does not carry a match across a space into a later prefixed home root: %s', (text) => {
+    for (const output of renderAll(text)) {
+      expect(output).not.toMatch(/fake-alice|private-bob/);
+    }
+  });
+
+  it('keeps the prose before a prefixed home root intact', () => {
+    for (const output of renderAll('see /Users/fake-alice/a.ts in x/y/home/private-bob')) {
+      expect(output).toContain('a.ts in x/y');
+    }
+  });
+
+  it('collapses a match that ends at a nested home root to <home>', () => {
+    for (const output of renderAll('open /Users/fake-alice/x/Users/private-bob failed')) {
+      expect(output).not.toMatch(/fake-alice|private-bob/);
+      expect(output).toContain('failed');
+    }
+  });
+
+  it('redacts prefixed roots in near-linear time on a long adversarial tail', () => {
+    const start = performance.now();
+    const outputs = renderAll(`/Users/fake-alice/x ${'a/b y/Users/q '.repeat(3_400)}`);
+    expect(performance.now() - start).toBeLessThan(2_000);
+    for (const output of outputs) expect(output).not.toContain('fake-alice');
+  });
+
+  it('matches a long space-separated tail in linear time (no catastrophic backtracking)', () => {
+    const start = performance.now();
+    const outputs = renderAll(`/Users/fake-alice/${'x '.repeat(25_000)}`);
+    expect(performance.now() - start).toBeLessThan(2_000);
+    for (const output of outputs) expect(output).not.toContain('fake-alice');
+  });
+
+  it('keeps untrusted labels and samples on one line with safe markdown and hypothesis quotes', () => {
+    const hostile = 'ENOENT "quoted" `tick`\r\n## injected **bold** [link](https://invalid.test) <img>';
+    const card = makeToolCard('bash', {
+      errorClusters: [{ normalized: hostile, sample: hostile, count: 3 }],
+    });
+    const hypothesis = toolFailureDensityTemplate.hypothesis(card);
+    const sketch = toolFailureDensityTemplate.fixSketch(card);
+    expect(hypothesis).not.toMatch(/[\r\n`]/);
+    expect(hypothesis.match(/"/g)).toHaveLength(4); // only the two enclosing quote pairs
+    expect(sketch).not.toContain('\n## injected');
+    const row = sketch.split('\n').find((line) => line.startsWith('- **'))!;
+    expect(row.match(/`/g)).toHaveLength(2); // only the sample's inline-code delimiters
+    const label = row.split(' · sample: ')[0]!;
+    expect(label).not.toContain('**bold**');
+    expect(label).not.toContain('<img>**');
+    expect(row).toContain('sample: `ENOENT ’quoted’ ’tick’ ## injected **bold** [link](https://invalid.test) <img>`');
+    expect(hypothesis).not.toContain('[link](');
+  });
+
+  it('bounds both cluster fields and the number of rendered clusters without mutating the card', () => {
+    const long = `ENOENT ${'ordinary error text '.repeat(100)}`;
+    const clusters = Array.from({ length: 100 }, (_, i) => ({
+      normalized: `${long} label ${i}`, sample: `${long} sample ${i}`, count: 1,
+    }));
+    const card = makeToolCard('bash', { errorClusters: clusters });
+    const sketch = toolFailureDensityTemplate.fixSketch(card);
+    const hypothesis = toolFailureDensityTemplate.hypothesis(card);
+    const rows = sketch.split('\n').filter((line) => line.startsWith('- **'));
+    expect(rows).toHaveLength(5);
+    expect(rows.every((row) => row.length < 500)).toBe(true);
+    expect(hypothesis.length).toBeLessThan(900);
+    expect(sketch).not.toContain(long);
+    expect(hypothesis).not.toContain(long);
+    expect(clusters[0]!.normalized).toContain(long);
+  });
+});
+
+describe('toolFailureDensityTemplate — hypothesis with errorClusters', () => {
+  it('names the dominant cluster when errorClusters is present', () => {
+    const card = makeToolCard('wait_for', {
+      failureCount: 20,
+      errorClusters: [
+        { normalized: 'timed out after <dur>', count: 15, sample: 'timed out after 30s' },
+        { normalized: 'enoent no such file', count: 5, sample: 'ENOENT: no such file' },
+      ],
+    });
+    const hypothesis = toolFailureDensityTemplate.hypothesis(card);
+    // dominant cluster named with percentage
+    expect(hypothesis).toContain('timed out after &#60;dur&#62;');
+    expect(hypothesis).toContain('75%');
+    // sample included
+    expect(hypothesis).toContain('timed out after 30s');
+    // should NOT fall back to options A-D when clusters present
+    expect(hypothesis).not.toContain('Likely causes: (a)');
+  });
+
+  it('falls back to options A-D when errorClusters is absent', () => {
+    const hypothesis = toolFailureDensityTemplate.hypothesis(makeToolCard('bash'));
+    expect(hypothesis).toContain('Likely causes: (a)');
+  });
+
+  it('falls back to options A-D when errorClusters is an empty array', () => {
+    const card = makeToolCard('bash', { errorClusters: [] });
+    const hypothesis = toolFailureDensityTemplate.hypothesis(card);
+    expect(hypothesis).toContain('Likely causes: (a)');
   });
 });

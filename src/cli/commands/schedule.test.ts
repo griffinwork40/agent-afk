@@ -124,6 +124,13 @@ describe('afk schedule CLI — live-sync parity', () => {
     expect(await daemonTasks(handle.port)).toContain(entry!.id);
   });
 
+  it('add --failure-streak-threshold persists and registers the same threshold', async () => {
+    await buildProgram().parseAsync(['node', 'afk', 'schedule', 'add', '--name', 'Threshold', '--command', '/x', '--cron', FAR_FUTURE_CRON, '--failure-streak-threshold', '7']);
+    expect(loadSchedules()[0]?.failureStreakThreshold).toBe(7);
+    const tasks = await (await fetch(`http://localhost:${handle.port}/tasks`)).json() as Array<{ failureStreakThreshold?: number }>;
+    expect(tasks[0]?.failureStreakThreshold).toBe(7);
+  });
+
   it('disable unregisters a live task; enable re-registers it', async () => {
     await buildProgram().parseAsync([
       'node', 'afk', 'schedule', 'add',
@@ -195,6 +202,13 @@ describe('afk schedule CLI — mock-based branch coverage', () => {
   // -------------------------------------------------------------------------
   // schedule add — option validation
   // -------------------------------------------------------------------------
+
+  it.each(['0', '-1', '1.5', '3junk', ''])('rejects invalid threshold %s without writing', async (value) => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('exit'); });
+    await expect(buildProgram().parseAsync(['node', 'afk', 'schedule', 'add', '--name', 'Bad', '--command', '/x', '--cron', FAR_FUTURE_CRON, '--failure-streak-threshold', value])).rejects.toThrow('exit');
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(loadSchedules()).toHaveLength(0);
+  });
 
   it('add rejects invalid --executor value', async () => {
     const origExit = process.exitCode;

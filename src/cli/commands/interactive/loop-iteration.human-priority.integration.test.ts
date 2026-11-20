@@ -55,7 +55,7 @@ async function harness() {
   let boundary: (() => string | undefined) | undefined;
   const peer = source(), bg = source(), shell = source();
   const ctx = {
-    options: { maxTurns: '10' }, stats: { permissionMode: 'default' },
+    options: { maxTurns: '10' }, stats: { permissionMode: 'bypassPermissions' },
     session: { current: { waitForInitialization: async () => ({}),
       takePendingPlanExitSeed: async () => undefined,
       setBeforeNextRound: (cb: typeof boundary) => { boundary = cb; },

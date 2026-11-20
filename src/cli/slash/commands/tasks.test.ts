@@ -65,7 +65,7 @@ function makeStats(): SessionStats {
     turnTokens: [],
     turns: [],
     model: 'sonnet',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
   };
 }
 
@@ -306,7 +306,7 @@ describe('/tasks slash commands', () => {
           stats: {
             totalTurns: 0, totalCostUsd: 0, totalTokens: 0, totalDurationMs: 0, unpricedTurns: 0,
             sessionStartTime: Date.now(), turnCosts: [], turnTokens: [], turns: [],
-            model: 'sonnet', permissionMode: 'default',
+            model: 'sonnet', permissionMode: 'bypassPermissions',
           },
           out: {
             line: vi.fn(),

@@ -48,7 +48,7 @@ function defaultDeps() {
     getCwd: () => '/work',
     modelName: 'sonnet',
     providerName: 'anthropic-direct',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     getEnabledToolNames: () => ['bash', 'read_file'],
     getMcpTools: () => [] as AnthropicToolDef[],
     getMcpServerStates: () => [] as { serverName: string; status: string; error?: string }[],

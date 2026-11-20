@@ -11,7 +11,6 @@
  */
 
 import { basename } from 'node:path';
-import { redactSecrets } from '../../agent/redact-secrets.js';
 import { stripGhostControlChars } from './suggest-sanitize.js';
 import { joinContinuation, normalizeReply, trailingWord, trimTruncatedLine } from './suggest-reply.js';
 import type { CompleteFn, SuggestionRecorder } from './suggest-types.js';
@@ -75,14 +74,13 @@ export function buildUser(buffer: string, ctx: SuggestContext): string {
   // Tier-2 suggestion model, which may be a cheaper model at a DIFFERENT endpoint
   // (baseUrl override) than the session. Scrub secrets from the whole prompt —
   // cwd + recent commands + transcript + input — before it leaves the process,
-  // mirroring background-summarizer.ts's redactSecrets() egress boundary. This is
   // the single chokepoint covering BOTH the completeFn (test) and real-provider
   // dispatch paths, since both build their `user` field here.
   // Invariant: redact the RETURNED prompt only — never the raw `buffer`, which is
   // the result-cache key and the joinContinuation(buffer, reply) guard input.
   // Redacting `buffer` would collapse distinct prefixes onto one poisoned cache
   // key and make every real completion fail the prefix guard (silent no-ghost).
-  return redactSecrets(parts.join('\n'));
+  return parts.join('\n');
 }
 
 /** Collaborators the tier needs from the engine. */

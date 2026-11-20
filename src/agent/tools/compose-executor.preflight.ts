@@ -13,7 +13,7 @@
 import { parseComposeInput, type ComposeInput } from './compose-input-parse.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { deriveOrigin, actorFromDepth } from '../session/session-identity.js';
-import { resolveMaxNestingDepth } from './nesting.js';
+import { resolveChildMaxDepth } from './dispatch-preparation.js';
 import { buildComposeMaxDepthRefusal } from './skill-depth-message.js';
 import { errorMessage } from '../../utils/errors.js';
 import { runSubagentDAG, type SubagentDAGNode } from '../dag-subagent.js';
@@ -82,7 +82,7 @@ export function preflightComposeCall(
   // because compose is never wired below the root, and exists so that
   // AFK_MAX_NESTING_DEPTH=0 disables every dispatch tool uniformly.
   const depth = ctx.depth ?? 0;
-  const maxDepth = ctx.maxDepth ?? resolveMaxNestingDepth();
+  const maxDepth = resolveChildMaxDepth(ctx.maxDepth);
   if (depth >= maxDepth) {
     void appendRoutingDecision({
       ...identity,

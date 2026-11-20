@@ -92,7 +92,7 @@ function makeCtx(out: Writer): SlashContext {
     stats: {
       totalTurns: 0, totalCostUsd: 0, totalTokens: 0, totalDurationMs: 0,
       sessionStartTime: 0, turnCosts: [], turnTokens: [], turns: [],
-      model: 'sonnet', permissionMode: 'default',
+      model: 'sonnet', permissionMode: 'bypassPermissions',
     },
     ui: { clearScreen: vi.fn(), repaintStatusLine: vi.fn() },
   };

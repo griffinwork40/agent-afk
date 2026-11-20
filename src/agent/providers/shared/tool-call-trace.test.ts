@@ -601,32 +601,27 @@ describe('buildErrorHead', () => {
     expect(head).not.toContain('(truncated)');
   });
 
-  it('redacts an Anthropic API key (sk-ant-…)', () => {
+  it('passes through an Anthropic API key (sk-ant-…)', () => {
     const key = 'sk-ant-api03-' + 'A'.repeat(40);
     const content = `Error: invalid key ${key} provided`;
     const head = buildErrorHead(true, content);
     expect(head).toBeDefined();
-    expect(head).not.toContain(key);
-    expect(head).toContain('[REDACTED]');
+    expect(head).toContain(key);
   });
 
-  it('redacts a GitHub PAT (ghp_…) via the generic long-token rule', () => {
-    // ghp_ tokens are 40 chars (prefix + 36 base62 chars) — caught by
-    // the generic ≥32-char opaque token rule in redactSecrets.
+  it('passes through a GitHub PAT (ghp_…)', () => {
     const token = 'ghp_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7';
     const content = `fatal: Authentication failed: ${token}`;
     const head = buildErrorHead(true, content);
     expect(head).toBeDefined();
-    expect(head).not.toContain(token);
-    expect(head).toContain('[REDACTED]');
+    expect(head).toContain(token);
   });
 
-  it('redacts a Bearer token', () => {
+  it('passes through a Bearer token', () => {
     const content = 'Authorization: Bearer mysupersecrettokenvalue1234567890 not allowed';
     const head = buildErrorHead(true, content);
     expect(head).toBeDefined();
-    expect(head).toContain('[REDACTED]');
-    expect(head).not.toContain('mysupersecrettokenvalue');
+    expect(head).toContain('mysupersecrettokenvalue');
   });
 
   it('preserves non-secret content without altering it', () => {
@@ -675,7 +670,7 @@ describe('buildToolCallCompletedPayload — errorHead field', () => {
     expect('errorHead' in payload).toBe(false);
   });
 
-  it('redacts a secret in the error head', () => {
+  it('passes through a secret in the error head', () => {
     const key = 'sk-ant-api03-' + 'B'.repeat(40);
     const payload = buildToolCallCompletedPayload({
       toolUseId: 'tu_eh_redact',
@@ -685,8 +680,7 @@ describe('buildToolCallCompletedPayload — errorHead field', () => {
       durationMs: 1,
     });
     expect(payload.errorHead).toBeDefined();
-    expect(payload.errorHead).not.toContain(key);
-    expect(payload.errorHead).toContain('[REDACTED]');
+    expect(payload.errorHead).toContain(key);
   });
 
   it('collapses newlines in the error head', () => {

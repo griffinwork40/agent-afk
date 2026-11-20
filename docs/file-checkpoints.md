@@ -1,8 +1,20 @@
 # File checkpoints
 
 `AgentConfig.enableFileCheckpointing` defaults to `false` for embedders. The
-interactive REPL turns it on unless `afk.config.json` sets `fileCheckpoints:
-false` (#4271); chat, Telegram, the daemon, and subagent forks never set it.
+interactive REPL and `afk web` both turn it on unless `afk.config.json` sets
+`fileCheckpoints: false` (#4271); chat, Telegram, the daemon, and subagent
+forks never set it.
+
+### Web surface
+
+`afk web` enables file checkpointing by default. The `/rewind` slash command
+(available via the browser's retry/edit route and directly in the session
+control layer) can restore files using the `files` or `both` mode. The
+`POST /api/sessions/:id/rewind` route currently performs conversation-only
+rewinds; file restoration is available through the `/rewind` slash command
+executed via `executeSessionControl`. Set `fileCheckpoints: false` in
+`afk.config.json` to opt out on the web surface; conversation-only rewind
+remains available regardless.
 Both providers attach a per-turn checkpoint registry to the tool dispatcher.
 `write_file`, `edit_file`, non-dry-run `patch_apply`, and foreground `bash` in git
 repos snapshot prior file bytes. Bash outcomes are tracked via `bash` turn-log

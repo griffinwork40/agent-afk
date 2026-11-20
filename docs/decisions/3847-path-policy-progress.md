@@ -1,4 +1,4 @@
-# #3847 — shared path policy, second incremental slice
+# #3847 — shared path policy, incremental slices
 
 ## Verified base and scope
 
@@ -7,7 +7,7 @@ The base is an ancestor of this proposal. #4036 already introduced the shared
 read credential floor. This change extends that implementation rather than
 recreating it. It is a **partial proposal**, not closure of #3847.
 
-## Shipped in this slice
+## Shipped in slice 2 (PRs #4036, #4555)
 
 - `decidePathAccess(path, op, actorScope, fallbackBase)` now decides the read or
   write credential floor **before** actor-root containment. Denials distinguish
@@ -26,7 +26,37 @@ recreating it. It is a **partial proposal**, not closure of #3847.
   cannot override the credential floor. Existing symlink/dangling-target
   revalidation and live write-denylist resolution remain in place.
 
-## Independent review and verification
+## Shipped in slice 3 (this PR — Refs #3847, step B)
+
+Base: `aec7a556c0ab9a234f0256020abaa4c2ef060b7a`.
+
+- **Bash hard restriction hook check 2 consults `decidePathAccess` for the
+  message only** (#3847 step B, partial). The lexical scan
+  (`mentionsRestrictedRoot`) identifies the matched root and blocks unconditionally.
+  The policy result does not yet control the block decision.
+- Extracted `restrictedPathBlock(sub, headless)` helper from
+  `createBashRestrictionHook` to stay under the 200-line function ceiling. The
+  helper calls `decidePathAccess(sub, 'read')` (no scope — floor-only, consistent
+  with check 2's intent). Originally it replaced the displayed root with the
+  canonical denylist entry. The #5098 follow-up preserves the matched root
+  candidate and adds the policy match in parentheses for credential roots;
+  bash-only extras have no floor annotation. This is not the raw command operand:
+  home references and Windows separators have already been normalized.
+- Behaviour-preserving: `decidePathAccess` returns `deny/credential` for
+  BUILTIN_READ_DENYLIST paths and `allow` for bash-only extras (e.g.
+  `~/Library/Application Support`, LaunchAgents). Both classes still block — no
+  allow/deny outcome changes.
+- **49 equivalence (golden/characterization) tests** written BEFORE the change in
+  `bash-restriction-hook.check2-policy.test.ts` pin current allow/deny outcomes
+  for credential roots, bash-only extras, headless floor, interactive carve-outs,
+  grant-filtered paths, and the documented variable-assembly bypass. All 49 pass
+  unchanged after the migration.
+- The advisory (non-blocking) bash path extractor (`wouldBeRestricted` adapter)
+  is unchanged; it deliberately has no credential floor.
+- No baseline files increased; all source files remain below 350 code lines and
+  all functions below 200 lines; all 23 `check:audits` gates passed.
+
+## Independent review and verification (slice 2)
 
 A separate security reviewer read the diff and the new policy modules, ran
 scoped tests, and approved with no blocking bypass or regression found. Review
@@ -43,11 +73,13 @@ files were increased and all source files remain below 350 code lines.
 
 ## Exact remaining scope (keep issue open)
 
-1. Migrate the bash **hard restriction hook's** lexical extraction, sensitive
-   root derivation, interactive grants and headless carve-out semantics to the
-   policy incrementally. Do not replace its heuristics with the incomplete
-   advisory token scan: that would drop protections for interpreter-assembled,
-   embedded, variable and Windows spellings.
+1. Migrate the bash **hard restriction hook's** credential-floor decision to the
+   policy (equivalence goldens first). **Still open:** slice 3 consults the policy
+   only for the message; both policy allow and deny results still block.
+   Migrate the sensitive root derivation, interactive grant semantics and
+   headless carve-out logic incrementally. Do not replace heuristics with the
+   incomplete advisory token scan: that would drop protections for
+   interpreter-assembled, embedded, variable and Windows spellings.
 2. Migrate the AFK-mode gate's workspace-escape decisions only after equivalence
    tests pin its distinct risk/approval semantics.
 3. Consolidate remaining duplicate handler floor checks and resolution calls

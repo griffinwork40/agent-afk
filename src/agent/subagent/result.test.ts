@@ -240,12 +240,19 @@ describe('isTerminalStopReason — buffered-partial branch stale-reason gate (#3
   });
 
   it('is false for budget-cap and wind-down sentinels', () => {
-    // These are "incomplete" reasons — a prior round that wound down should
-    // not suppress STREAM_INCOMPLETE on an abort in the next round.
-    expect(isTerminalStopReason('tool_use_loop_capped')).toBe(false);
-    expect(isTerminalStopReason('soft_deadline_wind_down')).toBe(false);
-    expect(isTerminalStopReason('context_pressure_wind_down')).toBe(false);
-    expect(isTerminalStopReason('overload_exhausted')).toBe(false);
+    // History: #4400 finding 1 — wind-down reasons (soft_deadline_wind_down,
+    // context_pressure_wind_down, overload_exhausted) are intentionally excluded
+    // from isTerminalStopReason. They ARE in isIncompleteStopReason (see the
+    // SOFT_DEADLINE_WIND_DOWN / OVERLOAD_EXHAUSTED / CONTEXT_PRESSURE_WIND_DOWN
+    // describe blocks below), so a wound-down child gets the [PARTIAL RESULT]
+    // banner. The design is: terminal=false means handle.streaming.ts assigns
+    // STREAM_INCOMPLETE unconditionally (not via ??=) over any stale stop
+    // reason when no terminal message arrives; incomplete=true means the
+    // parent-visible banner still fires on the salvaged partial.
+    expect(isTerminalStopReason(TOOL_USE_LOOP_CAPPED)).toBe(false);
+    expect(isTerminalStopReason(SOFT_DEADLINE_WIND_DOWN)).toBe(false);
+    expect(isTerminalStopReason(CONTEXT_PRESSURE_WIND_DOWN)).toBe(false);
+    expect(isTerminalStopReason(OVERLOAD_EXHAUSTED)).toBe(false);
   });
 });
 

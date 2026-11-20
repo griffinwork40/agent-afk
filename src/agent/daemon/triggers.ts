@@ -15,6 +15,7 @@
  * @module agent/daemon/triggers
  */
 
+import { assertFailureStreakThreshold } from './failure-streak-threshold.js';
 import {
   TASK_MAX_ATTEMPTS_LIMIT,
   TASK_RETRY_DELAY_MIN_MS,
@@ -132,6 +133,13 @@ export interface ScheduledTask {
    * cron fire of that task is skipped while its resume is in flight (#1416).
    */
   overlapKey?: string;
+  /**
+   * Number of consecutive failures (error or blocked) before the scheduler
+   * sends an escalation alert. Default: 3. Set to 1 to alert on the very first
+   * failure. Must be a positive integer.
+   * See: scheduler.failure-streak.ts, issue #5146.
+   */
+  failureStreakThreshold?: number;
 }
 
 /**
@@ -175,6 +183,7 @@ export function validateScheduledTask(task: ScheduledTask): void {
   if (task.cwd !== undefined && (typeof task.cwd !== 'string' || !task.cwd)) {
     throw new Error(`task ${task.taskId}: cwd must be a non-empty string when set`);
   }
+  assertFailureStreakThreshold(task.failureStreakThreshold);
   // Validate retry fields with the same bounds as the input surfaces so a
   // hand-edited schedules.json is caught at registration, not silently clamped.
   if (task.maxAttempts !== undefined) {

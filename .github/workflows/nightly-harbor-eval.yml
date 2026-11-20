@@ -1,0 +1,124 @@
+name: Nightly Harbor Eval
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-harbor-eval
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  gate:
+    name: Check eval credential
+    if: github.repository == 'griffinwork40/agent-afk' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require a model credential (missing is a failure, not a skip)
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ] && [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo '::error::Add repository secret CLAUDE_CODE_OAUTH_TOKEN (preferred) or ANTHROPIC_API_KEY under Settings → Secrets and variables → Actions.'
+            echo '## No evaluation ran: add CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY repository secret.' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+  evaluate:
+    name: Fixed Terminal-Bench subset
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout evaluated commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Build checked-out afk (not npm latest)
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir dashboard install --frozen-lockfile
+          pnpm build:dist
+          mkdir -p "$RUNNER_TEMP/eval-package"
+          pnpm pack --pack-destination "$RUNNER_TEMP/eval-package"
+      - name: Install pinned harness and validate scripts
+        run: |
+          python -m pip install 'harbor==0.23.0' pytest
+          python -m pytest bench/harbor/ -q
+      - name: Checkout pinned task definitions
+        run: |
+          TASK_REPO=$(python -c 'import json; print(json.load(open("bench/harbor/nightly.json"))["task_repository"])')
+          TASK_COMMIT=$(python -c 'import json; print(json.load(open("bench/harbor/nightly.json"))["task_commit"])')
+          git init "$RUNNER_TEMP/terminal-bench"
+          git -C "$RUNNER_TEMP/terminal-bench" remote add origin "$TASK_REPO"
+          git -C "$RUNNER_TEMP/terminal-bench" fetch --depth=1 origin "$TASK_COMMIT"
+          git -C "$RUNNER_TEMP/terminal-bench" checkout --detach FETCH_HEAD
+      - name: Evaluate
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PYTHONPATH: .
+          HARBOR_DISABLE_TELEMETRY: '1'
+        run: |
+          python -m bench.harbor.nightly_run \
+            --package "$RUNNER_TEMP"/eval-package/*.tgz \
+            --tasks "$RUNNER_TEMP/terminal-bench" \
+            --output "$RUNNER_TEMP/eval"
+      - name: Upload sanitized record only (raw logs may contain credentials)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: nightly-eval-record
+          path: ${{ runner.temp }}/eval/record.json
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Store history and signal regression
+    needs: evaluate
+    if: always() && needs.evaluate.result != 'skipped' && needs.evaluate.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - name: Checkout reporting scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Download sanitized record
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nightly-eval-record
+          path: ${{ runner.temp }}/record
+      # This job has no model secret. Benchmark containers never receive the
+      # write token; the publisher uses a separate repo and a literal branch ref.
+      - name: Append history on harbor-results and update one issue if needed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONPATH: .
+        run: python -m bench.harbor.nightly_publish --record "$RUNNER_TEMP/record/record.json"

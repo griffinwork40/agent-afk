@@ -26,6 +26,39 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  ci-gate:
+    name: CI Gate
+    needs:
+      - lint-build
+      - test
+      - test-windows-shards
+      - test-windows
+      - test-node26
+      - test-node24
+      - smoke-windows
+      - test-pty
+      - docs
+      - test-dashboard
+      - publish-bundle
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every CI job to pass
+        # No job is conditionally optional: only individual steps can skip.
+        # Reject skipped/cancelled jobs too (including the raw Windows shards).
+        # tests/ci-gate.test.ts guards this needs list against new-job drift.
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        shell: bash
+        run: |
+          node <<'NODE'
+          const jobs = Object.entries(JSON.parse(process.env.NEEDS_JSON));
+          const failed = jobs.filter(([, job]) => job.result !== 'success');
+          for (const [id, job] of failed) console.error(`::error::${id}: ${job.result}`);
+          if (jobs.length === 0 || failed.length > 0) process.exit(1);
+          NODE
+
   lint-build:
     name: Lint & Build
     # GitHub-hosted runner. CI is triggered by `pull_request` — once this repo is
@@ -377,12 +410,13 @@ jobs:
       - name: Require every Windows shard to pass
         # A skipped/cancelled dependency must fail, not silently green this gate.
         # Exception (#4962): a run superseded by the concurrency group leaves the
-        # shards `cancelled`, and the job-level always() still starts this gate,
-        # so the check below would leave a false failed check on the PR. Skip the
-        # step for a `cancelled` shard result only; `failure`, `skipped` and any
-        # other result still reach the check and fail the gate. A step-level
-        # `cancelled()` cannot detect this: it reflects this job, which was never
-        # cancelled, not the run (observed live on run 43982827089).
+        # shards `cancelled` (a shard that hits timeout-minutes also reports
+        # `cancelled`, not `failure`), and the job-level always() still starts
+        # this gate, so the check below would leave a false failed check on the
+        # PR. Skip the step for a `cancelled` shard result only; `failure`,
+        # `skipped` and any other result still reach the check and fail the gate.
+        # A step-level `cancelled()` cannot detect this: it reflects this job,
+        # which was never cancelled, not the run (observed live on run 43982827089).
         if: ${{ !cancelled() && needs.test-windows-shards.result != 'cancelled' }}
         env:
           SHARD_RESULT: ${{ needs.test-windows-shards.result }}

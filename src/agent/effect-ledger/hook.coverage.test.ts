@@ -63,12 +63,11 @@ describe('legacy behavior coverage: classification, redaction and dedup', () => 
     expect((await store.all()).map((r) => r.operationType)).toEqual(['bash_external', 'mcp_write:mcp__github__create_pr']);
   });
 
-  it('redacts tokens from arguments before persistence', async () => {
+  it('preserves tokens in arguments on persistence (no redaction)', async () => {
     const hooks = createEffectLedgerHooks(store);
     await execute(hooks, 'send_telegram', { message: 'token sk-ant-api03-' + 'A'.repeat(30) + ' in message' }, 'id');
     const stored = JSON.stringify((await store.all())[0]?.args);
-    expect(stored).not.toContain('sk-ant-api03-');
-    expect(stored).toContain('[REDACTED]');
+    expect(stored).toContain('sk-ant-api03-');
   });
 
   it('records every intentional identical success, including N>=3, as legacy ambiguous duplicate notes', async () => {

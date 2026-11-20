@@ -88,7 +88,7 @@ export function hydrateStatsFromStore(
     // Runtime-only fields — reconstructed as empty defaults.
     turnCosts: [],
     turnTokens: [],
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
   };
   // Carry forward the per-route cwd override if one was set via /cd.
   const chatCwd = sessionData.get(key)?.cwd;

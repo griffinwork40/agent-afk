@@ -61,7 +61,11 @@ pnpm telegram:start                          # Telegram bot
 
 ### Pre-push hook
 
-`pnpm install` installs a pre-push hook running `pnpm check:audits`. Bypass: `git push --no-verify`.
+`pnpm install` installs a pre-push hook that refuses direct updates to `main` unless **every** new commit subject starts with `chore(release):` or `docs(changelog):`. Open a PR for other changes. An intentional human override is `AFK_ALLOW_MAIN_PUSH=1 git push` (audits still run). Refusals name the offending commit's short SHA and subject; unreadable ranges instead suggest `git fetch`. New remote `main` branches check the entire reachable history before examining subjects; seeding a new remote `main` needs the intentional human override `AFK_ALLOW_MAIN_PUSH=1 git push` to avoid that full-history scan. Merge commits and all their parents are checked too. Deletions, tags and other branches are unaffected by this guard.
+
+The hook then runs `pnpm check:audits`. Audit checks fail open for a broken environment (missing dependencies, Node or pnpm); the main-push guard runs first and does not. Bypass the entire hook: `git push --no-verify`.
+
+Branch rulesets can require the stable **CI Gate** check from `.github/workflows/ci.yml`. It requires every CI job to succeed; no job is legitimately optional (conditional steps do not skip their jobs). Failed, cancelled or skipped jobs block the gate. `tests/ci-gate.test.ts` checks that its dependencies cover every other job.
 
 ### Observability & Introspection
 

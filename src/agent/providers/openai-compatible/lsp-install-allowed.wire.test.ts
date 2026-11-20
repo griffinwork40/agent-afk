@@ -76,7 +76,7 @@ describe('buildQueryDispatcher lspInstallAllowed forwarding', () => {
     } as unknown as AgentConfig;
     buildQueryDispatcher({
       config,
-      permissionMode: 'default',
+      permissionMode: 'bypassPermissions',
       externalTools: undefined,
       customNames: [],
       schemas: [],
@@ -102,7 +102,7 @@ describe('buildQueryDispatcher lspInstallAllowed forwarding', () => {
     const config = { model: 'gpt-4o', surface: 'cli' } as unknown as AgentConfig;
     buildQueryDispatcher({
       config,
-      permissionMode: 'default',
+      permissionMode: 'bypassPermissions',
       externalTools: undefined,
       customNames: [],
       schemas: [],

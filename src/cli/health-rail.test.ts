@@ -35,7 +35,7 @@ function makeStats(): SessionStats {
     turnTokens: [],
     turns: [],
     model: 'claude-opus-4-5' as SessionStats['model'],
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     cwd: '/tmp',
   } as unknown as SessionStats;
 }

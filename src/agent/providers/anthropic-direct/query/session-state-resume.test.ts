@@ -25,7 +25,7 @@ const STUB_DISPATCHER = {} as unknown as import('../tool-dispatcher.js').ToolDis
 function makeMinimalOpts() {
   return {
     model: 'claude-test',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     userSystem: null,
     toolDispatcher: STUB_DISPATCHER,
   } as const;

@@ -27,7 +27,6 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { spawn as nodeSpawn } from 'node:child_process';
 import type { EpisodeTrace } from '../types.js';
-import { redactSecrets } from '../../agent/redact-secrets.js';
 import { accumulateStreamJson } from './afk-runner.stream.js';
 
 export { accumulateStreamJson } from './afk-runner.stream.js';
@@ -184,7 +183,7 @@ export async function runEpisodeChild(args: RunEpisodeChildArgs): Promise<Episod
       inputTokens: 0,
       outputTokens: 0,
       durationMs,
-      error: `Episode timed out after ${timeoutMs}ms. stderr: ${redactSecrets(stderrTail)}`,
+      error: `Episode timed out after ${timeoutMs}ms. stderr: ${stderrTail}`,
     };
   }
 
@@ -199,7 +198,7 @@ export async function runEpisodeChild(args: RunEpisodeChildArgs): Promise<Episod
       inputTokens: 0,
       outputTokens: 0,
       durationMs,
-      error: `afk chat exited ${exitCode}. stderr: ${redactSecrets(stderrTail)}`,
+      error: `afk chat exited ${exitCode}. stderr: ${stderrTail}`,
     };
   }
 
@@ -216,7 +215,7 @@ export async function runEpisodeChild(args: RunEpisodeChildArgs): Promise<Episod
       inputTokens: 0,
       outputTokens: 0,
       durationMs,
-      error: `afk chat stream ended without a done event. stderr: ${redactSecrets(stderrTail)}`,
+      error: `afk chat stream ended without a done event. stderr: ${stderrTail}`,
     };
   }
 

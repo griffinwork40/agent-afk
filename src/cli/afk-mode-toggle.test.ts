@@ -1,7 +1,7 @@
 /**
  * Unit tests for the AFK-mode toggle helper.
  *
- * `toggleAfkMode` flips the session permission mode ('autonomous' <-> 'default'),
+ * `toggleAfkMode` flips the session permission mode ('autonomous' <-> 'bypassPermissions'),
  * mirrors the result onto `stats.permissionMode`, resets the per-session push
  * budget on turn-ON, and preflights Telegram config (warns but still enters AFK
  * mode when unconfigured). Mirrors plan-mode-toggle's failure semantics: leave
@@ -67,7 +67,7 @@ function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
     turnTokens: [],
     turns: [],
     model: 'sonnet',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     ...overrides,
   };
 }
@@ -128,7 +128,7 @@ describe('toggleAfkMode', () => {
   });
 
   it('flips default → autonomous and emits ON copy', async () => {
-    const stats = makeStats({ permissionMode: 'default' });
+    const stats = makeStats({ permissionMode: 'bypassPermissions' });
     const { ctx, sess, lines } = makeCtx({ stats });
 
     await toggleAfkMode(ctx, true);
@@ -144,21 +144,21 @@ describe('toggleAfkMode', () => {
     expect(resetAfkPushBudget).toHaveBeenCalledTimes(1);
   });
 
-  it('flips autonomous → default and emits OFF copy', async () => {
+  it('flips autonomous → bypassPermissions and emits OFF copy', async () => {
     const stats = makeStats({ permissionMode: 'autonomous' });
     const { ctx, sess, lines } = makeCtx({ stats });
 
     await toggleAfkMode(ctx, false);
 
-    expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-    expect(stats.permissionMode).toBe('default');
+    expect(sess.setPermissionMode).toHaveBeenCalledWith('bypassPermissions');
+    expect(stats.permissionMode).toBe('bypassPermissions');
     expect(lines.join('\n').toLowerCase()).toContain('afk mode off');
   });
 
   it('warns but STILL enters AFK mode when Telegram is unconfigured', async () => {
     mockToken = undefined;
     mockTargets = [];
-    const stats = makeStats({ permissionMode: 'default' });
+    const stats = makeStats({ permissionMode: 'bypassPermissions' });
     const { ctx, lines } = makeCtx({ stats });
 
     await toggleAfkMode(ctx, true);
@@ -178,13 +178,13 @@ describe('toggleAfkMode', () => {
 
   it('leaves permissionMode unchanged and surfaces an error when setPermissionMode rejects', async () => {
     const setPermissionMode = vi.fn().mockRejectedValue(new Error('boom'));
-    const stats = makeStats({ permissionMode: 'default' });
+    const stats = makeStats({ permissionMode: 'bypassPermissions' });
     const { ctx, lines } = makeCtx({ stats, setPermissionMode });
 
     await toggleAfkMode(ctx, true);
 
     expect(setPermissionMode).toHaveBeenCalledWith('autonomous');
-    expect(stats.permissionMode).toBe('default');
+    expect(stats.permissionMode).toBe('bypassPermissions');
     expect(lines.some((l) => l.startsWith('ERROR:'))).toBe(true);
   });
 });
@@ -202,7 +202,7 @@ describe('toggleAfkMode — AFK ledger channel wiring (scope.lock criterion 1)',
 
   it('on /afk on, swaps to the ledger channel handler and marks presence AFK', async () => {
     const { ctx, sess, swapCalls, stdinHandler } = makeCtx({
-      stats: makeStats({ permissionMode: 'default' }),
+      stats: makeStats({ permissionMode: 'bypassPermissions' }),
       sessionId: 's1',
       withChannel: true,
     });
@@ -263,7 +263,7 @@ describe('toggleAfkMode — AFK ledger channel wiring (scope.lock criterion 1)',
 
   it('degrades to keyboard-only AND warns when the provider session id is not yet known', async () => {
     const { ctx, swapCalls, lines } = makeCtx({
-      stats: makeStats({ permissionMode: 'default' }),
+      stats: makeStats({ permissionMode: 'bypassPermissions' }),
       // no sessionId → e.g. /afk on before the first turn issued an id
       withChannel: true,
     });
@@ -284,7 +284,7 @@ describe('toggleAfkMode — AFK ledger channel wiring (scope.lock criterion 1)',
   it('F3: warns about the missing signing key but STILL arms the channel', async () => {
     ensureSessionKey.mockReturnValueOnce(null);
     const { ctx, swapCalls, lines } = makeCtx({
-      stats: makeStats({ permissionMode: 'default' }),
+      stats: makeStats({ permissionMode: 'bypassPermissions' }),
       sessionId: 's-nokey',
       withChannel: true,
     });
@@ -318,7 +318,7 @@ describe('toggleAfkMode — AFK ledger channel wiring (scope.lock criterion 1)',
   // Criterion 4: abort-watcher wiring
   it('on /afk on, starts the abort-watcher bound to the same session and key', async () => {
     const { ctx } = makeCtx({
-      stats: makeStats({ permissionMode: 'default' }),
+      stats: makeStats({ permissionMode: 'bypassPermissions' }),
       sessionId: 's2',
       withChannel: true,
     });
@@ -338,7 +338,7 @@ describe('toggleAfkMode — AFK ledger channel wiring (scope.lock criterion 1)',
   it('on /afk off, stops the abort-watcher (stop() is called)', async () => {
     // Turn ON first to install the watcher.
     const { ctx } = makeCtx({
-      stats: makeStats({ permissionMode: 'default' }),
+      stats: makeStats({ permissionMode: 'bypassPermissions' }),
       sessionId: 's3',
       withChannel: true,
     });
@@ -356,7 +356,7 @@ describe('toggleAfkMode — AFK ledger channel wiring (scope.lock criterion 1)',
 
   it('abort-watcher is not started when no channel (non-REPL surface)', async () => {
     const { ctx } = makeCtx({
-      stats: makeStats({ permissionMode: 'default' }),
+      stats: makeStats({ permissionMode: 'bypassPermissions' }),
       sessionId: 's4',
       withChannel: false,
     });

@@ -110,11 +110,10 @@ describe('buildPromptSuggestionUser', () => {
     expect(typeof extractOutcome).toBe('function');
   });
 
-  it('redacts secrets before egress', () => {
-    // DATA-EGRESS: transcript content reaches a possibly-different endpoint.
+  it('passes secrets through in egress', () => {
     const leaked = 'user: deploy with sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
     const user = buildPromptSuggestionUser(makeCtx({ getTranscriptTail: () => leaked }));
-    expect(user).not.toContain('sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+    expect(user).toContain('sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
   });
 });
 

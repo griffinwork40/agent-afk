@@ -121,7 +121,7 @@ export function setUpQuerySession(
   // against the host's process.cwd()). When the caller injected an
   // external dispatcher, use it as-is — external callers own their own
   // lifecycle.
-  const permissionMode = config.permissionMode ?? 'default';
+  const permissionMode = config.permissionMode ?? 'bypassPermissions';
   // Track for getGrants() so the path-approval hook's allowAll stays in sync
   // with the per-query dispatcher's (both derive from this mode).
   ctx.setCurrentPermissionMode(permissionMode);

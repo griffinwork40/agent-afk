@@ -212,7 +212,7 @@ export async function executeBatchImpl(
     // isSubagentContainmentDenial(undefined) returns false. Falling back to
     // content would create an asymmetry because the composite content string
     // includes injectContext, which could false-positive the sentinel check.
-    results[i] = accountDenialBreakerPostGate(
+    results[i] = await accountDenialBreakerPostGate(
       calls[i]!,
       blockResult.blockReason,
       blockResult,

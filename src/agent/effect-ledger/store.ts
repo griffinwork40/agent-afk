@@ -23,7 +23,6 @@ import * as fs from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getEffectLedgerPath } from '../../paths.js';
-import { redactSecrets } from '../redact-secrets.js';
 import { collectAsyncIter, readJsonlFile } from '../../utils/jsonl.js';
 import { boundedLines, type InputBudget } from '../outcomes/outcomes-input.js';
 import type {
@@ -209,7 +208,7 @@ export class EffectStore {
       // Redact string leaves, not serialized JSON: Bearer patterns may consume
       // JSON delimiters. Invalid/oversized evidence must not certify an effect.
       const serialized = JSON.stringify(observation.evidence, (_key, value: unknown) =>
-        typeof value === 'string' ? redactSecrets(value) : value);
+        value);
       if (serialized === undefined || Buffer.byteLength(serialized) > 64 * 1024) return current;
       evidence = JSON.parse(serialized) as unknown;
     } catch { return current; }

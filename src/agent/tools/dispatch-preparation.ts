@@ -7,6 +7,7 @@ import {
   type ResolvedChildModel,
 } from '../subagent/resolve-child-model.js';
 import { applyParentCredentialFallback } from './child-credential.js';
+import { resolveMaxNestingDepth } from './nesting.js';
 
 /**
  * Compose must not even invoke a credential resolver for OpenAI nodes. The
@@ -82,4 +83,23 @@ export function prepareDispatchModel(input: DispatchModelPreparationInput): Prep
   // into an OpenAI config. Do not rely on the parent-fallback helper for this:
   // it intentionally preserves a nonempty resolved key unchanged.
   return { ...resolved, isOpenAI, apiKey: isOpenAI ? undefined : apiKey };
+}
+
+/**
+ * Second shared pre-fork stage (#4042 Stage 3): resolve the effective
+ * `maxDepth` for a child dispatch, applying the env-var default when the
+ * caller's context does not carry an explicit cap.
+ *
+ * Both the agent-tool path (`subagent-executor.execute-once.ts`) and the
+ * compose path (`compose-executor.preflight.ts`) previously inlined the
+ * identical expression `ctx.maxDepth ?? resolveMaxNestingDepth()`. Extracting
+ * it here means a future change to the resolution logic (e.g. a new env var or
+ * a per-provider override) only needs to land in one place.
+ *
+ * Precondition: `ctxMaxDepth` is the value already stored on the executor
+ * context (may be `undefined` for contexts constructed without an explicit
+ * cap). Returns the env-var default when `ctxMaxDepth` is `undefined`.
+ */
+export function resolveChildMaxDepth(ctxMaxDepth: number | undefined): number {
+  return ctxMaxDepth ?? resolveMaxNestingDepth();
 }

@@ -55,4 +55,14 @@ describe('killProcessGroupAndWait', () => {
     await killProcessGroupAndWait(0, 'SIGKILL', deps);
     expect(launch).not.toHaveBeenCalled();
   });
+
+  it('never signals pid 1 on either platform (kill(-1) reaches every user process)', async () => {
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const { launch, deps } = setup();
+    await killProcessGroupAndWait(1, 'SIGKILL', { platform: 'linux' });
+    await killProcessGroupAndWait(1, 'SIGKILL', { platform: 'darwin' });
+    await killProcessGroupAndWait(1, 'SIGKILL', deps);
+    expect(kill).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
+  });
 });

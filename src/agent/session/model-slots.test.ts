@@ -66,7 +66,7 @@ function makeSlots(over: Partial<Record<'local' | 'small' | 'medium' | 'large' |
     small: { id: over.small ?? DEFAULT_SLOT_BINDINGS.small.id },
     medium: { id: over.medium ?? DEFAULT_SLOT_BINDINGS.medium.id },
     large: { id: over.large ?? DEFAULT_SLOT_BINDINGS.large.id },
-    subagent: { id: '' },
+    subagent: { id: over.subagent ?? DEFAULT_SLOT_BINDINGS.subagent.id },
   };
 }
 
@@ -130,6 +130,11 @@ describe('resolveModelInput', () => {
     expect(resolveModelInput('small', bindings)).toBe('gpt-4o-mini');
     // `haiku` is a fixed identity alias — a rebound `small` tier must NOT drag it.
     expect(resolveModelInput('haiku', bindings)).toBe(CLAUDE_HAIKU_ID);
+  });
+
+  it('resolves the subagent override supplied by makeSlots', () => {
+    const bindings = makeSlots({ subagent: 'gpt-4o-mini' });
+    expect(resolveModelInput('subagent', bindings)).toBe('gpt-4o-mini');
   });
 
   it('passes through raw ids, the auto sentinel, and undefined', () => {
@@ -369,6 +374,19 @@ describe('computeSlotBindings', () => {
     process.env['AFK_MODEL_SMALL'] = 'o4-mini';
     const out = computeSlotBindings({ small: { id: 'gpt-4o-mini', name: 'fast' } });
     expect(out.small).toEqual({ id: 'o4-mini', name: 'fast' });
+  });
+
+  it('activates the subagent binding from env alone', () => {
+    process.env['AFK_MODEL_SUBAGENT'] = 'gpt-4o-mini';
+    process.env['AFK_MODEL_SUBAGENT_BASE_URL'] = 'http://localhost:1234/v1';
+    process.env['AFK_MODEL_SUBAGENT_API_KEY'] = 'subagent-test-key';
+    const bindings = computeSlotBindings();
+    expect(bindings.subagent).toEqual({
+      id: 'gpt-4o-mini',
+      baseUrl: 'http://localhost:1234/v1',
+      apiKey: 'subagent-test-key',
+    });
+    expect(resolveModelInput('subagent', bindings)).toBe('gpt-4o-mini');
   });
 
   it('ignores blank env values', () => {

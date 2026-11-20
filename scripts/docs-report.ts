@@ -3,7 +3,6 @@
 import { isMain, repoRoot } from './lib/docs-reference.js';
 import { gitReader, handwrittenPages, type GitRead, type Page } from './lib/docs-impact.js';
 import { loadBacklog, loadPublicSurface, namesSymbol, RATCHET_KINDS, type Backlog, type Surface } from './lib/public-surface.js';
-import { redactSecrets } from '../src/agent/redact-secrets.js';
 
 export function featSinceDocs(git: GitRead): { commits: string[]; note?: string } {
   try {
@@ -11,7 +10,7 @@ export function featSinceDocs(git: GitRead): { commits: string[]; note?: string 
     if (!last) return { commits: [], note: 'No prior docs-content commit found.' };
     const commits = git(['log', `${last}..HEAD`, '--format=%h%x09%s']).trim().split('\n').filter(Boolean)
       .filter((line) => /^[^\t]+\tfeat(?:\([^)]*\))?!?:/i.test(line))
-      .map((line) => { const [sha, ...subject] = line.split('\t'); return `\`${sha}\` ${redactSecrets(subject.join('\t'))}`; });
+      .map((line) => { const [sha, ...subject] = line.split('\t'); return `\`${sha}\` ${subject.join('\t')}`; });
     return { commits };
   } catch { return { commits: [], note: 'Git history unavailable.' }; }
 }
@@ -19,7 +18,7 @@ export function featSinceDocs(git: GitRead): { commits: string[]; note?: string 
 export function reportMarkdown(surface: Surface, backlog: Backlog, pages: readonly Page[], history: ReturnType<typeof featSinceDocs>): string {
   const onlyGenerated = surface.symbols.filter((symbol) => RATCHET_KINDS.includes(symbol.kind)
     && !pages.some((page) => namesSymbol(symbol, page.text)));
-  const backlogLines = backlog.entries.map((item) => `- \`${item.kind}:${item.name}\` (${item.added}): ${redactSecrets(item.reason)}`);
+  const backlogLines = backlog.entries.map((item) => `- \`${item.kind}:${item.name}\` (${item.added}): ${item.reason}`);
   const lines = ['# Docs freshness report', '', `## Backlog (${backlog.entries.length})`,
     ...(backlogLines.length ? backlogLines : ['- None']), '',
     `## Public symbols named only in generated references (${onlyGenerated.length})`,

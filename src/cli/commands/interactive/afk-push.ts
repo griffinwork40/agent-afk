@@ -146,6 +146,10 @@ export function doneHasCorroboratingEvidence(toolEvents: readonly ToolEvent[]): 
  * produced no corroborating evidence ({@link doneHasCorroboratingEvidence}):
  * either no evidence tools fired at all, or code changed without a subsequent
  * verification step.
+ *
+ * A done with structured fields but no Pending bullet gets `• Pending: not
+ * stated`: "not stated" is not "none", and the operator cannot tell them apart
+ * if the model simply left the bullet out.
  */
 export function formatTerminalStateForTelegram(
   state: TerminalState,
@@ -165,13 +169,18 @@ export function formatTerminalStateForTelegram(
   // Use the model's own terminal-state body (not tool output) as a last resort.
   // Clip to MAX_RAW_BODY_FALLBACK_CHARS so an oversized model body cannot carry
   // unbounded prose into the Telegram push channel.
-  if (lines.length === 0 && state.rawBody.trim().length > 0) {
+  const hasStructuredLines = lines.length > 0;
+  if (!hasStructuredLines && state.rawBody.trim().length > 0) {
     const raw = state.rawBody.trim();
     lines.push(
       raw.length > MAX_RAW_BODY_FALLBACK_CHARS
         ? `${raw.slice(0, MAX_RAW_BODY_FALLBACK_CHARS)}… [truncated]`
         : raw,
     );
+  }
+  const pendingStated = typeof state.deferred === 'string' && state.deferred.trim().length > 0;
+  if (state.kind === 'done' && hasStructuredLines && !pendingStated) {
+    lines.push('• Pending: not stated');
   }
   if (downgraded) {
     lines.push(

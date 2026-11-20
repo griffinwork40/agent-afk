@@ -1,0 +1,64 @@
+---
+title: "Install and first-run errors"
+description: "Look up messages from installing Node.js through sending your first AFK request."
+---
+
+If you see one of these messages, use the matching row before reinstalling anything. Start at the stage where you stopped. Shell and npm wording varies by version and language; the tables show recognizable text or error codes, not a prediction of what every computer will display. These are reference remedies, not results from clean-machine testing.
+
+Already running tasks? [Common errors](/troubleshooting/common-errors) covers runtime failures such as context limits, blocked tools, and worktree cleanup. The [glossary](/concepts/glossary) explains unfamiliar terms.
+
+## Get Node.js and npm working
+
+Run `node --version` and `npm --version` in your terminal. Both should print a version number before you try to install AFK.
+
+| If you see | What it means | What to do |
+|---|---|---|
+| `command not found: node` or `command not found: npm` | Your shell cannot find Node.js or npm. They may not be installed, or the terminal may not know where they were installed. | Follow npm's [Node.js and npm installation guide](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm), choosing a Node version supported by [AFK](/installation#requirements). Close and reopen your terminal, then check both versions again. |
+| `'node' is not recognized` or `'npm' is not recognized` | Windows Command Prompt cannot find the program. This is not an AFK sign-in problem. | Install Node.js and npm using the [official installation guidance](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm), then open a new terminal. If they are already installed, check the installation's PATH settings rather than repeatedly installing AFK. |
+| `running scripts is disabled on this system` | PowerShell blocked a `.ps1` launcher, which may be npm's launcher, before AFK ran. | See Microsoft's [execution policy explanation](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies). For a trusted npm installation, try its Windows command launcher: `npm.cmd --version`, then `npm.cmd install -g agent-afk`; similarly use `afk.cmd --version` after installation. npm documents [Windows command launchers](https://docs.npmjs.com/cli/v11/configuring-npm/package-json#bin). Do not disable execution policy globally; on a managed computer, ask your administrator if policy prevents use. |
+
+## Install AFK
+
+| If you see | What it means | What to do |
+|---|---|---|
+| `EBADENGINE` | npm found a package whose supported Node.js or npm versions do not match yours. This may be a warning or a failed install. | Read which package the message names and its required versions. For AFK, compare `node --version` with [requirements](/installation#requirements), install a supported Node version, then retry `npm install -g agent-afk`. See npm's [engine requirements](https://docs.npmjs.com/cli/v11/configuring-npm/package-json#engines) and [installation guide](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm); do not force an unsupported version. |
+| `EACCES` | npm does not have permission to write to the installation location. | On macOS or Linux, follow npm's [global-install permissions guide](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally): use a Node version manager or a user-owned npm directory. Its manual directory instructions do not apply to Windows. Do not run AFK as root to get past an install problem. |
+
+## The afk command is not found
+
+| If you see | What it means | What to do |
+|---|---|---|
+| `command not found: afk` or `'afk' is not recognized` | Your shell cannot find the installed command. This can happen if installation failed, AFK was installed in a different Node environment, or npm's global command folder is missing from PATH. | First confirm `npm install -g agent-afk` completed successfully in this environment. Open a new terminal and try `afk --version`; if it still fails, use the PATH checks below. See npm's [executable locations](https://docs.npmjs.com/cli/v11/configuring-npm/folders#executables). |
+
+Run `npm config get prefix` to find the base folder npm uses for global installs. On macOS and Linux, commands are in the `bin` folder inside that folder; on Windows they are directly in the printed folder. That command folder needs to be on PATH, the list of folders your shell searches. Follow the [npm folder guidance](https://docs.npmjs.com/cli/v11/configuring-npm/folders#executables) for the correct location; do not paste macOS shell-profile commands into PowerShell.
+
+Native Windows and WSL have separate installations. Run AFK in the environment where you installed it. Once `afk --version` works, move on to sign-in rather than installing again.
+
+## Sign in
+
+The messages below come from AFK. Quoted fragments are labeled as fragments; other entries give the complete message text. Credential entry belongs in your terminal's secret prompt, never in an agent conversation, screenshot, or bug report.
+
+| If you see | What it means | What to do |
+|---|---|---|
+| `Anthropic API key or OAuth token:` (prompt) | AFK is waiting for an Anthropic credential, not asking for a normal chat message. Typed or pasted characters are hidden. | Enter an Anthropic credential and press Enter. If you intended to use OpenAI or another provider, cancel with Ctrl+C and follow that provider's [credential instructions](/configuration/api-keys) instead; do not paste another provider's key here. |
+| `No token provided. Nothing saved.` | You submitted the credential prompt without a value. | For Anthropic, run `afk login` again and enter the credential at the hidden prompt. See [provider credentials](/configuration/api-keys) if you do not yet have one. |
+| ``agent-afk: No Anthropic credential found. Run `afk login` to authenticate.`` | AFK needs an Anthropic credential but cannot ask for one in this noninteractive run. | Run `afk login` directly in a terminal first, then retry. If you meant to use a different provider, follow [models and providers](/configuration/models-providers) to select it and configure its own credentials. |
+| `` `afk login` is Anthropic-only. `` | The selected provider is OpenAI-backed, but this login command saves Anthropic credentials. | For OpenAI API billing, run `afk config env set OPENAI_API_KEY` and enter the key at the masked prompt. For ChatGPT subscription access, follow the separate [Codex sign-in instructions](/configuration/api-keys#openai-and-chatgpt-subscription). |
+| `No OpenAI auth found.` (message opening) | AFK could not find usable OpenAI credentials. | Follow [OpenAI credentials](/configuration/api-keys#openai-and-chatgpt-subscription), then run `afk provider auth diagnose` to inspect the selected source without revealing the key. |
+
+Saving a credential only proves that it was saved. It does not prove that the provider accepts it or that the account has credit. See [authentication troubleshooting](/troubleshooting/auth-and-providers) if a saved key is not the one you expected AFK to use.
+
+## Send the first message
+
+After selecting and configuring your provider, try a small request such as `afk chat "hello"`. A hosted model request may incur provider charges; see [usage and cost](/guides/usage-and-cost).
+
+| If you see | What it means | What to do |
+|---|---|---|
+| `Authentication failed. Check that your API key is valid and has not expired.` | The provider rejected the credential. Reinstalling AFK will not make the key valid. | Check [authentication troubleshooting](/troubleshooting/auth-and-providers). For an Anthropic key, `afk login --force` lets you replace it; for another provider, correct that provider's credential instead. Restart any already-running AFK process after changing credentials. |
+| `Your Anthropic API credit balance is empty.` | The Anthropic API account has no remaining credit. This is different from a temporary rate limit. | Check [Anthropic billing](https://console.anthropic.com/settings/billing) before buying more credit. A subscription and API-key billing are different access paths; follow [credential setup](/configuration/api-keys) if you intended to use a supported subscription instead. |
+| `Rate limit reached. The request was rejected (HTTP 429).` | The provider is limiting how often requests can be made. | Wait a moment before retrying, and reduce simultaneous requests. If AFK shows a separate usage reset time, follow the [usage-pause guidance](/troubleshooting/common-errors#rate-limits-and-usage-pauses) instead. |
+| `Network error: unable to reach the API endpoint.` | AFK could not connect to the model service. | Check your internet connection. If you chose a local model, make sure its server is running; use [provider troubleshooting](/troubleshooting/auth-and-providers) to check the configured address. Do not disable firewall or workplace security controls just to retry. |
+
+## Still stuck?
+
+If `afk` runs, use `afk doctor` for configuration checks. It does not test a model completion, so a passing check is not proof that the first request will succeed. Follow [diagnostics and safe bug reporting](/troubleshooting), and share only the error and relevant version numbers after removing secrets.

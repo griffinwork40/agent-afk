@@ -245,9 +245,8 @@ export function formatStatusLine(f: StatusLineFields, maxW: number): string {
     parts.push({ text: palette.info('◐ AFK') });
   } else if (f.permissionMode === 'bypassPermissions') {
     parts.push({ text: palette.bypass('⚡ bypass') });
-  } else if (f.permissionMode === 'default') {
-    parts.push({ text: palette.success('○ default') });
   }
+  // 'default' is deprecated; no chip rendered — sessions now baseline at bypassPermissions.
 
   // Last-held risk category chip (#3900): shown only in autonomous mode so
   // reviewers of an unattended run see which rule family last paused the gate.

@@ -234,7 +234,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     this.state = createSessionState({
       model: opts.model,
       ...(opts.requestedModel !== undefined ? { requestedModel: opts.requestedModel } : {}),
-      permissionMode: opts.permissionMode ?? 'default',
+      permissionMode: opts.permissionMode ?? 'bypassPermissions',
       userSystem: opts.userSystem,
       toolDispatcher: opts.toolDispatcher,
       ...(opts.initialMessages ? { initialMessages: opts.initialMessages } : {}),

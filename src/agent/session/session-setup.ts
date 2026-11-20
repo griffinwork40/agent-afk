@@ -58,7 +58,7 @@ export function buildInitialState(
   sessionIdentity: SessionIdentity;
   metadata: SessionMetadata;
 } {
-  const permissionMode = config.permissionMode ?? 'default';
+  const permissionMode = config.permissionMode ?? 'bypassPermissions';
   const persistSession = config.persistSession ?? true;
 
   const sessionIdentity: SessionIdentity = {

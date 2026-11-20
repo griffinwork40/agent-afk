@@ -184,6 +184,28 @@ describe('computeSessionCost', () => {
     expect(r).toMatchObject({ rootCostUsd: 1, subagentCostUsd: 4, totalCostUsd: 5, source: 'seal' });
   });
 
+  // #5050: cost-present / turn-count-absent path (cost.ts:308)
+  // A seal-only trace where finalTurnCount is missing emits cost_usd but must
+  // NOT emit rootTurnCount — the conditional spread `...(sealTurns !== undefined
+  // ? { turns: sealTurns } : {})` in rootSplit is the guard under test.
+  it('seal-only with no finalTurnCount: emits rootCostUsd but omits rootTurnCount (#5050)', () => {
+    const sealCostNoTurns: CostEventLike = {
+      kind: 'session_sealed',
+      payload: { status: 'succeeded', finalCostUsd: 2.5, closedAt: ts },
+      // Note: finalTurnCount intentionally absent
+    };
+    const acc = new SessionCostAccumulator();
+    acc.add(sealCostNoTurns);
+    const r = acc.result();
+    expect(r.rootCostUsd).toBe(2.5);
+    expect(r.subagentCostUsd).toBe(0);
+    expect(r.totalCostUsd).toBe(2.5);
+    expect(r.source).toBe('seal');
+    // rootTurnCount must be absent — not 0, not undefined coerced — the key
+    // must not exist in the result at all.
+    expect(r).not.toHaveProperty('rootTurnCount');
+  });
+
   it('multi-cycle REPL root: disjoint per-cycle closures are summed', () => {
     // `/clear` re-zeroes the root accumulator, so each cycle closes with its
     // own spend and the seal covers only the last cycle. With no subagent in

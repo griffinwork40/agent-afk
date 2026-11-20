@@ -56,7 +56,8 @@ function readTelemetryRecords(path: string): unknown[] {
   return readFileSync(path, 'utf-8')
     .split('\n')
     .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line));
+    .map((line) => JSON.parse(line))
+    .filter((record) => record.recordType !== 'notification-delivery');
 }
 
 describe('validateScheduledTask', () => {
@@ -1014,6 +1015,24 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       body: JSON.stringify(body),
     });
     expect(res2.status).toBe(409);
+  });
+
+  it('POST /tasks validates and roundtrips the per-task failure threshold', async () => {
+    handle = await startDaemon({ port: 0, telemetryPath, writePortFile: false });
+    const good = await fetch(`http://localhost:${handle.port}/tasks`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId: 'streak', command: '/x', cron: '* * * * *', failureStreakThreshold: 7 }),
+    });
+    expect(good.status).toBe(201);
+    expect(handle.scheduler.list().find((t) => t.taskId === 'streak')?.failureStreakThreshold).toBe(7);
+    for (const value of [0, -1, 1.5, '3', null]) {
+      const bad = await fetch(`http://localhost:${handle.port}/tasks`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: 'bad-streak', command: '/x', cron: '* * * * *', failureStreakThreshold: value }),
+      });
+      expect(bad.status).toBe(400);
+    }
+    expect(handle.scheduler.list().find((t) => t.taskId === 'bad-streak')).toBeUndefined();
   });
 
   it('POST /tasks threads maxAttempts / retryDelayMs and rejects out-of-bounds values (#3243)', async () => {

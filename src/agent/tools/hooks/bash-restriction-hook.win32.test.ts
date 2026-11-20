@@ -123,6 +123,14 @@ describe('bash-restriction hook under win32 semantics — credential floor holds
     expect(decision.reason).toMatch(/restricted path/);
   });
 
+  it('names the matched win32 root and its credential floor in the reason', () => {
+    const decision = hook(ctx('cat /c/Users/alice/.ssh/id_rsa', mgr));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain(
+      'restricted path (C:\\Users\\alice/.ssh) (credential floor: C:\\Users\\alice\\.ssh)',
+    );
+  });
+
   it('does NOT block ordinary commands or non-credential home paths', () => {
     expect(hook(ctx('ls', mgr)).decision).not.toBe('block');
     expect(hook(ctx('git status', mgr)).decision).not.toBe('block');

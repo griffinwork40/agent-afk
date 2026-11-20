@@ -1,0 +1,74 @@
+name: Onboarding observation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 9 * * 1'
+  pull_request:
+    paths:
+      - '.github/workflows/onboarding-observe.yml'
+      - 'scripts/onboarding/**'
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    name: Observe ${{ matrix.os }} Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    # Two Windows installs can each consume their 15-minute observation timeout.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, macos-15]
+        node: [20, 22, 24, 26]
+    steps:
+      - name: Checkout observation kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Select observed Node version
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Observe macOS install and first launch
+        if: runner.os == 'macOS'
+        shell: sh
+        run: sh scripts/onboarding/observe-macos.sh "$GITHUB_WORKSPACE/observation/macos.log"
+      - name: Observe Windows PowerShell 5.1 install and first launch
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          & .\scripts\onboarding\observe-windows.ps1 -LogPath (Join-Path $env:GITHUB_WORKSPACE 'observation\windows.log')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Observe Windows with Git removed from PATH
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          & .\scripts\onboarding\observe-windows.ps1 -WithoutGit -LogPath (Join-Path $env:GITHUB_WORKSPACE 'observation\windows-no-git.log')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: macOS digest
+        if: always() && runner.os == 'macOS'
+        shell: sh
+        run: |
+          for digest in observation/*.summary.md; do
+            [ -f "$digest" ] && cat "$digest" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Windows digest
+        if: always() && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Get-ChildItem observation\*.summary.md -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-Content -LiteralPath $_.FullName | Out-File -LiteralPath $env:GITHUB_STEP_SUMMARY -Append -Encoding UTF8
+          }
+      - name: Upload full logs and digests
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: onboarding-${{ matrix.os }}-node-${{ matrix.node }}
+          path: |
+            observation/*.log
+            observation/*.summary.md
+          if-no-files-found: error
+          retention-days: 30

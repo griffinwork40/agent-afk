@@ -41,7 +41,7 @@
  *
  * ## resultTail
  * For verification commands, we reuse RESULT_TAIL_CHARS (exported from
- * verification-patterns.ts) and redactSecrets (from redact-secrets.ts) so
+ * verification-patterns.ts) so
  * journal-derived tails match sidecar-derived ones exactly.
  *
  * ## Spilled / blob content

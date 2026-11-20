@@ -108,7 +108,7 @@ function makeStats(): SessionStats {
     turnTokens: [],
     turns: [],
     model: 'claude-3-5-sonnet-20241022',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     thinkingUi: 'live',
   } as SessionStats;
 }

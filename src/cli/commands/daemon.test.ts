@@ -80,6 +80,7 @@ vi.mock('../errors/index.js', () => ({
 }));
 
 import { startDaemon } from '../../agent/daemon.js';
+import { makeTaskCompleteHandler } from './daemon.action.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import { loadConfig, loadTelegramConfig } from '../config.js';
 import { getApiKey, getModel } from '../shared-helpers.js';
@@ -345,7 +346,7 @@ describe('afk daemon (CLI integration)', () => {
 
     expect(mockPushIfConfigured).toHaveBeenCalledWith(
       expect.stringContaining('full daemon output'),
-      { markdown: true },
+      { markdown: true, target: [] },
     );
   });
 
@@ -392,10 +393,10 @@ describe('afk daemon (CLI integration)', () => {
         },
         { responseText: 'done', notifyChat: -100999 },
       );
-      // Not allowlisted → no target key → default routing, byte-identical to legacy.
+      // Not allowlisted → explicitly resolve default targets for delivery telemetry.
       expect(mockPushIfConfigured).toHaveBeenCalledWith(
         expect.stringContaining('done'),
-        { markdown: true },
+        { markdown: true, target: [111] },
       );
     } finally {
       delete process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'];
@@ -538,18 +539,23 @@ describe('registerDaemonCrashHandlers', () => {
     // Without this, the 200 ms timer arms on every process.emit('uncaughtException')
     // call and fires during vitest worker teardown, killing the worker with exit
     // code 1 and failing the job (#5019).
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     exitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: number | string | null) => undefined as never);
   });
 
   afterEach(() => {
-    vi.clearAllTimers();
-    exitSpy.mockRestore();
-    vi.useRealTimers();
-    // Remove listeners added by registerDaemonCrashHandlers to keep process clean.
-    process.removeAllListeners('uncaughtException');
-    process.removeAllListeners('unhandledRejection');
-    _resetDaemonCrashHandlersForTest();
+    try {
+      expect(exitSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      exitSpy.mockRestore();
+      vi.useRealTimers();
+      // Remove listeners added by registerDaemonCrashHandlers to keep process clean.
+      process.removeAllListeners('uncaughtException');
+      process.removeAllListeners('unhandledRejection');
+      _resetDaemonCrashHandlersForTest();
+      process.exitCode = undefined;
+    }
   });
 
   it('push includes error text without in-flight tasks when none provided', () => {
@@ -743,5 +749,24 @@ describe('registerDaemonCrashHandlers', () => {
     // The safe display form must appear instead.
     expect(msg).toContain('[REDACTED]');
     expect(msg).toContain('/safe-cmd');
+  });
+});
+
+
+describe('task completion delivery outcome', () => {
+  beforeEach(() => { vi.clearAllMocks(); vi.stubEnv('AFK_TELEGRAM_ALLOWED_CHAT_IDS', '123'); vi.stubEnv('AFK_TELEGRAM_PRIMARY_CHAT_ID', '123'); mockLoadTelegramConfig.mockReturnValue({}); });
+  afterEach(() => { vi.unstubAllEnvs(); });
+  const record = { taskId: 't', command: 'x', trigger: 'cron' as const, status: 'error' as const, triggeredAt: 'date', durationMs: 1 };
+  it('reports unconfigured separately from failed, with the resolved destination', async () => {
+    mockPushIfConfigured.mockResolvedValueOnce(null);
+    expect(await makeTaskCompleteHandler(false)(record)).toEqual({ target: [123], outcome: 'unconfigured' });
+    mockPushIfConfigured.mockResolvedValueOnce([{ ok: false, status: 403 }]);
+    expect(await makeTaskCompleteHandler(false)(record, { notifyChat: 123 })).toEqual({ target: 123, outcome: 'failed' });
+  });
+  it('reports delivered only when all sends succeeded and retains targets on rejection', async () => {
+    mockPushIfConfigured.mockResolvedValueOnce([{ ok: true, status: 200 }]);
+    expect(await makeTaskCompleteHandler(false)(record)).toEqual({ target: [123], outcome: 'delivered' });
+    mockPushIfConfigured.mockRejectedValueOnce(new Error('offline'));
+    expect(await makeTaskCompleteHandler(false)(record)).toEqual({ target: [123], outcome: 'failed' });
   });
 });

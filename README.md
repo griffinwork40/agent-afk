@@ -12,9 +12,7 @@ Open source. Runs locally. Works with any model provider, including local models
 [![Awesome Harness Engineering](https://img.shields.io/badge/awesome-harness--engineering-fc60a8?logo=awesomelists&logoColor=white)](https://github.com/walkinglabs/awesome-harness-engineering#coding-agent-harnesses)
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/4a84f6e4-2494-4065-a01f-54a1c557f7f3" width="820" autoplay loop muted playsinline>
-    Your browser does not support the video tag.
-  </video>
+  <img src="docs/assets/readme-hero.jpg" width="820" alt="agent-afk">
 </p>
 
 > ⭐ **Like the idea of an agent you can walk away from? [Star the repo](https://github.com/griffinwork40/agent-afk/stargazers)** -- it's the fastest way to help other people find it.
@@ -24,8 +22,15 @@ Open source. Runs locally. Works with any model provider, including local models
 ```bash
 npm install -g agent-afk    # Node 22.22.2–22.x, 24.15–24.x, or 26+ (23.x and 25.x excluded)
 afk login                   # authenticate (auto-detects Claude Code / Codex creds)
-afk doctor                  # verify everything works
-afk chat "hello"             # first real conversation
+afk chat "hello"            # first real conversation
+```
+
+Never used a terminal? Start here: [docs.agentafk.com/terminal-basics](https://docs.agentafk.com/terminal-basics)
+
+Optional next steps:
+
+```bash
+afk doctor
 
 # Preview a behaviour change before applying it
 afk whatif --append "Always ask a clarifying question before using tools." --verify

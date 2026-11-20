@@ -1,4 +1,4 @@
-/** Bounded read-only adapters for the landed artifact registry (#1415). */
+/** Bounded read-only adapters and publish handler for the artifact registry (#1415). */
 import { open, realpath } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import { z, ZodError } from 'zod';
@@ -6,6 +6,7 @@ import { artifactCount, artifactGet, artifactList } from '../../artifact-registr
 import { getArtifactStoreDir } from '../../../paths.js';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
+import { createArtifactPublishHandler } from './artifact-publish.js';
 
 const MAX_INDEX_BYTES = 8 * 1024 * 1024;
 const artifactId = z.string().regex(/^art_[0-9a-f]{32}$/);
@@ -113,6 +114,7 @@ async function readSlice(record: Metadata, offset: number, limit: number) {
 
 export function createArtifactHandlers(opts: ArtifactHandlerOptions = {}): Map<string, ToolHandler> {
   const handlers = new Map<string, ToolHandler>();
+  handlers.set('artifact_publish', createArtifactPublishHandler(opts));
   handlers.set('artifact_get', async (input, signal, context) => {
     try {
       signal.throwIfAborted();
