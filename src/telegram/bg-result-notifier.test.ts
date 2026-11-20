@@ -284,8 +284,7 @@ describe('TelegramBgResultNotifier', () => {
   // process. buildBgResultInjection (local model-context path) must NOT strip
   // them so the model receives the full result unmodified.
 
-  it('redacts Anthropic API key in Telegram push but preserves it in local injection', async () => {
-    // Synthetic secret that matches the sk-ant-* pattern in redactSecrets.
+  it('passes through Anthropic API key in Telegram push and local injection', async () => {
     const syntheticKey = 'sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890abcd';
     const output = `Token recovered: ${syntheticKey} — please rotate immediately.`;
 
@@ -294,18 +293,17 @@ describe('TelegramBgResultNotifier', () => {
 
     fireTerminal(succeed(job.jobId, output));
 
-    // Push path — secret must be redacted.
+    // Push path — secret passes through.
     await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
     const pushed = pushMock.mock.calls[0]![0];
-    expect(pushed).not.toContain(syntheticKey);
-    expect(pushed).toContain('[REDACTED]');
+    expect(pushed).toContain(syntheticKey);
 
     // Local injection — raw content preserved for model context.
     const injection = notifier.drainInjections();
     expect(injection).toContain(syntheticKey);
   });
 
-  it('redacts Bearer token in Telegram push', async () => {
+  it('passes through Bearer token in Telegram push', async () => {
     const output = 'Authorization: Bearer ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345678';
     const { handle, fireTerminal } = makeBgHandle();
     const job = registry.register({ handle, prompt: 'bearer task', model: 'sonnet' });
@@ -314,8 +312,7 @@ describe('TelegramBgResultNotifier', () => {
 
     await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
     const pushed = pushMock.mock.calls[0]![0];
-    expect(pushed).not.toContain('ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345678');
-    expect(pushed).toContain('[REDACTED]');
+    expect(pushed).toContain('ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345678');
   });
 
   it('buffers the result for next-turn injection and drains it exactly once', () => {

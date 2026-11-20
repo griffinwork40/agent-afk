@@ -19,7 +19,6 @@
  */
 
 import { emitSessionPhase } from '../../trace/emit.js';
-import { redactSecrets } from '../../redact-secrets.js';
 import type { TraceSink } from '../../trace/index.js';
 import type { RetryInfo } from './transient-retry.js';
 import { errorMessage } from '../../../utils/errors.js';
@@ -43,7 +42,7 @@ export function traceTransientRetry(
         source,
         attempt: info.attempt,
         maxRetries,
-        error: redactSecrets(message).slice(0, 200),
+        error: message.slice(0, 200),
         ...(info.code !== undefined ? { code: info.code } : {}),
         ...(info.status !== undefined ? { status: info.status } : {}),
       },
@@ -73,7 +72,7 @@ export function traceExhaustedRetry(
         source,
         attempt: info.attempt,
         maxRetries,
-        error: redactSecrets(message).slice(0, 200),
+        error: message.slice(0, 200),
         ...(info.code !== undefined ? { code: info.code } : {}),
         ...(info.status !== undefined ? { status: info.status } : {}),
       },

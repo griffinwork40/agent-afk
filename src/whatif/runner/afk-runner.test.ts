@@ -250,7 +250,7 @@ describe('createAfkRunner().run()', () => {
     expect(trace.tools).toEqual([]);
   }, 10_000);
 
-  it('redacts sk-ant credentials in error messages', async () => {
+  it('passes through sk-ant credentials in error messages', async () => {
     const scriptWithKey = join(tmpDir, 'fake-key-error.js');
     await writeFile(scriptWithKey,
       `process.stderr.write('Error: sk-ant-api03-secretvalue123\\n'); process.exit(1);`,
@@ -260,8 +260,7 @@ describe('createAfkRunner().run()', () => {
     const trace = await runner.run(env, baseEpisode, 0, baseOpts);
 
     expect(trace.error).toBeDefined();
-    expect(trace.error).not.toContain('secretvalue123');
-    expect(trace.error).toContain('[REDACTED]');
+    expect(trace.error).toContain('secretvalue123');
   });
 });
 

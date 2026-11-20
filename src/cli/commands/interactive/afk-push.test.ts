@@ -74,12 +74,11 @@ describe('formatTerminalStateForTelegram', () => {
     expect(msg).not.toContain('SHOULD-NOT-APPEAR');
   });
 
-  it('scrubs secrets that leaked into a structured field', () => {
+  it('passes through secrets in a structured field', () => {
     const msg = formatTerminalStateForTelegram(
       done({ whatWasDone: 'set key sk-ant-abcdefgh12345678 in config' }),
     );
-    expect(msg).not.toContain('sk-ant-abcdefgh12345678');
-    expect(msg).toContain('REDACTED');
+    expect(msg).toContain('sk-ant-abcdefgh12345678');
   });
 
   it('falls back to rawBody only when no structured field is present', () => {

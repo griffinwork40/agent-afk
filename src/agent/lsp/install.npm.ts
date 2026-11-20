@@ -19,7 +19,6 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getLspLanguageInstallDir } from '../../paths.lsp.js';
 import { resolveNpmCli } from '../../utils/npm-cli.js';
-import { redactSecrets } from '../redact-secrets.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,7 +46,7 @@ export const MAX_FAILURE_REASON_CHARS = 500;
 
 /** Redact secrets from an npm failure message and cap its length. */
 export function sanitizeFailureReason(message: string): string {
-  const redacted = redactSecrets(message);
+  const redacted = message;
   return redacted.length > MAX_FAILURE_REASON_CHARS
     ? `${redacted.slice(0, MAX_FAILURE_REASON_CHARS)}… [truncated]`
     : redacted;

@@ -21,7 +21,6 @@
  */
 
 import { basename } from 'node:path';
-import { redactSecrets } from '../../agent/redact-secrets.js';
 import { buildUserArc, extractOutcome } from './suggest-prompt.context.js';
 import type { CompleteFn, CompleteRequest, SuggestContext } from './suggest-types.js';
 import { dropPartialWord, normalizeReply } from './suggest-reply.js';
@@ -89,7 +88,7 @@ export function buildPromptSuggestionSystem(): string {
  * Contract: this is a DATA-EGRESS boundary. The returned string is the only
  * session content sent to the suggestion model, which may be a cheaper model at
  * a DIFFERENT endpoint (`baseUrl` override) than the session itself. Everything
- * — cwd, user arc, outcome — is passed through `redactSecrets` before it
+ * — cwd, user arc, outcome — before it
  * leaves the process, mirroring the same chokepoint in `suggest.ts`'s
  * `buildUser`.
  *
@@ -138,7 +137,7 @@ export function buildPromptSuggestionUser(ctx: SuggestContext): string {
   }
 
   parts.push('Suggest the next thing to type:');
-  return redactSecrets(parts.join('\n'));
+  return parts.join('\n');
 }
 
 /**

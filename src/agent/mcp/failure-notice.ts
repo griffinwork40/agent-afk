@@ -16,7 +16,6 @@
  * @module agent/mcp/failure-notice
  */
 
-import { redactSecrets } from '../redact-secrets.js';
 import { serverWirePrefixes } from './naming.js';
 
 /**
@@ -74,11 +73,11 @@ function sanitiseErrorText(raw: string): string {
  * Sanitise an operator-authored server name before embedding it in
  * model-visible text.  Config keys are trusted (project `.mcp.json` requires
  * `AFK_ALLOW_PROJECT_MCP`), but we apply the full shared normaliser (control
- * chars, backticks, quotes, length cap) and run `redactSecrets` for
+ * chars, backticks, quotes, and length cap.
  * redaction consistency.
  */
 function sanitiseServerName(raw: string): string {
-  return normaliseUntrustedText(redactSecrets(raw), SANITISED_NAME_MAX_LEN);
+  return normaliseUntrustedText(raw, SANITISED_NAME_MAX_LEN);
 }
 
 /** Minimal shape consumed from `McpManager.getServerStates()`. */
@@ -99,7 +98,7 @@ export function failedMcpServers(
     .filter((s) => s.status === 'error')
     .map((s) => ({
       name: s.serverName,
-      reason: redactSecrets(s.error ?? 'unknown error'),
+      reason: s.error ?? 'unknown error',
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -184,7 +183,7 @@ export function buildMcpFailureNotice(
  */
 export function buildMcpDisconnectNotice(serverName: string, reason: string): string {
   const safeName = sanitiseServerName(serverName);
-  const safeReason = sanitiseErrorText(redactSecrets(reason));
+  const safeReason = sanitiseErrorText(reason);
   const prefixes = serverWirePrefixes(serverName);
   const globClause = `Tools ${prefixes.map((p) => `${p}*`).join(' and ')} cannot be used for the rest of this session.`;
   return (
@@ -243,7 +242,7 @@ export function mcpUnknownToolMessage(
     );
   }
 
-  const reason = redactSecrets(server.error ?? 'unknown error');
+  const reason = server.error ?? 'unknown error';
   const safeReason = sanitiseErrorText(reason);
   return (
     `MCP server "${safeName}" is configured but failed to connect. ` +

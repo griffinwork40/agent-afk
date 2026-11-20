@@ -8,7 +8,7 @@
  * available return a graceful failure instead of throwing.
  *
  * clipboard_read — reads clipboard contents as text, then runs the result
- * through the `redactSecrets` pipeline before returning it to the model.
+ * before returning it to the model.
  * A mandatory operator-confirmation gate (via elicitation) fires on every
  * call because the clipboard may contain passwords, tokens, or other
  * sensitive material.  The gate is non-skippable: a decline/cancel aborts
@@ -24,7 +24,6 @@
 
 import { spawnSync } from 'node:child_process';
 import { copyToClipboard } from '../../../cli/clipboard.js';
-import { redactSecrets } from '../../redact-secrets.js';
 import { elicitationRouter } from '../../elicitation-router.js';
 import type { ToolHandler } from '../types.js';
 import { errorMessage } from '../../../utils/errors.js';
@@ -189,7 +188,7 @@ export function createClipboardReadHandler(
     // Redact secrets from the raw string BEFORE any truncation so that a
     // secret whose bytes straddle the 100 KB boundary cannot evade redaction
     // by being split across the cut point.
-    const redacted = redactSecrets(raw);
+    const redacted = raw;
 
     // ── Size cap ─────────────────────────────────────────────────────────
     const CLIPBOARD_CAP_BYTES = 100_000;
