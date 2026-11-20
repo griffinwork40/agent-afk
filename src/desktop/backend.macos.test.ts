@@ -180,6 +180,71 @@ describe('macOS backend — scale reporting', () => {
     }
   });
 
+  it('matches the display by captured pixel size, not by list position', async () => {
+    // system_profiler lists the built-in Retina panel first, but the capture
+    // (display index 0, the main display) came from the external 1x monitor.
+    const pngBuf = makePng(2560, 1440);
+    const profilerOut = JSON.stringify({
+      SPDisplaysDataType: [{
+        spdisplays_ndrvs: [
+          { _spdisplays_pixels: '3456 x 2234', _spdisplays_resolution: '1728 x 1117 @ 120.00Hz' },
+          { _spdisplays_pixels: '2560 x 1440', _spdisplays_resolution: '2560 x 1440 @ 60.00Hz' },
+        ],
+      }],
+    });
+    setupExecFile({ stdout: '', stderr: '' }, { stdout: profilerOut, stderr: '' });
+    (readFile as ReturnType<typeof vi.fn>).mockResolvedValue(pngBuf);
+
+    const { createMacOsBackend } = await import('./backend.macos.js');
+    const result = await createMacOsBackend().screenshot({ displayIndex: 0 }, SIDECAR);
+
+    expect('aborted' in result).toBe(false);
+    if (!('aborted' in result)) {
+      expect(result.scaleFactor).toBe(1);
+      expect(result.logicalWidth).toBe(2560);
+      expect(result.logicalHeight).toBe(1440);
+    }
+  });
+
+  it('reports scaleFactor null when no listed display has the captured size', async () => {
+    const pngBuf = makePng(1920, 1080);
+    const profilerOut = JSON.stringify({
+      SPDisplaysDataType: [{
+        spdisplays_ndrvs: [
+          { _spdisplays_pixels: '3456 x 2234', _spdisplays_resolution: '1728 x 1117 @ 120.00Hz' },
+        ],
+      }],
+    });
+    setupExecFile({ stdout: '', stderr: '' }, { stdout: profilerOut, stderr: '' });
+    (readFile as ReturnType<typeof vi.fn>).mockResolvedValue(pngBuf);
+
+    const { createMacOsBackend } = await import('./backend.macos.js');
+    const result = await createMacOsBackend().screenshot({ displayIndex: 0 }, SIDECAR);
+
+    expect('aborted' in result).toBe(false);
+    if (!('aborted' in result)) expect(result.scaleFactor).toBeNull();
+  });
+
+  it('reports scaleFactor null when two displays of the captured size disagree on logical size', async () => {
+    const pngBuf = makePng(3840, 2160);
+    const profilerOut = JSON.stringify({
+      SPDisplaysDataType: [{
+        spdisplays_ndrvs: [
+          { _spdisplays_pixels: '3840 x 2160', _spdisplays_resolution: '1920 x 1080 @ 60.00Hz' },
+          { _spdisplays_pixels: '3840 x 2160', _spdisplays_resolution: '3840 x 2160 @ 60.00Hz' },
+        ],
+      }],
+    });
+    setupExecFile({ stdout: '', stderr: '' }, { stdout: profilerOut, stderr: '' });
+    (readFile as ReturnType<typeof vi.fn>).mockResolvedValue(pngBuf);
+
+    const { createMacOsBackend } = await import('./backend.macos.js');
+    const result = await createMacOsBackend().screenshot({ displayIndex: 0 }, SIDECAR);
+
+    expect('aborted' in result).toBe(false);
+    if (!('aborted' in result)) expect(result.scaleFactor).toBeNull();
+  });
+
   it('reports scaleFactor null when system_profiler returns no match', async () => {
     const pngBuf = makePng(2560, 1440);
     setupExecFile(

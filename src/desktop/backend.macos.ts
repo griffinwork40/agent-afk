@@ -87,15 +87,20 @@ function buildArgs(
 }
 
 /**
- * Query the logical and physical pixel dimensions of a display using
+ * Find the logical size of the display that was just captured, using
  * `system_profiler SPDisplaysDataType -json`. No permission prompt is required.
  *
- * Returns `{ logicalW, logicalH, physicalW, physicalH }` for the given
- * zero-based display index, or `null` when the query cannot determine the
- * values (unexpected output format, display index out of range, spawn error).
+ * Invariant: the display is identified by its PHYSICAL PIXEL SIZE, which must
+ * equal the captured PNG's size. It is never identified by list position:
+ * `system_profiler` lists displays in its own order (built-in panel first on
+ * the machine this was written on), while `screencapture -D 1` is the main
+ * display, so a positional lookup reports another display's scale. Returns
+ * `null` when no listed display has the captured size, or when displays of
+ * that size disagree on their logical size, or on any parse or spawn error.
  */
 async function queryDisplayDimensions(
-  displayIndex: number,
+  capturedW: number,
+  capturedH: number,
 ): Promise<{ logicalW: number; logicalH: number; physicalW: number; physicalH: number } | null> {
   let stdout: string;
   try {
@@ -134,25 +139,29 @@ async function queryDisplayDimensions(
     }
   }
 
-  const disp = displays[displayIndex];
-  if (!disp) return null;
-
   // `_spdisplays_pixels` = "3456 x 2234" (physical pixels)
   // `_spdisplays_resolution` = "1728 x 1117 @ 120.00Hz" (logical pixels)
-  const physStr = typeof disp['_spdisplays_pixels'] === 'string' ? disp['_spdisplays_pixels'] as string : null;
-  const logStr = typeof disp['_spdisplays_resolution'] === 'string' ? disp['_spdisplays_resolution'] as string : null;
-  if (!physStr || !logStr) return null;
-
-  const physMatch = /^(\d+)\s*x\s*(\d+)$/.exec(physStr.trim());
-  const logMatch = /^(\d+)\s*x\s*(\d+)/.exec(logStr.trim());
-  if (!physMatch || !logMatch) return null;
-
-  return {
-    physicalW: parseInt(physMatch[1]!, 10),
-    physicalH: parseInt(physMatch[2]!, 10),
-    logicalW: parseInt(logMatch[1]!, 10),
-    logicalH: parseInt(logMatch[2]!, 10),
-  };
+  let found: { logicalW: number; logicalH: number; physicalW: number; physicalH: number } | null = null;
+  for (const disp of displays) {
+    const physStr = typeof disp['_spdisplays_pixels'] === 'string' ? disp['_spdisplays_pixels'] as string : null;
+    const logStr = typeof disp['_spdisplays_resolution'] === 'string' ? disp['_spdisplays_resolution'] as string : null;
+    if (!physStr || !logStr) continue;
+    const physMatch = /^(\d+)\s*x\s*(\d+)$/.exec(physStr.trim());
+    const logMatch = /^(\d+)\s*x\s*(\d+)/.exec(logStr.trim());
+    if (!physMatch || !logMatch) continue;
+    const dims = {
+      physicalW: parseInt(physMatch[1]!, 10),
+      physicalH: parseInt(physMatch[2]!, 10),
+      logicalW: parseInt(logMatch[1]!, 10),
+      logicalH: parseInt(logMatch[2]!, 10),
+    };
+    if (dims.physicalW !== capturedW || dims.physicalH !== capturedH) continue;
+    // Two displays of the captured size that disagree on logical size: the
+    // scale is ambiguous, so report it as unknown rather than pick one.
+    if (found && (found.logicalW !== dims.logicalW || found.logicalH !== dims.logicalH)) return null;
+    found = dims;
+  }
+  return found;
 }
 
 class MacOsDesktopBackend implements DesktopBackend {
@@ -234,7 +243,7 @@ class MacOsDesktopBackend implements DesktopBackend {
       logicalHeight = input.region.height;
       scaleFactor = logicalWidth > 0 ? width / logicalWidth : null;
     } else {
-      const dims = await queryDisplayDimensions(displayIndex);
+      const dims = await queryDisplayDimensions(width, height);
       if (dims && dims.logicalW > 0) {
         logicalWidth = dims.logicalW;
         logicalHeight = dims.logicalH;
