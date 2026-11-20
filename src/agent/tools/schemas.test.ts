@@ -18,9 +18,10 @@ import { filterBackgroundToolDefs } from './process-job-tools.js';
 import type { AnthropicToolDef } from './types.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 50 tools', () => {
-    // 24 invariant core + 26 optional tail = 50
-    expect(builtinToolSchemas).toHaveLength(50);
+  it('contains exactly 51 tools', () => {
+    // 24 invariant core + 27 optional tail = 51
+    // Tranche 1 desktop tools: desktop_screenshot
+    expect(builtinToolSchemas).toHaveLength(51);
   });
 
   it('exports the expected tool names', () => {
@@ -85,6 +86,7 @@ describe('builtinToolSchemas', () => {
       'browser_act',
       'browser_screenshot',
       'browser_close',
+      'desktop_screenshot',
       'clipboard_write',
       'clipboard_read',
       'list_sessions',

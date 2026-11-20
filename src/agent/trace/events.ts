@@ -26,6 +26,7 @@ import {
   BackgroundAgentStartedPayloadSchema,
 } from './background-agent-schema.js';
 import { BrowserEventPayloadSchema } from './events.browser.js';
+import { DesktopEventPayloadSchema } from './events.desktop.js';
 import { SessionBillingSchema } from './events.billing.js';
 import { CompactionPayloadInputSchema, CompactionPayloadPersistedSchema } from './events.compaction.js';
 import { SessionPhasePayloadSchema } from './events.session-phase.js';
@@ -54,6 +55,7 @@ export {
   BrowserEventTargetSchema,
   BrowserEventPayloadSchema,
 } from './events.browser.js';
+export { DesktopEventToolSchema, DesktopEventPayloadSchema } from './events.desktop.js';
 export {
   CompactionTriggerSchema,
   CompactionSidecarRefSchema,
@@ -344,6 +346,7 @@ export const TraceEventInputSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('closure'), payload: ClosurePayloadSchema }),
   z.object({ kind: z.literal('claim'), payload: ClaimPayloadSchema }),
   z.object({ kind: z.literal('browser_event'), payload: BrowserEventPayloadSchema }),
+  z.object({ kind: z.literal('desktop_event'), payload: DesktopEventPayloadSchema }),
   z.object({ kind: z.literal('queued_user_message'), payload: QueuedUserMessagePayloadSchema }),
   z.object({ kind: z.literal('peer_message'), payload: PeerMessagePayloadSchema }),
   z.object({ kind: z.literal('session_phase'), payload: SessionPhasePayloadSchema }),
@@ -416,6 +419,12 @@ export const TraceEventSchema = z.discriminatedUnion('kind', [
     seq: z.number().int().nonnegative(),
     kind: z.literal('browser_event'),
     payload: BrowserEventPayloadSchema,
+  }),
+  z.object({
+    ts: z.string().datetime(),
+    seq: z.number().int().nonnegative(),
+    kind: z.literal('desktop_event'),
+    payload: DesktopEventPayloadSchema,
   }),
   z.object({
     ts: z.string().datetime(),

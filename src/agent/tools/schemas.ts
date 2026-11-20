@@ -82,6 +82,13 @@ import {
   browserCloseTool,
 } from './schemas.browser-tools.js';
 
+// ── Desktop computer-use tools ────────────────────────────────────────────
+// Category 'desktop' is stripped by toWireToolDef before the API boundary.
+// Tranche 1: desktop_screenshot only. The eight input tools register in
+// Tranche 3M/3W after real-machine feasibility spikes are complete.
+import { desktopScreenshotTool } from './schemas.desktop-tools.js';
+export { desktopScreenshotTool } from './schemas.desktop-tools.js';
+
 // ── Orchestration (background jobs, patch-apply, witness) ─────────────────
 import { cancelBackgroundJobTool, patchApplyTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
 import { readWitnessTool, searchWitnessTool } from './schemas.witness.js';
@@ -135,8 +142,8 @@ import { artifactToolSchemas } from './schemas.artifact.js';
  *   read_witness, search_witness,
  *   remote_agent, web_scrape, web_request
  *
- * ---- Optional tail (indices 23..47) -----------------------------------------
- *   artifact_get, artifact_list, artifact_read,
+ * ---- Optional tail (indices 23..50) -----------------------------------------
+ *   artifact_get, artifact_list, artifact_read, artifact_publish,
  *   cancel_background_job, send_message_to_agent, get_background_job_health,
  *   send_telegram,
  *   image_generate, image_edit,
@@ -144,6 +151,7 @@ import { artifactToolSchemas } from './schemas.artifact.js';
  *   cancel_schedule,
  *   browser_open, browser_observe, browser_act, browser_screenshot,
  *   browser_close,
+ *   desktop_screenshot,
  *   clipboard_write, clipboard_read,
  *   list_sessions, send_to_session,
  *   terminal_font_size,
@@ -199,6 +207,7 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   browserActTool,
   browserScreenshotTool,
   browserCloseTool,
+  desktopScreenshotTool,
   clipboardWriteTool,
   clipboardReadTool,
   listSessionsTool,
