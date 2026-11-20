@@ -82,6 +82,11 @@ vi.mock('../../agent/tools/top-level-allowlist.js', () => ({
   topLevelSurfaceAllowedTools: vi.fn(() => []),
 }));
 
+vi.mock('./acp.session.provider.js', () => ({ createAcpProvider: vi.fn(() => ({})) }));
+vi.mock('./acp.session.mcp.js', () => ({ connectAcpMcp: vi.fn(async () => undefined) }));
+vi.mock('./acp.session.prompt.js', () => ({ resolveAcpPrompt: vi.fn(() => ({ systemPromptSource: 'none' })) }));
+vi.mock('../../agent/trace/factory.js', () => ({ createDefaultTraceWriter: vi.fn(() => null) }));
+
 // ---------------------------------------------------------------------------
 // Spy on injectEpisodeRecall — must be set up before importing acp.session
 // ---------------------------------------------------------------------------
@@ -106,7 +111,6 @@ vi.mock('../../agent/memory/index.js', () => {
 // ---------------------------------------------------------------------------
 
 import { buildAcpSession, closeAcpSession } from './acp.session.js';
-import { MemoryStore } from '../../agent/memory/index.js';
 
 // ---------------------------------------------------------------------------
 // Tests

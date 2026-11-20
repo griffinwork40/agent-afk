@@ -42,6 +42,8 @@ export type ParseProviderOptions = {
    */
   openaiBaseUrl?: string;
   fastModeController?: import('../agent/fast-mode.js').FastModeController;
+  /** Surface-owned approval bridge; preserved for every provider family. */
+  canUseTool?: import('../agent/types/sdk-types.js').CanUseTool;
 };
 
 /**
@@ -118,6 +120,7 @@ export function parseProvider(
   if (effective === 'anthropic' || effective === 'anthropic-direct') {
     return new AnthropicDirectProvider({
       permissions: { allowedTools: allowedToolsFor() },
+      ...(opts?.canUseTool !== undefined ? { canUseTool: opts.canUseTool } : {}),
       subagentExecutor: opts?.subagentExecutor,
       skillExecutor: opts?.skillExecutor,
       composeExecutor: opts?.composeExecutor,
@@ -133,6 +136,7 @@ export function parseProvider(
     // agent/skill/compose when executors are injected.
     return new OpenAICompatibleProvider({
       permissions: { allowedTools: allowedToolsFor() },
+      ...(opts?.canUseTool !== undefined ? { canUseTool: opts.canUseTool } : {}),
       ...(opts?.subagentExecutor !== undefined ? { subagentExecutor: opts.subagentExecutor } : {}),
       ...(opts?.skillExecutor !== undefined ? { skillExecutor: opts.skillExecutor } : {}),
       ...(opts?.composeExecutor !== undefined ? { composeExecutor: opts.composeExecutor } : {}),
@@ -150,6 +154,7 @@ export function parseProvider(
     const authMode = resolveXaiConstructionAuthMode(effective, wasExplicitProvider);
     return new XaiProvider({
       permissions: { allowedTools: allowedToolsFor() },
+      ...(opts?.canUseTool !== undefined ? { canUseTool: opts.canUseTool } : {}),
       ...(authMode !== undefined ? { authMode } : {}),
       ...(opts?.subagentExecutor !== undefined ? { subagentExecutor: opts.subagentExecutor } : {}),
       ...(opts?.skillExecutor !== undefined ? { skillExecutor: opts.skillExecutor } : {}),
