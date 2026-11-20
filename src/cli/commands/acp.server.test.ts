@@ -448,9 +448,10 @@ describe('ACP server — shutdown bound (D17)', () => {
     mBuild.mockImplementation(async () => ({ ...(fakeHandle() as object), tag: ++n }) as never);
     mLoad.mockImplementation(async () => ({ ...(fakeHandle() as object), tag: ++n }) as never);
     const closed: number[] = [];
-    mClose.mockImplementation(async (handle: { tag?: number }) => {
-      if (handle.tag === 1) await new Promise(() => { /* a close that never finishes */ });
-      closed.push(handle.tag ?? 0);
+    mClose.mockImplementation(async (handle) => {
+      const tag = (handle as unknown as { tag?: number }).tag;
+      if (tag === 1) await new Promise(() => { /* a close that never finishes */ });
+      closed.push(tag ?? 0);
     });
     const h = startServer({ shutdownDeadlineMs: 50 });
     h.send(init); h.send(newSession(2));
