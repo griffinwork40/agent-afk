@@ -98,7 +98,6 @@ function restoreChoiceLabel(mode: PermissionMode): string {
     case 'dontAsk':
     case 'auto':
       return 'Approve — implement now (restore your previous mode: no approval prompts)';
-    case 'default':
     case 'plan':
     default:
       return 'Approve — implement now (restore default mode: writes ask for confirmation, contained to the workspace)';

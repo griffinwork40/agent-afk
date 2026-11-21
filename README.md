@@ -249,10 +249,10 @@ Each branch gets a dedicated worktree under `~/.afk/state/farm/`. A commit-count
 
 **To re-enable path containment**, set the mode back any of these ways:
 
-- Persistently: `afk config set permissionMode default` (or `plan`), or `"permissionMode": "default"` in `afk.config.json`. It stays that way until you change it again.
+- Persistently: `afk config set permissionMode plan`, or `"permissionMode": "plan"` in `afk.config.json`. It stays that way until you change it again.
 - For one session: `/bypass off` in the REPL (the status line clears `⚡ bypass`).
 
-With containment on (`default`), a file tool (read/write/edit/list/glob/grep) targeting a path *outside* the session's working directory triggers a **path-approval** prompt; pre-authorize paths with `/allow-dir <path>` (or answer "persist" at the prompt to remember them across sessions). Toggle bypass live anytime with `/bypass`. `afk daemon` always runs in bypass (no human to prompt); **Telegram** sessions stay contained (`default`) and rely on hook-based enforcement.
+With containment on (`plan`), a file tool (read/write/edit/list/glob/grep) targeting a path *outside* the session's working directory triggers a **path-approval** prompt; pre-authorize paths with `/allow-dir <path>` (or answer "persist" at the prompt to remember them across sessions). Toggle bypass live anytime with `/bypass`. `afk daemon` always runs in bypass (no human to prompt); **Telegram** sessions run in `bypassPermissions` and rely on hook-based enforcement.
 
 ## Troubleshooting
 

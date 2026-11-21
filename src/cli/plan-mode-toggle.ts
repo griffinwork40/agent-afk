@@ -39,7 +39,6 @@ function describeRestoredMode(mode: PermissionMode): string {
     case 'dontAsk':
     case 'auto':
       return 'previous mode restored — no approval prompts';
-    case 'default':
     default:
       return 'default permissions restored';
   }

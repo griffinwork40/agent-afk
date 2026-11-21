@@ -14,14 +14,6 @@
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export type PermissionMode =
-  /**
-   * @deprecated Path-containment + interactive approval prompt mode. Only
-   * retained in the type union because `src/cli/commands/acp.session.ts` still
-   * references it as a literal. The ACP peer branch (`afk/acp-contract`) will
-   * remove it. All other fallback values have been replaced with
-   * `'bypassPermissions'`.
-   */
-  | 'default'
   | 'acceptEdits'
   | 'bypassPermissions'
   | 'plan'
@@ -33,7 +25,7 @@ export type PermissionMode =
  * union above — add a member to the union, add it here.
  */
 export const VALID_PERMISSION_MODES: ReadonlySet<string> = new Set<PermissionMode>([
-  'default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto',
+  'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto',
 ]);
 
 /** Type-guard: returns true when `value` is a member of the {@link PermissionMode} union. */

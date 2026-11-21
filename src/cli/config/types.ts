@@ -386,7 +386,7 @@ export interface ConfigFileSchema {
   maxTokens?: number;
   temperature?: number;
   systemPrompt?: string;
-  /** Session permission mode (validated on load): default | plan | autonomous | bypassPermissions. */
+  /** Session permission mode (validated on load): plan | bypassPermissions | acceptEdits | dontAsk | auto. */
   permissionMode?: string;
   autoRouting?: {
     interactive?: boolean;
