@@ -1072,6 +1072,53 @@ describe('concurrent inflight actions', () => {
     expect((r1 as { id: string }).id).toBe(id1);
   });
 
+  it('sends concurrent actions in call order even when signing finishes out of order', async () => {
+    // Regression: WebCrypto sign() completion order is not call order (about
+    // 15% of concurrent pairs invert on a loaded machine), which used to send
+    // post #2 before post #1. Force the inversion deterministically: the first
+    // signature is held until released, the second would finish at once.
+    const ctx = await setup();
+    const sock = await connectAndWelcome(ctx);
+    const realSign = ctx.store._signFn;
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    let calls = 0;
+    ctx.store._signFn = async (canonical) => {
+      if (calls++ === 0) await gate;
+      return realSign(canonical);
+    };
+    const p1 = ctx.client.post('first message');
+    const p2 = ctx.client.post('second message');
+    await flushAsync();
+    expect(sentOfType(sock, 'post')).toHaveLength(0);
+    release();
+    await flushAsync();
+    const posts = sentOfType<Record<string, unknown>>(sock, 'post');
+    expect(posts.map(p => p['text'])).toEqual(['first message', 'second message']);
+    for (const p of posts) sock.triggerMessageStr({ t: 'ack', id: p['id'] as string });
+    expect((await p1).ok).toBe(true);
+    expect((await p2).ok).toBe(true);
+  });
+
+  it('a failed signature does not block later actions', async () => {
+    const ctx = await setup();
+    const sock = await connectAndWelcome(ctx);
+    const realSign = ctx.store._signFn;
+    let calls = 0;
+    ctx.store._signFn = async (canonical) => {
+      if (calls++ === 0) throw new Error('sign failed');
+      return realSign(canonical);
+    };
+    const p1 = ctx.client.post('first message');
+    const p2 = ctx.client.post('second message');
+    expect((await p1).ok).toBe(false);
+    await flushAsync();
+    const posts = sentOfType<Record<string, unknown>>(sock, 'post');
+    expect(posts.map(p => p['text'])).toEqual(['second message']);
+    sock.triggerMessageStr({ t: 'ack', id: posts[0]!['id'] as string });
+    expect((await p2).ok).toBe(true);
+  });
+
   it('post and report inflight — wrong-type ack does not cross-resolve', async () => {
     const ctx = await setup();
     const sock = await connectAndWelcome(ctx);

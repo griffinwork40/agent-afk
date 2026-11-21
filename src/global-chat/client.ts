@@ -33,6 +33,7 @@ export class GlobalChatClient implements ChatClient {
   readonly #pending = new Map<string, Pending>();
   #you: ChatIdentity | null = null;
   #connectGeneration = 0;
+  #signing: Promise<unknown> = Promise.resolve();
 
   constructor(options: GlobalChatClientOptions) {
     this.#identity = options.identity;
@@ -101,8 +102,13 @@ export class GlobalChatClient implements ChatClient {
   async #action(frame: UnsignedAction, canonical: string): Promise<ChatActionResult> {
     if (!this.#transport.ready) return disconnected();
     const generation = this.#transport.generation;
+    // Signing is asynchronous (WebCrypto) and completion order is not call
+    // order, so concurrent actions are signed one after another: frames reach
+    // the relay in the order the caller issued them (two quick posts never swap).
+    const signed = this.#signing.then(() => this.#identity.sign(canonical));
+    this.#signing = signed.catch(() => undefined);
     let sig: string;
-    try { sig = await this.#identity.sign(canonical); }
+    try { sig = await signed; }
     catch { return { ok: false, code: 'bad_signature', message: 'Unable to sign chat action' }; }
     if (!this.#transport.ready || generation !== this.#transport.generation) return disconnected();
     return new Promise(resolve => {
