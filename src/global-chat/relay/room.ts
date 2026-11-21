@@ -45,6 +45,17 @@ export class Room {
     this.newKeyWindow = new SlidingWindowLimiter(NEW_KEY_WINDOW_MS, NEW_KEY_LIMIT, clock);
   }
 
+  /** One bounded physical prune batch. Adapter alarms continue while expired rows remain. */
+  async onAlarm(): Promise<void> {
+    await this.store.pruneOlderThan(this.clock.now() - RETENTION_MS);
+  }
+
+  async nextMessageExpiry(): Promise<number | null> {
+    const oldest = await this.store.getOldestMessageTimestamp();
+    // Prune uses strict <; add one millisecond so the oldest row is actually expired.
+    return oldest === null ? null : Math.max(this.clock.now() + 1, oldest + RETENTION_MS + 1);
+  }
+
   onConnect(_connId: string, ipHash: string): ConnRecord {
     return { pubkey: null, name: null, ipHash, helloOk: false };
   }

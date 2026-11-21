@@ -22,6 +22,7 @@ export interface RelayStore {
   getBacklog(n: number): Promise<Msg[]>;
   getMessageById(id: string): Promise<Msg | null>;
   pruneOlderThan(cutoffMs: number): Promise<void>;
+  getOldestMessageTimestamp(): Promise<number | null>;
   countPostsByKeySince(pubkey: string, sinceMs: number): Promise<number>;
 
   // --- bans ---
@@ -89,6 +90,7 @@ export class MemoryRelayStore implements RelayStore {
     const toDelete: string[] = [];
     for (const [id, m] of this.messages) {
       if (m.ts < cutoffMs) toDelete.push(id);
+      if (toDelete.length >= 100) break;
     }
     for (const id of toDelete) {
       this.messages.delete(id);
@@ -97,6 +99,12 @@ export class MemoryRelayStore implements RelayStore {
     const deleted = new Set(toDelete);
     this.messageOrder.splice(0, this.messageOrder.length,
       ...this.messageOrder.filter(id => !deleted.has(id)));
+  }
+
+  async getOldestMessageTimestamp(): Promise<number | null> {
+    let oldest = Infinity;
+    for (const message of this.messages.values()) oldest = Math.min(oldest, message.ts);
+    return Number.isFinite(oldest) ? oldest : null;
   }
 
   async countPostsByKeySince(pubkey: string, sinceMs: number): Promise<number> {

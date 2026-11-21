@@ -110,7 +110,7 @@ export class SqliteRelayStore implements RelayStore {
   }
 
   async pruneOlderThan(cutoffMs: number): Promise<void> {
-    // Hide all expired rows immediately, but bound physical cleanup per hello.
+    // Hide all expired rows immediately, but bound physical cleanup per event.
     // Synchronous SQL calls are committed together by the DO storage runtime.
     this.sql.exec(`INSERT INTO room_state (key, value) VALUES ('prune_cutoff', ?)
       ON CONFLICT(key) DO UPDATE SET value = MAX(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER))`, cutoffMs);
@@ -118,6 +118,11 @@ export class SqliteRelayStore implements RelayStore {
       (SELECT id FROM messages WHERE ts < ? ORDER BY rowid LIMIT 100)`, cutoffMs);
     this.sql.exec(`DELETE FROM messages WHERE rowid IN
       (SELECT rowid FROM messages WHERE ts < ? ORDER BY rowid LIMIT 100)`, cutoffMs);
+  }
+
+  async getOldestMessageTimestamp(): Promise<number | null> {
+    const row = this.sql.exec<{ ts: number }>(`SELECT ts FROM messages ORDER BY ts LIMIT 1`).toArray()[0];
+    return row?.ts ?? null;
   }
 
   async countPostsByKeySince(pubkey: string, sinceMs: number): Promise<number> {

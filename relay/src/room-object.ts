@@ -164,12 +164,13 @@ export class ChatRoom implements DurableObject {
           this.closeSocket(ws, 1008, 'Hello deadline exceeded');
         }
       }
+      await this.getRoom().onAlarm();
       await this.scheduleDeadline();
     });
   }
 
   private async scheduleDeadline(): Promise<void> {
-    let next = Infinity;
+    let next = await this.getRoom().nextMessageExpiry() ?? Infinity;
     for (const ws of this.sockets()) {
       const rec = this.record(ws);
       if (rec && !rec.helloOk) next = Math.min(next, rec._helloDeadline);

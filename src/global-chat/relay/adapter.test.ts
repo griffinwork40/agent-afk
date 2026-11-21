@@ -3,7 +3,7 @@ import { ChatRoom, HELLO_TIMEOUT_MS, MAX_TOTAL_CONNECTIONS, MAX_PENDING_EVENTS_P
 import { Room } from './room.js';
 import { MemoryRelayStore } from './store.js';
 import { generateKeyPair, importPrivateKey, sign } from '../crypto.js';
-import { canonicalHello, canonicalPost } from '../protocol.js';
+import { canonicalHello, canonicalPost, RETENTION_MS } from '../protocol.js';
 
 class Socket {
   readyState = 1;
@@ -85,6 +85,23 @@ describe('Durable Object event serialization', () => {
 });
 
 describe('Durable Object admission and lifecycle', () => {
+  it('schedules expiry earlier than hello and drains expired rows in bounded alarm batches', async () => {
+    const { object, sockets, store, ctx } = setup(1);
+    const now = Date.now();
+    const timestamp = now - RETENTION_MS - 1;
+    for (let i = 0; i < 205; i++) await store.insertMessage({ id: String(i), ts: timestamp,
+      pubkey: 'a'.repeat(64), name: 'alice', text: 'expired', sig: 'b'.repeat(128) });
+    await send(object, sockets[0]!, '{"t":"ping","n":1}');
+    expect(ctx.storage.setAlarm.mock.lastCall![0]).toBeLessThan(sockets[0]!.attachment._helloDeadline);
+    await object.alarm();
+    expect(await store.getMessageById('99')).toBeNull();
+    expect(await store.getMessageById('100')).not.toBeNull();
+    await object.alarm();
+    expect(await store.getMessageById('200')).not.toBeNull();
+    await object.alarm();
+    expect(await store.getOldestMessageTimestamp()).toBeNull();
+    expect(ctx.storage.setAlarm).toHaveBeenLastCalledWith(sockets[0]!.attachment._helloDeadline);
+  });
   it.each(['', 'short'])('fails closed for invalid IP_SALT %j', async salt => {
     const { ctx } = setup(0);
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
