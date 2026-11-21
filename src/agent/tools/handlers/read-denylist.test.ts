@@ -791,6 +791,16 @@ describe('parseReadDenylistEntries — tilde backslash expansion (PR #1215)', ()
 // ---------------------------------------------------------------------------
 
 describe('read-denylist — global-chat static floor', () => {
+  it('does not let config carve-outs pierce a relocated chat floor', () => {
+    const state = join(tmpDir, 'state-carveout');
+    const chat = join(state, 'global-chat');
+    mkdirSync(chat, { recursive: true });
+    vi.stubEnv('AFK_STATE_DIR', state);
+    vi.stubEnv('AFK_HOME', chat);
+    expect(isReadDenied(join(chat, 'config', 'mcp.json')).denied).toBe(true);
+    expect(isReadDenied(join(chat, 'config', 'schedules.json')).denied).toBe(true);
+    vi.unstubAllEnvs();
+  });
   it('tracks relocated AFK_STATE_DIR without a cache reset, including symlinks', () => {
     const state = join(tmpDir, 'state');
     const gc = join(state, 'global-chat');

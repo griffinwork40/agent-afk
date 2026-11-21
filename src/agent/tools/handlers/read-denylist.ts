@@ -447,13 +447,14 @@ function resolveLists(): {
   // Keep source identity until carve-out gating is complete. Canonical paths
   // alone are insufficient: the designated AFK config root and an independent
   // credential root can resolve to the same string through a symlink.
-  const resolvedBuiltinEntries = BUILTIN_READ_DENYLIST.map((source) => ({
+  const chatRoots = derivedGlobalChatReadEntry();
+  const resolvedBuiltinEntries = [...BUILTIN_READ_DENYLIST, ...chatRoots].map((source) => ({
     source,
     root: safeRealpath(resolve(source)),
   }));
   const derivedCarvedRoots = derivedAfkHomeReadEntry();
   const builtins = [
-    ...new Set([...resolvedBuiltinEntries.map(({ root }) => root), ...derivedCarvedRoots, ...derivedGlobalChatReadEntry()]),
+    ...new Set([...resolvedBuiltinEntries.map(({ root }) => root), ...derivedCarvedRoots]),
   ];
   // Invariant: every carve-out is gated against the builtin deny prefixes
   // BEFORE it is unioned into `allow`, because `allow` is consulted ahead of
@@ -489,7 +490,7 @@ function resolveLists(): {
     // The SSH public-key PATTERN carve-out goes through the same per-entry
     // provenance gate (plus every derived AFK_HOME config root), so a
     // relocated home or a symlinked ~/.ssh can never widen it.
-    pubKeyDir: gateSshPubKeyDir(resolvedBuiltinEntries, derivedCarvedRoots, SSH_SOURCE),
+    pubKeyDir: gateSshPubKeyDir(resolvedBuiltinEntries, [...derivedCarvedRoots, ...chatRoots], SSH_SOURCE),
   };
   return cached;
 }
