@@ -618,6 +618,29 @@ describe('worktree handler — remove with .afk-scratch/ (item 4)', () => {
     expect(mock.calls.some((c) => c.args.includes('remove'))).toBe(false);
   });
 
+  // A scratch-only tree with meta present but scratchDisposable: false (explicit opt-out)
+  // must also be refused — the probe sees `!! .afk-scratch/` and the meta has no opt-in.
+  it('refuses removal of a scratch-only tree with scratchDisposable: false in meta', async () => {
+    const wtPath = join(afkRoot, 'scratch-explicit-optout');
+    await fs.mkdir(wtPath, { recursive: true });
+    await fs.writeFile(
+      join(wtPath, '.afk-worktree-meta.json'),
+      JSON.stringify({ owner: 'agent', scratchDisposable: false, createdAt: new Date().toISOString(), baseSha: 'abc' }),
+    );
+    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath)}\n`, (call) => {
+      if (call.args.includes('--ignored')) {
+        return { stdout: '!! .afk-scratch/\n!! .afk-scratch/notes.md\n', stderr: '' };
+      }
+      if (call.args.includes('status')) return { stdout: '', stderr: '' };
+      return undefined;
+    }));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'remove', path: 'scratch-explicit-optout' }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('non-rebuildable ignored files');
+    expect(mock.calls.some((c) => c.args.includes('remove'))).toBe(false);
+  });
+
   // A scratch-only tree WITH scratchDisposable: true in meta IS allowed.
   // The probe reads the meta, sees the opt-in, and skips .afk-scratch/ lines.
   it('allows removal of a scratch-only tree with scratchDisposable opt-in', async () => {
