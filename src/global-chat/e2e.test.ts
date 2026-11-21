@@ -181,23 +181,24 @@ describe('GlobalChatClient <-> Room e2e', () => {
     a.client.close();
   });
 
+  async function makeMaintainer(name: string) {
+    const { store, dir, identity } = await tempStore({ name });
+    dirs.push(dir);
+    relay = new InMemoryRelay({ maintainerKeys: [identity.pubkey], maxConnsPerIp: 10 });
+    return connect(relay, store, dir, 'ip-m');
+  }
+
   it('a maintainer bans a user, who is disconnected and cannot rejoin', async () => {
-    const { store: mStore, dir: mDir, identity: mIdent } = await tempStore({ name: 'maint' });
-    dirs.push(mDir);
-    relay = new InMemoryRelay({ maintainerKeys: [mIdent.pubkey], maxConnsPerIp: 10 });
-    const maintConn = await connect(relay, mStore, mDir, 'ip-m');
+    const maint = await makeMaintainer('maint');
     const victim = await makeUser('victim', 'ip-v');
+    const victimErr = awaitError(victim.client);
+    const banned = await doAction(relay, maint.connId, maint.client.admin('ban', victim.identity.pubkey));
+    expect(banned.ok).toBe(true);
+    expect((await victimErr).code).toBe('banned');
+    expect(victim.end.closed).toBe(true);
+    expect(relay.conns.has(victim.connId)).toBe(false);
 
-    // Start the ban action (relay has no ack for admin ops; we verify via store)
-    void maintConn.client.admin('ban', victim.identity.pubkey);
-    await tick(30); // sign completes
-    await relay.flush(maintConn.connId); // relay processes ban, closes victim
-    await tick(10);
-
-    // Verify ban is in store
-    expect(await relay.store.isBannedKey(victim.identity.pubkey)).toBe(true);
-
-    // Victim reconnects -- should get banned error
+    // Victim reconnects -- refused with a terminal banned error.
     const end2 = new ClientEnd();
     const connId2 = relay.register(end2, 'ip-v2');
     const client2 = new GlobalChatClient({
@@ -210,32 +211,58 @@ describe('GlobalChatClient <-> Room e2e', () => {
     await tick(30); // hello sign completes
     await relay.flush(connId2); // relay sends banned error back
     await tick(10); // transport processes error
-    const err = await errP;
-    expect(err.code).toBe('banned');
+    expect((await errP).code).toBe('banned');
+    maint.client.close(); victim.client.close(); client2.close();
+  });
 
-    maintConn.client.close(); victim.client.close(); client2.close();
+  it('a ban does not disconnect or error bystanders, who see presence drop and keep chatting', async () => {
+    const maint = await makeMaintainer('maint3');
+    const bystander = await makeUser('bystander', 'ip-b');
+    const victim = await makeUser('victim', 'ip-v');
+    const bystanderErrors: string[] = [];
+    const maintErrors: string[] = [];
+    bystander.client.subscribe({ onError: e => bystanderErrors.push(e.code) });
+    maint.client.subscribe({ onError: e => maintErrors.push(e.code) });
+    const presenceP = awaitPresence(bystander.client, n => n === 2);
+
+    const banned = await doAction(relay, maint.connId, maint.client.admin('ban', victim.identity.pubkey));
+    expect(banned.ok).toBe(true);
+    expect(await presenceP).toBe(2);
+    expect(bystanderErrors).toEqual([]);
+    expect(maintErrors).toEqual([]);
+    expect(bystander.end.closed).toBe(false);
+    expect(maint.end.closed).toBe(false);
+
+    // Both remaining users are still live: a post from the bystander is acked
+    // and reaches the maintainer.
+    const msgP = awaitMsg(maint.client);
+    const posted = await doAction(relay, bystander.connId, bystander.client.post('still here'));
+    expect(posted.ok).toBe(true);
+    expect((await msgP).text).toBe('still here');
+    maint.client.close(); bystander.client.close(); victim.client.close();
+  });
+
+  it('a non-maintainer admin action is refused with its own result', async () => {
+    const a = await makeUser('alice', 'ip-a');
+    const result = await doAction(relay, a.connId, a.client.admin('mode', 'closed'));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe('forbidden');
+    expect(await relay.store.getRoomMode()).toBe('open');
+    a.client.close();
   });
 
   it('maintainer sets read-only and a normal user post is refused', async () => {
-    const { store: mStore, dir: mDir, identity: mIdent } = await tempStore({ name: 'maint2' });
-    dirs.push(mDir);
-    relay = new InMemoryRelay({ maintainerKeys: [mIdent.pubkey], maxConnsPerIp: 10 });
-    const maintConn2 = await connect(relay, mStore, mDir, 'ip-m');
+    const maint = await makeMaintainer('maint2');
     const a = await makeUser('alice', 'ip-a');
+    const modeP = new Promise<string>(resolve => { a.client.subscribe({ onMode: resolve }); });
+    const modeResult = await doAction(relay, maint.connId, maint.client.admin('mode', 'readonly'));
+    expect(modeResult.ok).toBe(true);
+    expect(await modeP).toBe('readonly');
 
-    // Set readonly (relay sends no ack for mode changes; verify via store)
-    void maintConn2.client.admin('mode', 'readonly');
-    await tick(30); // sign completes
-    await relay.flush(maintConn2.connId); // relay processes mode change
-    await tick(10);
-    expect(await relay.store.getRoomMode()).toBe('readonly');
-
-    // Alice's post should be refused with readonly
     const result = await doAction(relay, a.connId, a.client.post('should fail'));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe('readonly');
-
-    maintConn2.client.close(); a.client.close();
+    maint.client.close(); a.client.close();
   });
 
   it('three distinct reports hide a message for everyone', async () => {
@@ -243,19 +270,20 @@ describe('GlobalChatClient <-> Room e2e', () => {
     const postResult = await doAction(relay, a.connId, a.client.post('bad content'));
     expect(postResult.ok).toBe(true);
     const msgId = (postResult as { ok: true; id: string }).id;
+    const deleted: string[] = [];
+    a.client.subscribe({ onDeleted: id => deleted.push(id) });
 
-    // Relay sends no ack for report ops; verify effect in store
     for (let i = 0; i < 3; i++) {
       const r = await makeUser(`reporter${i}`, `ip-r${i}`);
-      void r.client.report(msgId);
-      await tick(30); // sign completes
-      await relay.flush(r.connId); // relay processes report
-      await tick(10);
+      const reported = await doAction(relay, r.connId, r.client.report(msgId));
+      expect(reported.ok).toBe(true);
+      if (reported.ok) expect(reported.id).not.toBe(msgId); // ack carries the report's own id
+      expect(deleted).toEqual(i < 2 ? [] : [msgId]);
       r.client.close();
     }
-    // After 3 reports the relay marks the message deleted (soft-delete: not in backlog)
-    const backlog = await relay.store.getBacklog(50);
-    expect(backlog.some(m => m.id === msgId)).toBe(false);
+    const self = await doAction(relay, a.connId, a.client.report(msgId));
+    expect(self.ok).toBe(false); // deleted (and own) message cannot be reported
+    expect((await relay.store.getBacklog(50)).some(m => m.id === msgId)).toBe(false);
     a.client.close();
   });
 

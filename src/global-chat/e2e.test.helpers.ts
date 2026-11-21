@@ -8,6 +8,7 @@
  * Keep <=350 lines.
  */
 import { Room, MemoryRelayStore } from './relay/index.js';
+import { countDistinctKeys } from './relay/room.js';
 import type { ConnRecord, RelayConfig, RoomEffect } from './relay/index.js';
 import type { RelayFrame } from './protocol.js';
 import type { ChatSocket, ChatSocketConstructor } from './client.transport.js';
@@ -134,35 +135,40 @@ export class InMemoryRelay {
     return m;
   }
 
+  // Contract: mirrors applyEffect in relay/src/room-object.ts, in the same
+  // order: sender frames, then private frames to named connections, then
+  // closes, then the broadcast to hello'd connections, then a presence
+  // recount if closing changed the number of distinct online keys. Private
+  // frames (toConnections) never reach anyone else: a ban error is delivered
+  // only to the banned connection, so bystanders stay connected.
   async _applyEffect(senderConnId: string, effect: RoomEffect): Promise<void> {
-    // Update sender record first
     const senderEntry = this.conns.get(senderConnId);
     if (senderEntry) senderEntry.record = effect.conn;
-
-    // Send to sender
-    for (const frame of effect.toSender) {
-      senderEntry?.end.receive(frame);
+    for (const frame of effect.toSender) senderEntry?.end.receive(frame);
+    const before = countDistinctKeys(this._allConns());
+    for (const { connId, frame } of effect.toConnections ?? []) {
+      this.conns.get(connId)?.end.receive(frame);
     }
-    // Broadcast to all hello'd connections
-    for (const frame of effect.toBroadcast) {
-      for (const [cid, { end, record }] of this.conns) {
-        if (record.helloOk || cid === senderConnId) {
-          end.receive(frame);
-        }
-      }
-    }
-    // Force-close connections: mark the socket closed and remove from relay.
-    // Do NOT call triggerClose() here -- the error frame was already delivered
-    // via toSender/toBroadcast above, and triggerClose() would fire before the
-    // #incoming microtask processes the error, making current()=false and
-    // silently dropping the error frame. The client closes itself via
-    // terminal() after processing the error.
+    // Force-close: mark the socket closed and drop it from the relay. Do NOT
+    // call triggerClose() here -- it would fire before the client's #incoming
+    // chain processes the error frame delivered above, making current() false
+    // and silently dropping it. The client closes itself via terminal().
     for (const closeId of effect.toClose) {
       const entry = this.conns.get(closeId);
       if (entry) {
         this.conns.delete(closeId);
         entry.end.close();
       }
+    }
+    this._broadcast(effect.toBroadcast);
+    const after = countDistinctKeys(this._allConns());
+    if (after !== before) this._broadcast([{ t: 'presence', online: after }]);
+  }
+
+  private _broadcast(frames: readonly RelayFrame[]): void {
+    for (const { end, record } of this.conns.values()) {
+      if (!record.helloOk) continue;
+      for (const frame of frames) end.receive(frame);
     }
   }
 }
