@@ -44,13 +44,20 @@ export function explainFailure(result: Failure, verb = 'Message'): string {
     case 'readonly': return 'The room is read-only right now. Nothing was sent.';
     case 'closed': return 'The room is closed right now. Nothing was sent.';
     case 'banned': return 'You are banned from this room.';
-    case 'not_connected': return 'Not connected to the relay. Nothing was sent; try again when connected.';
+    case 'not_connected': return 'Not connected to the relay. Nothing left your machine.';
+    case 'delivery_unknown': return 'The connection dropped before the relay confirmed. It may or may not have been sent.';
     case 'timeout': return 'The relay did not answer in time. It may not have been sent; check before retrying.';
+    case 'name_change_too_soon': return result.retryAfterMs !== undefined ? `The relay needs you to wait ${formatWait(result.retryAfterMs)} before changing your name again.` : 'The relay needs you to wait before changing your name again.';
+    case 'bad_name': return 'The relay refused that display name.';
+    case 'reserved_name': return 'That display name is reserved.';
+    case 'bad_signature': return 'Your client could not prove this request came from your identity.';
+    case 'not_hello': return 'The relay needs a completed sign-in before this request.';
+    case 'bad_frame': return 'The relay could not understand this request.';
     case 'forbidden': return 'That command is for maintainers only.';
     case 'unknown_target': return 'That message no longer exists on the relay.';
     case 'duplicate': return 'The relay already has that message.';
     case 'stale_timestamp': return 'Your clock looks wrong, so the relay refused this. Check your system time.';
-    default: return `${verb} failed (${result.code}).`;
+    default: return `${verb} failed.`;
   }
 }
 

@@ -24,7 +24,7 @@ function setup(over: { accepted?: boolean; identity?: typeof ME | null; pending?
   };
   const createClient = vi.fn(() => client);
   const deps: GlobalChatViewDeps = {
-    compositor, stdin, stdout, clock, identity, mutes, guards, createClient,
+    compositor, stdin, stdout, clock, identity, mutes, guards, createClient, relayHost: 'relay.example',
     pauseRecording: vi.fn(() => log.push('pause')),
     resumeRecording: vi.fn(() => log.push('resumeRec')),
     ...(over.pending ? { hasPendingWork: over.pending } : {}),
@@ -106,6 +106,25 @@ describe('runGlobalChatView lifecycle', () => {
     expect(screen(h)).toContain('hello world');
     expect(h.client.reports).toEqual([]);
     expect(h.client.admins).toEqual([]);
+  });
+
+  it('keeps deleted messages as removed placeholders', async () => {
+    const h = await open();
+    const m = msg('will vanish');
+    h.client.emit('onMessage', m);
+    h.client.emit('onDeleted', m.id);
+    expect(screen(h)).toContain('[removed]');
+  });
+
+  it('shows one outage line and a recovery line', async () => {
+    const h = await open();
+    h.client.emit('onStatus', 'reconnecting');
+    h.client.emit('onStatus', 'reconnecting');
+    h.client.emit('onStatus', 'reconnecting');
+    h.client.emit('onStatus', 'reconnecting');
+    expect(screen(h)).toContain('Cannot reach relay.example. Still trying. Press Esc to leave.');
+    h.client.emit('onStatus', 'open');
+    expect(screen(h)).toContain('Connected to the relay again.');
   });
 
   it('a failed post restores the input and explains why', async () => {
@@ -192,6 +211,35 @@ describe('runGlobalChatView onboarding', () => {
     expect(h.identity.calls).toEqual([]);
     expect(h.createClient).not.toHaveBeenCalled();
     expect(h.log).toContain('resumeRec');
+  });
+
+  it('Esc before a name is confirmed stores nothing', async () => {
+    const h = await open({ accepted: false, identity: null });
+    h.stdin.type('y');
+    h.stdin.type('neo');
+    h.stdin.type('\x1b'); h.clock.flush();
+    expect(await h.done).toBe('declined');
+    expect(h.identity.calls).toEqual([]);
+  });
+
+  it('Esc during identity creation waits for the save and records consent after it', async () => {
+    const h = await open({ accepted: false, identity: null });
+    let release!: (result: { ok: true; identity: typeof ME }) => void;
+    h.identity.create = async (name: string) => {
+      h.identity.calls.push(`create:${name}`);
+      return await new Promise((resolve) => { release = resolve; });
+    };
+    h.stdin.type('y');
+    h.stdin.type('neo');
+    h.stdin.type('\r');
+    await tick();
+    const resumesBeforeEsc = h.compositor.resumeInput.mock.calls.length;
+    h.stdin.type('\x1b'); h.clock.flush();
+    expect(h.compositor.resumeInput).toHaveBeenCalledTimes(resumesBeforeEsc);
+    release({ ok: true, identity: { ...ME, name: 'neo' } });
+    await tick(); await tick();
+    expect(h.identity.calls).toEqual(['create:neo', 'accept']);
+    expect(h.createClient).toHaveBeenCalledOnce();
   });
 
   it('accepting leads to the name screen with validation, then chat', async () => {

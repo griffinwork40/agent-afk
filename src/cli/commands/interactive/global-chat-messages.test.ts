@@ -19,9 +19,11 @@ describe('failure explanations', () => {
     expect(f('secret_detected', { spans: [] })).toContain('relay thinks');
     expect(f('readonly')).toContain('read-only');
     expect(f('closed')).toContain('closed');
-    expect(f('not_connected')).toContain('Not connected');
+    expect(f('not_connected')).toContain('Nothing left your machine');
+    expect(f('delivery_unknown')).toContain('may or may not have been sent');
+    expect(f('name_change_too_soon', { retryAfterMs: 1000 })).toContain('1 second');
     expect(f('timeout')).toContain('did not answer');
-    for (const c of ['banned', 'forbidden', 'unknown_target', 'duplicate', 'stale_timestamp', 'bad_frame']) expect(f(c)).toBeTruthy();
+    for (const c of ['banned', 'forbidden', 'unknown_target', 'duplicate', 'stale_timestamp', 'bad_frame', 'bad_name', 'reserved_name', 'bad_signature', 'not_hello']) expect(f(c)).toBeTruthy();
   });
   it('explains identity failures', () => {
     expect(explainIdentityFailure({ ok: false, code: 'name_change_too_soon', retryAfterMs: 3600_000 })).toContain('once a day');

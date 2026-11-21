@@ -100,12 +100,13 @@ async function main(): Promise<void> {
   await settle();
 
   const identity = new FakeIdentity();
-  if (scenario === 'onboard') { identity.accepted = false; identity.identity = null; }
+  if (scenario === 'onboard' || scenario === 'smallnotice') { identity.accepted = false; identity.identity = null; }
   const origCreate = identity.create.bind(identity);
   identity.create = async (name: string) => { log({ ev: 'create', name }); return origCreate(name); };
-  const client = new ScriptedClient(backlog(scenario === 'onboard' ? 2 : 30));
+  const client = new ScriptedClient(backlog(scenario === 'onboard' || scenario === 'smallnotice' ? 2 : 30));
   client.live.push(msg('bob', 'LIVE_WHILE_SCROLLED from bob'), msg('mallory', HOSTILE_TEXT, 'e'.repeat(64)));
   process.on('SIGUSR2', () => client.deliverNext());
+  process.on('SIGUSR1', () => client.emit('onDeleted', '1e'.padStart(32, '0')));
   // Mirror the production order (signal handler -> rl.close -> handleRlClose
   // in interactive.ts): the exit summary is printed synchronously FIRST, then
   // the cleanup registry runs, then exit.

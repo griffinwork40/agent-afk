@@ -13,7 +13,7 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 ## [Unreleased]
 
 ### Added
-- add `/global` public chat room: opt-in terminal REPL chat between agent turns, with relay client, identity and mute stores, moderation, secret detection, and TTY recording pause; the identity (Ed25519 private key) and mute list live in the AFK config directory under `global-chat/`, which the agent's file tools already refuse
+- add `/global` opt-in terminal chat between agent turns for people, when a relay is configured; messages are signed and verified, the relay retains messages with author public keys and display names for 7 days, and identity and mute files live in the AFK config directory under `global-chat/`
 
 ## [5.360.0] - 2026-11-19
 

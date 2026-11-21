@@ -67,7 +67,10 @@ describe('global chat model', () => {
     expect(s.input).toBe('hi line1 line2');
     clearInput(s);
     expect(s.input).toBe('');
-    appendInput(s, 'x'.repeat(MAX_INPUT_CHARS + 50));
+    expect(appendInput(s, 'x'.repeat(MAX_INPUT_CHARS + 50))).toBe(true);
+    expect(s.input).toHaveLength(MAX_INPUT_CHARS);
+    clearInput(s);
+    appendInput(s, '😀'.repeat(1001));
     expect(s.input).toHaveLength(MAX_INPUT_CHARS);
     expect(cleanInputChunk(' ')).toBe(' ');
     expect(cleanInputChunk('\x1b[A')).toBe('');
@@ -116,6 +119,7 @@ describe('global chat model', () => {
     unmute(s, KEY_B);
     expect(s.muted.size).toBe(0);
     deleteMessage(s, m.id);
-    expect(s.entries).toHaveLength(0);
+    expect(s.entries).toHaveLength(1);
+    expect(findByN(s, 1)?.text).toBe('[removed]');
   });
 });

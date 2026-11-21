@@ -8,7 +8,7 @@
  * @module cli/commands/interactive/global-chat-model
  */
 
-import type { Badge, Msg, RoomMode } from '../../../global-chat/protocol.js';
+import { MAX_TEXT_CHARS, type Badge, type Msg, type RoomMode } from '../../../global-chat/protocol.js';
 import type { ChatConnectionStatus, ChatIdentity, ChatWelcome } from '../../../global-chat/client-types.js';
 import { sanitizeChatText } from '../../../global-chat/sanitize.js';
 import { previousGraphemeIndex } from '../../display.js';
@@ -16,10 +16,11 @@ import { createHash } from 'node:crypto';
 
 export const MAX_ENTRIES = 300;
 /** Local input cap; the relay limit is enforced by the relay and shown as a counter. */
-export const MAX_INPUT_CHARS = 2000;
+export const MAX_INPUT_CHARS = MAX_TEXT_CHARS;
 
 export interface ChatMessageEntry {
   kind: 'msg';
+  removed?: boolean;
   seq: number;
   n: number;
   id: string;
@@ -104,7 +105,8 @@ export function applyWelcome(state: ChatViewState, welcome: ChatWelcome): void {
 }
 
 export function deleteMessage(state: ChatViewState, id: string): void {
-  state.entries = state.entries.filter((e) => !(e.kind === 'msg' && e.id === id));
+  const entry = state.entries.find((e): e is ChatMessageEntry => e.kind === 'msg' && e.id === id);
+  if (entry) { entry.text = '[removed]'; entry.removed = true; }
 }
 
 export function setStatus(state: ChatViewState, status: ChatConnectionStatus): void { state.status = status; }
@@ -122,13 +124,15 @@ export function cleanInputChunk(chunk: string): string {
   return out.startsWith(SENTINEL) && out.endsWith(SENTINEL) ? out.slice(1, -1) : sanitizeChatText(chunk);
 }
 
-export function appendInput(state: ChatViewState, chunk: string): void {
-  if (state.sending) return;
+export function appendInput(state: ChatViewState, chunk: string): boolean {
+  if (state.sending) return false;
   const clean = cleanInputChunk(chunk);
-  if (!clean) return;
-  const room = MAX_INPUT_CHARS - Array.from(state.input).length;
-  if (room <= 0) return;
-  state.input += Array.from(clean).slice(0, room).join('');
+  if (!clean) return false;
+  const room = MAX_INPUT_CHARS - state.input.length;
+  if (room <= 0) return true;
+  const next = clean.slice(0, room);
+  state.input += next;
+  return next.length < clean.length;
 }
 
 export function backspace(state: ChatViewState): void {

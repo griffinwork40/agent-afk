@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseViewCommand } from './global-chat-commands.js';
+import { HELP_LINES, parseViewCommand } from './global-chat-commands.js';
 import { createChatState, addMessage, mute, tagForPubkey, type ChatViewState } from './global-chat-model.js';
 
 const ME = 'c'.repeat(64);
@@ -33,8 +33,9 @@ describe('parseViewCommand', () => {
     expect(parseViewCommand(`/unmute bob#${bobTag}`, s)).toEqual({ kind: 'unmute', pubkey: BOB, display: `bob#${bobTag}` });
     expect(parseViewCommand('/unmute 1', s)).toMatchObject({ kind: 'error' });
   });
-  it('report needs a number', () => {
+  it('report needs another user message number', () => {
     expect(parseViewCommand('/report 1', state())).toEqual({ kind: 'report', id: '1'.repeat(32), n: 1 });
+    expect(parseViewCommand('/report 2', state())).toMatchObject({ kind: 'error', message: expect.stringContaining('own message') });
     expect(parseViewCommand('/report x', state())).toMatchObject({ kind: 'error' });
   });
   it('maintainer commands are refused for others', () => {
@@ -54,6 +55,13 @@ describe('parseViewCommand', () => {
     expect(parseViewCommand('/mode closed', s)).toEqual({ kind: 'mode', mode: 'closed' });
     expect(parseViewCommand('/mode loud', s)).toMatchObject({ kind: 'error' });
   });
+  it('documents every accepted command in help', () => {
+    const help = HELP_LINES.join('\n');
+    for (const command of ['/help', '/rules', '/mutes', '/mute', '/unmute', '/report', '/ban', '/unban', '/delete', '/mode']) {
+      expect(help).toContain(command);
+    }
+  });
+
   it('unknown commands get a hint', () => {
     expect(parseViewCommand('/frobnicate now', state())).toMatchObject({ kind: 'error', message: expect.stringContaining('/help') });
   });

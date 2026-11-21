@@ -17,6 +17,8 @@ import type { SlashCommand, SlashContext } from '../types.js';
 import type { ChatClient, ChatIdentity, IdentityStore, MuteStore } from '../../../global-chat/client-types.js';
 import { NOTICE_VERSION } from '../../../global-chat/client-types.js';
 import { formatDisplayName } from '../../../global-chat/names.js';
+import { validateChatUrl } from '../../../global-chat/client.transport.js';
+import { getGlobalChatIdentityPath } from '../../../paths.js';
 import { runGlobalChatView, realClock, type ChatClock } from '../../commands/interactive/global-chat-view.js';
 import { explainIdentityFailure } from '../../commands/interactive/global-chat-messages.js';
 import type { ChatCompositor, ChatStdin, ChatStdout } from '../../commands/interactive/global-chat-terminal.js';
@@ -70,19 +72,22 @@ function display(identity: ChatIdentity): string {
 async function openRoom(ctx: SlashContext, deps: GlobalCommandDeps, compositor: LiveCompositor): Promise<void> {
   const url = deps.relayUrl;
   if (!url) { ctx.out.info(NO_RELAY); return; }
+  let relayHost: string;
+  try { relayHost = new URL(validateChatUrl(url)).host; }
+  catch { ctx.out.error('AFK_GLOBAL_CHAT_URL is invalid. Use wss://<host>/v1/room/global, or ws:// only on localhost.'); return; }
   const identityStore = deps.createIdentityStore();
   // Periodic footer writers would paint into the alternate screen.
   ctx.suspendFooter?.();
   try {
     await runGlobalChatView({
-      compositor, stdin: compositor.stdin, stdout: compositor.stdout,
+      compositor, stdin: compositor.stdin, stdout: compositor.stdout, relayHost,
       createClient: (identity) => deps.createClient({ url, identity, identityStore }),
       identity: identityStore, mutes: deps.createMuteStore(), clock: deps.clock ?? realClock,
       pauseRecording: deps.pauseRecording, resumeRecording: deps.resumeRecording,
       ...(deps.hasPendingWork ? { hasPendingWork: deps.hasPendingWork } : {}),
     });
   } catch {
-    ctx.out.error('Global chat could not start (could not read its local state).');
+    ctx.out.error(`Could not read the chat identity file at ${getGlobalChatIdentityPath()}. Move it aside to create a new identity with a new tag. Nothing was overwritten.`);
   } finally {
     ctx.resumeFooter?.();
   }
@@ -93,7 +98,7 @@ async function setName(ctx: SlashContext, store: IdentityStore, name: string): P
   const existing = await store.load();
   if (!existing) { ctx.out.info('No chat identity yet. Run /global to set one up.'); return; }
   const result = await store.rename(name);
-  if (result.ok) ctx.out.success(`Display name is now ${display(result.identity)}. Names can change once a day.`);
+  if (result.ok) ctx.out.success(`Display name ${display(result.identity)} is saved and will be used the next time you join.`);
   else ctx.out.warn(explainIdentityFailure(result));
 }
 
@@ -109,7 +114,7 @@ export function createGlobalCommand(deps: GlobalCommandDeps): SlashCommand {
   return {
     name: '/global',
     requires: ['tty'],
-    summary: 'Open the public global chat room (people only, between turns)',
+    summary: 'Open public chat when a relay is configured',
     usage: '/global [name <name> | status | off]',
     async handler(ctx, args) {
       const compositor = liveCompositor(ctx, deps);
