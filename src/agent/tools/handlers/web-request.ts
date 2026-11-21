@@ -333,12 +333,10 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
       }
 
       // -- Format structured response ----------------------------------------
-      // Redact secrets from response body before returning to model context.
-      // JSON responses are parsed objects — serialize, redact, then re-parse so
-      // token patterns embedded in JSON values (e.g. {"key":"sk-ant-…"}) are masked.
+      // JSON responses are parsed objects — serialize then re-parse so the
+      // serialized form is what we store (consistent string representation).
       let responseBody = result.body;
-      if (typeof responseBody === 'string') {
-      } else if (typeof responseBody === 'object' && responseBody !== null) {
+      if (typeof responseBody === 'object' && responseBody !== null) {
         const serialized = JSON.stringify(responseBody);
         try { responseBody = JSON.parse(serialized); } catch { responseBody = serialized; }
       }
