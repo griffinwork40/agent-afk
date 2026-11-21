@@ -1,4 +1,3 @@
-import { VALID_PERMISSION_MODE_SET } from '../../utils/permission-mode.js';
 import type { RemovedPermissionMode } from '../../utils/permission-mode.js';
 export { classifyPermissionMode } from '../../utils/permission-mode.js';
 export type { RemovedPermissionMode } from '../../utils/permission-mode.js';
@@ -45,9 +44,8 @@ export function warnPermissionModeRemoval(mode: RemovedPermissionMode): void {
 export function warnPermissionModeUnknown(value: string): void {
   if (warnedUnknownModes.has(value)) return;
   warnedUnknownModes.add(value);
-  const valid = [...VALID_PERMISSION_MODE_SET].join(', ');
   const message =
-    `[afk] permissionMode "${value}" is not recognised and will be ignored. Valid modes: ${valid}.`;
+    `[afk] permissionMode "${value}" is not recognised and will be ignored. Valid modes: plan, bypassPermissions.`;
   if (deferredPermissionModeWarnings !== null) {
     deferredPermissionModeWarnings.push(message);
   } else {

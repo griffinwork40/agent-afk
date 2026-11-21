@@ -14,10 +14,17 @@
  */
 
 /**
+ * Local mirror of the `PermissionMode` union from `src/agent/types/sdk-types.ts`.
+ * Foundation cannot import from Core/Infra (agent/), so this type is duplicated
+ * here intentionally. Keep in sync when modes are added or removed in sdk-types.ts.
+ */
+export type PermissionMode = 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk' | 'auto';
+
+/**
  * Valid permissionMode values. Must stay in sync with the `PermissionMode`
  * union in `src/agent/types/sdk-types.ts`.
  */
-export const VALID_PERMISSION_MODE_SET: ReadonlySet<string> = new Set([
+export const VALID_PERMISSION_MODE_SET: ReadonlySet<PermissionMode> = new Set<PermissionMode>([
   'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto',
 ]);
 
@@ -35,8 +42,12 @@ export const REMOVED_PERMISSION_MODES: ReadonlySet<string> = new Set<RemovedPerm
  * - `'removed'` — existed before v6; callers should warn and drop.
  * - `'unknown'` — unrecognised; callers should warn with valid options and drop.
  */
+export function isPermissionMode(value: string): value is PermissionMode {
+  return (VALID_PERMISSION_MODE_SET as ReadonlySet<string>).has(value);
+}
+
 export function classifyPermissionMode(value: string): 'valid' | 'removed' | 'unknown' {
-  if (VALID_PERMISSION_MODE_SET.has(value)) return 'valid';
+  if (isPermissionMode(value)) return 'valid';
   if (REMOVED_PERMISSION_MODES.has(value)) return 'removed';
   return 'unknown';
 }
