@@ -12,6 +12,45 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking: `autonomous` (AFK) permission mode removed.** The `autonomous`
+  mode, the `/afk` REPL and Telegram commands, the high-risk approval gate,
+  the phone-approval flow, Telegram `/abort`, automatic Telegram watch, and
+  `afk trace show --evasion` / `--evasion-window` are all gone. Scheduled
+  daemon tasks now run in `bypassPermissions` with no risk-classifier gate;
+  the unconditional blocking hooks (safe-destruct, release-boundary, sensitive
+  paths) remain the only pre-execution refusals on a daemon tick. A config
+  file that still names `autonomous` runs in `bypassPermissions` and prints
+  one warning. Manual `/watch <session-id>` and `/unwatch` still work. (fb4932e53)
+
+- **Breaking: `default` permission mode removed; `bypassPermissions` is now
+  the baseline.** The `default` mode (path containment on, interactive
+  approval prompts on) is no longer accepted as a user-facing choice. Every
+  surface that previously fell back to `default` now resolves to
+  `bypassPermissions`: both providers, session setup, the OpenAI-compatible
+  query normalizer, plan-mode exit, CLI and Telegram AFK-off, Telegram session
+  lifecycle, the web dashboard, session stats and resume. The Shift+Tab ring
+  is now `plan <-> bypassPermissions`. A config file that still sets
+  `"permissionMode": "default"` prints one warning and runs in
+  `bypassPermissions`. (628df60f1)
+
+- **Breaking: generic pattern-based secret redaction removed.** The
+  `redactSecrets` module and all 30+ call sites are stripped. On a
+  single-user local process the pattern-matching redactor added maintenance
+  burden and false-positive friction with no security value, since the full
+  session transcript already contains raw secrets in the provider API calls.
+  What remains: Telegram bot-token URL redactors (network-facing credential
+  paths), `redactSensitiveFields` in `tool-call-trace.ts` (field-level, not
+  pattern), and the browser `sanitize.ts` copy. The `AFK_REDACT_SECRETS` env
+  var is also removed. (5675dc0a5)
+
+### Added
+
+- census surface capability wiring and document known gaps per surface in a living test (894f0673f)
+- `afk setup` alias for `afk login` with guided first-time Anthropic sign-in: explains credentials, billing, hidden paste, Claude Code detection, and validates API keys before saving (8b5c38d0c)
+- onboarding friction observation kit: hosted install workflows for Windows and macOS across Node 20/22/24/26, with ledger, contracts, and dated findings (f443aa78c)
+
 ### Changed
 
 - **Breaking: `afk acp` now speaks Agent Client Protocol v1 over stdio.** The
@@ -160,6 +199,48 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
   approval policy resolves that child's relative or absent paths against it
   rather than the session `cwd`. Absolute paths inside the session `cwd`
   remain auto-allowed.
+
+### Fixed
+
+- add fast-uri override drift test and guard audit floor against the 11 moderate/low CVEs in fast-uri <3.1.9 (0d709ec81)
+- gate scratch-dir system-prompt rule on `scratchDisposable` opt-in so non-worktree forks do not receive stale guidance (5444dcfc0)
+- use wrap-ansi's internal string-width version to decide full-width in the render loop, eliminating stale-cell artifacts from code-point disagreements between string-width 8 and 9 (cd7c443cc)
+- harden pre-push test harness: move `AFK_ALLOW_MAIN_PUSH` into spawnSync env map, add atomic-push shape test, add gpgsig fixture precondition assertion (70de4f406)
+- name refused main-push commits in hook output so the operator can identify the offending SHA and subject (6a14ecb3e)
+- show "Pending: not stated" in `afk-push` output when a Done report omits the Pending field (7bf12facc)
+- clear the session drain timer after close and reset to prevent a stale callback firing on the next session (675d7d23d)
+- one send owns one provider turn: fix ESC-then-send lag and stray-interrupt session death caused by overlapping turn ownership (cf5001365)
+- address advisory findings from pr-triage batch: comments, sentinel literals, and minor logic nits (c1eff1d03)
+- reword rationale comment and replace bare sentinel literals with named constants (f09e0e2aa)
+- patch path-sanitizer boundary, space-in-directory, and UNC path gaps (6bf5ad4db)
+- address 7 of 8 remaining advisory findings: comments, regex correctness, truncation, and test coverage (c3a8d6666)
+- bound artifact publish admission: enforce size, count, and metadata constraints at the admission gate (4ad7808d2)
+- rank recent commands first, group native and skill commands, cap summaries in the ⌘K palette (fc2449511)
+- fix budget-cap exit path, duplicate-alert gate, and `issues[0]` nit in the budget reporter (476495f68)
+- clarify credential-floor diagnostics and narrow policy-scope description in the doctor output (dc17e2241)
+- type `makeFooter`, `makeTranscript`, and `makeSurface` test stubs against their real interfaces (6651a6403)
+- replace parity test self-compare and wire skill executor inline sites to `resolveChildMaxDepth` (5c7422f13)
+- daemon failure-streak escalation, notification delivery telemetry, and schedule health improvements (dc29ef51a)
+- enable web dashboard model fallback when the primary model is unavailable (5e9e10b6c)
+- address advisory findings: comments, regex, truncation, and test corrections (7643dd570)
+- doctor handles fresh stores and encoded install paths without spurious errors (d8109261e)
+- enable file checkpointing by default on the web surface (a56286470)
+- align skills manifest gate across providers and cover the `'true'` branch (bcc280ab8)
+- add LSP crash-restart loop guard: suppress auto-restart after 3 crashes within 120 s (e52f9318f)
+- add scratch-dir create-time exclude write (item 3) and handler+sweep (item 4) tests (554c99fae)
+- add direct unit tests for `safeNum`, `formatPct`, and `htmlEscape` in `html.helpers.ts` (5f5fccf87)
+
+### Documentation
+
+- replace demo video in README with failure geometry hero image (4030c551f)
+- explain onboarding terms, install errors, and Telegram setup in the getting-started guide (a67b4fa55)
+- add a from-zero onboarding path covering clean-machine install through first agent session (4e849060b)
+
+### Tests
+
+- add `TurnStreamRunner` integration test for auth-retry-tier trace events (234b2864e)
+- cover CRLF excludes and tracked `.afk-scratch` teardown paths (e7d162ff4)
+- stop racing registry cleanup in the Telegram watch stream test (d6ff7a2c6)
 
 ## [5.360.0] - 2026-11-19
 
