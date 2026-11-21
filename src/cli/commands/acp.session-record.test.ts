@@ -3,7 +3,7 @@
  *
  * @module cli/commands/acp.session-record.test
  */
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +12,16 @@ import { getAcpSessionRecordPath } from '../../paths.journal.js';
 import { readAcpSessionRecord, writeAcpSessionRecord } from './acp.session-record.js';
 
 let state: string;
+
+/** Directory link; where Windows refuses a symlink (EPERM without the privilege) a junction is used. */
+function linkDir(target: string, link: string): void {
+  try {
+    symlinkSync(target, link, 'dir');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EPERM') throw err;
+    symlinkSync(target, link, 'junction');
+  }
+}
 
 beforeEach(() => {
   state = mkdtempSync(path.join(os.tmpdir(), 'acp-record-'));
@@ -71,6 +81,25 @@ describe('writeAcpSessionRecord / readAcpSessionRecord', () => {
 
   it('returns undefined when the sessions directory does not exist yet', () => {
     expect(readAcpSessionRecord('fresh-1')).toBeUndefined();
+  });
+
+  it('a sessions directory that is a link to a directory is not treated as blocked', () => {
+    const real = path.join(state, 'real-sessions');
+    mkdirSync(real);
+    mkdirSync(path.join(state, 'acp'));
+    linkDir(real, path.join(state, 'acp', 'sessions'));
+    expect(readAcpSessionRecord('via-link-1')).toBeUndefined();
+    writeAcpSessionRecord('via-link-2', { cwd: path.join(state, 'project') });
+    expect(readAcpSessionRecord('via-link-2')).toEqual({ cwd: path.join(state, 'project') });
+  });
+
+  it('a state directory reached through a link, with no acp tree yet, is not treated as blocked', () => {
+    const realState = path.join(state, 'real-state');
+    mkdirSync(realState);
+    const linked = path.join(state, 'state-link');
+    linkDir(realState, linked);
+    vi.spyOn(env, 'AFK_STATE_DIR', 'get').mockReturnValue(linked);
+    expect(readAcpSessionRecord('fresh-2')).toBeUndefined();
   });
 
   it('throws when the write fails', () => {

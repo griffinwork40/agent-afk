@@ -17,7 +17,7 @@
  * @module cli/commands/acp.session-record
  */
 
-import { lstatSync, readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { getAcpSessionRecordPath } from '../../paths.journal.js';
@@ -36,13 +36,15 @@ export function writeAcpSessionRecord(acpId: string, record: AcpSessionRecord): 
  * True when the nearest existing ancestor of `file` is not a directory, or
  * cannot be examined. Windows answers ENOENT for a read through a file used
  * as a directory, so ENOENT alone does not prove the record is merely absent.
+ * Links are followed (`statSync`), so a state directory or a `sessions`
+ * directory that is a symbolic link or junction to a directory is not blocked.
  */
 function parentBlocked(file: string): boolean {
   let dir = path.dirname(file);
   for (;;) {
-    let st: ReturnType<typeof lstatSync> | undefined;
+    let st: ReturnType<typeof statSync> | undefined;
     try {
-      st = lstatSync(dir, { throwIfNoEntry: false });
+      st = statSync(dir, { throwIfNoEntry: false });
     } catch {
       return true;
     }
