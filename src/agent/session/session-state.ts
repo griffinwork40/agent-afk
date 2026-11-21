@@ -68,6 +68,12 @@ export class SessionStateManager {
       this.resolveInitialization = resolve;
       this.rejectInitialization = reject;
     });
+    // The session drives initialization on its own, so this promise can reject
+    // (e.g. no credential) while nobody has called waitForInitialization(): a
+    // host that only reads status and closes would otherwise see a
+    // process-level unhandledRejection. Mark it handled; waitForInitialization
+    // callers still receive the rejection through their own handlers.
+    this.initializationPromise.catch(() => {});
   }
 
   waitForInitialization(): Promise<SessionMetadata> {
