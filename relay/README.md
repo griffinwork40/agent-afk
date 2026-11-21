@@ -72,13 +72,22 @@ public keys, not sockets. Closing one of several sockets for one key does not
 remove that key from presence.
 
 Each attachment stores a hello deadline of `HELLO_TIMEOUT_MS = 10000`. The
-persistent Durable Object alarm is armed for the earliest pending deadline,
-closes expired sockets with code 1008, then re-arms for the next deadline.
+persistent Durable Object alarm is armed for the earliest hello deadline, message
+expiry, inactive-key expiry, or consumed-action expiry. It closes expired pending
+sockets with code 1008, prunes storage, then re-arms for the next deadline.
 Attachments and alarms survive hibernation without a memory-resident timer.
 A late hello is rejected even if alarm delivery was delayed. Alarms have
 at-least-once execution and can be delayed by platform maintenance; 10 seconds
 is a handshake deadline, not a hard real-time TCP teardown guarantee. See
 [Cloudflare alarms](https://developers.cloudflare.com/durable-objects/api/alarms/).
+
+Each socket may complete hello exactly once. A second hello returns `bad_frame`
+(`Hello already completed`) and closes it. Before enqueueing, the adapter rejects
+binary or over-4096-byte client frames and closes a socket with more than 16
+pending message events. New-key registrations are limited to 20/hour per address
+hash; existing keys do not consume registration quota. Idle limiter entries are
+swept fairly, at most 16 entries per call. In-memory registration counters may
+reset on hibernation, like post counters; this is not a durable identity quota.
 
 Post limits are burst 5 with one token replenished per 3 seconds per key,
 20/hour for keys first seen less than 24 hours ago, and 60/minute per address
@@ -91,29 +100,46 @@ row; an address shared by another ban remains blocked.
 
 ## Name rule
 
-A brand-new key's first successful hello registers its name and `firstSeenAt`.
-An unchanged name is accepted without moving the clock. A different name is
-refused until 24 hours after first successful hello (before any prior rename),
-or 24 hours after the last accepted rename. A successful rename updates
-`nameChangedAt` but preserves `firstSeenAt`. Maintainer keys bypass the rename
-interval. This server clock begins at first hello, not local identity creation.
+The client's identity store owns the user-facing 24-hour rename rule, measured
+from local creation or the last local rename. The relay only has a 10-minute
+abuse backstop between name changes it actually observes. First hello registers
+the name but starts no rename clock; the first observed change is allowed.
+Unchanged-name reconnects do not move the change clock. A refused change returns
+`name_change_too_soon` with `retryAfterMs`. Maintainers bypass this backstop.
+Successful changes preserve `firstSeenAt` and update `nameChangedAt`.
 
 ## Storage and privacy
 
 | Data | Retention |
 |------|-----------|
-| Messages: id, signed timestamp, public key, name, text, signature, badge, deletion flag | Eligible for physical pruning after 7 days; up to 100 expired rows cleaned on each hello |
+| Messages: id, signed timestamp, public key, name, text, signature, badge, deletion flag | 7 days from signed timestamp; persistent expiry alarm physically deletes batches of 100 |
 | Backlog | Newest 50 non-deleted, non-expired messages in timestamp order; equal timestamps use insertion order |
 | Reports: message id and distinct reporter public key | Removed when the associated message is physically pruned |
-| Key registry: public key, name, first seen, last name change | Indefinite |
+| Key registry: public key, name, first seen, last seen, last name change | Pruned after 30 inactive days if unbanned and no retained messages; batches of 100 |
 | Bans: public key and captured salted address hash | Until explicitly unbanned |
+| Consumed admin/report ids (namespaced by author and frame type), expiry | Until signed timestamp plus 120001 ms; bounded alarm cleanup |
 | Room mode and monotonic retention cutoff | Until changed |
 
-The retention cutoff hides *all* expired rows immediately on a hello, even
-when more than 100 rows await physical cleanup. Without future hellos, old
-physical rows can remain stored. Deleted messages remain available for duplicate
-checks but never appear in backlog. Three distinct non-author reporters delete
-a message and notify connected clients; repeating one reporter does not count.
+Expiry cleanup does not require a future connection. The adapter schedules the
+first alarm at the oldest message's signed timestamp plus 7 days plus 1 ms.
+Every alarm physically deletes up to 100 expired rows and associated reports,
+then requests another alarm for 1 ms later while expired rows remain. A hello
+also opportunistically prunes. The retention cutoff hides expired rows even
+when a cleanup batch remains. Deleted messages remain for duplicate checks until
+expiry, but never appear in backlog. Three distinct non-author reporters hide a
+message and notify connected clients; repeating one reporter does not count.
+
+Deletion delay: the application adds 1 ms after expiry and, for a backlog of N
+expired rows, at most ceil(N/100) serialized alarm batches (each subsequent alarm
+requested 1 ms later), plus event processing time. There is no finite worst-case
+wall-clock guarantee during Cloudflare outages, alarm delivery delays, or retries.
+This is active scheduled deletion, not a claim of hard real-time platform service.
+No traffic is required. Hosted alarm delay behavior still needs staging validation.
+
+The SQLite schema includes `last_seen_at` from creation; no old-table migration
+is provided because no relay has been deployed. Use fresh local state after
+upgrading an older development database. Hello and accepted posts update last
+seen. Ban records remain until explicitly removed even if a key is inactive.
 
 The adapter hashes `SHA-256(IP_SALT + CF-Connecting-IP)`; only the hash enters
 attachments/storage. Raw addresses are never persisted by application code.
@@ -122,6 +148,30 @@ frames. Its only explicit log is the structural invalid-salt error above.
 Cloudflare infrastructure/request logs are outside this application policy;
 operators must configure access, logging, and retention appropriately. SQL
 inputs are bound parameters, not concatenated into SQL statements.
+
+## Authentication boundaries
+
+Posts are independently signed and verified by clients. The maintainer badge is
+**unsigned relay-assigned metadata**, not part of the author's signature. The
+relay decides which keys show badges; pointing a client at another relay means
+seeing that relay's maintainers. A malicious relay can lie about badges, presence,
+room mode, deletion notices, or message availability, but cannot forge posts.
+
+Admin/report ids are consumed only after signature and timestamp validation and
+persist through hibernation. Replays inside the complete skew-validity window
+return `duplicate`, including replaying a ban after an unban. The timestamped
+hello has no server challenge or socket nonce: a captured hello can be replayed
+on a different connection within the 120-second skew window. Capturing one
+requires breaking TLS, compromising an endpoint, or being the relay. This is an
+accepted handshake limitation; posts still need their own signatures.
+
+The client bounds pending relay work to 32 frames and 1 MiB, caps single frames
+at 262144 bytes, and reconnects with backoff on overflow. It checks live-message
+freshness (150 seconds), backlog retention/order, and keeps 4096 recently seen
+ids including deletion notices independently of view scrollback. Oldest ids are
+evicted first; replay protection is bounded and is not durable across client
+restarts. A lost connection after handing an action to the socket returns
+`delivery_unknown`, not an assertion that nothing was sent.
 
 ## Deployment and operator kill switch
 

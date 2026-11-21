@@ -1,124 +1,88 @@
-# Local verification receipt (2026-11-20)
+# Review-fix local verification receipt (2026-11-20)
 
-No Cloudflare login, deployment, or account operation was performed. Changes are
-on `afk/global-chat-relayfix`, not pushed. Test identities used temporary files,
-never the real AFK state directory. Throwaway drivers and raw outputs are in
-this worktree's ignored `.afk-scratch/` directory.
+Branch `afk/global-chat-relayfix`. No push, Cloudflare login, deployment, or
+account operation. Only assigned global-chat client/relay paths were changed.
+Scratch drivers, temporary test identities, local databases, and raw logs live
+under this worktree's ignored `.afk-scratch/`, never the real AFK state directory.
 
-## Commands and outcomes
+## Findings and commits
+
+| Finding | Confirmed evidence and regression test | Commit |
+|---------|----------------------------------------|--------|
+| 7: disconnect misreports sent actions | Pending actions previously all became `not_connected`; track socket handoff, return `delivery_unknown` after handoff. Client tests cover transmitted post/report disconnects and interrupted signing before send. | `bfed15fbf` |
+| 1: ingress queues | Client and adapter previously chained work without admission bounds. Client: 32 pending frames, 1 MiB, 262144 bytes/frame; overload disconnects with normal backoff. Adapter: 4096 bytes before enqueue, 16 pending events/socket. Tests pin count, bytes, single-frame overflow, UTF-8 sizing, and bystander progress. | `b899930e4` |
+| 4: old genuine messages | Client previously only verified signature/sanitization. Live freshness 150 seconds, backlog seven-day/future/order filtering, 4096 FIFO seen/deleted ids independent of view. Tests pin stale/future/replay/deletion/order and FIFO eviction. | `ec5780fcb` |
+| 5: quiet-room retention | Only hello previously triggered prune. Persistent alarms now select earliest hello/message expiry, physically prune 100 rows/batch, immediately rearm for remainder. Platform-neutral tests drain 205 rows; real workerd and Wrangler test SQLite row deletion with no hello/traffic while expiry occurs. | `c4a811bdd` |
+| 2: growing registry/counters | Repeated successful hello previously allowed; only one now. 20 unseen keys/address/hour. Required `last_seen_at` added to fresh schema (no deployed relay, no migration); hello/post update it. Prune 100 idle unbanned keys without retained messages after 30 days. Fair limiter sweep 16/call. Memory and real SQLite tests pin bounds and exclusions. | `3b65bc13b` |
+| 3: replayed moderation | Valid signatures/timestamps previously lacked consumed ids. Store author/type/id until signed timestamp + skew + 1 ms, covering future skew. Prune via alarms. Ban/unban/replayed ban and report replay tests recreate Room; real SQLite test restarts workerd. | `7ba42e8c7` |
+| 6: rename mismatch | Relay previously measured 24h from first hello/observed rename. First hello now starts no clock; first observed rename allowed, subsequent changes backstopped at 10 minutes with retryAfterMs. Client keeps 24h rule. Unit and client/Room e2e tests pin delayed observation and exact retry. | `edebb6bbc` |
+| 8: self-report | Confirmed unchanged: `forbidden`, exact relay text `Cannot report your own message`. Regression test asserts both. Client intentionally substitutes generic relay text; view must guard by target ownership, not original description. | pinned in `7ba42e8c7` |
+
+No finding was refuted. Badge remains unsigned relay metadata. Timestamped hello
+replay on a different socket inside the skew window is explicitly accepted and
+documented, not given a new server challenge.
+
+## Final gate results
 
 - `pnpm lint`: exit 0 (`tsc --noEmit`).
-- `pnpm test src/global-chat/relay`: 3 files, 69 tests passed, 0 failed.
-  Breakdown: Room 55, adapter 10, memory store 4.
-- `pnpm audit:filesize:check`: 0 violations, 0 grandfathered, 62 warning-band files.
-- `pnpm audit:funcsize:check`: 0 violations, 0 grandfathered, 55 warning-band functions.
+- `pnpm test src/global-chat`: **16 files, 433 passed, 0 failed**.
+  Client 100, in-memory e2e 11, relay Room 59, adapter 13, limiter 3, memory store 5.
+- `pnpm audit:filesize:check`: **0 violations, 0 grandfathered, 62 warning-band files**.
+- `pnpm audit:funcsize:check`: **0 violations, 0 grandfathered, 56 warning-band functions**.
 - `cd relay && pnpm exec tsc --noEmit`: exit 0.
-- `cd relay && pnpm test`: 9 tests passed, 0 failed, real workerd SQLite and
-  WebSockets. The 10-second persistent alarm test completed in about 10.1 seconds.
-- `WRANGLER_SEND_METRICS=false pnpm exec tsx .afk-scratch/relay-e2e.ts`:
-  exit 0. Real `GlobalChatClient` and `FileIdentityStore`, Node global `WebSocket`,
-  `wrangler dev --local`, local vars for salt and test maintainer key. Removed
-  `relay/.wrangler` before initial start; kept its state for the restart assertion.
+- `cd relay && pnpm test`: **12 passed, 0 failed**. Real workerd SQLite,
+  restart, WebSockets, 10-second hello alarm, and quiet expiry deletion.
+  Hello alarm test about 10.09 seconds; short-retention test about 1.89 seconds.
+- `src/global-chat/client.test.ts` **20 consecutive runs, all 100 tests passed
+  each time: 2000 test executions, 0 failed runs, 0 failed tests**.
+  Raw logs `.afk-scratch/client-streak-1.log` through `client-streak-20.log`.
+- Read-only independent spot-check found no confirmed regression; it highlighted
+  alarm backlog rearming as an operational cost, not a failed invariant.
 
-The SQLite tests exercise `ensureSchema`, `insertMessage`, `markDeleted`,
-`getBacklog`, `getMessageById`, `pruneOlderThan`, `countPostsByKeySince`, `addBan`,
-`removeBan`, `isBannedKey`, `isBannedIp`, `getKeyRecord`, `upsertKeyRecord`,
-`addReport`, `countReporters`, `getRoomMode`, and `setRoomMode`. Tests cover quoted
-SQL-like input as data, shared-address bans, key-only unban, distinct reports,
-first-seen preservation, deleted-backlog exclusion, >100-row pruning, and restart.
-No query interpolates caller inputs into SQL.
+## Real Wrangler e2e
 
-## Real-client observed output
+`WRANGLER_SEND_METRICS=false pnpm exec tsx .afk-scratch/relay-e2e.ts`, exit 0.
+Real `GlobalChatClient`, `FileIdentityStore`, Node WebSocket, `wrangler dev
+--local`, unique fresh `--persist-to` directory. Same directory reused only for
+restart verification, never production/local ambient databases deleted.
 
 ```text
 two join online: [2,2]
 real client onMessage signature accepted: ["first verified post"]
 third welcome exact ordered backlog: ["first verified post","second ordered post"]
-burst limit: {"code":"rate_limited","retryAfterMs":2948,"accepted":3}
-fake credential locally refused: {"code":"secret_detected","spans":1,"sent":false}
-ban: {"action":true,"targetClosed":"closed","rejoin":"banned","maintainerStillOpen":"open"}
-unban: {"rejoined":true}
-mode: {"readonly":"readonly","restored":"open"}
-three distinct reports: {"deletedForAll":true,"newBacklogExcludes":true,"remaining":4}
-immediate rename: {"code":"name_change_too_soon","retryAfterMs":86399979}
-restart SQLite persistence: {"backlogCount":4,"backlogOrderPreserved":true,"ban":"banned"}
-worker HTTP routing: {"room":426,"unknown":404}
+burst limit: rate_limited, accepted=3, retryAfterMs=2950
+fake credential locally refused: secret_detected, spans=1, sent=false
+ban: action=true, targetClosed=closed, rejoin=banned, maintainerStillOpen=open, bystanderStillOpen=open
+unban: rejoined=true
+mode: readonly refused, restored=open
+three distinct reports: deletedForAll=true, newBacklogExcludes=true, remaining=4
+first observed rename: accepted=true, name=dave_renamed
+restart SQLite persistence: backlogCount=4, backlogOrderPreserved=true, ban=banned
+captured admin replay after unban: duplicate
+second hello: bad_frame, closed=true
+oversized UTF8 frame: bytes=4098, closed=true
+worker HTTP routing: room=426, unknown=404
 ```
 
-`onMessage` is emitted only after the real client verifies the signature. The
-third joiner's backlog was asserted for exact equality and order, not merely
-"at least one". Three distinct non-author reporters each received successful
-action results; all connected participants observed deletion. A later joiner
-and a restarted runtime excluded the deleted row. For the ban-persistence test,
-the target was offline when banned so the shared local test address would not
-prevent the maintainer from rejoining.
+`WRANGLER_SEND_METRICS=false pnpm exec tsx .afk-scratch/wrangler-retention.ts`,
+exit 0. Bundles the committed test-only `relay/test/retention-worker.ts` with a
+source transform replacing seven-day retention by 1000 ms. Generates a scratch
+Wrangler configuration; no production binding/env override exists. Real
+`wrangler dev --local`, fresh state: SQLite rows before=1, rows after=0, no
+reconnect and no intervening traffic while waiting 2 seconds for the real alarm.
+The test-only row-count route performs no cleanup. Equivalent regression is in
+`relay/test/retention.test.ts` for the normal local suite.
 
-## Original smoke anomalies: reproduced and explained
+## Remaining verification boundaries
 
-Original driver found at sibling worktree
-`global-chat-relay/.afk-scratch/integration-test.mjs` and launcher
-`run-integration.sh`. Reproduction driver
-`.afk-scratch/reproduce-original.ts` bundles the original adapter from commit
-`d96cbc8b7`, runs that original smoke script in real workerd/Miniflare on fresh
-temporary state, disposes the runtime, then repeats against the same persisted
-state. Observed output:
+Hosted hibernation, compatibility behavior, alarm delays/retries/outages, trusted
+address headers, platform logs, resource limits, and actual deployment are not
+verified. Pinned Wrangler 3 uses workerd compatibility through 2025-07-18 and
+warns when falling back from production's configured 2026-11-20 date.
 
-```text
-RUN 1 CLEAN STATE
-c1 welcome ok, online= 1
-c2 welcome ok, online= 2
-presence ok, online= 1
-c1 got late presence, online= 2 (skipping)
-c3 backlog ok, messages= 1 sig verified
-RUN 2 SAME PERSISTED STATE AFTER RESTART
-c1 welcome ok, online= 1
-c2 welcome ok, online= 2
-presence ok, online= 1
-c1 got late presence, online= 2 (skipping)
-c3 backlog ok, messages= 2 sig verified
-```
-
-**Presence cause:** the relay broadcasts presence after each successful hello,
-including to the new participant. The driver consumes only c1's welcome at line
-93, leaving its own `presence(1)` queued. Lines 108-115 consume that frame and
-mislabel it as c2's join. The correct c2-join `presence(2)` is consumed later at
-lines 124-129. No stale-attachment or production-only explanation is needed.
-
-**Extra backlog cause:** the launcher starts ordinary persisted `wrangler dev`
-without clearing state (lines 10-12). Each smoke run generates a new message id
-and stores one post. A clean run has exactly one row; a second run correctly has
-two. This is intended persistence, not an extra post created by the relay.
-The old script also emitted three generic `WS error` lines when the test runtime
-was disposed while its close handshakes were unfinished; these occurred after
-`ALL ASSERTIONS PASSED`, not while validating presence or backlog.
-
-The new concurrent hello/post tests separately demonstrate genuine old adapter
-interleaving: without the event queue, concurrent hello snapshots lose online
-counts and duplicate post IDs can broadcast twice. SQLite's primary key alone
-cannot prevent the duplicate broadcast after both existence checks pass.
-
-## Corrections and remaining boundary
-
-Additional fixes: private ban errors instead of terminal errors to every user;
-ack/error-id correlation for signed actions; close handshake completion and
-closing-attachment filtering; same-key multi-socket presence; memory-store
-key-only unban and SQLite parity; prune-associated-report cleanup and immediate
-retention filtering despite bounded physical cleanup.
-
-Relay rename clock: first successful hello sets `firstSeenAt`; unchanged name
-is a no-op; first rename waits 24 hours from that first hello, later renames wait
-24 hours from the last accepted rename. Maintainers bypass that interval. The
-client uses identity creation time, so an identity created long before its first
-hello can disagree. This is outside this lane and was reported, not changed.
-
-Cloudflare docs confirm input gates cover storage I/O, not arbitrary crypto
-awaits; hence an explicit event queue is required. Persistent alarms and socket
-attachments are the documented hibernation-safe mechanism for hello deadlines.
-The local runtime supports dates through 2025-07-18 and warns when falling back
-from the configured 2026-11-20. Hosted hibernation, compatibility behavior, alarm
-retry/delay behavior, trusted address headers, platform logs and load limits
-need deployed staging verification. No such environment was contacted.
-
-Current protocol constants already distinguish 4096-byte client frames from
-262144-byte relay frames; the old shared 4096-byte welcome-cap conflict is not
-present on this branch. The end-to-end run did not fill all 50 backlog slots.
+There is no finite worst-case wall-clock deletion guarantee during platform
+outages. Application scheduling adds 1 ms at expiry, then 100 physical deletions
+per alarm batch with 1 ms requested rearming while expired rows remain, plus
+event processing/platform delivery delay. This limitation is stated in README,
+not hidden behind a hard seven-day real-time guarantee. Recently seen-id replay
+protection is bounded at 4096 and resets across client restarts by design.
