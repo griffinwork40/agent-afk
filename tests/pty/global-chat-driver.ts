@@ -15,6 +15,7 @@
 import { appendFileSync } from 'node:fs';
 import { TerminalCompositor } from '../../src/cli/terminal-compositor.js';
 import { StatusLine } from '../../src/cli/status-line.js';
+import { LoopStageBar } from '../../src/cli/commands/interactive/loop-stage.js';
 import { createGlobalCommand } from '../../src/cli/slash/commands/global.js';
 import type { SlashContext } from '../../src/cli/slash/types.js';
 import type { ChatPostResult } from '../../src/global-chat/client-types.js';
@@ -82,6 +83,12 @@ async function main(): Promise<void> {
   const statusLine = new StatusLine({ stream: stdout, force: true, throttleMs: 0, tickMs: 50 });
   statusLine.start();
   statusLine.repaint({ model: 'FOOTERMODEL', cost: 0, tokens: 0, contextPct: 0 });
+  // Production wiring: the loop-stage rail repaints on every debounced resize
+  // and is NOT among the writers ctx.suspendFooter stops (repl-loop.ts).
+  const loopStageBar = new LoopStageBar({ getExtraRows: () => statusLine.getExtraRows(), stream: stdout });
+  loopStageBar.setRowCountChangeHandler((n) => statusLine.setExtraRows(n));
+  statusLine.setAfterScrollRestore(() => loopStageBar.redraw());
+  loopStageBar.start();
   let submitted: string | null = null;
   const c = new TerminalCompositor({
     stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1,

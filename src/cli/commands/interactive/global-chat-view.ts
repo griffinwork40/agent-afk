@@ -57,6 +57,13 @@ const PENDING_POLL_MS = 1000;
 /** How long a trailing ESC (or an unfinished paste) waits for the rest of its sequence. */
 const ESC_WAIT_MS = 50;
 const PASTE_WAIT_MS = 500;
+/**
+ * External constraint: REPL footer rows (the loop-stage rail, the verdict
+ * ledger) repaint on ResizeBus's 150ms-debounced resize and are not all
+ * stopped by `ctx.suspendFooter`, so they draw onto this screen after a
+ * resize. A second full repaint after the debounce covers them.
+ */
+const RESIZE_SETTLE_MS = 200;
 const PENDING_BANNER = 'Your agent has results waiting. Esc to return.';
 const NAME_CHARS = /[^a-z0-9_-]/g;
 
@@ -88,6 +95,7 @@ function startSession(deps: GlobalChatViewDeps, pre: Preload, resolve: (o: Globa
   let cancelPoll: (() => void) | null = null;
   let pendingInput = '';
   let cancelPending: (() => void) | null = null;
+  let cancelSettle: (() => void) | null = null;
 
   // Teardown is written before setup (ordered-sequence rule).
   const detach = (): void => {
@@ -97,6 +105,7 @@ function startSession(deps: GlobalChatViewDeps, pre: Preload, resolve: (o: Globa
     cancelPaint?.(); cancelPaint = null;
     cancelPoll?.(); cancelPoll = null;
     cancelPending?.(); cancelPending = null;
+    cancelSettle?.(); cancelSettle = null;
     try { unsubscribe?.(); } catch { /* ignore */ }
     try { client?.close(); } catch { /* ignore */ }
   };
@@ -237,8 +246,10 @@ function startSession(deps: GlobalChatViewDeps, pre: Preload, resolve: (o: Globa
   }
   function onResize(): void {
     if (!open) return;
-    stdout.write('\x1b[2J');
-    paintNow();
+    const full = (): void => { if (open) { stdout.write('\x1b[2J'); paintNow(); } };
+    full();
+    cancelSettle?.();
+    cancelSettle = clock.schedule(() => { cancelSettle = null; full(); }, RESIZE_SETTLE_MS);
   }
 
   const takeover = takeTerminal({

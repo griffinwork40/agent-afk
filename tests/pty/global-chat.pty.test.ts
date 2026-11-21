@@ -187,7 +187,11 @@ describe.skipIf(!avail.ok)('global chat view in a real pty: behaviours', () => {
       await s.waitFor(() => inputRow(s) === '> resize me', 'typed');
       await s.resize(50, 16);
       await s.waitFor(() => s.screen().length === 16 && inputRow(s) === '> resize me' && /global/i.test(s.screen()[0] ?? ''), 'repainted at 50x16');
-      await s.sleep(150);
+      // Outlast the 150ms ResizeBus debounce: REPL footer rows that repaint on
+      // resize must not land on the alternate screen.
+      await s.sleep(400);
+      expect(s.screen().join('\n')).not.toContain('idle');
+      expect(inputRow(s)).toBe('> resize me');
       for (const l of s.screen()) expect(displayCols(l.trimEnd())).toBeLessThanOrEqual(50);
       expect(s.screen().join('\n')).toContain('BACKLOG_29');
       expect(s.screen().join('\n')).not.toContain('FOOTERMODEL');
