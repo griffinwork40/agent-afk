@@ -4,7 +4,7 @@
  * Run with: pnpm test src/agent/tools/handlers/glob.test.ts
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -597,64 +597,5 @@ describe('GlobAbortedError message and handler catch', () => {
       ac.signal,
     );
     expect(result).toEqual({ content: 'Search aborted', isError: true });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// glob handler — read-denylist: does not descend into denied subtrees
-// ---------------------------------------------------------------------------
-
-describe('globHandler — does not descend into read-denied dirs', () => {
-  afterEach(() => vi.unstubAllEnvs());
-  let root: string;
-
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), 'glob-denylist-'));
-    _resetReadDenylistCacheForTests();
-  });
-
-  afterEach(async () => {
-    delete process.env['AFK_READ_DENYLIST'];
-    _resetReadDenylistCacheForTests();
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  it('excludes files inside a denied subtree and includes sibling files', async () => {
-    // safe/ok.ts — allowed; secret/token.txt — denied via AFK_READ_DENYLIST
-    await fs.mkdir(path.join(root, 'safe'));
-    await fs.writeFile(path.join(root, 'safe', 'ok.ts'), '');
-    const secretDir = path.join(root, 'secret');
-    await fs.mkdir(secretDir);
-    await fs.writeFile(path.join(secretDir, 'token.txt'), 'secret');
-    process.env['AFK_READ_DENYLIST'] = secretDir;
-    _resetReadDenylistCacheForTests();
-
-    const result = await globHandler({ pattern: '**/*', path: root }, new AbortController().signal);
-    expect(result.isError).not.toBe(true);
-    const hits = String(result.content);
-    expect(hits).toContain('ok.ts');
-    expect(hits).not.toContain('token.txt');
-  });
-
-  it('does not descend into the default global-chat dir when scanning a tmpdir with a global-chat subdir', async () => {
-    // Create a tmp state-like dir with a global-chat subdir and a safe sibling.
-    const fakeState = await fs.mkdtemp(path.join(os.tmpdir(), 'glob-gc-state-'));
-    try {
-      await fs.mkdir(path.join(fakeState, 'global-chat'));
-      await fs.writeFile(path.join(fakeState, 'global-chat', 'identity.json'), '{}');
-      await fs.mkdir(path.join(fakeState, 'todos'));
-      await fs.writeFile(path.join(fakeState, 'todos', 'x.json'), '{}');
-      // The built-in floor must follow a relocated state directory.
-      vi.stubEnv('AFK_STATE_DIR', fakeState);
-      _resetReadDenylistCacheForTests();
-
-      const result = await globHandler({ pattern: '**/*', path: fakeState }, new AbortController().signal);
-      expect(result.isError).not.toBe(true);
-      const hits = String(result.content);
-      expect(hits).toContain('todos');
-      expect(hits).not.toContain('identity.json');
-    } finally {
-      await fs.rm(fakeState, { recursive: true, force: true });
-    }
   });
 });

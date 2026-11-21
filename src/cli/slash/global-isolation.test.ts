@@ -18,8 +18,7 @@ import type { GlobalCommandDeps } from './commands/global.js';
 import type { SlashContext } from './types.js';
 import { classifyEnvKey } from '../../config/settable-keys.js';
 import { isReadDenied } from '../../agent/tools/handlers/read-denylist.js';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { getAfkStateDir, getGlobalChatDir, getGlobalChatIdentityPath, getGlobalChatMutesPath } from '../../paths.js';
 
 // ---------------------------------------------------------------------------
 // Minimal fake context factories
@@ -150,18 +149,20 @@ describe('/global isolation', () => {
 
   // ---- Read denylist covers the identity file location --------------------
 
-  it('isReadDenied returns denied for the default global-chat state directory', () => {
-    // The FileIdentityStore defaults to ~/.afk/state/global-chat/identity.json.
-    // The BUILTIN_READ_DENYLIST includes ~/.afk/state/global-chat so the agent
-    // cannot read the private key or mute list.
-    const identityPath = join(homedir(), '.afk', 'state', 'global-chat', 'identity.json');
-    const { denied } = isReadDenied(identityPath);
-    expect(denied).toBe(true);
+  it('isReadDenied returns denied for the real identity and mute paths', () => {
+    // The stores default to getGlobalChatIdentityPath()/getGlobalChatMutesPath(),
+    // which resolve under the AFK config dir. That dir is denied wholesale by the
+    // read floor (it holds afk.env API keys), so the agent cannot read the
+    // private key or mute list. Tool-level coverage: identity-read-floor.test.ts.
+    expect(isReadDenied(getGlobalChatIdentityPath()).denied).toBe(true);
+    expect(isReadDenied(getGlobalChatMutesPath()).denied).toBe(true);
   });
 
   it('isReadDenied returns denied for the global-chat directory itself', () => {
-    const chatDir = join(homedir(), '.afk', 'state', 'global-chat');
-    const { denied } = isReadDenied(chatDir);
-    expect(denied).toBe(true);
+    expect(isReadDenied(getGlobalChatDir()).denied).toBe(true);
+  });
+
+  it('the global-chat directory is not under the subagent-grantable state dir', () => {
+    expect(getGlobalChatDir().startsWith(getAfkStateDir())).toBe(false);
   });
 });

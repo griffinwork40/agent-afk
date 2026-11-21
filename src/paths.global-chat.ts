@@ -1,21 +1,28 @@
 /**
- * Path helpers for global-chat client state.
+ * Path helpers for the global-chat client files.
  *
  * Extracted into a sibling module to keep `src/paths.ts` within the 350-code-line
- * ceiling. All paths derive from `getAfkStateDir()`.
+ * ceiling. All paths derive from `getAfkConfigDir()` (`<AFK_HOME>/config`).
+ *
+ * Invariant: these files live in the CONFIG dir, never the state dir. The
+ * identity file holds an Ed25519 private key, and the config dir is denied
+ * wholesale by the agent's read floor (`BUILTIN_READ_DENYLIST` plus the
+ * derived relocated-`AFK_HOME` entry in `read-denylist.ts`), the write floor,
+ * and the shell guard's `SENSITIVE_PATH_SIGNAL`. The state dir is deliberately
+ * grantable to subagents as a read root, so nothing secret may live there.
  *
  * @module paths.global-chat
  */
 
 import { join } from 'node:path';
-import { getAfkStateDir } from './paths.js';
+import { getAfkConfigDir } from './paths.js';
 
 /**
- * Root directory for global-chat client state: `<state>/global-chat/`.
+ * Root directory for global-chat client files: `<config>/global-chat/`.
  * Created with mode 0700 by the stores that write into it.
  */
 export function getGlobalChatDir(): string {
-  return join(getAfkStateDir(), 'global-chat');
+  return join(getAfkConfigDir(), 'global-chat');
 }
 
 /**

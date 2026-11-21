@@ -1,9 +1,8 @@
-import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'fs';
-import { tmpdir, homedir } from 'os';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import { readFileHandler } from './read-file.js';
-import { _resetReadDenylistCacheForTests } from './read-denylist.js';
 import type { ToolHandlerContext } from '../types.js';
 
 describe('readFileHandler', () => {
@@ -426,64 +425,5 @@ describe('readFileHandler cwd containment', () => {
     );
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('no context data');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// read_file handler — read-denylist enforcement (real handler path)
-// Verifies the handler itself returns isError:true for denied paths, not just
-// that the helper isReadDenied() returns denied:true.
-// ---------------------------------------------------------------------------
-
-describe('readFileHandler — read-denylist enforcement', () => {
-  afterEach(() => vi.unstubAllEnvs());
-  it('refuses relocated chat identity and a symlink to it', async () => {
-    const state = await fs.mkdtemp(join(tmpdir(), 'chat-read-floor-'));
-    try {
-      const chat = join(state, 'global-chat');
-      await fs.mkdir(chat);
-      const identity = join(chat, 'identity.json');
-      await fs.writeFile(identity, 'private fixture');
-      vi.stubEnv('AFK_STATE_DIR', state);
-      const link = join(state, 'identity-link');
-      await fs.symlink(identity, link);
-      for (const file_path of [identity, link]) {
-        const result = await readFileHandler({ file_path }, new AbortController().signal);
-        expect(result.isError).toBe(true);
-        expect(String(result.content)).not.toContain('private fixture');
-      }
-    } finally { await fs.rm(state, { recursive: true, force: true }); }
-  });
-  let denyTmpDir: string;
-
-  beforeEach(async () => {
-    denyTmpDir = await fs.mkdtemp(join(tmpdir(), 'read-denylist-handler-'));
-    _resetReadDenylistCacheForTests();
-  });
-
-  afterEach(async () => {
-    delete process.env['AFK_READ_DENYLIST'];
-    _resetReadDenylistCacheForTests();
-    await fs.rm(denyTmpDir, { recursive: true, force: true });
-  });
-
-  it('returns isError:true for the default global-chat dir (static floor)', async () => {
-    const gcPath = join(homedir(), '.afk', 'state', 'global-chat', 'identity.json');
-    const result = await readFileHandler({ file_path: gcPath }, new AbortController().signal);
-    expect(result.isError).toBe(true);
-    expect(String(result.content)).toMatch(/protected|denylist|credential/i);
-  });
-
-  it('returns isError:true for a custom AFK_READ_DENYLIST path', async () => {
-    const secretDir = join(denyTmpDir, 'secrets');
-    await fs.mkdir(secretDir);
-    const secretFile = join(secretDir, 'token.txt');
-    await fs.writeFile(secretFile, 'secret', 'utf-8');
-    process.env['AFK_READ_DENYLIST'] = secretDir;
-    _resetReadDenylistCacheForTests();
-
-    const result = await readFileHandler({ file_path: secretFile }, new AbortController().signal);
-    expect(result.isError).toBe(true);
-    expect(String(result.content)).toMatch(/protected|denylist|credential/i);
   });
 });

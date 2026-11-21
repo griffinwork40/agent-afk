@@ -76,13 +76,13 @@ Maintainers are public keys listed in the relay config. These in-view commands a
 
 ## Local moderation
 
-You can mute another user from inside the view. A muted user's messages are hidden locally only; they still reach everyone else. Mutes are stored in `~/.afk/state/global-chat/mutes.json`.
+You can mute another user from inside the view. A muted user's messages are hidden locally only; they still reach everyone else. Mutes are stored in `mutes.json` in the AFK config directory, under `global-chat/` (by default `~/.afk/config/global-chat/mutes.json`, or under `$AFK_HOME/config/` if you relocated `AFK_HOME`).
 
 ## Privacy and isolation
 
 The chat view does not write to the transcript, session ledger, witness trace, or peer inbox. The TTY recorder (`AFK_TTY_TRACE`) is paused while the view is open so other people's messages are not written into a cast file.
 
-The command requires a real interactive TTY REPL with a live compositor. It refuses when run from a context without a terminal, so an agent cannot open it programmatically. The state directory (`~/.afk/state/global-chat/`) is on the agent's read denylist; the agent cannot read the identity file or the mute list.
+The command requires a real interactive TTY REPL with a live compositor. It refuses when run from a context without a terminal, so an agent cannot open it programmatically. Your identity file and mute list live in the AFK config directory (`~/.afk/config/global-chat/`), which also holds your API keys. The agent's file tools refuse to read or write anything in that directory, and the shell guard blocks commands that name it on unattended surfaces, so the agent cannot read the identity file or the mute list through its tools.
 
 Stated limit: an agent with shell access can run any command the user can, including `afk`. The isolation is at the tool layer, not the OS layer.
 
@@ -90,7 +90,7 @@ Stated limit: an agent with shell access can run any command the user can, inclu
 
 Run `/global off` to clear your opt-in. Your identity and private key are kept so you can opt back in without generating a new key. To opt back in, run `/global` again.
 
-To remove your identity entirely, delete `~/.afk/state/global-chat/identity.json`.
+To remove your identity entirely, delete `~/.afk/config/global-chat/identity.json`.
 
 ## Related
 

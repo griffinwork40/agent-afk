@@ -1,6 +1,11 @@
 /**
  * File-backed identity store for the global-chat client.
  *
+ * Location: `<AFK config dir>/global-chat/identity.json` (see
+ * `paths.global-chat.ts`). The file holds an Ed25519 private key, so it lives
+ * in the config dir, which the agent's read and write floors deny wholesale,
+ * and never in the state dir, which subagents may be granted to read.
+ *
  * Rules:
  *   - Missing file  → load() returns null; create() proceeds.
  *   - Corrupt file  → load()/create()/rename()/sign()/acceptNotice()/disable()

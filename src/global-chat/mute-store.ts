@@ -2,6 +2,9 @@
  * File-backed mute store for the global-chat client.
  *
  * Contract:
+ *   - The backing file (`<AFK config dir>/global-chat/mutes.json`, see
+ *     `paths.global-chat.ts`) sits beside the identity file in the config
+ *     dir, out of reach of the agent's file tools.
  *   - The backing file is a JSON array of `{ pubkey, name }` objects.
  *   - If the file is missing, `list()` returns `[]` without throwing.
  *   - If the file is corrupt (bad JSON or wrong shape), `list()` returns `[]`
