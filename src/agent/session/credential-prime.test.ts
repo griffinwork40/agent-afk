@@ -8,11 +8,16 @@
  * `execFileSync` (the `security` subprocess) and `h1ModelFetch` (the token
  * endpoint) are mocked over an in-memory fake store, so no test can reach a
  * real keychain, `~/.claude/`, or the network.
+ *
+ * Forcing the platform affects everything the session loads lazily, not only
+ * the credential code, so native modules that select a binary by platform are
+ * loaded once under the real platform first (see the warm-up below).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
+import Database from 'better-sqlite3';
 
 const execFileSyncMock = vi.hoisted(() => vi.fn());
 const fetchMock = vi.hoisted(() => vi.fn());
@@ -35,6 +40,12 @@ const { _resetRefreshedClaudeCodeOauthToken, _resetLastResolvedAnthropicCredenti
 const { _resetClaudeLoginStatus } = await import('../auth/claude-login-status.js');
 const { sessionNeedsStoredLogin } = await import('./credential-prime.js');
 const { checkAnthropicCredential } = await import('../auth/anthropic-credential-check.js');
+
+// better-sqlite3 picks its native binary from process.platform on first use and
+// caches it for the process. Load it here, under the real platform, before any
+// test forces darwin. Otherwise a session started on Linux or Windows tries to
+// load the macOS binary when it opens its memory store and fails to start.
+new Database(':memory:').close();
 
 const STALE_ACCESS = 'sk-ant-oat01-stale-access-SECRET';
 const STORED_REFRESH = 'sk-ant-ort01-stored-refresh-SECRET';
