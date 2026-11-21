@@ -19,7 +19,9 @@
 
 // Ledger writes are isolated by the global setup file
 // src/__test-utils__/redirect-paths-env.ts (per-file AFK_HOME sentinel).
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { SETTLE_DRAIN_TIMEOUT_MS } from '../timeout.js';
+import { ProviderTurns } from './turn-stream-runner.abandoned-turn.js';
 import { AgentSession } from './agent-session.js';
 import { createHookRegistry } from '../hooks.js';
 import { AbortCoordinator } from '../providers/shared/abort-coordinator.js';
@@ -689,4 +691,81 @@ describe('end-of-turn work finishes before the turn is released', () => {
     expect(messageTexts(hello)).toEqual(['Echo: hello']);
     expect(messageTexts(after)).toEqual(['Echo: after']);
   }, 5000);
+});
+
+/**
+ * R1.11 (#5174): drain() must not block forever when a settling turn's
+ * `turn.ended` never resolves. `ProviderTurns` is exercised directly here so
+ * the test can use fake timers without spinning a full AgentSession.
+ */
+describe('drain timeout: R1.11 (#5174)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('drain() unblocks after SETTLE_DRAIN_TIMEOUT_MS when a settling turn never ends', async () => {
+    // A turn whose `ended` promise never resolves (simulates a provider stuck
+    // mid-settlement — it was interrupted but never yields its terminal event).
+    let markEnded: (() => void) | null = null;
+    const neverEnded = new Promise<void>((resolve) => {
+      markEnded = resolve; // held — only resolved by endTurn below
+    });
+
+    // Wire a minimal ProviderTurns with a consume hook that never fires for
+    // this test (the hung turn never produces events), plus a no-op
+    // recordSyntheticDone and interruptProvider.
+    let syntheticDoneRecorded = false;
+    const turns = new ProviderTurns({
+      consume: async () => null,
+      interruptProvider: async () => {},
+      recordSyntheticDone: () => { syntheticDoneRecorded = true; },
+    });
+
+    // Craft a fake iterator that blocks forever (the hung settlement).
+    const hungIterator: AsyncIterator<never> = {
+      next: () => neverEnded.then(() => ({ done: true as const, value: undefined })),
+    };
+
+    // Register a send, start a turn, then abandon it so drain() will settle it.
+    const send = turns.beginSend();
+    const turn = turns.startTurn(
+      send,
+      {} as import('./stream-consumer.js').TransformDeps,
+      hungIterator,
+      Date.now(),
+    );
+    turn.interrupted = true; // already interrupted — settle() skips the interrupt call
+    turns.abandon(turn);
+
+    // drain() is called by untilClear; run it via a fresh send waiting behind
+    // the abandoned turn.
+    const send2 = turns.beginSend();
+    const drainDone = turns.untilClear(send2, null);
+
+    // Before the timeout fires, the drain is still waiting.
+    await vi.advanceTimersByTimeAsync(SETTLE_DRAIN_TIMEOUT_MS - 1);
+    let resolved = false;
+    drainDone.then(() => { resolved = true; });
+    // Flush microtasks; still not resolved.
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    // Fire the timeout — drain() force-ends the stuck turn and unblocks.
+    await vi.advanceTimersByTimeAsync(1);
+    await drainDone;
+    expect(resolved).toBe(true);
+
+    turns.withdraw(send2);
+
+    // The settle() background loop is still blocked on the hung iterator's
+    // `next()`. Release it so settle's finally block can run recordMissingDone.
+    markEnded!();
+    // Flush the promise chain: iterator.next() resolves → settle finally runs.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(syntheticDoneRecorded).toBe(true);
+  });
 });
