@@ -315,7 +315,15 @@ export class TurnStreamRunner {
       yield buildInterruptedDone(0);
       return;
     }
-    onTurnStart?.();
+    // R2.1: guard onTurnStart so a throw does not leave `send` registered as
+    // pending. Without this, the next interrupt() targets the dead send instead
+    // of the running provider turn. Refs #5175.
+    try {
+      onTurnStart?.();
+    } catch (err) {
+      this.turns.withdraw(send);
+      throw err;
+    }
 
     const effectiveContent = this.withPendingContext(content);
     const historySummary =
