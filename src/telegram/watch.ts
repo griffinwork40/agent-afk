@@ -253,12 +253,10 @@ export class SessionWatchManager {
     // Invariant: the ledger relay MUST mirror bot.ts's native install — a
     // COMPOSED handler, not the ask handler alone. ask_question shapes carry a
     // `type` and route to the ask handler (confirm/choice→buttons; text/number/
-    // multi_choice→typed reply). But the afk-mode-gate high-risk approval prompt
-    // and MCP form/url elicitations carry mode:'form' with NO `type`: the ask
-    // handler defaults those to a free-text prompt (no buttons) and returns
-    // content.value, while the afk-mode-gate consumer reads content.choice →
-    // 'unrecognised' → the op is refused. So an away operator literally could not
-    // approve a high-risk op from the phone. The form handler (afk:pa: enum
+    // multi_choice→typed reply). But MCP form/url elicitations carry
+    // mode:'form' with NO `type`: the ask handler would default those to a
+    // free-text prompt (no buttons) returning content.value, while form-mode
+    // enum consumers read content.choice. The form handler (afk:pa: enum
     // keyboard) renders tappable buttons and returns content.choice. Composing
     // them (disjoint afk:e: / afk:pa: callback prefixes) is exactly what bot.ts
     // does for the native surface — the relay must not diverge. Built only when

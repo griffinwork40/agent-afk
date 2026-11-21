@@ -27,9 +27,7 @@ import { elicitationRouter } from '../agent/elicitation-router.js';
 import { ensurePluginEntrypointsLoaded } from '../agent/tools/skill-bridge.js';
 import { SessionWatchManager } from './watch.js';
 import { handleWatchCommand } from './bot.watch-command.js';
-import { readLivePresenceFiles } from '../agent/awareness/presence.js';
-import { splitLongMessage } from './formatter.js';
-import { routeFromCtx, sendOptions, type TelegramRoute } from './route.js';
+import { routeFromCtx, sendOptions } from './route.js';
 import { escapeRegExp } from '../utils/regexp.js';
 import { errorMessage } from '../utils/errors.js';
 import { registerReactionHandler, ALLOWED_UPDATE_TYPES } from './bot.reaction-handler.js';
@@ -83,10 +81,6 @@ export class TelegramBot {
   private registeredCommandChats = new Set<number>();
   private messageHandler: MessageHandler;
   private watchManager: SessionWatchManager;
-  /** Interval handle for the AFK presence auto-subscribe loop. */
-  private autoSubscribeInterval: NodeJS.Timeout | null = null;
-  /** How often to poll presence files for new AFK cli sessions (ms). */
-  private static readonly AUTO_SUBSCRIBE_INTERVAL_MS = 5_000;
 
   constructor(options: BotOptions) {
     this.options = options;
@@ -352,13 +346,6 @@ export class TelegramBot {
     this.running = true;
     this.log('Bot started successfully');
 
-    // Auto-subscribe: periodically discover AFK cli sessions and start
-    // watching them so the operator's phone receives agent questions without
-    // needing a manual /watch. Idempotent — already-watched sessions are not
-    // re-subscribed. The interval is cleared on stop() (Invariant #2: we
-    // only read presence files and call watchManager; no second Telegraf poller).
-    this.startAutoSubscribe();
-
     // Invariant: SIGINT/SIGTERM handlers are NOT registered here. Signal
     // ownership lives in the process entrypoint (entry.ts) so that resources
     // it created (sharedMemoryStore, statsInterval) are correctly torn down.
@@ -376,7 +363,6 @@ export class TelegramBot {
     this.log('Stopping bot...');
     this.running = false;
 
-    this.log('Stopping auto-subscribe loop...'); this.stopAutoSubscribe();
     this.log('Uninstalling elicitation handler...'); elicitationRouter.uninstall();
 
     this.log('Stopping session watches...');
@@ -435,102 +421,6 @@ export class TelegramBot {
 
   async handleDocument(ctx: Context): Promise<void> {
     return this.messageHandler.handleDocument(ctx);
-  }
-
-  /**
-   * Start the presence auto-subscribe loop.
-   *
-   * Polls `readLivePresenceFiles()` every AUTO_SUBSCRIBE_INTERVAL_MS and calls
-   * `watchManager.start()` for any `surface === 'cli' && afk === true` session
-   * not already watched. Stops auto-watches whose `afk` flag cleared or whose
-   * presence file disappeared.
-   *
-   * Invariant #2: this loop only reads presence files and delegates to
-   * watchManager. It NEVER constructs a Telegraf instance or second poller.
-   *
-   * Idempotency: `watchManager.start()` replaces any existing watch for a chat
-   * only when the session id changes — if the same session is already watched,
-   * the `watching(chatId) === sessionId` guard skips the start call.
-   */
-  private startAutoSubscribe(): void {
-    if (this.autoSubscribeInterval !== null) return;
-    const tick = (): void => {
-      void this.runAutoSubscribeTick().catch((err) =>
-        this.log('auto-subscribe tick error:', err),
-      );
-    };
-    this.autoSubscribeInterval = setInterval(tick, TelegramBot.AUTO_SUBSCRIBE_INTERVAL_MS);
-    // Don't hold the process open solely for presence polling.
-    this.autoSubscribeInterval.unref?.();
-    // Run immediately so the first discovered session is picked up without a
-    // full interval delay.
-    tick();
-  }
-
-  private stopAutoSubscribe(): void {
-    if (this.autoSubscribeInterval !== null) {
-      clearInterval(this.autoSubscribeInterval);
-      this.autoSubscribeInterval = null;
-    }
-  }
-
-  /**
-   * One tick of the auto-subscribe loop. Reads presence files and starts
-   * (or stops) watches for AFK cli sessions.
-   *
-   * Contract: if `allowedChatIds` is empty there are no allowed chats to
-   * subscribe to — the tick exits early without scanning presence files.
-   */
-  private async runAutoSubscribeTick(): Promise<void> {
-    const chatIds = [...this.options.allowedChatIds];
-    if (chatIds.length === 0) return;
-
-    let presence: Awaited<ReturnType<typeof readLivePresenceFiles>>;
-    try {
-      presence = await readLivePresenceFiles();
-    } catch {
-      return; // presence dir unreadable — ignore silently
-    }
-
-    // Find all AFK cli sessions currently advertised in presence files.
-    const afkSessionIds = new Set(
-      presence
-        .filter((p) => p.surface === 'cli' && p.afk === true && p.sessionId)
-        .map((p) => p.sessionId),
-    );
-
-    // For each allowed chat, subscribe to newly-discovered AFK sessions and
-    // unsubscribe from sessions whose AFK flag cleared.
-    for (const chatId of chatIds) {
-      const watchedId = this.watchManager.getWatched(chatId);
-
-      if (watchedId !== undefined && !afkSessionIds.has(watchedId)) {
-        // The currently-watched session is no longer AFK — stop the auto-watch.
-        // (If the user manually /watched something, the same stop fires, which
-        // is correct: the AFK flag being cleared means the REPL is back.)
-        this.watchManager.stop(chatId);
-        this.log(`[auto-subscribe] stopped watch for ${watchedId} (afk cleared)`);
-      }
-
-      // Pick the first unsubscribed AFK session (in practice there is usually
-      // one REPL session per operator).
-      for (const sessionId of afkSessionIds) {
-        if (this.watchManager.watching(chatId) === sessionId) continue; // already watching
-        // Resolve the complete active route at use time so an existing watch
-        // follows topic changes. When no session data exists, fall back to
-        // General; this preserves pre-topics behavior for non-topic chats.
-        const autoRoute = (): TelegramRoute =>
-          this.sessionManager.getActiveRouteForChat(chatId) ?? { chatId };
-        const send = async (msg: string): Promise<void> => {
-          for (const part of splitLongMessage(msg)) {
-            await this.bot.telegram.sendMessage(chatId, part, sendOptions(autoRoute())); // #1023, #1222
-          }
-        };
-        this.watchManager.start(chatId, sessionId, send, autoRoute);
-        this.log(`[auto-subscribe] started watch for ${sessionId} on chat ${chatId}`);
-        break; // one session per chat at a time
-      }
-    }
   }
 
   /**

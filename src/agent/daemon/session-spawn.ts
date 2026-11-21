@@ -199,11 +199,6 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
       cwd: agentCwd,
       sessionId,
       ...(hookTraceWriter !== undefined ? { traceWriter: hookTraceWriter } : {}),
-      // Issue #3464: supply the running task's own id so the risk classifier
-      // can carve out self-disable (cancel_schedule / update_schedule with
-      // enabled:false) as 'medium'. This value comes from the scheduler, not
-      // from any model-supplied input — it cannot be spoofed by the agent.
-      daemonTaskId: taskId,
       // Daemon ticks use a fixed model per tick; resolve it once at dispatch
       // time so hook payloads reflect the actual wire id.
       getModel: buildDaemonGetModel(options.sessionConfig?.model),

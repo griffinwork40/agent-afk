@@ -2,7 +2,7 @@
  * Additional coverage tests for src/telegram/bot.ts (COV-017).
  *
  * The existing bot.test.ts already covers construction, commands, message
- * handling, auto-subscribe, and lifecycle. This file targets the branches
+ * handling, and lifecycle. This file targets the branches
  * still below 60% — primarily the handlers that are registered in
  * setupHandlers() but not yet exercised:
  *   - /compact (idle vs busy paths)
@@ -11,7 +11,7 @@
  *   - unsupported media type reply
  *   - stop() when not running (no-op)
  *   - getBusySessionCount()
- *   - stopAutoSubscribe branch (autoSubscribeInterval already null)
+ *   - a manual /watch survives past the retired 5s presence-scan interval
  *   - log() suppressed when verbose=false / emitted when verbose=true
  */
 
@@ -88,7 +88,7 @@ async function command(bot: TelegramBot, text: string) {
       message_id: 1, text, date: 0,
       chat: { id: 12345, type: 'private', first_name: 'T' },
       from: { id: 12345, is_bot: false, first_name: 'T' },
-      entities: [{ type: 'bot_command', offset: 0, length: text.length }],
+      entities: [{ type: 'bot_command', offset: 0, length: text.split(' ')[0]!.length }],
     },
   });
   return api;
@@ -225,39 +225,6 @@ describe('TelegramBot — additional branch coverage', () => {
   });
 
   // -------------------------------------------------------------------------
-  // startAutoSubscribe / stopAutoSubscribe guard
-  // -------------------------------------------------------------------------
-  describe('startAutoSubscribe / stopAutoSubscribe', () => {
-    test('stopAutoSubscribe is a no-op when interval is null', () => {
-      // Ensure interval is null (bot never started).
-      const b = makeBot();
-      expect(() => {
-        (b as unknown as { stopAutoSubscribe: () => void }).stopAutoSubscribe();
-      }).not.toThrow();
-    });
-
-    test('startAutoSubscribe sets the interval and immediate tick fires', async () => {
-      vi.useFakeTimers();
-      const b = makeBot();
-      const tickSpy = vi
-        .spyOn(b as unknown as { runAutoSubscribeTick: () => Promise<void> }, 'runAutoSubscribeTick')
-        .mockResolvedValue(undefined);
-
-      (b as unknown as { startAutoSubscribe: () => void }).startAutoSubscribe();
-      // The immediate tick is called synchronously (void fire-and-forget).
-      await Promise.resolve(); // flush microtasks
-      expect(tickSpy).toHaveBeenCalledTimes(1);
-
-      // Second call is idempotent.
-      (b as unknown as { startAutoSubscribe: () => void }).startAutoSubscribe();
-      expect(tickSpy).toHaveBeenCalledTimes(1);
-
-      (b as unknown as { stopAutoSubscribe: () => void }).stopAutoSubscribe();
-      vi.useRealTimers();
-    });
-  });
-
-  // -------------------------------------------------------------------------
   // getStats
   // -------------------------------------------------------------------------
   describe('getStats()', () => {
@@ -266,48 +233,6 @@ describe('TelegramBot — additional branch coverage', () => {
       expect(stats).toHaveProperty('running', false);
       expect(stats).toHaveProperty('activeSessions');
       expect(stats).toHaveProperty('totalChats');
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // runAutoSubscribeTick — empty allowedChatIds early exit
-  // -------------------------------------------------------------------------
-  describe('runAutoSubscribeTick', () => {
-    test('exits early when allowedChatIds is empty', async () => {
-      const emptyBot = new TelegramBot({
-        botToken: 'tok',
-        apiKey: 'key',
-        dataDir: './test-data',
-        verbose: false,
-        allowedChatIds: new Set<number>(),
-        createSession: vi.fn(),
-      });
-      // Should resolve without throwing even though no chats are allowed.
-      await expect(
-        (emptyBot as unknown as { runAutoSubscribeTick: () => Promise<void> }).runAutoSubscribeTick(),
-      ).resolves.not.toThrow();
-    });
-
-    test('handles readLivePresenceFiles error gracefully', async () => {
-      const presence = await import('../agent/awareness/presence.js');
-      const spy = vi.spyOn(presence, 'readLivePresenceFiles').mockRejectedValueOnce(new Error('ENOENT'));
-      await expect(
-        (bot as unknown as { runAutoSubscribeTick: () => Promise<void> }).runAutoSubscribeTick(),
-      ).resolves.not.toThrow();
-      spy.mockRestore();
-    });
-
-    test('stops watch for a session whose afk flag cleared', async () => {
-      const presence = await import('../agent/awareness/presence.js');
-      // Return no AFK sessions — any currently-watched session should be stopped.
-      const spy = vi.spyOn(presence, 'readLivePresenceFiles').mockResolvedValueOnce([]);
-      const wm = (bot as unknown as { watchManager: { getWatched: (id: number) => string | undefined; stop: (id: number) => void } }).watchManager;
-      vi.spyOn(wm, 'getWatched').mockReturnValue('old-session-id');
-      const stopSpy = vi.spyOn(wm, 'stop').mockImplementation(() => {});
-
-      await (bot as unknown as { runAutoSubscribeTick: () => Promise<void> }).runAutoSubscribeTick();
-      expect(stopSpy).toHaveBeenCalledWith(12345);
-      spy.mockRestore();
     });
   });
 
@@ -376,23 +301,43 @@ describe('TelegramBot — additional branch coverage', () => {
   });
 
   // -------------------------------------------------------------------------
-  // tick error log (line 514) — runAutoSubscribeTick rejection logged
+  // Manual /watch lifetime (automatic presence-driven watch is retired)
   // -------------------------------------------------------------------------
-  describe('tick error logging', () => {
-    test('logs tick errors when verbose=true', async () => {
-      const noisyBot = makeBot(true);
-      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  describe('manual /watch lifetime', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    test('a /watch started watch stays active well past 5s and start() schedules no presence scan', async () => {
+      vi.useFakeTimers();
+      const presence = await import('../agent/awareness/presence.js');
+      const presenceSpy = vi.spyOn(presence, 'readLivePresenceFiles').mockResolvedValue([]);
+      const watchMod = await import('./watch.js');
+      vi.spyOn(watchMod, 'resolveWatchTarget').mockResolvedValue('sess-manual');
+      // Replace the ledger tail with a loop that only ends on abort, so the
+      // watch is registered exactly as a real one is and is torn down by stop().
       vi.spyOn(
-        noisyBot as unknown as { runAutoSubscribeTick: () => Promise<void> },
-        'runAutoSubscribeTick',
-      ).mockRejectedValueOnce(new Error('tick boom'));
+        watchMod.SessionWatchManager.prototype as unknown as { _run: (...a: unknown[]) => Promise<void> },
+        '_run',
+      ).mockImplementation((...args: unknown[]) => {
+        const signal = args[4] as AbortSignal;
+        return new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+      });
+      const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
 
-      (noisyBot as unknown as { startAutoSubscribe: () => void }).startAutoSubscribe();
-      await new Promise<void>((r) => setTimeout(r, 10)); // let microtasks drain
-      (noisyBot as unknown as { stopAutoSubscribe: () => void }).stopAutoSubscribe();
+      (bot as unknown as { bot: { launch: () => Promise<void> } }).bot.launch = vi.fn(async () => {});
+      (bot as unknown as { bot: { telegram: { setMyCommands: () => Promise<void> } } }).bot.telegram.setMyCommands = vi.fn(async () => {});
+      await bot.start();
+      expect(setIntervalSpy.mock.calls.filter((c) => c[1] === 5_000)).toHaveLength(0);
 
-      expect(logSpy).toHaveBeenCalledWith('[TelegramBot]', 'auto-subscribe tick error:', expect.any(Error));
-      logSpy.mockRestore();
+      await command(bot, '/watch sess-manual');
+      const wm = (bot as unknown as { watchManager: { watching: (id: number) => string | undefined } }).watchManager;
+      expect(wm.watching(12345)).toBe('sess-manual');
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(wm.watching(12345)).toBe('sess-manual');
+      expect(presenceSpy).not.toHaveBeenCalled();
+      expect(setIntervalSpy.mock.calls.filter((c) => c[1] === 5_000)).toHaveLength(0);
     });
   });
 

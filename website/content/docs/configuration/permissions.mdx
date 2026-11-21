@@ -6,7 +6,7 @@ description: "Understand the bypass baseline, plan mode, and path approval."
 A new CLI installation starts in `bypassPermissions`: the agent can use file tools outside the working directory without a path approval prompt. Neither mode is a sandbox or a per-command confirmation system.
 
 <Callout type="info">
-**Upgrading from v5?** A config file that sets `"permissionMode": "autonomous"` or `"permissionMode": "default"` now runs in `bypassPermissions` and prints one warning. Those modes were removed in v6. Set `"permissionMode": "plan"` for a read-only session.
+**Upgrading from an earlier version?** A config file that sets `"permissionMode": "autonomous"` or `"permissionMode": "default"` now runs in `bypassPermissions` and prints one warning. Those modes have been removed. Set `"permissionMode": "plan"` for a read-only session.
 </Callout>
 
 ## Start with plan mode

@@ -89,7 +89,7 @@ Use a future date appropriate to your task. If you supply both `runAt` and `cron
 
 With `update_schedule`, pass `null` to clear `runAt` or `expiresAt`. To clear a pinned `cwd`, pass `null` or an empty string. Renaming a task changes its label, not its ID.
 
-A result with `daemonSynced: false` means the change is saved but was not applied live. It takes effect on the daemon's next start. Unattended daemon tasks cannot freely create or change other tasks.
+A result with `daemonSynced: false` means the change is saved but was not applied live. It takes effect on the daemon's next start. A scheduled task runs in `bypassPermissions`, so it can create, change, or cancel schedules, including other tasks.
 
 ## Execution, retries, and routing
 

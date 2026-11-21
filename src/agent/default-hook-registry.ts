@@ -222,7 +222,6 @@ type AgentOptions = {
    * in the stdin JSON payload and as `AFK_HOOK_MODEL` in the subprocess env.
    */
   getModel?: () => string | undefined;
-  daemonTaskId?: string;
 };
 
 /**

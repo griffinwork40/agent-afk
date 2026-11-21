@@ -317,8 +317,9 @@ running inside the daemon for this session.
 
 After the operator answers, the daemon:
 
-1. Reads the per-session HMAC key from `~/.afk/state/sessions/<id>/session.key`
-   (written 0600 by the REPL at session start).
+1. Reads the per-session HMAC key from `~/.afk/state/sessions/<id>/session.key`.
+   Nothing writes this key at present (see the status note above), so the daemon
+   finds no key and skips the write-back.
 2. Signs the response with `signElicitationResponse` (HMAC-SHA256 over
    `recordKind‖sessionId‖reqId‖stableStringify(result)`).
 3. Appends a signed `elicitation_response` record to the ledger.
