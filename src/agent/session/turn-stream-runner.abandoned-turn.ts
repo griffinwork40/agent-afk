@@ -334,13 +334,17 @@ export class ProviderTurns {
     for (let turn = this.open; turn !== null; turn = this.open) {
       if (turn.abandoned && !turn.settling) void this.settle(turn);
       await raceWithDrainTimeout(turn.ended, SETTLE_DRAIN_TIMEOUT_MS);
-      // If the turn is still open after the timeout, force-end it so the
-      // waiting send is not blocked indefinitely (the settlement continues
-      // in the background and the second endTurn call is a no-op).
-      if (this.open === turn) {
+      // If an ABANDONED turn is still open after the timeout, record its done
+      // and force-end it so the waiting send is not blocked indefinitely (the
+      // settlement continues in the background and the second endTurn call is
+      // a no-op). Non-abandoned turns with a live reader are NOT force-ended:
+      // they are legitimately waiting and would suffer shared-iterator crossover
+      // if two readers pulled from the same iterator concurrently.
+      if (this.open === turn && turn.abandoned) {
         debugLog(
-          `AgentSession: drain timed out after ${SETTLE_DRAIN_TIMEOUT_MS}ms waiting for a settling turn to end; force-ending it`,
+          `AgentSession: drain timed out after ${SETTLE_DRAIN_TIMEOUT_MS}ms waiting for an abandoned turn to end; force-ending it`,
         );
+        this.recordDone(turn);
         this.endTurn(turn);
       }
     }
