@@ -52,6 +52,9 @@ export class SqliteRelayStore implements RelayStore {
         PRIMARY KEY (message_id, reporter_key)
       );
 
+      CREATE TABLE IF NOT EXISTS action_ids (key TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS action_ids_expiry ON action_ids(expires_at);
+
       CREATE TABLE IF NOT EXISTS room_state (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -217,6 +220,23 @@ export class SqliteRelayStore implements RelayStore {
       messageId,
     ).toArray();
     return rows[0]?.cnt ?? 0;
+  }
+
+  async consumeActionId(key: string, expiresAt: number, now: number): Promise<boolean> {
+    const rows = this.sql.exec<{ key: string }>(`INSERT INTO action_ids (key, expires_at) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET expires_at = excluded.expires_at WHERE action_ids.expires_at <= ?
+      RETURNING key`, key, expiresAt, now).toArray();
+    return rows.length > 0;
+  }
+
+  async pruneActionIds(now: number): Promise<void> {
+    this.sql.exec(`DELETE FROM action_ids WHERE key IN
+      (SELECT key FROM action_ids WHERE expires_at <= ? ORDER BY expires_at LIMIT 100)`, now);
+  }
+
+  async getOldestActionExpiry(): Promise<number | null> {
+    return this.sql.exec<{ expires_at: number }>(`SELECT expires_at FROM action_ids ORDER BY expires_at LIMIT 1`)
+      .toArray()[0]?.expires_at ?? null;
   }
 
   async getRoomMode(): Promise<RoomMode> {

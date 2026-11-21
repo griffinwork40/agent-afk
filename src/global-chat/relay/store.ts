@@ -42,6 +42,11 @@ export interface RelayStore {
   addReport(messageId: string, reporterKey: string): Promise<void>;
   countReporters(messageId: string): Promise<number>;
 
+  // --- signed action replay protection ---
+  consumeActionId(key: string, expiresAt: number, now: number): Promise<boolean>;
+  pruneActionIds(now: number): Promise<void>;
+  getOldestActionExpiry(): Promise<number | null>;
+
   // --- room mode ---
   getRoomMode(): Promise<RoomMode>;
   setRoomMode(mode: RoomMode): Promise<void>;
@@ -62,6 +67,8 @@ export class MemoryRelayStore implements RelayStore {
   private readonly reports = new Map<string, Set<string>>();
   private mode: RoomMode = 'open';
   private keySweep: MapIterator<[string, KeyRecord]> | undefined;
+  private readonly actionIds = new Map<string, number>();
+  private actionSweep: MapIterator<[string, number]> | undefined;
 
   async insertMessage(msg: Msg): Promise<void> {
     if (this.messages.has(msg.id)) return;
@@ -173,6 +180,27 @@ export class MemoryRelayStore implements RelayStore {
 
   async countReporters(messageId: string): Promise<number> {
     return this.reports.get(messageId)?.size ?? 0;
+  }
+
+  async consumeActionId(key: string, expiresAt: number, now: number): Promise<boolean> {
+    if ((this.actionIds.get(key) ?? 0) > now) return false;
+    this.actionIds.set(key, expiresAt);
+    return true;
+  }
+
+  async pruneActionIds(now: number): Promise<void> {
+    this.actionSweep ??= this.actionIds.entries();
+    for (let i = 0; i < 100; i++) {
+      const entry = this.actionSweep.next();
+      if (entry.done) { this.actionSweep = undefined; break; }
+      if (entry.value[1] <= now) this.actionIds.delete(entry.value[0]);
+    }
+  }
+
+  async getOldestActionExpiry(): Promise<number | null> {
+    let oldest = Infinity;
+    for (const expires of this.actionIds.values()) oldest = Math.min(oldest, expires);
+    return Number.isFinite(oldest) ? oldest : null;
   }
 
   async getRoomMode(): Promise<RoomMode> { return this.mode; }

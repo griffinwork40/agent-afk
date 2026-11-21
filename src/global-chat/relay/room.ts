@@ -55,6 +55,7 @@ export class Room {
   async onAlarm(): Promise<void> {
     await this.store.pruneOlderThan(this.clock.now() - RETENTION_MS);
     await this.store.pruneKeyRecords(this.clock.now() - KEY_REGISTRY_RETENTION_MS);
+    await this.store.pruneActionIds(this.clock.now());
   }
 
   async nextMessageExpiry(): Promise<number | null> {
@@ -62,7 +63,8 @@ export class Room {
     // Prune uses strict <; add one millisecond so the oldest row is actually expired.
     const keyOldest = await this.store.getOldestKeyTimestamp();
     const next = Math.min(oldest === null ? Infinity : oldest + RETENTION_MS + 1,
-      keyOldest === null ? Infinity : keyOldest + KEY_REGISTRY_RETENTION_MS + 1);
+      keyOldest === null ? Infinity : keyOldest + KEY_REGISTRY_RETENTION_MS + 1,
+      await this.store.getOldestActionExpiry() ?? Infinity);
     return Number.isFinite(next) ? Math.max(this.clock.now() + 1, next) : null;
   }
 

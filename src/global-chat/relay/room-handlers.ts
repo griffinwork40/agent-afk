@@ -137,6 +137,8 @@ export async function handleReport(
   if (Math.abs(clock.now() - frame.ts) > CLOCK_SKEW_MS)
     return makeEffect(conn, { toSender: [err('stale_timestamp', 'Timestamp out of range')] });
 
+  if (!await store.consumeActionId(`${pubkey}:report:${frame.id}`, frame.ts + CLOCK_SKEW_MS + 1, clock.now()))
+    return makeEffect(conn, { toSender: [err('duplicate', 'Duplicate action id')] });
   const target = await store.getMessageById(frame.target);
   if (!target || (target as unknown as { deleted: boolean }).deleted)
     return makeEffect(conn, { toSender: [err('unknown_target', 'Message not found or deleted')] });
@@ -169,6 +171,8 @@ export async function handleAdmin(
   if (Math.abs(clock.now() - frame.ts) > CLOCK_SKEW_MS)
     return makeEffect(conn, { toSender: [err('stale_timestamp', 'Timestamp out of range')] });
 
+  if (!await store.consumeActionId(`${pubkey}:admin:${frame.id}`, frame.ts + CLOCK_SKEW_MS + 1, clock.now()))
+    return makeEffect(conn, { toSender: [err('duplicate', 'Duplicate action id')] });
   if (frame.op === 'ban') return adminBan(frame.arg, conn, store, allConns);
   if (frame.op === 'unban') return adminUnban(frame.arg, conn, store);
   if (frame.op === 'delete') return adminDelete(frame.arg, conn, store);

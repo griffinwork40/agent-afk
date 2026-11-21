@@ -84,6 +84,19 @@ await test('SqliteRelayStore: every method against real workerd SQLite', async t
       await call('pruneOlderThan', 150);
       assert.equal(await call('getMessageById', 'old-104'), null);
     });
+    await t.test('action replay ids persist across restart and prune in bounded batches', async () => {
+      assert.equal(await call('consumeActionId', 'admin:one', 500, 100), true);
+      await mf.dispose(); mf = new Miniflare(options);
+      assert.equal(await call('consumeActionId', 'admin:one', 500, 100), false);
+      for (let i = 0; i < 105; i++) await call('consumeActionId', 'report:' + i, 200, 100);
+      await call('pruneActionIds', 200);
+      assert.equal(await call('getOldestActionExpiry'), 200, 'only 100 expired ids pruned');
+      await call('pruneActionIds', 200);
+      assert.equal(await call('getOldestActionExpiry'), 500);
+      assert.equal(await call('consumeActionId', 'admin:one', 900, 500), true);
+      await call('pruneActionIds', 900);
+      assert.equal(await call('getOldestActionExpiry'), null);
+    });
     await t.test('mode and all durable data persist across runtime restart', async () => {
       assert.equal(await call('getRoomMode'), 'open');
       await call('setRoomMode', 'readonly');

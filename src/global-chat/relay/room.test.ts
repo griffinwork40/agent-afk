@@ -711,6 +711,21 @@ describe('Room bans', () => {
     await doHello(room, 'c1', kp, 'alice', store, clock, allConns);
   });
 
+  it('refuses a captured ban after unban and Room recreation, including future timestamps', async () => {
+    const conn = allConns.get('mod')!;
+    const id = randomId();
+    const frame = await buildAdminFrame(mkp, id, clock.now() + 120_000, 'ban', kp.pubkey);
+    await room.onMessage('mod', frame, conn, allConns);
+    const unban = await buildAdminFrame(mkp, randomId(), clock.now(), 'unban', kp.pubkey);
+    await room.onMessage('mod', unban, conn, allConns);
+    clock.advance(120_001);
+    room = new Room(store, makeConfig({ maintainerKeys: [mkp.pubkey] }), clock);
+    await room.onAlarm();
+    const replay = await room.onMessage('mod', frame, conn, allConns);
+    expect(replay.toSender[0]).toMatchObject({ code: 'duplicate', id });
+    expect(await store.isBannedKey(kp.pubkey)).toBe(false);
+  });
+
   it('admin ban closes live connections for target key', async () => {
     const conn = allConns.get('mod')!;
     const id = randomId();
@@ -814,6 +829,18 @@ describe('Room reports', () => {
     await room.onMessage('c1', frame, conn, allConns);
   });
 
+  it('refuses replayed signed reports after Room recreation', async () => {
+    const reporter = await generateKeyPair();
+    const conn = await doHello(room, 'r', reporter, 'bob', store, clock, allConns);
+    const id = randomId();
+    const frame = await buildReportFrame(reporter, id, clock.now(), targetMsgId);
+    await room.onMessage('r', frame, conn, allConns);
+    room = new Room(store, makeConfig(), clock);
+    const replay = await room.onMessage('r', frame, conn, allConns);
+    expect(replay.toSender[0]).toMatchObject({ code: 'duplicate', id });
+    expect(await store.countReporters(targetMsgId)).toBe(1);
+  });
+
   it('error forbidden when reporting own message', async () => {
     const conn = allConns.get('c1')!;
     clock.advance(1_000);
@@ -821,6 +848,7 @@ describe('Room reports', () => {
     const effect = await room.onMessage('c1', frame, conn, allConns);
     const e = effect.toSender[0] as Extract<typeof effect.toSender[0], { t: 'error' }>;
     expect(e.code).toBe('forbidden');
+    expect(e.message).toBe('Cannot report your own message');
   });
 
   it('error unknown_target for nonexistent message', async () => {
