@@ -194,6 +194,8 @@ export async function executeOnce(
   // Pre-dispatch implementation-intent gate (#3754): rejects implementation briefs sent to read-only named agents.
   { const r = checkReadOnlyDispatchIntent(childWriteCapable, namedAgent, parsed.prompt, classifyDispatchIntent); if (r !== undefined) { budgetReceipt?.rollback(); return r; } }
 
+  { const r = checkForkModeBackgroundGate(parsed.mode, ctx.defaultConfig.skillDispatchName); if (r !== undefined) { budgetReceipt?.rollback(); return r; } } // #5177: before isolation — avoids leaking a locked worktree on rejected background dispatch
+
   // isolation:"worktree" — may mutate childConfig.cwd; a continuation reuses the chain's tree.
   let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;
   let setupNotice: string | undefined; // #3601: failed repo-declared setup, surfaced to the parent too
@@ -214,8 +216,6 @@ export async function executeOnce(
   const { childParentSession, childManager, nestedAgentAllowlist, modelFallback } = completeChildConfigNesting(
     childConfigArgs, preNesting, nestingCwd,
   );
-
-  { const r = checkForkModeBackgroundGate(parsed.mode, ctx.defaultConfig.skillDispatchName); if (r !== undefined) { budgetReceipt?.rollback(); return r; } } // #5177: reject background dispatch from fork-mode skill context
 
   if (parsed.mode === 'background' && childConfig.timeoutMs === undefined) {
     childConfig.timeoutMs = SUBAGENT_BACKGROUND_TIMEOUT_MS;
