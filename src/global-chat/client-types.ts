@@ -30,14 +30,14 @@ export interface ChatClientEvents {
 }
 export type ChatActionResult = { ok: true; id: string } | {
   ok: false;
-  code: ErrorCode | 'not_connected' | 'timeout';
+  code: ErrorCode | 'not_connected' | 'timeout' | 'delivery_unknown';
   message: string;
   id?: string;
   retryAfterMs?: number;
 };
 export type ChatPostResult = { ok: true; id: string } | {
   ok: false;
-  code: Exclude<ErrorCode, 'secret_detected'> | 'not_connected' | 'timeout';
+  code: Exclude<ErrorCode, 'secret_detected'> | 'not_connected' | 'timeout' | 'delivery_unknown';
   message: string;
   id?: string;
   retryAfterMs?: number;
