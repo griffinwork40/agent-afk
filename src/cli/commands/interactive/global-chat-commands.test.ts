@@ -33,8 +33,9 @@ describe('parseViewCommand', () => {
     expect(parseViewCommand(`/unmute bob#${bobTag}`, s)).toEqual({ kind: 'unmute', pubkey: BOB, display: `bob#${bobTag}` });
     expect(parseViewCommand('/unmute 1', s)).toMatchObject({ kind: 'error' });
   });
-  it('report needs a number', () => {
+  it('report needs another user message number', () => {
     expect(parseViewCommand('/report 1', state())).toEqual({ kind: 'report', id: '1'.repeat(32), n: 1 });
+    expect(parseViewCommand('/report 2', state())).toMatchObject({ kind: 'error', message: expect.stringContaining('own message') });
     expect(parseViewCommand('/report x', state())).toMatchObject({ kind: 'error' });
   });
   it('maintainer commands are refused for others', () => {
