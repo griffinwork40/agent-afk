@@ -1,5 +1,9 @@
 import type { ChatConnectionStatus, ChatRelayError } from './client-types.js';
-import type { RelayFrame } from './protocol.js';
+import { MAX_RELAY_FRAME_BYTES, type RelayFrame } from './protocol.js';
+
+// Bound both CPU work and retained decoded data while signature verification waits.
+export const MAX_PENDING_RELAY_FRAMES = 32;
+export const MAX_PENDING_RELAY_BYTES = 1024 * 1024;
 import { parseRelayFrame } from './protocol.parse.js';
 
 export interface ChatSocket {
@@ -114,17 +118,26 @@ export class ChatTransport {
     this.#socket = socket;
     const current = (): boolean => this.#socket === socket && !this.#stopped;
     this.#incoming = Promise.resolve();
+    let pendingCount = 0;
+    let pendingBytes = 0;
     this.#deadline = this.timers.setTimeout(() => { if (current()) this.#lost(); }, 10_000);
     socket.addEventListener('open', () => {
       if (current()) void this.#open(current).catch(() => { if (current()) this.close(); });
     });
     socket.addEventListener('message', event => {
       if (!current() || typeof event.data !== 'string') return;
+      if (event.data.length > MAX_RELAY_FRAME_BYTES) { this.#lost(); return; }
+      const bytes = new TextEncoder().encode(event.data).length;
+      if (bytes > MAX_RELAY_FRAME_BYTES || pendingCount >= MAX_PENDING_RELAY_FRAMES ||
+        pendingBytes + bytes > MAX_PENDING_RELAY_BYTES) { this.#lost(); return; }
       const parsed = parseRelayFrame(event.data);
       if (!parsed.ok) return;
+      pendingCount++;
+      pendingBytes += bytes;
       this.#incoming = this.#incoming.then(async () => {
         if (current()) await this.#frame(parsed.frame, current);
-      }).catch(() => { /* Invalid peer data must never escape the event loop. */ });
+      }).catch(() => { /* Invalid peer data must never escape the event loop. */ })
+        .finally(() => { pendingCount--; pendingBytes -= bytes; });
     });
     for (const event of ['close', 'error'] as const) {
       socket.addEventListener(event, () => { if (current()) this.#lost(); });

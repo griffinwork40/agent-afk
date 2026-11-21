@@ -5,7 +5,7 @@
  * Async flushing via setImmediate (flushAsync).
  */
 import { describe, it, expect } from 'vitest';
-import { validateChatUrl } from './client.transport.js';
+import { ChatTransport, MAX_PENDING_RELAY_FRAMES, validateChatUrl } from './client.transport.js';
 import { GlobalChatClient } from './client.js';
 import { PROTOCOL_VERSION, type Msg } from './protocol.js';
 import {
@@ -90,6 +90,31 @@ async function connectAndWelcome(ctx: Ctx, backlog: Msg[] = []): Promise<FakeSoc
 // ============================================================
 // 2. CONNECTION LIFECYCLE + STATUSES
 // ============================================================
+describe('ingress bounds', () => {
+  it.each(['count', 'bytes', 'single'])('disconnects on %s overflow and reconnects with backoff', async bound => {
+    const factory = new FakeSocketFactory();
+    const timers = new FakeTimers();
+    const statuses: string[] = [];
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const transport = new ChatTransport({ url: 'wss://relay.example.com', WebSocket: factory.Constructor,
+      timers, random: () => 0 }, s => statuses.push(s), async () => {}, async () => blocked, () => {});
+    transport.connect();
+    const socket = factory.latest;
+    const count = bound === 'count' ? MAX_PENDING_RELAY_FRAMES + 1 : bound === 'bytes' ? 6 : 1;
+    const raw = bound === 'count' ? JSON.stringify({ t: 'presence', online: 1 }) :
+      JSON.stringify({ t: 'error', code: 'bad_frame', message: 'x'.repeat(bound === 'single' ? 262144 : 220000) });
+    for (let i = 0; i < count; i++) socket.triggerMessage(raw);
+    expect(socket.closed).toBe(true);
+    expect(statuses).toEqual(['connecting', 'reconnecting']);
+    expect(factory.sockets).toHaveLength(1);
+    timers.tick(1000);
+    expect(factory.sockets).toHaveLength(2);
+    release();
+    transport.close();
+  });
+});
+
 describe('connection lifecycle', () => {
   it('emits connecting on connect()', async () => {
     const ctx = await setup();

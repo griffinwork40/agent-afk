@@ -1,7 +1,7 @@
 import { Room, countDistinctKeys } from '../../src/global-chat/relay/room.js';
 import { SqliteRelayStore } from './sqlite-store.js';
 import type { ConnRecord, RelayConfig, RoomEffect } from '../../src/global-chat/relay/room-types.js';
-import type { RoomMode } from '../../src/global-chat/protocol.js';
+import { MAX_CLIENT_FRAME_BYTES, type RoomMode } from '../../src/global-chat/protocol.js';
 import { realClock } from '../../src/global-chat/relay/limiter.js';
 
 // Contract:
@@ -14,6 +14,8 @@ import { realClock } from '../../src/global-chat/relay/limiter.js';
 export const MAX_TOTAL_CONNECTIONS = 500;
 export const HELLO_TIMEOUT_MS = 10_000;
 const MAX_CONNECTIONS_PER_IP = 5;
+// At most 64 KiB of raw queued input per socket (16 * 4096), plus bounded event overhead.
+export const MAX_PENDING_EVENTS_PER_CONNECTION = 16;
 
 interface Env {
   ADMIN_PUBKEYS: string;
@@ -45,6 +47,7 @@ async function hashIp(salt: string, ip: string): Promise<string> {
 export class ChatRoom implements DurableObject {
   private room: Room | null = null;
   private queue: Promise<void> = Promise.resolve();
+  private readonly pending = new WeakMap<WebSocket, number>();
 
   constructor(private readonly ctx: DurableObjectState, private readonly env: Env) {}
 
@@ -109,8 +112,16 @@ export class ChatRoom implements DurableObject {
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    if (ws.readyState !== 1) return Promise.resolve();
+    const count = this.pending.get(ws) ?? 0;
+    if (typeof message !== 'string' || message.length > MAX_CLIENT_FRAME_BYTES ||
+      new TextEncoder().encode(message).length > MAX_CLIENT_FRAME_BYTES ||
+      count >= MAX_PENDING_EVENTS_PER_CONNECTION) {
+      this.closeSocket(ws, 1008, 'Ingress limit exceeded');
+      return Promise.resolve();
+    }
+    this.pending.set(ws, count + 1);
     return this.enqueue(async () => {
-      if (typeof message !== 'string') return;
       const rec = this.record(ws);
       if (!rec || rec._closed || ws.readyState !== 1) return;
       if (!rec.helloOk && Date.now() >= rec._helloDeadline) {
@@ -122,7 +133,7 @@ export class ChatRoom implements DurableObject {
       const effect = await this.getRoom().onMessage(rec._connId, message, rec, allConns);
       this.applyEffect(ws, rec._connId, effect);
       await this.scheduleDeadline();
-    });
+    }).finally(() => { this.pending.set(ws, (this.pending.get(ws) ?? 1) - 1); });
   }
 
   webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ChatRoom, HELLO_TIMEOUT_MS, MAX_TOTAL_CONNECTIONS } from '../../../relay/src/room-object.js';
+import { ChatRoom, HELLO_TIMEOUT_MS, MAX_TOTAL_CONNECTIONS, MAX_PENDING_EVENTS_PER_CONNECTION } from '../../../relay/src/room-object.js';
 import { Room } from './room.js';
 import { MemoryRelayStore } from './store.js';
 import { generateKeyPair, importPrivateKey, sign } from '../crypto.js';
@@ -37,6 +37,22 @@ async function hello(name: string) {
 const send = (object: ChatRoom, socket: Socket, frame: string) => object.webSocketMessage(socket as any, frame);
 
 describe('Durable Object event serialization', () => {
+  it('rejects oversized UTF-8 input before enqueueing', async () => {
+    const { object, sockets } = setup(1);
+    await send(object, sockets[0]!, 'é'.repeat(2049));
+    expect(sockets[0]!.readyState).toBe(3);
+    expect(sockets[0]!.sent).toEqual([]);
+  });
+
+  it('closes a flooding socket and lets another connection progress', async () => {
+    const { object, sockets } = setup(2);
+    const tasks = Array.from({ length: MAX_PENDING_EVENTS_PER_CONNECTION + 1 }, () =>
+      send(object, sockets[0]!, '{"t":"ping","n":1}'));
+    expect(sockets[0]!.readyState).toBe(3);
+    await Promise.all(tasks);
+    await send(object, sockets[1]!, '{"t":"ping","n":2}');
+    expect(sockets[1]!.sent).toContainEqual({ t: 'pong', n: 2 });
+  });
   it('serializes overlapping crypto awaits before taking the next connection snapshot', async () => {
     const { object, sockets } = setup();
     const [a, b] = await Promise.all([hello('alice'), hello('bob')]);
