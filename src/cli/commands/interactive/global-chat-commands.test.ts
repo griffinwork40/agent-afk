@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseViewCommand } from './global-chat-commands.js';
+import { HELP_LINES, parseViewCommand } from './global-chat-commands.js';
 import { createChatState, addMessage, mute, tagForPubkey, type ChatViewState } from './global-chat-model.js';
 
 const ME = 'c'.repeat(64);
@@ -54,6 +54,13 @@ describe('parseViewCommand', () => {
     expect(parseViewCommand('/mode closed', s)).toEqual({ kind: 'mode', mode: 'closed' });
     expect(parseViewCommand('/mode loud', s)).toMatchObject({ kind: 'error' });
   });
+  it('documents every accepted command in help', () => {
+    const help = HELP_LINES.join('\n');
+    for (const command of ['/help', '/rules', '/mutes', '/mute', '/unmute', '/report', '/ban', '/unban', '/delete', '/mode']) {
+      expect(help).toContain(command);
+    }
+  });
+
   it('unknown commands get a hint', () => {
     expect(parseViewCommand('/frobnicate now', state())).toMatchObject({ kind: 'error', message: expect.stringContaining('/help') });
   });
