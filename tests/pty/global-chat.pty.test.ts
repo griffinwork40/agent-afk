@@ -36,6 +36,8 @@ describe.skipIf(!avail.ok)('global chat view in a real pty', () => {
     const s = await openChat();
     try {
       expect(s.term.buffer.active.type).toBe('alternate');
+      // Raw mode is on when the view starts reading (suspendInput turned it off).
+      expect((await s.waitForEvent('connect'))['isRaw']).toBe(true);
       const scr = s.screen();
       expect(scr).toHaveLength(24);
       expect(scr[0]).toMatch(/global/i);

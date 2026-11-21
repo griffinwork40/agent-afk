@@ -47,7 +47,7 @@ class ScriptedClient extends FakeClient {
   constructor(private readonly backlog: Msg[]) { super(); }
   override async connect(): Promise<void> {
     this.connected++;
-    log({ ev: 'connect' });
+    log({ ev: 'connect', isRaw: process.stdin.isRaw });
     setTimeout(() => {
       this.emit('onStatus', 'open');
       this.emit('onWelcome', { online: 3, mode: 'open', backlog: this.backlog, you: { ...ME } });
