@@ -23,7 +23,6 @@ afk trace show --all                 # include all event kinds
 afk trace show -n 40                 # limit to 40 events
 afk trace show --json                # raw JSON (pipe to jq)
 afk trace show --results             # include full tool outputs from the message journal
-afk trace show --evasion             # run the block-evasion analyzer
 ```
 
 ### `afk trace export-otlp [session]`

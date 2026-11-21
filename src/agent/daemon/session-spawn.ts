@@ -20,7 +20,6 @@ import { StateStore } from '../state/state-store.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
 import type { TraceSink, TraceWriter } from '../trace/index.js';
-import { makeGateBlockTraceOwner, type GateBlockCounter } from './scheduler-gate-recovery.js';
 import type { AgentConfig } from '../types.js';
 
 export interface DaemonSpawnOptions {
@@ -33,14 +32,6 @@ export interface DaemonSpawnOptions {
    * (daemon-wide AFK_DAEMON_CWD). Precedence: taskCwd ?? sessionConfig.cwd ?? daemonDefaultCwd().
    */
   taskCwd?: string;
-  /**
-   * Shared mutable counter incremented each time the AFK gate emits a
-   * `hook_decision` with `approvalOutcome: 'hard-block'` during this tick
-   * (#3466). The spawn wires a counting shim around the trace writer so the
-   * caller can read the total after `sendMessage` resolves and record it on
-   * the telemetry record without polling the trace file.
-   */
-  gateBlockCounter?: GateBlockCounter;
 }
 
 /**
@@ -193,17 +184,10 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
   // Mirrors chat.ts / interactive bootstrap.ts. Returns null under
   // AFK_TRACE_DISABLED=1. The label is derived from the taskId (see
   // daemonTraceLabel) so traces are greppable by task name while each tick
-  // still gets its own trace dir. Created before the hook registry so the
-  // AFK gate's structured audit trace is wired from the start of the session.
+  // still gets its own trace dir. Created before the hook registry so hook
+  // decisions are traced from the start of the session.
   const trace = createDefaultTraceWriter({ sessionLabel: sessionId });
-  // Contract: when a gateBlockCounter is supplied, wrap the trace writer with a
-  // counting shim BEFORE wiring it into createDefaultHookRegistry so the AFK
-  // gate's emitHookDecision calls go through the shim. The shim delegates every
-  // write() to the real writer — it is purely observational — and increments
-  // the counter each time it sees a hook_decision with approvalOutcome:
-  // 'hard-block'. This lets executeAgentTask read the final count after
-  // sendMessage() returns and classify recovery without polling the trace file.
-  const hookTraceWriter = makeGateBlockTraceOwner(trace?.writer, options.gateBlockCounter);
+  const hookTraceWriter = trace?.writer;
   const { registry, memoryStore } = createDefaultHookRegistry(
     undefined,
     'daemon',

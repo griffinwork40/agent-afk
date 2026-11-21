@@ -67,9 +67,8 @@ The following handlers are registered by the bot. Telegram's command picker and 
 | `/model`, `/model opus` | Choose a model, with buttons when no argument is given. The advertised short aliases are `opus`, `sonnet`, and `haiku`. |
 | `/cd`, `/cwd`, `/name` | Show or change the session directory, or show or set its name. |
 | `/new`, `/sessions` | Start another conversation or list saved conversations with buttons to switch back. |
-
 | `/usage` | Show Claude subscription usage. |
-| `/watch`, `/unwatch`, `/abort` | Follow another live session in this chat, stop following, or request an authenticated abort of the watched session. |
+| `/watch <session-id>`, `/unwatch` | Follow a live session in this chat by its session ID, or stop following. `/watch` with no argument lists watchable sessions. |
 | `/inbox`, `/inbox release all`, `/inbox drop all` | Review, accept, or discard peer messages held for this chat's session. A message ID prefix can replace `all`. |
 | `/good`, `/bad` | Record positive or negative feedback on the current session. |
 
@@ -107,7 +106,7 @@ To send to one chat instead of the default, the agent's `send_telegram` tool acc
 
 The Telegram bot sends a compact turn report for each Done, Blocked, Asking, or Interrupted state. The report prefers structured verdict fields rather than tool output, applies secret redaction, and limits notification volume.
 
-The bot also renders ordinary path approval and agent questions through Telegram prompts. A scheduled daemon task can save a question as a durable handoff; you can answer it in Telegram and the daemon resumes later. These are distinct from the CLI autonomous high risk gate. See [Permissions](/configuration/permissions) and [Daemon](/surfaces/daemon).
+The bot also renders ordinary path approval and agent questions through Telegram prompts. A scheduled daemon task can save a question as a durable handoff; you can answer it in Telegram and the daemon resumes later. See [Permissions](/configuration/permissions) and [Daemon](/surfaces/daemon).
 
 ## Troubleshooting
 

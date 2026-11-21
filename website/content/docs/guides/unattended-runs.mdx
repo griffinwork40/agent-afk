@@ -3,7 +3,7 @@ title: "Run afk without a human at the keyboard"
 description: "Choose an unattended execution mode, arrange phone supervision, and require evidence before trusting completion."
 ---
 
-AFK can keep working while you are away, but a background process, a daemon, and an autonomous interactive session have different lifetimes and safety boundaries. Choose the smallest surface that fits the job, tell it what success means, and arrange a way to inspect the result.
+AFK can keep working while you are away, but a background process and a daemon have different lifetimes and safety boundaries. Choose the smallest surface that fits the job, tell it what success means, and arrange a way to inspect the result.
 
 ## Choose the right mode
 
@@ -16,7 +16,7 @@ AFK can keep working while you are away, but a background process, a daemon, and
 | Call AFK from CI or a script and parse the response | [Headless chat](/guides/headless). |
 | Execute on another machine's files and accounts | [Remote dispatch](/guides/remote-dispatch). |
 
-Autonomous mode is a permission mode, not a process supervisor. It does not make a laptop stay awake, restart a crashed REPL, or turn session-owned background jobs into services.
+The daemon and Telegram bot are process supervisors separate from permission mode.
 
 ## Leave an interactive session safely
 
@@ -52,19 +52,9 @@ Name the working directory, verification command, forbidden effects, and complet
 </Step>
 </Steps>
 
-## Autonomous permissions and phone approvals
+## Daemon permissions
 
-In AFK mode, safe and medium-risk operations can proceed without an ordinary keyboard permission prompt. High-risk operations, such as destructive commands, writes outside the trusted workspace, and schedule mutations, require special handling.
-
-For the top-level interactive session, AFK routes an **approve or deny this single call** request through the phone channel, racing the keyboard fallback. Telegram displays an inline choice with the operation and input preview. Approval permits only that call, not every future operation of the same type.
-
-The default approval window is five minutes, starting when the request is actually shown. Denial, cancellation, no reachable operator, an invalid response, or timeout refuses the call. Subagents cannot obtain their own high-risk approval through this gate; they must report the blocker to the parent.
-
-<Callout type="warn">
-The gate is a best-effort classifier, not a shell sandbox. A command's risk classification does not replace a clear task boundary. Do not use `bypassPermissions` as a substitute for autonomous mode's safety posture, and do not assume the classifier catches every possible shell side effect.
-</Callout>
-
-The daemon has a different contract: it bypasses ordinary interactive permission prompts, but separately applies the autonomous high-risk gate with phone approval disabled. High-risk operations are refused immediately rather than left waiting for a human. A task may disable itself through a narrowly scoped exception; that is not general permission to modify other schedules.
+The daemon runs scheduled tasks in `bypassPermissions`. There is no high-risk gate or phone approval step: unconditional blocking hooks (such as the hooks that block `git reset --hard`, `git push --force`, `git clean -f`, and npm/pnpm publish) are the only pre-execution refusals. Many destructive shell patterns are observe-tier: they are recorded in the trace but not blocked. Write a clear task boundary and verification step into the task prompt rather than relying on the daemon to refuse harmful commands at runtime. See [Safety](/concepts/safety) for which patterns block and which observe.
 
 ## Check what Done means
 

@@ -48,8 +48,8 @@ export function createTelegramAfkHookBundle(
     undefined,
     'telegram',
     memoryStore,
-    // Live getter: registers the plan-mode gate; falls back to the fully-
-    // contained 'default' until the session is late-bound.
+    // Live getter: registers the plan-mode gate; falls back to the
+    // 'bypassPermissions' baseline until the session is late-bound.
     getPermissionMode,
     loadHooksConfig(cwd !== undefined && cwd.length > 0 ? { cwd } : {}),
     {

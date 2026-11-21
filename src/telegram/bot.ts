@@ -28,8 +28,6 @@ import { ensurePluginEntrypointsLoaded } from '../agent/tools/skill-bridge.js';
 import { SessionWatchManager } from './watch.js';
 import { handleWatchCommand } from './bot.watch-command.js';
 import { readLivePresenceFiles } from '../agent/awareness/presence.js';
-import { readSessionKey, signAbortRequest, freshChannelId } from '../agent/afk-channel.js';
-import { SessionLedgerWriter } from '../agent/session-ledger.js';
 import { splitLongMessage } from './formatter.js';
 import { routeFromCtx, sendOptions, type TelegramRoute } from './route.js';
 import { escapeRegExp } from '../utils/regexp.js';
@@ -191,41 +189,6 @@ export class TelegramBot {
       }
       const stopped = this.watchManager.stop(chatId);
       await ctx.reply(stopped ? `Stopped watching ${stopped}.` : 'Not watching anything.');
-    });
-
-    // /abort — write a signed abort_request to the ledger of the watched
-    // session. The REPL's abort-watcher verifies the HMAC and fires the
-    // AbortGraph only on a valid record (Invariant #4). If the chat is not
-    // watching a session, or the session has no key, reply helpfully.
-    //
-    // Invariant #5: comms only via the ledger; no IPC.
-    // Invariant #4: the abort_request MUST be HMAC-signed; an unsigned one
-    // would be ignored by the REPL anyway.
-    this.bot.command('abort', async (ctx) => {
-      const chatId = ctx.chat?.id;
-      if (!chatId) {
-        await ctx.reply(formatError('Could not identify chat'));
-        return;
-      }
-      const sessionId = this.watchManager.getWatched(chatId);
-      if (!sessionId) {
-        await ctx.reply(
-          'Not watching any session. Use /watch <session-id> to watch a REPL session first, then /abort to stop it.',
-        );
-        return;
-      }
-      const key = readSessionKey(sessionId);
-      if (key === null) {
-        await ctx.reply(
-          'Session key not found — the REPL may not have enabled AFK mode (/afk on). Cannot send a verified abort.',
-        );
-        return;
-      }
-      // Invariant #4: sign the abort so the REPL verifies it before acting.
-      const nonce = freshChannelId();
-      const hmac = signAbortRequest(key, sessionId, nonce);
-      new SessionLedgerWriter(sessionId).record({ kind: 'abort_request', nonce, hmac });
-      await ctx.reply(`✋ Abort sent to session ${sessionId}.`);
     });
 
     // Invariant: a message update handler MUST NOT await the agent turn.

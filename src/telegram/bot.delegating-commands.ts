@@ -1,6 +1,6 @@
 /**
  * Telegram commands that delegate straight to a handler with no routing or
- * queueing logic of their own (/cd, /good, /bad, /afk, /inbox, /insights). Shared
+ * queueing logic of their own (/cd, /good, /bad, /inbox, /insights). Shared
  * commands (/model, /name, /usage, ...) run through handlers/slash.ts.
 
  *

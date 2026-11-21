@@ -7,7 +7,6 @@
  * setupHandlers() but not yet exercised:
  *   - /compact (idle vs busy paths)
  *   - /watch / /unwatch
- *   - /abort (no session watched, no key, happy path)
  *   - /sessions / /new callbacks
  *   - unsupported media type reply
  *   - stop() when not running (no-op)
@@ -200,16 +199,6 @@ describe('TelegramBot — additional branch coverage', () => {
       const api = await command(bot, '/unwatch');
       expect(stopSpy).toHaveBeenCalledExactlyOnceWith(12345);
       expect(api).toHaveBeenCalledWith('sendMessage', expect.objectContaining({ chat_id: 12345, text: 'Not watching anything.' }));
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // /abort — various paths
-  // -------------------------------------------------------------------------
-  describe('/abort command paths via watchManager', () => {
-    test('watchManager.getWatched returns undefined for unwatched chat', () => {
-      const wm = (bot as unknown as { watchManager: { getWatched: (id: number) => string | undefined } }).watchManager;
-      expect(wm.getWatched(12345)).toBeUndefined();
     });
   });
 

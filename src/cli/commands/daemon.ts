@@ -95,7 +95,6 @@ export function formatTaskCompletion(
     header,
     `trigger=${record.trigger} duration=${durationSec}s`,
   ];
-  if (record.gateRecoveryNote) lines.push(record.gateRecoveryNote);
   if (record.modelFallbackNote) lines.push(record.modelFallbackNote);
   if (record.skipReason) lines.push(`skipReason=${record.skipReason}`);
   if (record.errorMessage) {

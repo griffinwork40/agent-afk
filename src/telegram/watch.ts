@@ -195,8 +195,7 @@ export class SessionWatchManager {
 
   /**
    * The session id that `chatId` is currently watching, or undefined.
-   * Alias for {@link watching} — exposed under the name the `/abort` handler
-   * uses so the call site reads clearly.
+   * Alias for {@link watching}, named for call sites that read the watched id.
    */
   getWatched(chatId: number): string | undefined {
     return this.watches.get(chatId)?.sessionId;
@@ -328,10 +327,8 @@ export class SessionWatchManager {
             nudges += 1;
             const mins = Math.round((Date.now() - elicitStartedAt) / 60_000);
             void send(
-              // NB: do NOT advertise /abort here — over the watch relay /abort only
-              // writes an abort_request to the ledger for the REPL; it does NOT
-              // settle this awaited elicitation (only /unwatch or shutdown fires the
-              // per-run signal → decline). Advertising it would wedge the chat.
+              // NB: only /unwatch or shutdown fires the per-run signal (→ decline)
+              // that settles this awaited elicitation, so that is what we advertise.
               `⏳ Still waiting on your answer (${mins}m elapsed) — no deadline, reply above whenever you're ready. (Send /unwatch to stop watching this session.)`,
             ).catch(() => {});
           }, this.elicitHeartbeatMs);

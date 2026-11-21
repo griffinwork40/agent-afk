@@ -1,25 +1,29 @@
 ---
 title: "Choose a permission mode"
-description: "Understand the default bypass mode, path approval, plan mode, and autonomous safety gates."
+description: "Understand the bypass baseline, plan mode, and path approval."
 ---
 
-A new CLI installation starts in `bypassPermissions`: the agent can use file tools outside the working directory without a path approval prompt. Choose `default` when you want out-of-root file access to require approval. Neither mode is a sandbox or a per-command confirmation system.
+A new CLI installation starts in `bypassPermissions`: the agent can use file tools outside the working directory without a path approval prompt. Neither mode is a sandbox or a per-command confirmation system.
 
-## Start with path approval
+<Callout type="info">
+**Upgrading from v5?** A config file that sets `"permissionMode": "autonomous"` or `"permissionMode": "default"` now runs in `bypassPermissions` and prints one warning. Those modes were removed in v6. Set `"permissionMode": "plan"` for a read-only session.
+</Callout>
+
+## Start with plan mode
 
 ```bash
-afk config set permissionMode default
+afk config set permissionMode plan
 afk i
 ```
 
-The setting takes effect in new sessions. For a single run, use `afk i --permission-mode default` or `afk chat "Inspect this project" --permission-mode default`. The `--dangerously-skip-permissions` flag forces bypass mode for a run. An unconfigured CLI uses bypass mode; the daemon also runs unattended in bypass mode. Check the active mode in the REPL status line (`⚡ bypass` for bypass).
+The setting takes effect in new sessions. For a single run, use `afk i --permission-mode plan` or `afk chat "Inspect this project" --permission-mode plan`. The `--dangerously-skip-permissions` flag forces bypass mode for a run. An unconfigured CLI uses bypass mode; the daemon also runs in bypass mode. Check the active mode in the REPL status line (`⚡ bypass` for bypass, `● plan` for plan).
 
 | Mode | Behavior |
 |---|---|
 | `bypassPermissions` | New-install CLI default. No path containment or out-of-root approval for file tools. |
-| `default` | File tools within granted roots run; access outside them asks for approval on an interactive surface. No per-bash-command confirmation. |
 | `plan` | Read-only investigation, with write-class tools blocked until the plan is approved. |
-In an interactive session, **Shift+Tab** cycles `default → plan → bypassPermissions → default`. Use Shift+Tab to enter bypass during a session. `/plan` controls plan mode. The `--dangerously-skip-permissions` flag does not make irreversible actions safe.
+
+In an interactive session, **Shift+Tab** cycles between `plan` and `bypassPermissions`. Use Shift+Tab to toggle plan mode during a session. `/plan` also controls plan mode. The `--dangerously-skip-permissions` flag does not make irreversible actions safe.
 
 ## What path approval covers
 
