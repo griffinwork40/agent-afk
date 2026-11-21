@@ -84,7 +84,7 @@ function isValidRecord(v: unknown): v is IdentityRecord {
     typeof r['pubkey'] !== 'string' || !/^[0-9a-f]{64}$/.test(r['pubkey']) ||
     typeof r['privateKeyPkcs8'] !== 'string' || r['privateKeyPkcs8'].length === 0 ||
     typeof r['tag'] !== 'string' || !/^[0-9a-f]{4}$/.test(r['tag']) ||
-    typeof r['name'] !== 'string' || r['name'].length === 0 ||
+    typeof r['name'] !== 'string' || !validateName(r['name']).ok ||
     typeof r['nameChangedAt'] !== 'number' || !Number.isSafeInteger(r['nameChangedAt']) || r['nameChangedAt'] < 0
   ) return false;
   // acceptedNoticeVersion: null OR a positive safe integer
