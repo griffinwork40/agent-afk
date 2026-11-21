@@ -14,7 +14,6 @@
  */
 
 import type { HookContext, HookDecision, HookHandler } from './hooks.js';
-import type { PermissionMode } from './types/sdk-types.js';
 import { debugLog } from '../utils/debug.js';
 
 /**
@@ -48,11 +47,6 @@ export const TERMINAL_STATE_GATE_CORRECTION =
 
 export interface TerminalStateGateOptions {
   /**
-   * Live permission-mode getter. The gate only fires in `'autonomous'` (AFK)
-   * mode; in every other mode it is a no-op (a human is watching).
-   */
-  getPermissionMode: () => PermissionMode;
-  /**
    * Live enable getter — reads the human-tier `enforceDoneEvidence` config on
    * every turn (so a mid-session config change takes effect without restart,
    * matching `telegram.verifyDone`'s fresh-read semantics). Default off.
@@ -69,9 +63,9 @@ export interface TerminalStateGateOptions {
  * Build the terminal-state gate hook handler. Register on the `'Stop'` event.
  *
  * Returns `{ injectContext }` only when ALL hold: the feature is enabled, the
- * session is in autonomous mode, the completed turn's verdict is `Done`, the
- * turn produced no corroborating evidence, and the per-session injection budget
- * is not exhausted. Otherwise returns `{}` (no-op — never blocks).
+ * completed turn's verdict is `Done`, the turn produced no corroborating
+ * evidence, and the per-session injection budget is not exhausted. Otherwise
+ * returns `{}` (no-op — never blocks).
  */
 export function createTerminalStateGate(opts: TerminalStateGateOptions): HookHandler {
   const cap = opts.maxInjectionsPerSession ?? DEFAULT_MAX_TERMINAL_STATE_INJECTIONS;
@@ -86,9 +80,8 @@ export function createTerminalStateGate(opts: TerminalStateGateOptions): HookHan
 
   return (context: HookContext): HookDecision => {
     if (context.event !== 'Stop') return {};
-    // Cheap gates first; config/mode reads before touching the verdict.
+    // Cheap gate first; config read before touching the verdict.
     if (!opts.isEnabled()) return {};
-    if (opts.getPermissionMode() !== 'autonomous') return {};
     if (context.terminalState !== 'done') return {};
     // Fire ONLY when code was changed but not verified — the one shape where
     // the correction ("run a verification step") is actionable. Other shapes:

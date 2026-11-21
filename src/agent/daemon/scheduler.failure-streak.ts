@@ -15,7 +15,7 @@ export const DEFAULT_FAILURE_STREAK_THRESHOLD = 3;
 /** Further failures between reminder decisions after the first escalation. */
 export const REESCALATION_INTERVAL = 10;
 
-/** Both execution errors and unrecovered gate blocks advance the streak. */
+/** Execution errors advance the streak; so do legacy `'blocked'` rows read from old telemetry. */
 export function isFailureStatus(status: TelemetryRecord['status']): boolean {
   return status === 'error' || status === 'blocked';
 }

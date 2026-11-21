@@ -70,7 +70,7 @@ export interface ResumeHistoryTurn {
  * at `src/cli/commands/interactive/loop-iteration.ts`.
  */
 export interface PlanExitControls {
-  /** Flip the live session permission mode on approval (e.g. 'default' | 'bypassPermissions'). */
+  /** Flip the live session permission mode on approval (e.g. 'plan' | 'bypassPermissions'). */
   setPermissionMode(mode: PermissionMode): Promise<void>;
   /**
    * Queue the crafted implement-turn message AND the approved mode for the REPL
@@ -81,11 +81,10 @@ export interface PlanExitControls {
   /**
    * The permission mode the session was in immediately BEFORE it entered plan
    * mode — captured by `AgentSession.setPermissionMode` on the flip into 'plan'.
-   * An approved exit restores THIS mode instead of forcing 'default', so a user
-   * who was (say) in bypass before planning lands back in bypass. Returns
-   * `undefined` when nothing was captured (the session started in plan, or the
-   * prior mode was 'autonomous' — AFK has dedicated enter/exit machinery and is
-   * not restorable by a bare flip); callers fall back to 'default'.
+   * An approved exit restores THIS mode, so a user who was (say) in bypass
+   * before planning lands back in bypass. Returns `undefined` when nothing was
+   * captured (the session started in plan); callers fall back to
+   * 'bypassPermissions'.
    */
   getPrePlanMode(): PermissionMode | undefined;
   /**

@@ -87,21 +87,16 @@ export class PlanExitBridge {
         // stashed on the hop instead of the default itself. `modeBeforeDefault`
         // is turn-scoped, so this only fires for an uninterrupted gesture.
         const effectivePrev =
-          current === 'default' && this.modeBeforeDefault !== undefined
+          this.modeBeforeDefault !== undefined
             ? this.modeBeforeDefault
             : current;
-        this.prePlanMode = effectivePrev === 'autonomous' ? undefined : effectivePrev;
+        this.prePlanMode = effectivePrev;
       }
-    } else if (mode === 'default') {
-      // Stash the privileged mode being left so the NEXT `default → plan` press
-      // in the same Shift+Tab gesture can see past this transient default. Only
-      // privileged non-plan modes are worth restoring; default/plan are not.
-      this.modeBeforeDefault =
-        current !== 'default' && current !== 'plan' ? current : undefined;
     } else {
-      // Landing on a concrete working mode (bypass / acceptEdits / …) ends any
-      // in-flight ring gesture toward plan — drop the transient-default memory.
-      this.modeBeforeDefault = undefined;
+      // Non-plan mode: stash the current mode so a subsequent plan-entry can
+      // restore past this transient hop, then drop any in-flight ring memory
+      // when landing on a concrete working mode (bypass / acceptEdits / …).
+      this.modeBeforeDefault = current !== 'plan' ? current : undefined;
     }
   }
 

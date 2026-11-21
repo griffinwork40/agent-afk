@@ -3,6 +3,7 @@
  * Forks three subagents in parallel to test, lint, and review design.
  */
 
+import { mintChildGate } from './child-gate.js';
 import { z } from 'zod';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure } from '../../../agent/subagent/result.js';
@@ -74,6 +75,7 @@ async function forkVerifyMode(
       model: defaultSubagentModel,
       systemPrompt: verifyPrompt,
       apiKey: resolveCredentialForModel(defaultSubagentModel),
+      ...mintChildGate(parentSessionId, `mint-verify-${mode}`), // surface approval gate
     },
     idPrefix: `mint-verify-${mode}`,
     agentType: `mint-verify-${mode}`,

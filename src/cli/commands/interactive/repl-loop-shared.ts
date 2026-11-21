@@ -83,7 +83,6 @@ export function buildPrompt(mode: PermissionMode, buffer = ''): string {
   const base = palette.brand('afk');
   const marker =
     mode === 'plan' ? palette.warning(' ●') :
-    mode === 'autonomous' ? palette.info(' ◐') :
     mode === 'bypassPermissions' ? palette.bypass(' ⚡ bp') :
     '';
   // Shell passthrough is a distinct input mode: once `!` is the first buffer

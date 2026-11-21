@@ -10,7 +10,6 @@
  * @module agent/daemon/scheduler.execute-agent-task
  */
 
-import { gateBlockReason, gateRecoveryNote, hasRecoveredFromGate, type GateBlockCounter } from './scheduler-gate-recovery.js';
 import { makeDaemonElicitationHandler } from './handoff-wiring.js';
 import { makeCronElicitationHandler } from './scheduler.elicitation-notify.js';
 import { resumeContextFromTask } from './handoff-resume-context.js';
@@ -61,7 +60,7 @@ export interface AgentTaskContext {
   queueDir: string;
   idleDetector: IdleDetector;
   now: () => number;
-  spawnSession: (task: ScheduledTask, trigger: TelemetryTrigger, gateBlockCounter?: GateBlockCounter) => Promise<{
+  spawnSession: (task: ScheduledTask, trigger: TelemetryTrigger) => Promise<{
     session: AgentSession;
     memoryStore: MemoryStore;
     stateStore: StateStore;
@@ -84,7 +83,6 @@ export interface AgentTaskContext {
 /** What one successful attempt hands back to the telemetry writer. */
 interface AttemptResult {
   responseText: string;
-  recovered: boolean;
   doneUnverified: boolean;
   /** Set when a cron-task elicitation was declined and a handoff written. */
   elicitationMessage?: string;
@@ -121,17 +119,11 @@ export async function executeAgentTask(
     ...(task.name !== undefined ? { name: task.name } : {}),
   };
   const policy = resolveTaskRetryPolicy(task);
-  // Shared counter incremented by the trace shim on every AFK-gate hard-block
-  // during this run (#3466). A single object is created per executeAgentTask
-  // call (one per tick) and passed through spawnSession so the counting shim
-  // in session-spawn.ts can update it. Retries share the same counter so
-  // gateBlocks reflects the total across all attempts.
-  const gateBlockCounter: GateBlockCounter = { count: 0 };
   // Keep the latest switch across attempts, including attempts that throw.
   const fallbackFields: ModelFallbackFields = {};
   ctx.idleDetector.increment();
   try {
-    const outcome = await runWithTaskRetry(() => runAgentAttempt(ctx, task, trigger, fallbackFields, gateBlockCounter), {
+    const outcome = await runWithTaskRetry(() => runAgentAttempt(ctx, task, trigger, fallbackFields), {
       ...policy,
       signal: ctx.shutdownSignal ?? new AbortController().signal,
       ...(ctx.isCancelled !== undefined ? { isCancelled: ctx.isCancelled } : {}),
@@ -147,10 +139,6 @@ export async function executeAgentTask(
       } : {}),
     });
     const attemptsField = policy.maxAttempts > 1 ? { attempts: outcome.attempts } : {};
-    const gateBlocksField = gateBlockCounter.count > 0 ? {
-      gateBlocks: gateBlockCounter.count,
-      ...(gateBlockCounter.calls?.length ? { gateBlockCalls: gateBlockCounter.calls } : {}),
-    } : {};
     if (!outcome.ok) {
       const record: TelemetryRecord = {
         ...baseRecord,
@@ -159,26 +147,20 @@ export async function executeAgentTask(
         errorMessage: redactInlineSecrets(errorMessage(outcome.error)),
         ...fallbackFields,
         ...attemptsField,
-        ...gateBlocksField,
       };
       ctx.writeTelemetry(record, task);
       return record;
     }
-    const { responseText, recovered, doneUnverified, elicitationMessage } = outcome.value;
-    const status = gateBlockCounter.count > 0 && !recovered ? 'blocked' : 'success';
-    const recoveryNote = gateBlockCounter.count > 0 && recovered ? gateRecoveryNote(gateBlockCounter) : undefined;
+    const { responseText, doneUnverified, elicitationMessage } = outcome.value;
     const record: TelemetryRecord = {
       ...baseRecord,
       durationMs: ctx.now() - startTimeMs,
-      status,
-      ...(status === 'blocked' ? { errorMessage: gateBlockReason(gateBlockCounter) } : {}),
-      ...(recoveryNote !== undefined ? { gateRecoveryNote: recoveryNote } : {}),
+      status: 'success',
       ...fallbackFields,
       responseExcerpt: responseText.length > 280
         ? `${responseText.slice(0, 280)}… [truncated]`
         : responseText,
       ...attemptsField,
-      ...gateBlocksField,
     };
     // When a cron-task elicitation was declined, pass the task-aware
     // notification message as responseText so onTaskComplete routes it
@@ -207,7 +189,6 @@ async function runAgentAttempt(
   task: ScheduledTask,
   trigger: TelemetryTrigger,
   fallbackFields: ModelFallbackFields,
-  gateBlockCounter?: GateBlockCounter,
 ): Promise<AttemptResult> {
   let session: AgentSession | null = null;
   let memoryStore: MemoryStore | null = null;
@@ -222,7 +203,7 @@ async function runAgentAttempt(
   let elicitationKey = '';
   let handlerInstalled = false;
   try {
-    const spawned = await ctx.spawnSession(task, trigger, gateBlockCounter);
+    const spawned = await ctx.spawnSession(task, trigger);
     session = spawned.session;
     memoryStore = spawned.memoryStore;
     stateStore = spawned.stateStore;
@@ -303,7 +284,6 @@ async function runAgentAttempt(
     }
     return {
       responseText,
-      recovered: hasRecoveredFromGate(response, session.abortSignal?.aborted === true),
       doneUnverified: probeDoneUnverified(ctx, responseText, response),
       elicitationMessage,
     };

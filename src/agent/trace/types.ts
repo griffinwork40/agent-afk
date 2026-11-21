@@ -340,7 +340,10 @@ export interface HookDecisionPayload {
   injectedContextBytes?: number;
   /** Set only by the AFK high-risk approval gate. Wall-clock ms from gate entry to decision. */
   durationMs?: number;
-  /** Set only by the AFK high-risk approval gate. Fine-grained approval outcome. */
+  /**
+   * Legacy: written only by the removed AFK high-risk approval gate. Nothing
+   * writes it now; kept so traces recorded before the removal still parse.
+   */
   approvalOutcome?: AfkApprovalOutcome;
   /**
    * Named risk category from the classifier — the stable "why" dimension for

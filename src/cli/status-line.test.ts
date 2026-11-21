@@ -1082,26 +1082,6 @@ describe('StatusLine narrow-terminal priority drop', () => {
     status.stop();
   });
 
-  it('with AFK mode: never drops the AFK indicator', () => {
-    stream.columns = 30;
-    const status = new StatusLine({
-      stream: stream as unknown as NodeJS.WriteStream,
-      throttleMs: 0,
-    });
-    status.start();
-    stream.writes.length = 0;
-    status.repaint({
-      model: 'sonnet',
-      cwd: '/tmp',
-      cost: 0.05,
-      tokens: 1200,
-      permissionMode: 'autonomous',
-    });
-    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
-    expect(out).toContain('◐ AFK');
-    expect(out).not.toContain('tok');
-    status.stop();
-  });
 });
 
 describe('StatusLine cwd/branch worktree dedupe', () => {
@@ -1550,64 +1530,8 @@ describe('StatusLine — active agent fan-out count', () => {
   });
 });
 
-describe('StatusLine — lastHeldCategory (#3900)', () => {
-  // Minimal helpers reused from the narrow-terminal block above.
-  function wideStreamLocal(cols: number) {
-    const writes: string[] = [];
-    return {
-      isTTY: true,
-      columns: cols,
-      rows: 24,
-      write(s: string) { writes.push(s); return true; },
-      writes,
-    };
-  }
-  const ANSI_RE = /\x1b\[[0-9;]*m/g;
-  function stripped(s: string) { return s.replace(ANSI_RE, ''); }
 
-  it('shows [workspace-write] chip in autonomous mode', () => {
-    const stream = wideStreamLocal(120);
-    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
-    status.start(); stream.writes.length = 0;
-    status.repaint({ model: 'sonnet', permissionMode: 'autonomous', lastHeldCategory: 'workspace-write' });
-    const out = stripped(stream.writes.join(''));
-    expect(out).toContain('[workspace-write]');
-  });
 
-  it('does not show lastHeldCategory in non-autonomous modes', () => {
-    const stream = wideStreamLocal(120);
-    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
-    status.start(); stream.writes.length = 0;
-    status.repaint({ model: 'sonnet', permissionMode: 'bypassPermissions', lastHeldCategory: 'workspace-write' });
-    const out = stripped(stream.writes.join(''));
-    expect(out).not.toContain('[workspace-write]');
-  });
-
-  it('omits the chip when lastHeldCategory is undefined', () => {
-    const stream = wideStreamLocal(120);
-    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
-    status.start(); stream.writes.length = 0;
-    status.repaint({ model: 'sonnet', permissionMode: 'autonomous' });
-    const out = stripped(stream.writes.join(''));
-    expect(out).not.toMatch(/\[.*\]/);
-  });
-
-  it('drops the chip before contextPct on narrow terminals', () => {
-    // At 30 cols only model + mode chip fit; category chip should be shed first.
-    const stream = wideStreamLocal(30);
-    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
-    status.start(); stream.writes.length = 0;
-    status.repaint({
-      model: 'sonnet',
-      permissionMode: 'autonomous',
-      lastHeldCategory: 'workspace-write',
-      contextPct: 0.5,
-    });
-    const out = stripped(stream.writes.join(''));
-    // The model name must still be present.
-    expect(out).toContain('sonnet');
-  });
-});
 
 describe('StatusLine — AFK_CENTER_CONTENT centering', () => {
   /** Wide mock stream: 200 cols, so centering (measure=100) gives a 50-col left margin. */

@@ -428,9 +428,9 @@ export function createBashHandler(
 }
 
 /**
- * Default bash handler using the `'default'` permission mode.
+ * Default bash handler using the `'bypassPermissions'` permission mode.
  * Retained for backward compatibility with code that imports `bashHandler`
  * directly (e.g. unit tests, external plugins). Production sessions should
  * use {@link createBashHandler} with the session's actual permission mode.
  */
-export const bashHandler: ToolHandler = createBashHandler('default');
+export const bashHandler: ToolHandler = createBashHandler('bypassPermissions');

@@ -3,24 +3,13 @@
  *
  * `cyclePermissionMode` advances the two-stop ring: plan ↔ bypassPermissions.
  * `default` has been removed — `bypassPermissions` is the baseline mode.
- * AFK (`autonomous`) is excluded from the ring: if the session is already in
- * autonomous, the cycle exits it via `toggleAfkMode(ctx, false)` (mocked here)
- * rather than stepping to a ring mode — never entering AFK on a keypress.
  * plan/bypass transitions are pure setPermissionMode flips with the same
  * rejection contract as togglePlanMode (leave stats unchanged + surface error).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { cyclePermissionMode, PERMISSION_CYCLE } from './permission-mode-cycle.js';
-import { toggleAfkMode } from './afk-mode-toggle.js';
 import type { SessionStats, SlashContext } from './slash/types.js';
-
-// AFK's heavy enter/exit machinery is out of scope here — stub the helper so we
-// can assert the cycle DELEGATES the autonomous-exit to it (rather than firing a
-// raw setPermissionMode that would leak the abort-watcher / strand presence).
-vi.mock('./afk-mode-toggle.js', () => ({
-  toggleAfkMode: vi.fn(async () => {}),
-}));
 
 function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
   return {
@@ -69,7 +58,7 @@ function makeCtx(opts: {
 
 describe('cyclePermissionMode', () => {
   beforeEach(() => {
-    vi.mocked(toggleAfkMode).mockClear();
+    vi.clearAllMocks();
   });
 
   it('ring constant is [plan, bypassPermissions] and excludes autonomous', () => {
@@ -102,16 +91,6 @@ describe('cyclePermissionMode', () => {
     expect(lines.join('\n').toLowerCase()).toContain('bypass on');
   });
 
-  it('autonomous (AFK) → exits via toggleAfkMode(ctx, false), never a raw setPermissionMode', async () => {
-    const stats = makeStats({ permissionMode: 'autonomous' });
-    const { ctx, sess } = makeCtx({ stats });
-
-    await cyclePermissionMode(ctx);
-
-    expect(toggleAfkMode).toHaveBeenCalledWith(ctx, false);
-    expect(sess.setPermissionMode).not.toHaveBeenCalled();
-  });
-
   it('out-of-ring mode (e.g. acceptEdits) falls back to plan (index 0)', async () => {
     const stats = makeStats({ permissionMode: 'acceptEdits' });
     const { ctx, sess } = makeCtx({ stats });
@@ -120,7 +99,6 @@ describe('cyclePermissionMode', () => {
 
     expect(sess.setPermissionMode).toHaveBeenCalledWith('plan');
     expect(stats.permissionMode).toBe('plan');
-    expect(toggleAfkMode).not.toHaveBeenCalled();
   });
 
   it('deprecated default mode falls back to plan (index 0)', async () => {

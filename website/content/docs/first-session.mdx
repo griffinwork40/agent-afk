@@ -28,24 +28,22 @@ The prompt is submitted automatically, not left as an editable draft. The termin
 <Step>
 ### Choose your permission mode
 
-A new CLI installation starts in `bypassPermissions`, which disables path containment and path approvals. To start with path approvals enabled, use:
+A new CLI installation starts in `bypassPermissions`, which disables path containment. To start in read-only plan mode instead, use:
 
 ```bash
-afk --permission-mode default
+afk --permission-mode plan
 ```
 
 To make that choice persistent for future CLI sessions:
 
 ```bash
-afk config set permissionMode default
+afk config set permissionMode plan
 ```
 
-In the REPL, Shift+Tab cycles through `default`, `plan`, and `bypassPermissions`. Check the mode indicator before submitting work. Plan mode refuses writes and mutating shell commands; bypass mode turns path containment off. The `autonomous` mode is separate and is not part of the Shift+Tab cycle.
-
-When a file tool in `default` mode requests access outside the granted roots, you see a **Path access approval** prompt identifying the tool and path. Choose once, for this session, a persistent grant, or deny. Prefer the narrowest grant you need.
+In the REPL, Shift+Tab toggles between `plan` and `bypassPermissions`. Check the mode indicator before submitting work. Plan mode refuses writes and mutating shell commands; bypass mode turns path containment off.
 
 <Callout type="warn">
-Path approval is not a confirmation prompt for every action and is not an OS sandbox. Shell access has separate restrictions. Read [Permissions](/configuration/permissions) and [Safety](/concepts/safety) before using sensitive files or unattended workflows.
+Neither mode is a confirmation prompt for every action or an OS sandbox. Shell access has separate restrictions. Read [Permissions](/configuration/permissions) and [Safety](/concepts/safety) before using sensitive files or unattended workflows.
 </Callout>
 </Step>
 <Step>

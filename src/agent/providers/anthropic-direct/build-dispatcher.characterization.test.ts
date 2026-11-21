@@ -183,13 +183,12 @@ describe('buildDispatcher characterization (#824) — schemas', () => {
 });
 
 describe('buildDispatcher characterization (#824) — permissions and options', () => {
-  it('derives allowAll from the permission mode (bypassPermissions / autonomous only)', () => {
+  it('derives allowAll from the permission mode (bypassPermissions only)', () => {
     expect((build(new AnthropicDirectProvider(), 'default') as any)._allowAll).toBe(false);
     expect((build(new AnthropicDirectProvider(), 'plan') as any)._allowAll).toBe(false);
     expect(
       (build(new AnthropicDirectProvider(), 'bypassPermissions') as any)._allowAll,
     ).toBe(true);
-    expect((build(new AnthropicDirectProvider(), 'autonomous') as any)._allowAll).toBe(true);
   });
 
   it('leaves permissions undefined (allow-all) when no allowlist is configured', () => {
