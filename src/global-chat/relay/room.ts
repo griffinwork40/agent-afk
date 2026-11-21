@@ -1,5 +1,5 @@
 import {
-  BACKLOG_SIZE, CLOCK_SKEW_MS, NAME_CHANGE_INTERVAL_MS,
+  BACKLOG_SIZE, CLOCK_SKEW_MS,
   canonicalHello, type ClientFrame,
 } from '../protocol.js';
 import { verify } from '../crypto.js';
@@ -32,6 +32,8 @@ export const KEY_REGISTRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 // Twenty new identities/hour/address tolerates shared networks, but caps registry churn.
 export const KEY_REGISTRATION_WINDOW_MS = 60 * 60 * 1000;
 export const KEY_REGISTRATION_LIMIT = 20;
+// The 24h user rule belongs to the identity store. Relay only prevents rapid churn.
+export const RELAY_NAME_CHANGE_INTERVAL_MS = 10 * 60 * 1000;
 
 export class Room {
   // In-memory rate limiters -- intentionally not persisted (see Invariant above).
@@ -176,11 +178,10 @@ export class Room {
       });
       keyRecord = { pubkey: frame.pubkey, name: frame.name, firstSeenAt: now, nameChangedAt: 0, lastSeenAt: now };
     } else if (keyRecord.name !== frame.name) {
-      const baseline = keyRecord.nameChangedAt > 0 ? keyRecord.nameChangedAt : keyRecord.firstSeenAt;
-      const elapsed = now - baseline;
-      if (elapsed < NAME_CHANGE_INTERVAL_MS && !isMaintainer) {
+      const elapsed = now - keyRecord.nameChangedAt;
+      if (keyRecord.nameChangedAt > 0 && elapsed < RELAY_NAME_CHANGE_INTERVAL_MS && !isMaintainer) {
         return makeEffect(conn, { toSender: [err('name_change_too_soon', 'Name change too soon',
-          { retryAfterMs: NAME_CHANGE_INTERVAL_MS - elapsed })] });
+          { retryAfterMs: RELAY_NAME_CHANGE_INTERVAL_MS - elapsed })] });
       }
       keyRecord = { ...keyRecord, name: frame.name, nameChangedAt: now };
     }

@@ -5,7 +5,7 @@
 // from the package barrel -- only Room uses them.
 
 import {
-  CLOCK_SKEW_MS, MAX_LINKS, MAX_TEXT_CHARS, NAME_CHANGE_INTERVAL_MS,
+  CLOCK_SKEW_MS, MAX_LINKS, MAX_TEXT_CHARS,
   REPORT_THRESHOLD, RETENTION_MS,
   canonicalAdmin, canonicalPost, canonicalReport,
   type AdminFrame, type ClientFrame, type ErrorFrame, type Msg, type RoomMode,
@@ -225,4 +225,4 @@ async function adminMode(arg: string, conn: ConnRecord, store: RelayStore): Prom
 }
 
 // Also export retention prune helper used by room.ts
-export { RETENTION_MS, NAME_CHANGE_INTERVAL_MS };
+export { RETENTION_MS };

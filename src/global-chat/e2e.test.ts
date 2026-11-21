@@ -287,7 +287,7 @@ describe('GlobalChatClient <-> Room e2e', () => {
     a.client.close();
   });
 
-  it('display name can be created; renaming immediately is refused on both sides', async () => {
+  it('client owns the 24h rename rule while relay only backstops observed rapid changes', async () => {
     const t0 = Date.now();
     // Client side: immediate rename refused
     const { store, dir } = await tempStore({ name: 'alice', now: () => t0 });
@@ -299,7 +299,7 @@ describe('GlobalChatClient <-> Room e2e', () => {
       expect((r1.retryAfterMs ?? 0)).toBeGreaterThan(0);
     }
 
-    // Relay side: second hello from same key with new name, inside interval
+    // Relay side: first observed name change starts the abuse-backstop clock.
     // Connect alice at t0 to seed the relay's key record
     relay.setTime(t0);
     const { dir: d2, store: s2 } = await tempStore({ name: 'alice', now: () => t0 });
@@ -317,33 +317,26 @@ describe('GlobalChatClient <-> Room e2e', () => {
     const r3 = await s3.rename('alice2');
     expect(r3.ok).toBe(true);
 
-    // Reconnect at relay time t0 — relay has firstSeenAt=t0, nameChangedAt=0
-    // elapsed = t0 - t0 = 0 < interval -> refused
+    // Relay observes a valid local rename immediately after first hello.
     relay.setTime(t0);
-    const end2 = new ClientEnd();
-    const connId2 = relay.register(end2, 'ip-a2');
-    const frozenStore = new FileIdentityStore({
-      filePath: join(d2, 'identity.json'),
-      now: () => t0,
-    });
-    const client2 = new GlobalChatClient({
-      url: 'ws://localhost/global', identity: frozenStore,
-      WebSocket: relay.socketFactory(end2), now: () => t0,
-    });
-    const errP = awaitError(client2);
-    await client2.connect();
-    end2.triggerOpen();
-    await tick(30); // hello sign completes
-    await relay.flush(connId2); // relay sends name_change_too_soon error
-    await tick(10);
+    const renamed = await connect(relay, s3, d2, 'ip-a2');
+    expect(renamed.welcome.you.name).toBe('alice2');
+    renamed.client.close();
+
+    // A second observed change inside ten minutes hits only the abuse backstop.
+    const s4 = new FileIdentityStore({ filePath: join(d2, 'identity.json'),
+      now: () => t0 + 2 * NAME_CHANGE_INTERVAL_MS + 2 });
+    expect((await s4.rename('alice3')).ok).toBe(true);
+    const end3 = new ClientEnd();
+    const connId3 = relay.register(end3, 'ip-a3');
+    const client3 = new GlobalChatClient({ url: 'ws://localhost/global', identity: s4,
+      WebSocket: relay.socketFactory(end3), now: () => t0 });
+    const errP = awaitError(client3);
+    await client3.connect(); end3.triggerOpen(); await tick(30);
+    await relay.flush(connId3); await tick(10);
     const err = await errP;
     expect(err.code).toBe('name_change_too_soon');
-    client2.close();
-
-    // Contract note: client uses nameChangedAt (set at create()) as baseline;
-    // relay uses max(nameChangedAt>0 ? nameChangedAt : firstSeenAt).  For a
-    // brand-new key (nameChangedAt=0 on the relay), relay uses firstSeenAt,
-    // which mirrors the client's create-time clock.  Both sides refuse an
-    // immediate rename -- they agree on the outcome.
+    expect(err.retryAfterMs).toBe(600_000);
+    client3.close();
   });
 });

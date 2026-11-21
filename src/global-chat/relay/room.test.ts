@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { Room, countDistinctKeys, KEY_REGISTRATION_LIMIT, KEY_REGISTRATION_WINDOW_MS } from './room.js';
+import { Room, countDistinctKeys, KEY_REGISTRATION_LIMIT, KEY_REGISTRATION_WINDOW_MS, RELAY_NAME_CHANGE_INTERVAL_MS } from './room.js';
 import { MemoryRelayStore } from './store.js';
 import { generateKeyPair, importPrivateKey, sign, verifyMsg } from '../crypto.js';
 import {
@@ -256,17 +256,22 @@ describe('Room hello', () => {
     expect(e.code).toBe('banned');
   });
 
-  it('name_change_too_soon on rapid rename', async () => {
-    const allConns = new Map<string, ConnRecord>();
-    await doHello(room, 'c1', kp, 'alice', store, clock, allConns);
-    const c1 = room.onConnect('c1', 'ip1');
-    // Advance slightly (less than 24h) and try different name
-    clock.advance(1_000);
-    const frame2 = await buildHelloFrame(kp, 'alicia', clock.now());
-    const effect2 = await room.onMessage('c1', frame2, c1, allConns);
-    const e = effect2.toSender[0] as Extract<typeof effect2.toSender[0], { t: 'error' }>;
-    expect(e.code).toBe('name_change_too_soon');
-    expect(e.retryAfterMs).toBeGreaterThan(0);
+  it('first hello starts no rename clock; later observed changes have a ten-minute backstop', async () => {
+    const conns = new Map<string, ConnRecord>();
+    await doHello(room, 'c1', kp, 'alice', store, clock, conns);
+    conns.clear();
+    await doHello(room, 'c1', kp, 'alicia', store, clock, conns);
+    conns.clear();
+    clock.advance(1000);
+    const frame = await buildHelloFrame(kp, 'alison', clock.now());
+    const effect = await room.onMessage('c2', frame, room.onConnect('c2', 'ip1'), conns);
+    expect(effect.toSender[0]).toMatchObject({ code: 'name_change_too_soon',
+      retryAfterMs: RELAY_NAME_CHANGE_INTERVAL_MS - 1000 });
+    // Unchanged name reconnect remains allowed without restarting the clock.
+    await doHello(room, 'c1', kp, 'alicia', store, clock, conns);
+    conns.clear();
+    clock.advance(RELAY_NAME_CHANGE_INTERVAL_MS - 1000);
+    await doHello(room, 'c1', kp, 'alison', store, clock, conns);
   });
 
   it('allows rename after 24h', async () => {
