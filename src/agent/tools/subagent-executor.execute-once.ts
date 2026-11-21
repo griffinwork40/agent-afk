@@ -41,6 +41,7 @@ import {
   checkNestedScope,
   checkAndRunRemoteDispatch,
 } from './subagent-executor.execute-once.helpers.js';
+import { checkForkModeBackgroundGate } from './subagent-executor.execute-once.fork-gate.js';
 import { resolveChildInheritedReadRoots } from './subagent-executor.execute-once.read-scope.js';
 
 export interface ExecuteOnceArgs {
@@ -213,6 +214,8 @@ export async function executeOnce(
   const { childParentSession, childManager, nestedAgentAllowlist, modelFallback } = completeChildConfigNesting(
     childConfigArgs, preNesting, nestingCwd,
   );
+
+  { const r = checkForkModeBackgroundGate(parsed.mode, ctx.defaultConfig.skillDispatchName); if (r !== undefined) { budgetReceipt?.rollback(); return r; } } // #5177: reject background dispatch from fork-mode skill context
 
   if (parsed.mode === 'background' && childConfig.timeoutMs === undefined) {
     childConfig.timeoutMs = SUBAGENT_BACKGROUND_TIMEOUT_MS;
