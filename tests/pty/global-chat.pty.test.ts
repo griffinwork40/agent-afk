@@ -201,6 +201,10 @@ describe.skipIf(!avail.ok)('global chat view in a real pty: behaviours', () => {
       s.signal('SIGTERM');
       await s.waitForEvent('sigterm-cleaned');
       await s.waitFor(() => s.term.buffer.active.type === 'normal', 'normal buffer after SIGTERM');
+      // The exit summary printed by the REPL's own signal path lands on the
+      // main screen, not in the discarded alternate buffer.
+      expect(s.normalLines().join('\n')).toContain('GOODBYE_SUMMARY');
+      expect(s.events().find((e) => e['ev'] === 'sigterm-cleaned')?.['isRaw']).toBe(false);
       const raw = s.raw();
       expect(raw.lastIndexOf('\x1b[?25h')).toBeGreaterThan(raw.lastIndexOf('\x1b[?25l'));
     } finally { s.dispose(); }

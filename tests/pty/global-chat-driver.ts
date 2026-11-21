@@ -99,9 +99,11 @@ async function main(): Promise<void> {
   const client = new ScriptedClient(backlog(scenario === 'onboard' ? 2 : 30));
   client.live.push(msg('bob', 'LIVE_WHILE_SCROLLED from bob'), msg('mallory', HOSTILE_TEXT, 'e'.repeat(64)));
   process.on('SIGUSR2', () => client.deliverNext());
-  // Mirror interactive.signal-handlers.ts makeTermHupHandler: run the cleanup
-  // registry, then exit.
+  // Mirror the production order (signal handler -> rl.close -> handleRlClose
+  // in interactive.ts): the exit summary is printed synchronously FIRST, then
+  // the cleanup registry runs, then exit.
   const onTerm = (): void => {
+    stdout.write('GOODBYE_SUMMARY\r\n');
     void runCleanupFunctions().finally(() => {
       log({ ev: 'sigterm-cleaned', isRaw: stdin.isRaw });
       stdout.write(PTY_DONE_SENTINEL);
