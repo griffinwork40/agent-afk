@@ -33,7 +33,7 @@ const scratch = (tag: string): string => {
 const markerCmd = (marker: string): string =>
   `"${fwd(process.execPath)}" -e "require('fs').writeFileSync(process.argv[1],'x');process.stdin.pipe(process.stdout)" "${fwd(marker)}"`;
 const git = (cwd: string, ...a: string[]): string =>
-  execFileSync('git', ['-c', 'user.email=t@e', '-c', 'user.name=T', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=', ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  execFileSync('git', ['-c', 'user.email=t@e', '-c', 'user.name=T', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 function makeRepo(tag: string): string {
   const r = scratch(tag);
   git(r, 'init', '-q');
