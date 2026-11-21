@@ -778,3 +778,98 @@ describe('parseReadDenylistEntries — tilde backslash expansion (PR #1215)', ()
     expect(result[0]).toBe(join(homedir(), '.mysecrets'));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Global-chat state directory static read floor.
+//
+// ${HOME}/.afk/state/global-chat is added to BUILTIN_READ_DENYLIST as a
+// STATIC entry. The dynamic getAfkStateDir()-based path only covers the ACTIVE
+// state dir and silently drops when AFK_STATE_DIR is invalid; the static entry
+// protects the fixed default unconditionally — even when AFK_HOME relocates
+// state without AFK_STATE_DIR, when overrides are set, or when the override is
+// invalid.
+// ---------------------------------------------------------------------------
+
+describe('read-denylist — global-chat static floor', () => {
+  it('tracks relocated AFK_STATE_DIR without a cache reset, including symlinks', () => {
+    const state = join(tmpDir, 'state');
+    const gc = join(state, 'global-chat');
+    mkdirSync(gc, { recursive: true });
+    const identity = join(gc, 'identity.json');
+    writeFileSync(identity, 'private fixture');
+    expect(isReadDenied(identity).denied).toBe(false);
+    vi.stubEnv('AFK_STATE_DIR', state);
+    expect(isReadDenied(identity).denied).toBe(true);
+    expect(getReadDenylistDescendants(state)).toContain('global-chat');
+    const link = join(tmpDir, 'chat-link');
+    symlinkSync(gc, link, process.platform === 'win32' ? 'junction' : 'dir');
+    expect(isReadDenied(join(link, 'identity.json')).denied).toBe(true);
+    vi.unstubAllEnvs();
+  });
+  it('denies the default global-chat dir and children (AFK_STATE_DIR unset)', () => {
+    const gcDir = join(homedir(), '.afk', 'state', 'global-chat');
+    expect(isReadDenied(gcDir).denied).toBe(true);
+    expect(isReadDenied(join(gcDir, 'identity.json')).denied).toBe(true);
+    expect(isReadDenied(join(gcDir, 'mutes.json')).denied).toBe(true);
+    expect(isReadDenied(join(gcDir, 'subdir', 'transcript.jsonl')).denied).toBe(true);
+  });
+
+  it('does NOT deny non-global-chat state paths (preserves #544/#547/#554)', () => {
+    expect(isReadDenied(join(homedir(), '.afk', 'state', 'todos', 'x.json')).denied).toBe(false);
+    expect(isReadDenied(join(homedir(), '.afk', 'state', 'sessions', 's.json')).denied).toBe(false);
+    expect(isReadDenied(join(homedir(), '.afk', 'state', 'transcripts', 't.md')).denied).toBe(false);
+  });
+
+  // Static entry is present in BUILTIN_READ_DENYLIST verbatim.
+  it('BUILTIN_READ_DENYLIST contains the static global-chat entry', () => {
+    expect(BUILTIN_READ_DENYLIST).toContain(join(homedir(), '.afk', 'state', 'global-chat'));
+  });
+
+  // AFK_HOME relocation without AFK_STATE_DIR: state goes to <AFK_HOME>/state
+  // but the STATIC entry still covers the fixed default ${HOME}/.afk/state/global-chat.
+  it('default remains denied when AFK_HOME relocates state but AFK_STATE_DIR is unset', () => {
+    const relocated = join(tmpDir, 'afk-home-no-state-dir');
+    mkdirSync(relocated, { recursive: true });
+    process.env['AFK_HOME'] = relocated;
+    _resetReadDenylistCacheForTests();
+
+    // The static default is still denied — it does not follow AFK_HOME.
+    const defaultGc = join(homedir(), '.afk', 'state', 'global-chat');
+    expect(isReadDenied(join(defaultGc, 'identity.json')).denied).toBe(true);
+    // The dynamic floor protects the relocated state too.
+    expect(isReadDenied(join(relocated, 'state', 'global-chat', 'identity.json')).denied).toBe(true);
+  });
+
+  // Default remains denied when AFK_READ_DENYLIST overrides are set.
+  it('default remains denied when AFK_READ_DENYLIST extras are set', () => {
+    const extra = join(tmpDir, 'custom-secret');
+    mkdirSync(extra, { recursive: true });
+    process.env['AFK_READ_DENYLIST'] = extra;
+    _resetReadDenylistCacheForTests();
+
+    const gcDir = join(homedir(), '.afk', 'state', 'global-chat');
+    expect(isReadDenied(join(gcDir, 'identity.json')).denied).toBe(true);
+  });
+
+  // Invalid AFK_STATE_DIR override: static entry must NOT drop.
+  it('default remains denied when AFK_STATE_DIR is an invalid (relative) path', () => {
+    process.env['AFK_STATE_DIR'] = 'relative/not/absolute';
+    _resetReadDenylistCacheForTests();
+
+    const gcDir = join(homedir(), '.afk', 'state', 'global-chat');
+    expect(isReadDenied(join(gcDir, 'identity.json')).denied).toBe(true);
+    expect(isReadDenied(join(gcDir, 'mutes.json')).denied).toBe(true);
+  });
+
+  // getReadDenylistDescendants: grep/glob must not descend into global-chat
+  // when scanning the parent state dir.
+  it('grep/glob do not descend into global-chat from the state dir', () => {
+    const stateDir = join(homedir(), '.afk', 'state');
+    const descendants = getReadDenylistDescendants(stateDir);
+    expect(descendants).toContain('global-chat');
+  });
+});
+
+afterEach(() => {
+  delete process.env['AFK_STATE_DIR'];
+});

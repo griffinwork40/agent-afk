@@ -44,7 +44,7 @@ import { env } from '../../../config/env.js';
 import { basename, dirname, join, relative, resolve, sep } from 'path';
 import { homedir } from 'os';
 import { safeRealpath } from './write-denylist.js';
-import { getAfkHome } from '../../../paths.js';
+import { getAfkHome, getGlobalChatDir } from '../../../paths.js';
 import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
 import {
   gateDerivedCarveOuts,
@@ -86,10 +86,20 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
   // (`afk.env.bak-*`), so a file-level deny list here would be fail-OPEN —
   // every new or renamed sibling would default to readable. Non-secret members
   // are opted OUT one at a time via `READ_ALLOWLIST_REL` instead.
-  // Invariant: only `.../config` — NEVER `.../state`, which forked sub-agents
-  // must be able to read (skill-preflight inputs, todos, transcripts). Adding
-  // `.../state` here would re-break #544/#547/#554.
+  // Invariant: only `.../config` — `.../state` is NOT denied wholesale because
+  // forked sub-agents must read skill-preflight inputs, todos, transcripts, and
+  // session ledgers there (#544/#547/#554). Exception: `.../state/global-chat`
+  // is denied below — it holds identity keys and chat history that must stay
+  // protected even when AFK_STATE_DIR is relocated or invalid (the dynamic path
+  // only covers the active state dir; this static entry covers the fixed default).
   `${HOME}/.afk/config`,
+  // Global-chat identity key and message history. Floored as the whole sub-tree:
+  // identity.json (private key), mutes.json, and any session transcripts stored
+  // here are protected unconditionally. Static so the default location remains
+  // denied even when AFK_STATE_DIR is relocated or unset — the dynamic denylist
+  // entry (derived from getAfkStateDir()) only covers the ACTIVE path and silently
+  // drops when AFK_STATE_DIR is invalid; this entry has no such failure mode.
+  `${HOME}/.afk/state/global-chat`,
   // npm publish tokens and Docker registry credentials.
   `${HOME}/.npmrc`,
   `${HOME}/.docker/config.json`,
@@ -411,6 +421,12 @@ function derivedAfkHomeAllowEntries(): string[] {
   }
 }
 
+// Resolve at cache misses so AFK_HOME and AFK_STATE_DIR relocations stay protected.
+function derivedGlobalChatReadEntry(): string[] {
+  try { return [safeRealpath(resolve(getGlobalChatDir()))]; }
+  catch (err) { warnAfkHomeRejectedOnce(err); return []; }
+}
+
 function resolveLists(): {
   builtins: readonly string[];
   extras: readonly string[];
@@ -423,7 +439,7 @@ function resolveLists(): {
   // AFK_READ_DENYLIST change does — otherwise a stale denylist survives a
   // relocated AFK_HOME. Joined with U+0000, which cannot occur in either env
   // value, so the two components can never collide into an ambiguous key.
-  const key = `${env.AFK_READ_DENYLIST ?? ''}\u0000${env.AFK_HOME ?? ''}`;
+  const key = `${env.AFK_READ_DENYLIST ?? ''}\u0000${env.AFK_HOME ?? ''}\u0000${env.AFK_STATE_DIR ?? ''}`;
   if (cached && cached.key === key) return cached;
   const extras: string[] = parseReadDenylistEntries(env.AFK_READ_DENYLIST)
     .map((p) => safeRealpath(p))
@@ -437,7 +453,7 @@ function resolveLists(): {
   }));
   const derivedCarvedRoots = derivedAfkHomeReadEntry();
   const builtins = [
-    ...new Set([...resolvedBuiltinEntries.map(({ root }) => root), ...derivedCarvedRoots]),
+    ...new Set([...resolvedBuiltinEntries.map(({ root }) => root), ...derivedCarvedRoots, ...derivedGlobalChatReadEntry()]),
   ];
   // Invariant: every carve-out is gated against the builtin deny prefixes
   // BEFORE it is unioned into `allow`, because `allow` is consulted ahead of

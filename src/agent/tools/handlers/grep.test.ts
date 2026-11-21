@@ -1,10 +1,29 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { grepHandler, createGrepHandler } from './grep.js';
 import type { ToolHandlerContext } from '../types.js';
 import { _resetReadDenylistCacheForTests } from './read-denylist.js';
+
+describe('grep global-chat read floor', () => {
+  afterEach(() => { vi.unstubAllEnvs(); _resetReadDenylistCacheForTests(); });
+  it('does not descend into relocated chat state while reading safe siblings', async () => {
+    const state = mkdtempSync(join(tmpdir(), 'grep-chat-floor-'));
+    try {
+      mkdirSync(join(state, 'global-chat'));
+      mkdirSync(join(state, 'todos'));
+      writeFileSync(join(state, 'global-chat', 'identity.json'), 'floor-needle-private');
+      writeFileSync(join(state, 'todos', 'safe.txt'), 'floor-needle-safe');
+      vi.stubEnv('AFK_STATE_DIR', state);
+      const result = await grepHandler({ pattern: 'floor-needle', path: state }, new AbortController().signal);
+      expect(result.isError).not.toBe(true);
+      expect(String(result.content)).toContain('floor-needle-safe');
+      expect(String(result.content)).not.toContain('floor-needle-private');
+      expect(String(result.content)).not.toContain('identity.json');
+    } finally { rmSync(state, { recursive: true, force: true }); }
+  });
+});
 
 describe('grepHandler', () => {
   let tempDir: string;
