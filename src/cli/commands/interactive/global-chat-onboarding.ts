@@ -21,7 +21,7 @@ export const NOTICE_LINES: readonly string[] = [
   '  salted address hash for limits. It keeps that hash longer only if banned.',
   '- Reports are stored with your public key until the reported message is deleted.',
   '- AFK does not put chat text in your agent context, transcript, or logs, and',
-  '  gives the agent no chat tool. Shell access is not a sandbox.',
+  '  gives the agent no chat tool. An agent with shell access is not sandboxed.',
   '',
   'Rules: be decent, no spam, no secrets (never paste keys or tokens).',
   'Turn it off any time with /global off.',
