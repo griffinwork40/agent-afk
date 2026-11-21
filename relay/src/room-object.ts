@@ -191,7 +191,14 @@ export class ChatRoom implements DurableObject {
     const toClose = new Set(effect.toClose);
     for (const ws of this.sockets()) {
       const rec = this.record(ws);
-      if (rec && toClose.has(rec._connId)) this.closeSocket(ws, 1008, 'Connection closed by relay');
+      if (rec) {
+        for (const target of effect.toConnections ?? []) {
+          if (target.connId === rec._connId) {
+            try { ws.send(JSON.stringify(target.frame)); } catch { /* closing socket */ }
+          }
+        }
+        if (toClose.has(rec._connId)) this.closeSocket(ws, 1008, 'Connection closed by relay');
+      }
     }
     this.broadcast(effect.toBroadcast);
     const after = countDistinctKeys(this.buildAllConns());

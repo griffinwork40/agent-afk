@@ -191,9 +191,10 @@ async function adminBan(
   await store.addBan(targetKey, ipHash);
   return makeEffect(conn, {
     toClose: liveConnIds,
-    toBroadcast: liveConnIds.length > 0
-      ? [{ t: 'error', code: 'banned', message: 'You have been banned' }]
-      : [],
+    // Never broadcast a terminal banned error to innocent participants.
+    toConnections: liveConnIds.map(connId => ({ connId,
+      frame: { t: 'error', code: 'banned', message: 'You have been banned' },
+    })),
   });
 }
 

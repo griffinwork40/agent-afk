@@ -111,8 +111,8 @@ export class MemoryRelayStore implements RelayStore {
 
   async removeBan(pubkey: string): Promise<void> {
     const ipHash = this.bannedKeys.get(pubkey);
+    this.bannedKeys.delete(pubkey);
     if (ipHash) {
-      this.bannedKeys.delete(pubkey);
       // Only remove IP ban if no other key shares it
       const stillBanned = [...this.bannedKeys.values()].includes(ipHash);
       if (!stillBanned) this.bannedIps.delete(ipHash);

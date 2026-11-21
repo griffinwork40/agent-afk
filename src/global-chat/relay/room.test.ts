@@ -565,6 +565,15 @@ describe('Room presence', () => {
     expect(pres).toBeUndefined();
   });
 
+  it('closing one of two sockets for the same key does not decrement presence', async () => {
+    const kp = await generateKeyPair();
+    const allConns = new Map<string, ConnRecord>();
+    await doHello(room, 'c1', kp, 'alice', store, clock, allConns);
+    await doHello(room, 'c2', kp, 'alice', store, clock, allConns);
+    const effect = await room.onClose('c1', allConns.get('c1')!, allConns);
+    expect(effect.toBroadcast).toEqual([]);
+  });
+
   it('broadcasts presence on close when key drops to 0', async () => {
     const kp1 = await generateKeyPair();
     const allConns = new Map<string, ConnRecord>();
@@ -677,6 +686,10 @@ describe('Room bans', () => {
     const frame = await buildAdminFrame(mkp, id, clock.now(), 'ban', kp.pubkey);
     const effect = await room.onMessage('mod', frame, conn, allConns);
     expect(effect.toClose).toContain('c1');
+    expect(effect.toSender).toContainEqual({ t: 'ack', id });
+    expect(effect.toBroadcast.some(f => f.t === 'error')).toBe(false);
+    expect(effect.toConnections).toEqual([{ connId: 'c1',
+      frame: { t: 'error', code: 'banned', message: 'You have been banned' } }]);
   });
 
   it('admin ban blocks reconnect by key', async () => {
@@ -736,6 +749,14 @@ describe('Room bans', () => {
     const effect = await room.onMessage('c1', frame, conn, allConns);
     const e = effect.toSender[0] as Extract<typeof effect.toSender[0], { t: 'error' }>;
     expect(e.code).toBe('forbidden');
+    expect(e.id).toBe(id);
+  });
+
+  it('unbans an offline key that has no captured address', async () => {
+    const offline = (await generateKeyPair()).pubkey;
+    await store.addBan(offline, '');
+    await store.removeBan(offline);
+    expect(await store.isBannedKey(offline)).toBe(false);
   });
 });
 
