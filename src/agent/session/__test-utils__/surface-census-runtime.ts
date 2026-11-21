@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
-import { createRequire } from 'node:module';
+import { createRequire, isBuiltin } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { boundaries } from './surface-census-boundaries.js';
@@ -15,12 +15,37 @@ const realRequire = createRequire(import.meta.url);
 // http, ...) is a stub whose members throw when CALLED, so a builder may import
 // one but the census fails if its chain ever uses it. This is what makes "no
 // disk, no processes, no network" a check instead of a convention.
-const pureBuiltins = new Set(['node:crypto', 'node:os', 'node:path', 'node:url', 'node:util']);
+//
+// node:os is intentionally NOT passed through whole: it includes setPriority,
+// which changes the real process's scheduling priority. Only the read-only
+// members are exposed; any builder that calls a mutating member fails closed.
+const pureBuiltins = new Set(['node:crypto', 'node:path', 'node:url', 'node:util']);
+const osReadOnlyMembers = new Set([
+  'arch', 'availableParallelism', 'cpus', 'endianness', 'freemem', 'homedir',
+  'hostname', 'loadavg', 'machine', 'networkInterfaces', 'platform', 'release',
+  'tmpdir', 'totalmem', 'type', 'uptime', 'userInfo', 'version', 'constants',
+  'EOL', 'devNull',
+]);
 function nodeBuiltin(id: string, importer: string): unknown {
-  if (pureBuiltins.has(id)) return realRequire(id);
-  return new Proxy({}, {
-    get: (_target, member) => member === '__esModule' ? false : () => {
-      throw new Error(`Census sandbox: ${importer} called ${id}.${String(member)}; real ${id} access is not allowed.`);
+  // Normalise bare specifier (e.g. 'fs') to its node: form for the lookup.
+  const canonical = id.startsWith('node:') ? id : `node:${id}`;
+  if (pureBuiltins.has(canonical)) return realRequire(canonical);
+  if (canonical === 'node:os') {
+    const realOs = realRequire('node:os') as Record<string, unknown>;
+    return new Proxy(realOs, {
+      get(target, member: string | symbol) {
+        if (member === '__esModule') return true;
+        if (typeof member === 'string' && !osReadOnlyMembers.has(member)) {
+          // Mutating or unknown member: fail closed on call.
+          return () => { throw new Error(`Census sandbox: ${importer} called node:os.${member}; not in the read-only allowlist.`); };
+        }
+        return target[member as string];
+      },
+    });
+  }
+  return new Proxy({} as Record<string, unknown>, {
+    get: (_target, member: string | symbol) => member === '__esModule' ? true : () => {
+      throw new Error(`Census sandbox: ${importer} called ${canonical}.${String(member)}; real ${canonical} access is not allowed.`);
     },
   });
 }
@@ -60,7 +85,9 @@ export class SurfaceRuntime {
       fileName: filename,
     }).outputText;
     const require = (id: string): unknown => {
-      if (id.startsWith('node:')) return nodeBuiltin(id, relative);
+      // Route both node:-prefixed and bare built-in specifiers (e.g. 'fs') through
+      // the same stub so `require('fs')` is not mistaken for a relative import.
+      if (id.startsWith('node:') || isBuiltin(id)) return nodeBuiltin(id, relative);
       const target = path.posix.normalize(path.posix.join(path.posix.dirname(relative), id)).replace(/\.js$/, '.ts');
       return this.modules.includes(target) ? this.load(target) : this.boundary(target);
     };
@@ -74,7 +101,7 @@ export class SurfaceRuntime {
     const self = this;
     if (!boundaries.has(file)) throw new Error(`Unreviewed census import ${file}: execute the helper or explicitly review its boundary.`);
     this.record('boundary', [file]);
-    const fn = (name: string, result: (...args: any[]) => any) => (...args: any[]) => {
+    const fn = (name: string, result: (...args: unknown[]) => unknown) => (...args: unknown[]) => {
       self.record(name, args);
       return result(...args);
     };
@@ -133,9 +160,9 @@ export class SurfaceRuntime {
     values['createTerminalStateGate'] = () => ({});
     values['buildDaemonGetModel'] = () => () => 'sonnet';
     values['daemonDefaultCwd'] = () => 'daemon-cwd';
-    return new Proxy(values, { get(target, key: string) {
+    return new Proxy(values, { get(target, key: string | symbol) {
       if (key === '__esModule') return true;
-      if (!(key in target)) throw new Error(`Unreviewed census boundary ${file} export ${key}`);
+      if (typeof key === 'symbol' || !(key in target)) throw new Error(`Unreviewed census boundary ${file} export ${String(key)}`);
       return target[key];
     } });
   }
