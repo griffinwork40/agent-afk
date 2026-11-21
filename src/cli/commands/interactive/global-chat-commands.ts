@@ -97,7 +97,9 @@ export function parseViewCommand(line: string, state: ChatViewState): ViewComman
     }
     case 'report': {
       const m = resolveMessage(state, arg, 'report');
-      return typeof m === 'string' ? err(m) : { kind: 'report', ...m };
+      if (typeof m === 'string') return err(m);
+      if (findByN(state, m.n)?.pubkey === state.me?.pubkey) return err('You cannot report your own message.');
+      return { kind: 'report', ...m };
     }
     case 'ban': case 'unban': case 'delete': case 'mode':
       return parseAdmin(state, cmd, arg);

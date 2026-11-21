@@ -62,6 +62,13 @@ describe('/global command', () => {
     expect(h.compositor.suspendInput).not.toHaveBeenCalled();
   });
 
+  it('rejects an invalid relay URL before terminal takeover', async () => {
+    const h = harness({ relayUrl: 'ws://relay.example/v1/room/global' });
+    await h.cmd.handler(h.ctx, '');
+    expect(h.all()).toContain('AFK_GLOBAL_CHAT_URL is invalid');
+    expect(h.compositor.suspendInput).not.toHaveBeenCalled();
+  });
+
   it('opens the view with the relay url and returns after Esc', async () => {
     const h = harness();
     const p = h.cmd.handler(h.ctx, '');

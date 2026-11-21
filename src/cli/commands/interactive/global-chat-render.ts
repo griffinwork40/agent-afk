@@ -99,7 +99,7 @@ function layoutMessage(e: ChatMessageEntry, state: ChatViewState, cols: number, 
   const indent = Math.min(nWidth + 1, Math.floor(cols / 2));
   const firstWidth = cols - displayWidth(prefixPlain);
   const cells = mentionCells(e.text, isMe ? null : state.me?.name ?? null);
-  const base = (s: string): string => (isMe ? palette.user(s) : s);
+  const base = (s: string): string => e.removed ? palette.dim(s) : (isMe ? palette.user(s) : s);
   if (firstWidth < 4) {
     const rows = wrapFlagged(cells, cols - indent, cols - indent);
     return [truncateDisplayWidth(prefix, cols), ...rows.map((r) => ' '.repeat(indent) + styleRun(r, base))];
@@ -127,7 +127,7 @@ function headerLine(state: ChatViewState): string {
 }
 
 export function inputLine(state: ChatViewState, cols: number): string {
-  const count = Array.from(state.input).length;
+  const count = state.input.length;
   const counter = count >= COUNTER_FROM ? ` ${count}/${MAX_TEXT_CHARS}` : '';
   const counterStyled = count > MAX_TEXT_CHARS ? palette.error(counter) : palette.dim(counter);
   const room = Math.max(0, cols - 2 - displayWidth(counter));

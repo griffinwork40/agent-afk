@@ -21,7 +21,7 @@ import {
 import { renderChat } from './global-chat-render.js';
 import { parseKeys, splitPending, type ChatKey } from './global-chat-keys.js';
 import { relayErrorLine, submitLine, type ActionContext } from './global-chat-actions.js';
-import { renderNameScreen, renderNotice } from './global-chat-onboarding.js';
+import { NOTICE_MIN_COLUMNS, NOTICE_MIN_ROWS, renderNameScreen, renderNotice } from './global-chat-onboarding.js';
 import { explainIdentityFailure } from './global-chat-messages.js';
 import {
   defaultGuards, paintFrame, takeTerminal, type ChatCompositor, type ChatStdin, type ChatStdout, type ChatTeardownGuards,
@@ -41,6 +41,7 @@ export interface GlobalChatViewDeps {
   stdout: ChatStdout;
   /** Called once an identity exists (after onboarding when needed). */
   createClient: (identity: ChatIdentity) => ChatClient;
+  relayHost: string;
   identity: IdentityStore;
   mutes: MuteStore;
   clock: ChatClock;
@@ -96,6 +97,9 @@ function startSession(deps: GlobalChatViewDeps, pre: Preload, resolve: (o: Globa
   let pendingInput = '';
   let cancelPending: (() => void) | null = null;
   let cancelSettle: (() => void) | null = null;
+  let inputTruncated = false;
+  let outageShown = false;
+  let reconnects = 0;
 
   // Teardown is written before setup (ordered-sequence rule).
   const detach = (): void => {
@@ -149,13 +153,28 @@ function startSession(deps: GlobalChatViewDeps, pre: Preload, resolve: (o: Globa
     if (!state.me) state.me = { ...identity };
     client = deps.createClient(identity);
     actions.client = client;
+    const relayHost = deps.relayHost;
     unsubscribe = client.subscribe({
       onWelcome: (w) => { applyWelcome(state, w); paint(); },
       onMessage: (m) => { addMessage(state, m); paint(); },
       onPresence: (n) => { setOnline(state, n); paint(); },
       onDeleted: (id) => { deleteMessage(state, id); paint(); },
       onMode: (mode) => { setMode(state, mode); paint(); },
-      onStatus: (s) => { setStatus(state, s); paint(); },
+      onStatus: (s) => {
+        setStatus(state, s);
+        if (s === 'open') {
+          if (outageShown) addSystem(state, 'Connected to the relay again.');
+          outageShown = false;
+          reconnects = 0;
+        } else if (s === 'reconnecting') {
+          reconnects++;
+          if (reconnects >= 3 && !outageShown) {
+            addSystem(state, `Cannot reach ${relayHost}. Still trying. Press Esc to leave.`, 'error');
+            outageShown = true;
+          }
+        }
+        paint();
+      },
       onError: (e) => { const line = relayErrorLine(e); if (line) { addSystem(state, line, 'error'); paint(); } },
     });
     client.connect().catch(() => {
@@ -178,6 +197,9 @@ function startSession(deps: GlobalChatViewDeps, pre: Preload, resolve: (o: Globa
   const onNoticeKey = (key: ChatKey): void => {
     if (key.kind === 'escape') return finish('declined');
     if (key.kind !== 'text') return;
+    const cols = stdout.columns ?? 80;
+    const rows = stdout.rows ?? 24;
+    if (cols < NOTICE_MIN_COLUMNS || rows < NOTICE_MIN_ROWS) return;
     const c = key.text.toLowerCase();
     if (c === 'n') return finish('declined');
     if (c !== 'y') return;
@@ -191,8 +213,8 @@ function startSession(deps: GlobalChatViewDeps, pre: Preload, resolve: (o: Globa
   };
 
   const onNameKey = (p: Extract<Phase, { kind: 'name' }>, key: ChatKey): void => {
-    if (key.kind === 'escape') return finish('declined');
     if (p.busy) return;
+    if (key.kind === 'escape') return finish('declined');
     if (key.kind === 'text') p.input = (p.input + key.text.toLowerCase().replace(NAME_CHARS, '')).slice(0, 16);
     else if (key.kind === 'backspace') p.input = p.input.slice(0, -1);
     else if (key.kind === 'clear') p.input = '';
@@ -205,7 +227,12 @@ function startSession(deps: GlobalChatViewDeps, pre: Preload, resolve: (o: Globa
     const page = Math.max(1, (stdout.rows ?? 24) - 5);
     switch (key.kind) {
       case 'escape': return finish('left');
-      case 'text': appendInput(state, key.text); break;
+      case 'text':
+        if (appendInput(state, key.text) && !inputTruncated) {
+          addSystem(state, `Input was shortened to ${state.input.length} characters.`, 'error');
+          inputTruncated = true;
+        }
+        break;
       case 'backspace': backspace(state); break;
       case 'clear': clearInput(state); break;
       case 'enter': void submitLine(actions); return;

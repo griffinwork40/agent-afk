@@ -15,18 +15,21 @@ export const NOTICE_LINES: readonly string[] = [
   'Global chat: a public room for people who use AFK',
   '',
   'Before you join, here is what happens:',
-  '- Messages are public and visible to everyone in the room.',
-  '- The relay stores messages for 7 days, with your public key and display name.',
-  '- Your IP address is used only as a salted hash for rate limiting. It is',
-  '  stored only if you are banned.',
-  '- Text from other people is untrusted and is never shown to your agent.',
-  '- This room is for people, not agents. Your agent cannot read or post here.',
+  '- Messages are public. The relay stores each for 7 days with your public key',
+  '  and display name, then deletes it.',
+  '- It never stores or logs your raw IP address. While connected, it keeps a',
+  '  salted address hash for limits. It keeps that hash longer only if banned.',
+  '- Reports are stored with your public key until the reported message is deleted.',
+  '- AFK does not put chat text in your agent context, transcript, or logs, and',
+  '  gives the agent no chat tool. Shell access is not a sandbox.',
   '',
   'Rules: be decent, no spam, no secrets (never paste keys or tokens).',
   'Turn it off any time with /global off.',
   '',
 ];
 export const NOTICE_PROMPT = 'Join? Press y to agree and continue, n or Esc to go back.';
+export const NOTICE_MIN_COLUMNS = 80;
+export const NOTICE_MIN_ROWS = NOTICE_LINES.length + 1;
 
 function pad(lines: string[], cols: number, rows: number): string[] {
   const out = lines.slice(0, Math.max(0, rows)).map((l) => truncateDisplayWidth(l, cols));
@@ -35,6 +38,9 @@ function pad(lines: string[], cols: number, rows: number): string[] {
 }
 
 export function renderNotice(cols: number, rows: number): string[] {
+  if (cols < NOTICE_MIN_COLUMNS || rows < NOTICE_MIN_ROWS) {
+    return pad([`Enlarge window to ${NOTICE_MIN_COLUMNS}x${NOTICE_MIN_ROWS} to read the notice. Esc leaves.`], cols, rows);
+  }
   const lines = NOTICE_LINES.map((l, i) => (i === 0 ? palette.heading(l) : l));
   lines.push(palette.bold(NOTICE_PROMPT));
   return pad(lines, cols, rows);
@@ -60,7 +66,7 @@ export function renderNameScreen(input: string, error: string | null, busy: bool
     palette.dim('> ') + suffixDisplayWidth(input, Math.max(0, cols - 2)),
     busy ? palette.dim('Saving...') : error ? palette.error(error) : fb.ok ? palette.success(fb.text) : palette.dim(fb.text),
     '',
-    palette.dim('Enter to save, Esc to go back without saving anything.'),
+    palette.dim(busy ? 'Saving your identity. Please wait.' : 'Enter to save, Esc to go back without saving anything.'),
   ];
   return pad(lines, cols, rows);
 }
