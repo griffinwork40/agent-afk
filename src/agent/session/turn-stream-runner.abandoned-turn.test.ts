@@ -730,7 +730,7 @@ describe('abandoned turn: provider error terminal during settlement (R1.6-3)', (
     const kinds = records.filter((r) => r.kind === 'user' || r.kind === 'done');
     expect(kinds.map((r) => r.kind)).toEqual(['user', 'done', 'user', 'done']);
     // The last done belongs to the successful next send.
-    expect(kinds[3]!.stopReason).toBe('end_turn');
+    expect(kinds[3]).toHaveProperty('stopReason', 'end_turn');
   }, 5000);
 
   it('a provider error during settlement does not hang or reject the waiting send', async () => {
@@ -792,7 +792,7 @@ describe('abandoned turn: parked turn settled at the next send (R2.2-1)', () => 
     const kinds = records.filter((r) => r.kind === 'user' || r.kind === 'done');
     // user(long) → done(interrupted) → user(next) → done(end_turn)
     expect(kinds.map((r) => r.kind)).toEqual(['user', 'done', 'user', 'done']);
-    expect(kinds[3]!.stopReason).toBe('end_turn');
+    expect(kinds[3]).toHaveProperty('stopReason', 'end_turn');
   });
 });
 
