@@ -68,7 +68,7 @@ describe('/global command', () => {
     await tick();
     expect(h.createClient).toHaveBeenCalledWith(expect.objectContaining({ url: 'wss://relay.example/chat', identity: ME }));
     expect(h.ctx.suspendFooter).toHaveBeenCalled();
-    h.stdin.type('\x1b');
+    h.stdin.type('\x1b'); h.clock.flush();
     expect(await p).toBe('continue');
     expect(h.ctx.resumeFooter).toHaveBeenCalled();
     expect(h.out.line).not.toHaveBeenCalled();

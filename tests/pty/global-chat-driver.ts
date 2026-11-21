@@ -101,7 +101,14 @@ async function main(): Promise<void> {
   process.on('SIGUSR2', () => client.deliverNext());
   // Mirror interactive.signal-handlers.ts makeTermHupHandler: run the cleanup
   // registry, then exit.
-  process.on('SIGTERM', () => { log({ ev: 'sigterm' }); void runCleanupFunctions().finally(() => process.exit(0)); });
+  const onTerm = (): void => {
+    void runCleanupFunctions().finally(() => {
+      log({ ev: 'sigterm-cleaned', isRaw: stdin.isRaw });
+      stdout.write(PTY_DONE_SENTINEL);
+      setTimeout(() => process.exit(0), 60);
+    });
+  };
+  process.on('SIGTERM', onTerm);
 
   const cmd = createGlobalCommand({
     relayUrl: 'wss://relay.invalid', isInteractiveTerminal: () => true,
