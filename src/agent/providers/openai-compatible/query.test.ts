@@ -1049,6 +1049,62 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
   });
 });
 
+describe('OpenAICompatibleQuery — setModel dispatcher rebuild with omitted permissionMode (#5184)', () => {
+  it('passes bypassPermissions to modelDispatcherFactory when permissionMode is omitted', async () => {
+    // Regression guard for the follow-up from #5166: normalizePermissionMode falls
+    // back to 'bypassPermissions' when no permissionMode is provided, but setModel()
+    // rebuilds the dispatcher using this.currentPermissionMode — which is set by
+    // normalizePermissionMode at construction time. This test proves that the factory
+    // receives 'bypassPermissions' (not undefined or some other value) when the
+    // query is constructed without an explicit permissionMode.
+    //
+    // slotDenyKey() reads from filesystem config tier paths and returns '' for
+    // models that are not configured slots. We seed currentSlotDenyKey to a
+    // non-empty sentinel so the first setModel() call sees a different key and
+    // enters the rebuild branch — isolating the permission-mode forwarding
+    // assertion from the filesystem-dependent slot resolution.
+
+    const factoryCalls: Array<{ model: string; permissionMode: string }> = [];
+    const stubDispatcher = {
+      execute: async () => ({ content: '' }),
+      setAllowAll: () => {},
+      setResolveBase: () => {},
+    } as unknown as import('../../tools/dispatcher.js').SessionToolDispatcher;
+
+    const modelDispatcherFactory = (model: string, permissionMode: string) => {
+      factoryCalls.push({ model, permissionMode });
+      return stubDispatcher;
+    };
+
+    // Construct with no permissionMode — normalizePermissionMode must fall back to
+    // 'bypassPermissions', which setModel() must then forward to the factory.
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('x'),
+      // permissionMode deliberately omitted from config
+      config: baseConfig(),
+      modelDispatcherFactory,
+    });
+
+    // Seed currentSlotDenyKey to a non-empty sentinel so switching to any model
+    // whose slotDenyKey() returns '' triggers the rebuild branch. This avoids
+    // relying on filesystem config files to produce specific slot deny keys.
+    (q as unknown as { currentSlotDenyKey: string }).currentSlotDenyKey = 'sentinel-slot:[]';
+
+    // setModel() compares slotDenyKey(newModel) against currentSlotDenyKey.
+    // slotDenyKey('gpt-4o') returns '' (no disabledBySlot config in test env),
+    // which differs from the sentinel, so the factory must be called.
+    await q.setModel('gpt-4o');
+
+    expect(factoryCalls).toHaveLength(1);
+    expect(factoryCalls[0]!.permissionMode).toBe('bypassPermissions');
+
+    q.close();
+  });
+});
+
 describe('OpenAICompatibleQuery — reasoning_effort for o-series models', () => {
   it('forwards reasoning_effort for o-series models when effort is set', async () => {
     pendingChunks = [
