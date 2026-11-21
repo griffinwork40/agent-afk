@@ -250,6 +250,17 @@ describe('actionable error when the stored login is unusable', () => {
     expectNoSecrets(msg);
   });
 
+  it('repair: an empty access token with a refresh token is exchanged regardless of expiry', async () => {
+    storeLogin({ accessToken: '', refreshToken: STORED_REFRESH, expiresAt: Date.now() + 3_600_000 });
+    refreshOk();
+    const result = await refreshClaudeCodeOauthTokenWithStatus();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ token: FRESH_ACCESS, status: 'refreshed' });
+    const written = JSON.parse(store!) as { claudeAiOauth: Record<string, unknown> };
+    expect(written.claudeAiOauth['accessToken']).toBe(FRESH_ACCESS);
+    expect(written.claudeAiOauth['refreshToken']).toBe(ROTATED_REFRESH);
+  });
+
   it('no stored login says none was found', async () => {
     const msg = await failingTurnMessage();
     expect(msg).toContain('No Claude Code login was found');
@@ -279,6 +290,74 @@ describe('actionable error when the stored login is unusable', () => {
     expect(unhandled).toEqual([]);
   });
 });
+
+describe('init failure is observable in every host style (no stored login)', () => {
+  const EXPECTED = 'No Claude Code login was found';
+
+  async function withUnhandledWatch(fn: () => Promise<void>): Promise<unknown[]> {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      await fn();
+      await new Promise((r) => setTimeout(r, 30));
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+    return unhandled;
+  }
+
+  it('a host that awaits waitForInitialization() gets the credential error', async () => {
+    const unhandled = await withUnhandledWatch(async () => {
+      expect(await failingTurnMessage()).toContain(EXPECTED);
+    });
+    expect(unhandled).toEqual([]);
+  });
+
+  it('a host that only calls sendMessage() gets the credential error, not a generic one', async () => {
+    const unhandled = await withUnhandledWatch(async () => {
+      const session = new AgentSession({ model: 'claude-haiku-4-5' });
+      try {
+        await expect(session.sendMessage('hello')).rejects.toThrow(EXPECTED);
+      } finally {
+        await session.close();
+      }
+    });
+    expect(unhandled).toEqual([]);
+  });
+
+  it('a host that only streams gets an error event carrying the credential error', async () => {
+    const unhandled = await withUnhandledWatch(async () => {
+      const session = new AgentSession({ model: 'claude-haiku-4-5' });
+      const output = session.getOutputStream()[Symbol.asyncIterator]();
+      try {
+        const events: OutputEventLike[] = [];
+        for await (const ev of session.sendMessageStream('hello')) events.push(ev as OutputEventLike);
+        const err = events.find((e) => e.type === 'error');
+        expect(err?.error?.message).toContain(EXPECTED);
+        const first = await output.next();
+        expect((first.value as OutputEventLike | undefined)?.type).toBe('error');
+        expect((first.value as OutputEventLike).error?.message).toContain(EXPECTED);
+      } finally {
+        await session.close();
+      }
+    });
+    expect(unhandled).toEqual([]);
+  });
+
+  it('a host that reads status then closes without reads keeps the error retrievable', async () => {
+    const unhandled = await withUnhandledWatch(async () => {
+      const session = new AgentSession({ model: 'claude-haiku-4-5' });
+      await session.mcpServerStatus();
+      await new Promise((r) => setTimeout(r, 50));
+      await session.close();
+      await expect(session.waitForInitialization()).rejects.toThrow(EXPECTED);
+    });
+    expect(unhandled).toEqual([]);
+  });
+});
+
+type OutputEventLike = { type: string; error?: Error };
 
 describe('refresh single-flight', () => {
   it('concurrent refreshes share one token exchange', async () => {

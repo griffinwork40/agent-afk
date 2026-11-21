@@ -35,6 +35,7 @@ export class SessionStateManager {
   private resolveInitialization!: (metadata: SessionMetadata) => void;
   private rejectInitialization!: (error: Error) => void;
   private initializationSettled = false;
+  private initializationError: Error | undefined;
   private sessionMetadata: SessionMetadata;
   private sessionIdentity: SessionIdentity;
   /** Notified whenever the provider-issued id first becomes known or changes. */
@@ -134,7 +135,17 @@ export class SessionStateManager {
   rejectInitializationOnce(error: Error): void {
     if (this.initializationSettled) return;
     this.initializationSettled = true;
+    this.initializationError = error;
     this.rejectInitialization(error);
+  }
+
+  /**
+   * The error that failed initialization, if it failed. Lets send and stream
+   * paths report WHY the session could not start to a host that never called
+   * waitForInitialization() (the init promise itself is marked handled above).
+   */
+  getInitializationError(): Error | undefined {
+    return this.initializationError;
   }
 
   isInitializationSettled(): boolean {
