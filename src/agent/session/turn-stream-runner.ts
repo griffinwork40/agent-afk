@@ -307,7 +307,7 @@ export class TurnStreamRunner {
       this.turns.withdraw(send);
       throw err;
     }
-    const initError = this.deps.stateManager.getInitializationError();
+    const initError = this.deps.stateManager.getInitializationError?.();
     if (initError !== undefined) {
       // The provider never started (e.g. no usable credential). Report the
       // init error as this send's terminal `error` event, so a host that only
