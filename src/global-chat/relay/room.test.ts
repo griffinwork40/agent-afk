@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { Room, countDistinctKeys } from './room.js';
+import { Room, countDistinctKeys, KEY_REGISTRATION_LIMIT, KEY_REGISTRATION_WINDOW_MS } from './room.js';
 import { MemoryRelayStore } from './store.js';
 import { generateKeyPair, importPrivateKey, sign, verifyMsg } from '../crypto.js';
 import {
@@ -94,6 +94,34 @@ describe('Room hello', () => {
     clock = makeClock(1_700_000_000_000);
     room = new Room(store, makeConfig(), clock);
     kp = await generateKeyPair();
+  });
+
+  it('allows only one successful hello per connection, even with another key', async () => {
+    const conns = new Map<string, ConnRecord>();
+    const conn = await doHello(room, 'one', kp, 'alice', store, clock, conns);
+    const other = await generateKeyPair();
+    const result = await room.onMessage('one', await buildHelloFrame(other, 'bob', clock.now()), conn, conns);
+    expect(result.toClose).toEqual(['one']);
+    expect(result.toSender[0]).toMatchObject({ code: 'bad_frame', message: 'Hello already completed' });
+    expect(await store.getKeyRecord(other.pubkey)).toBeNull();
+  });
+
+  it('limits new-key registrations by address but permits existing keys and window expiry', async () => {
+    const conns = new Map<string, ConnRecord>();
+    for (let i = 0; i < KEY_REGISTRATION_LIMIT; i++) {
+      await doHello(room, 'one', i === 0 ? kp : await generateKeyPair(), 'alice', store, clock, conns);
+      conns.clear();
+    }
+    const other = await generateKeyPair();
+    const fresh = room.onConnect('one', 'ip1');
+    const frame = await buildHelloFrame(other, 'alice', clock.now());
+    const denied = await room.onMessage('one', frame, fresh, conns);
+    expect(denied.toSender[0]).toMatchObject({ code: 'rate_limited', retryAfterMs: KEY_REGISTRATION_WINDOW_MS });
+    expect(await store.getKeyRecord(other.pubkey)).toBeNull();
+    await doHello(room, 'one', kp, 'alice', store, clock, conns);
+    conns.clear();
+    clock.advance(KEY_REGISTRATION_WINDOW_MS);
+    await doHello(room, 'one', other, 'alice', store, clock, conns);
   });
 
   it('sends welcome on valid hello', async () => {
@@ -230,7 +258,8 @@ describe('Room hello', () => {
 
   it('name_change_too_soon on rapid rename', async () => {
     const allConns = new Map<string, ConnRecord>();
-    const c1 = await doHello(room, 'c1', kp, 'alice', store, clock, allConns);
+    await doHello(room, 'c1', kp, 'alice', store, clock, allConns);
+    const c1 = room.onConnect('c1', 'ip1');
     // Advance slightly (less than 24h) and try different name
     clock.advance(1_000);
     const frame2 = await buildHelloFrame(kp, 'alicia', clock.now());
@@ -244,7 +273,7 @@ describe('Room hello', () => {
     const allConns = new Map<string, ConnRecord>();
     await doHello(room, 'c1', kp, 'alice', store, clock, allConns);
     clock.advance(24 * 60 * 60 * 1000 + 1_000);
-    const c1 = allConns.get('c1')!;
+    const c1 = room.onConnect('c1', 'ip1');
     const frame2 = await buildHelloFrame(kp, 'alicia', clock.now());
     const effect2 = await room.onMessage('c1', frame2, c1, allConns);
     expect(effect2.toSender[0]?.t).toBe('welcome');
@@ -497,7 +526,7 @@ describe('Room rate limits', () => {
       const k = await generateKeyPair();
       keys.push(k);
       // Pre-register as old key so new-key quota won't fire
-      await store2.upsertKeyRecord({ pubkey: k.pubkey, name: `u${i}`, firstSeenAt: clock.now() - 48 * 3600 * 1000, nameChangedAt: 0 });
+      await store2.upsertKeyRecord({ pubkey: k.pubkey, name: `u${i}`, firstSeenAt: clock.now() - 48 * 3600 * 1000, lastSeenAt: clock.now(), nameChangedAt: 0 });
       await doHello(room2, `c${i}`, k, `u${i}`, store2, clock, allConns2, sharedIp);
     }
     // First 60 posts should succeed

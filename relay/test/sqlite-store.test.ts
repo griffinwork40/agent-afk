@@ -48,9 +48,24 @@ await test('SqliteRelayStore: every method against real workerd SQLite', async t
     });
     await t.test('registry preserves first seen while updating name and timestamp', async () => {
       assert.equal(await call('getKeyRecord', key), null);
-      await call('upsertKeyRecord', { pubkey: key, name: 'alice', firstSeenAt: 100, nameChangedAt: 0 });
-      await call('upsertKeyRecord', { pubkey: key, name: 'alicia', firstSeenAt: 999, nameChangedAt: 86400100 });
-      assert.deepEqual(await call('getKeyRecord', key), { pubkey: key, name: 'alicia', firstSeenAt: 100, nameChangedAt: 86400100 });
+      await call('upsertKeyRecord', { pubkey: key, name: 'alice', firstSeenAt: 100, lastSeenAt: 100, nameChangedAt: 0 });
+      await call('upsertKeyRecord', { pubkey: key, name: 'alicia', firstSeenAt: 999, lastSeenAt: 999, nameChangedAt: 86400100 });
+      assert.deepEqual(await call('getKeyRecord', key), { pubkey: key, name: 'alicia', firstSeenAt: 100, lastSeenAt: 999, nameChangedAt: 86400100 });
+    });
+    await t.test('registry prune preserves banned, recent and retained authors and bounds deletion batches', async () => {
+      for (let i = 0; i < 105; i++) await call('upsertKeyRecord', { pubkey: 'idle-' + i,
+        name: 'alice', firstSeenAt: 1, lastSeenAt: 1, nameChangedAt: 0 });
+      await call('addBan', 'idle-0', '');
+      await call('upsertKeyRecord', { pubkey: 'recent', name: 'alice', firstSeenAt: 1, lastSeenAt: 999, nameChangedAt: 0 });
+      await call('pruneKeyRecords', 500);
+      assert.notEqual(await call('getKeyRecord', key), null, 'retained author survives');
+      assert.notEqual(await call('getKeyRecord', 'idle-0'), null, 'ban survives');
+      assert.equal(await call('getKeyRecord', 'idle-1'), null);
+      assert.notEqual(await call('getKeyRecord', 'idle-104'), null, 'only 100 deleted');
+      await call('pruneKeyRecords', 500);
+      assert.equal(await call('getKeyRecord', 'idle-104'), null);
+      assert.notEqual(await call('getKeyRecord', 'recent'), null);
+      assert.equal(await call('getOldestKeyTimestamp'), 999);
     });
     await t.test('reports count distinct keys and deletion is idempotent', async () => {
       await call('addReport', 'two', 'r1'); await call('addReport', 'two', 'r1');

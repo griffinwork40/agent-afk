@@ -28,12 +28,17 @@ const IP_WINDOW_MS = 60_000;
 const IP_LIMIT = 60;
 const NEW_KEY_WINDOW_MS = 60 * 60 * 1_000;
 const NEW_KEY_LIMIT = 20;
+export const KEY_REGISTRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+// Twenty new identities/hour/address tolerates shared networks, but caps registry churn.
+export const KEY_REGISTRATION_WINDOW_MS = 60 * 60 * 1000;
+export const KEY_REGISTRATION_LIMIT = 20;
 
 export class Room {
   // In-memory rate limiters -- intentionally not persisted (see Invariant above).
   private readonly postBucket: TokenBucketLimiter;
   private readonly ipWindow: SlidingWindowLimiter;
   private readonly newKeyWindow: SlidingWindowLimiter;
+  private readonly registrations: SlidingWindowLimiter;
 
   constructor(
     private readonly store: RelayStore,
@@ -43,17 +48,22 @@ export class Room {
     this.postBucket = new TokenBucketLimiter(POST_INTERVAL_MS, POST_BURST, clock);
     this.ipWindow = new SlidingWindowLimiter(IP_WINDOW_MS, IP_LIMIT, clock);
     this.newKeyWindow = new SlidingWindowLimiter(NEW_KEY_WINDOW_MS, NEW_KEY_LIMIT, clock);
+    this.registrations = new SlidingWindowLimiter(KEY_REGISTRATION_WINDOW_MS, KEY_REGISTRATION_LIMIT, clock);
   }
 
   /** One bounded physical prune batch. Adapter alarms continue while expired rows remain. */
   async onAlarm(): Promise<void> {
     await this.store.pruneOlderThan(this.clock.now() - RETENTION_MS);
+    await this.store.pruneKeyRecords(this.clock.now() - KEY_REGISTRY_RETENTION_MS);
   }
 
   async nextMessageExpiry(): Promise<number | null> {
     const oldest = await this.store.getOldestMessageTimestamp();
     // Prune uses strict <; add one millisecond so the oldest row is actually expired.
-    return oldest === null ? null : Math.max(this.clock.now() + 1, oldest + RETENTION_MS + 1);
+    const keyOldest = await this.store.getOldestKeyTimestamp();
+    const next = Math.min(oldest === null ? Infinity : oldest + RETENTION_MS + 1,
+      keyOldest === null ? Infinity : keyOldest + KEY_REGISTRY_RETENTION_MS + 1);
+    return Number.isFinite(next) ? Math.max(this.clock.now() + 1, next) : null;
   }
 
   onConnect(_connId: string, ipHash: string): ConnRecord {
@@ -111,6 +121,9 @@ export class Room {
     conn: ConnRecord,
     allConns: ReadonlyMap<string, ConnRecord>,
   ): Promise<RoomEffect> {
+    if (conn.helloOk) return makeEffect(conn, {
+      toSender: [err('bad_frame', 'Hello already completed')], toClose: [connId],
+    });
     const now = this.clock.now();
     const isMaintainer = this.config.maintainerKeys.includes(frame.pubkey);
 
@@ -155,7 +168,11 @@ export class Room {
     // Key registry + rename rule
     let keyRecord = await this.store.getKeyRecord(frame.pubkey);
     if (!keyRecord) {
-      keyRecord = { pubkey: frame.pubkey, name: frame.name, firstSeenAt: now, nameChangedAt: 0 };
+      if (!this.registrations.allow(conn.ipHash)) return makeEffect(conn, {
+        toSender: [err('rate_limited', 'New identity registration limit exceeded',
+          { retryAfterMs: this.registrations.retryAfterMs(conn.ipHash) })], toClose: [connId],
+      });
+      keyRecord = { pubkey: frame.pubkey, name: frame.name, firstSeenAt: now, nameChangedAt: 0, lastSeenAt: now };
     } else if (keyRecord.name !== frame.name) {
       const baseline = keyRecord.nameChangedAt > 0 ? keyRecord.nameChangedAt : keyRecord.firstSeenAt;
       const elapsed = now - baseline;
@@ -165,10 +182,10 @@ export class Room {
       }
       keyRecord = { ...keyRecord, name: frame.name, nameChangedAt: now };
     }
-    await this.store.upsertKeyRecord(keyRecord);
+    await this.store.upsertKeyRecord({ ...keyRecord, lastSeenAt: now });
 
     // Opportunistic prune (bounded -- store implementations may add LIMIT internally)
-    await this.store.pruneOlderThan(now - RETENTION_MS);
+    await this.onAlarm();
 
     const backlog = await this.store.getBacklog(BACKLOG_SIZE);
     const updatedConn: ConnRecord = { ...conn, pubkey: frame.pubkey, name: frame.name, helloOk: true };

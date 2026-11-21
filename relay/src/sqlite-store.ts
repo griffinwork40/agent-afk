@@ -39,8 +39,12 @@ export class SqliteRelayStore implements RelayStore {
         pubkey TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         first_seen_at INTEGER NOT NULL,
-        name_changed_at INTEGER NOT NULL DEFAULT 0
+        name_changed_at INTEGER NOT NULL DEFAULT 0,
+        last_seen_at INTEGER NOT NULL
       );
+
+      CREATE INDEX IF NOT EXISTS key_registry_last_seen ON key_registry(last_seen_at);
+      CREATE INDEX IF NOT EXISTS messages_pubkey ON messages(pubkey);
 
       CREATE TABLE IF NOT EXISTS reports (
         message_id TEXT NOT NULL,
@@ -161,25 +165,43 @@ export class SqliteRelayStore implements RelayStore {
 
   async getKeyRecord(pubkey: string): Promise<KeyRecord | null> {
     const rows = this.sql.exec<{
-      pubkey: string; name: string; first_seen_at: number; name_changed_at: number;
+      pubkey: string; name: string; first_seen_at: number; name_changed_at: number; last_seen_at: number;
     }>(
-      `SELECT pubkey, name, first_seen_at, name_changed_at FROM key_registry WHERE pubkey = ?`,
+      `SELECT pubkey, name, first_seen_at, name_changed_at, last_seen_at FROM key_registry WHERE pubkey = ?`,
       pubkey,
     ).toArray();
     const r = rows[0];
     if (!r) return null;
-    return { pubkey: r.pubkey, name: r.name, firstSeenAt: r.first_seen_at, nameChangedAt: r.name_changed_at };
+    return { pubkey: r.pubkey, name: r.name, firstSeenAt: r.first_seen_at,
+      nameChangedAt: r.name_changed_at, lastSeenAt: r.last_seen_at };
   }
 
   async upsertKeyRecord(record: KeyRecord): Promise<void> {
     this.sql.exec(
-      `INSERT INTO key_registry (pubkey, name, first_seen_at, name_changed_at)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO key_registry (pubkey, name, first_seen_at, name_changed_at, last_seen_at)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(pubkey) DO UPDATE SET
          name = excluded.name,
-         name_changed_at = excluded.name_changed_at`,
-      record.pubkey, record.name, record.firstSeenAt, record.nameChangedAt,
+         name_changed_at = excluded.name_changed_at,
+         last_seen_at = excluded.last_seen_at`,
+      record.pubkey, record.name, record.firstSeenAt, record.nameChangedAt, record.lastSeenAt,
     );
+  }
+
+  async pruneKeyRecords(cutoffMs: number): Promise<void> {
+    this.sql.exec(`DELETE FROM key_registry WHERE pubkey IN (
+      SELECT k.pubkey FROM key_registry k WHERE k.last_seen_at < ?
+      AND NOT EXISTS (SELECT 1 FROM bans b WHERE b.pubkey = k.pubkey)
+      AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.pubkey = k.pubkey)
+      ORDER BY k.last_seen_at LIMIT 100)`, cutoffMs);
+  }
+
+  async getOldestKeyTimestamp(): Promise<number | null> {
+    const row = this.sql.exec<{ ts: number }>(`SELECT k.last_seen_at AS ts FROM key_registry k
+      WHERE NOT EXISTS (SELECT 1 FROM bans b WHERE b.pubkey = k.pubkey)
+      AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.pubkey = k.pubkey)
+      ORDER BY k.last_seen_at LIMIT 1`).toArray()[0];
+    return row?.ts ?? null;
   }
 
   async addReport(messageId: string, reporterKey: string): Promise<void> {

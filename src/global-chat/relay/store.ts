@@ -11,6 +11,7 @@ export interface KeyRecord {
   pubkey: string;
   name: string;
   firstSeenAt: number;
+  lastSeenAt: number;
   nameChangedAt: number;
 }
 
@@ -34,6 +35,8 @@ export interface RelayStore {
   // --- key registry ---
   getKeyRecord(pubkey: string): Promise<KeyRecord | null>;
   upsertKeyRecord(record: KeyRecord): Promise<void>;
+  pruneKeyRecords(cutoffMs: number): Promise<void>;
+  getOldestKeyTimestamp(): Promise<number | null>;
 
   // --- reports ---
   addReport(messageId: string, reporterKey: string): Promise<void>;
@@ -58,6 +61,7 @@ export class MemoryRelayStore implements RelayStore {
   // messageId -> Set<reporterKey>
   private readonly reports = new Map<string, Set<string>>();
   private mode: RoomMode = 'open';
+  private keySweep: MapIterator<[string, KeyRecord]> | undefined;
 
   async insertMessage(msg: Msg): Promise<void> {
     if (this.messages.has(msg.id)) return;
@@ -138,6 +142,27 @@ export class MemoryRelayStore implements RelayStore {
   async upsertKeyRecord(record: KeyRecord): Promise<void> {
     const firstSeenAt = this.keys.get(record.pubkey)?.firstSeenAt ?? record.firstSeenAt;
     this.keys.set(record.pubkey, { ...record, firstSeenAt });
+  }
+
+  async pruneKeyRecords(cutoffMs: number): Promise<void> {
+    this.keySweep ??= this.keys.entries();
+    for (let i = 0; i < 100; i++) {
+      const entry = this.keySweep.next();
+      if (entry.done) { this.keySweep = undefined; break; }
+      const [key, record] = entry.value;
+      if (record.lastSeenAt < cutoffMs && !this.bannedKeys.has(key) &&
+        ![...this.messages.values()].some(m => m.pubkey === key)) this.keys.delete(key);
+    }
+  }
+
+  async getOldestKeyTimestamp(): Promise<number | null> {
+    let oldest = Infinity;
+    for (const [key, record] of this.keys) {
+      if (!this.bannedKeys.has(key) && ![...this.messages.values()].some(m => m.pubkey === key)) {
+        oldest = Math.min(oldest, record.lastSeenAt);
+      }
+    }
+    return Number.isFinite(oldest) ? oldest : null;
   }
 
   async addReport(messageId: string, reporterKey: string): Promise<void> {

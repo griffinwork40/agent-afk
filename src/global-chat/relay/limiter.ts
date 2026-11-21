@@ -11,6 +11,19 @@
 
 export interface Clock { now(): number }
 export const realClock: Clock = { now: () => Date.now() };
+export const LIMITER_SWEEP_BUDGET = 16;
+
+// Rotate survivors to the tail so each call examines a bounded, fair slice.
+function sweep<T>(map: Map<string, T>, expired: (value: T) => boolean): void {
+  const count = Math.min(LIMITER_SWEEP_BUDGET, map.size);
+  for (let i = 0; i < count; i++) {
+    const entry = map.entries().next().value;
+    if (!entry) break;
+    const [key, value] = entry;
+    map.delete(key);
+    if (!expired(value)) map.set(key, value);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // TokenBucket: 1 token per intervalMs, max burst capacity
@@ -25,9 +38,12 @@ export class TokenBucketLimiter {
     private readonly clock: Clock,
   ) {}
 
+  get entryCount(): number { return this.buckets.size; }
+
   /** Returns true if the request is allowed (consumes one token). */
   allow(key: string): boolean {
     const now = this.clock.now();
+    sweep(this.buckets, b => b.tokens + Math.floor((now - b.lastRefill) / this.intervalMs) >= this.burst);
     let bucket = this.buckets.get(key);
     if (!bucket) {
       bucket = { tokens: this.burst, lastRefill: now };
@@ -64,8 +80,11 @@ export class SlidingWindowLimiter {
     private readonly clock: Clock,
   ) {}
 
+  get entryCount(): number { return this.windows.size; }
+
   allow(key: string): boolean {
     const now = this.clock.now();
+    sweep(this.windows, times => (times[times.length - 1] ?? 0) <= now - this.windowMs);
     const cutoff = now - this.windowMs;
     let times = this.windows.get(key);
     if (!times) { times = []; this.windows.set(key, times); }

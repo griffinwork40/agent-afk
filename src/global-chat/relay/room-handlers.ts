@@ -117,6 +117,7 @@ export async function handlePost(
     ...(badge ? { badge } : {}),
   };
   await store.insertMessage(msg);
+  if (keyRecord) await store.upsertKeyRecord({ ...keyRecord, lastSeenAt: now });
   return makeEffect(conn, {
     toSender: [{ t: 'ack', id: frame.id }],
     toBroadcast: [{ t: 'msg', m: msg }],

@@ -22,6 +22,8 @@ export class StoreTestObject {
       isBannedIp: (...a) => this.store.isBannedIp(a[0]),
       getKeyRecord: (...a) => this.store.getKeyRecord(a[0]),
       upsertKeyRecord: (...a) => this.store.upsertKeyRecord(a[0]),
+      pruneKeyRecords: (...a) => this.store.pruneKeyRecords(a[0]),
+      getOldestKeyTimestamp: () => this.store.getOldestKeyTimestamp(),
       addReport: (...a) => this.store.addReport(a[0], a[1]),
       countReporters: (...a) => this.store.countReporters(a[0]),
       getRoomMode: () => this.store.getRoomMode(),
