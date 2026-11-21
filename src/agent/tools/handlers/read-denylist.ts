@@ -89,16 +89,19 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
   // Invariant: only `.../config` — `.../state` is NOT denied wholesale because
   // forked sub-agents must read skill-preflight inputs, todos, transcripts, and
   // session ledgers there (#544/#547/#554). Exception: `.../state/global-chat`
-  // is denied below — it holds identity keys and chat history that must stay
-  // protected even when AFK_STATE_DIR is relocated or invalid (the dynamic path
-  // only covers the active state dir; this static entry covers the fixed default).
+  // is denied below -- it holds the identity file (with an Ed25519 private key)
+  // and the local mute list. The client stores no messages. Protected even when
+  // AFK_STATE_DIR is relocated or invalid (the dynamic path only covers the
+  // active state dir; this static entry covers the fixed default).
   `${HOME}/.afk/config`,
-  // Global-chat identity key and message history. Floored as the whole sub-tree:
-  // identity.json (private key), mutes.json, and any session transcripts stored
-  // here are protected unconditionally. Static so the default location remains
-  // denied even when AFK_STATE_DIR is relocated or unset — the dynamic denylist
-  // entry (derived from getAfkStateDir()) only covers the ACTIVE path and silently
-  // drops when AFK_STATE_DIR is invalid; this entry has no such failure mode.
+  // Global-chat client state. Floored as the whole sub-tree:
+  // identity.json (private key) and mutes.json are protected unconditionally.
+  // The client stores no messages; the directory holds only the identity file
+  // (with an Ed25519 private key) and the local mute list. Static so the
+  // default location remains denied even when AFK_STATE_DIR is relocated or
+  // unset -- the dynamic denylist entry (derived from getAfkStateDir()) only
+  // covers the ACTIVE path and silently drops when AFK_STATE_DIR is invalid;
+  // this entry has no such failure mode.
   `${HOME}/.afk/state/global-chat`,
   // npm publish tokens and Docker registry credentials.
   `${HOME}/.npmrc`,
