@@ -13,6 +13,7 @@ import type { ChalkInstance } from 'chalk';
 import { palette } from '../../palette.js';
 import { displayWidth, splitGraphemes, suffixDisplayWidth, truncateDisplayWidth } from '../../display.js';
 import { MAX_TEXT_CHARS, ROOM } from '../../../global-chat/protocol.js';
+import { escapeRegExp } from '../../../utils/regexp.js';
 import type { ChatEntry, ChatMessageEntry, ChatViewState } from './global-chat-model.js';
 
 export const MIN_COLUMNS = 20;
@@ -72,7 +73,7 @@ export function mentionCells(text: string, myName: string | null): Array<{ g: st
   const cells = graphemes.map((g) => ({ g, hi: false }));
   if (!myName) return cells;
   const needle = `@${myName}`;
-  const re = new RegExp(`(^|[^a-z0-9_-])(${needle.replace(/[-]/g, '\\-')})(?![a-z0-9_-])`, 'gi');
+  const re = new RegExp(`(^|[^a-z0-9_-])(${escapeRegExp(needle)})(?![a-z0-9_-])`, 'gi');
   const ranges: Array<[number, number]> = [];
   for (const m of text.matchAll(re)) {
     const start = m.index + (m[1]?.length ?? 0);

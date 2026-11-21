@@ -922,7 +922,7 @@ describe('subscribers', () => {
     const ctx = await setup();
     const other = await makeKeyPair('bob');
     const m = await makeMsg(other);
-    const counts = [0, 0];
+    const counts: [number, number] = [0, 0];
     const unsub0 = ctx.client.subscribe({ onMessage: () => counts[0]++ });
     const unsub1 = ctx.client.subscribe({ onMessage: () => counts[1]++ });
     const sock = await connectAndWelcome(ctx);

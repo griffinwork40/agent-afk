@@ -234,10 +234,11 @@ describe('FileIdentityStore.create()', () => {
     }
   });
 
-  it('writes file with mode 0600', async () => {
+  it('writes a private file (mode 0600 where the platform has mode bits)', async () => {
     await store().create('alice');
-    const { mode } = await import('node:fs/promises').then(fs => fs.stat(filePath));
-    expect(mode & 0o777).toBe(0o600);
+    const info = await import('node:fs/promises').then(fs => fs.stat(filePath));
+    // NTFS exposes no POSIX mode bits, so on Windows only the write itself can be checked.
+    if (process.platform === 'win32') { expect(info.isFile()).toBe(true); } else { expect(info.mode & 0o777).toBe(0o600); }
   });
 });
 

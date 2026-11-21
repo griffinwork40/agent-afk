@@ -142,11 +142,12 @@ describe('FileMuteStore.add()', () => {
     expect(list.map(e => e.pubkey).sort()).toEqual([PK1, PK2, PK3].sort());
   });
 
-  it('writes file with mode 0600', async () => {
+  it('writes a private file (mode 0600 where the platform has mode bits)', async () => {
     await store().add(PK1, 'alice');
     const { stat } = await import('node:fs/promises');
-    const { mode } = await stat(filePath);
-    expect(mode & 0o777).toBe(0o600);
+    const info = await stat(filePath);
+    // NTFS exposes no POSIX mode bits, so on Windows only the write itself can be checked.
+    if (process.platform === 'win32') { expect(info.isFile()).toBe(true); } else { expect(info.mode & 0o777).toBe(0o600); }
   });
 
   it('writes over a corrupt file on first successful mutation', async () => {
