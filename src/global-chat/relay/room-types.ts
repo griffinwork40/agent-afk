@@ -35,6 +35,8 @@ export interface RoomEffect {
   toBroadcast: RelayFrame[];
   /** Connection ids to forcibly close (after sending their toSender frames). */
   toClose: string[];
+  /** Private frames, delivered only to their named connection before closing. */
+  toConnections?: { connId: string; frame: RelayFrame }[];
   /** Updated per-connection record (replace the stored attachment). */
   conn: ConnRecord;
 }

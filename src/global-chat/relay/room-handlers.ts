@@ -53,7 +53,7 @@ export async function handlePost(
   const [keyBanned, ipBanned] = await Promise.all([
     store.isBannedKey(pubkey), store.isBannedIp(conn.ipHash),
   ]);
-  if (keyBanned || ipBanned) return makeEffect(conn, { toSender: [err('banned', 'You are banned')] });
+  if (keyBanned || ipBanned) return makeEffect(conn, { toSender: [err('banned', 'You are banned', { id: frame.id })] });
 
   // 4. room mode
   const storedMode = await store.getRoomMode();
@@ -191,9 +191,10 @@ async function adminBan(
   await store.addBan(targetKey, ipHash);
   return makeEffect(conn, {
     toClose: liveConnIds,
-    toBroadcast: liveConnIds.length > 0
-      ? [{ t: 'error', code: 'banned', message: 'You have been banned' }]
-      : [],
+    // Never broadcast a terminal banned error to innocent participants.
+    toConnections: liveConnIds.map(connId => ({ connId,
+      frame: { t: 'error', code: 'banned', message: 'You have been banned' },
+    })),
   });
 }
 

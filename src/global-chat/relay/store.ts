@@ -53,13 +53,13 @@ export class MemoryRelayStore implements RelayStore {
   private readonly messages = new Map<string, StoredMsg>();
   private readonly messageOrder: string[] = [];
   private readonly bannedKeys = new Map<string, string>(); // pubkey -> ipHash
-  private readonly bannedIps = new Set<string>();
   private readonly keys = new Map<string, KeyRecord>();
   // messageId -> Set<reporterKey>
   private readonly reports = new Map<string, Set<string>>();
   private mode: RoomMode = 'open';
 
   async insertMessage(msg: Msg): Promise<void> {
+    if (this.messages.has(msg.id)) return;
     this.messages.set(msg.id, { ...msg, deleted: false });
     this.messageOrder.push(msg.id);
   }
@@ -90,7 +90,10 @@ export class MemoryRelayStore implements RelayStore {
     for (const [id, m] of this.messages) {
       if (m.ts < cutoffMs) toDelete.push(id);
     }
-    for (const id of toDelete) this.messages.delete(id);
+    for (const id of toDelete) {
+      this.messages.delete(id);
+      this.reports.delete(id);
+    }
     const deleted = new Set(toDelete);
     this.messageOrder.splice(0, this.messageOrder.length,
       ...this.messageOrder.filter(id => !deleted.has(id)));
@@ -106,17 +109,10 @@ export class MemoryRelayStore implements RelayStore {
 
   async addBan(pubkey: string, ipHash: string): Promise<void> {
     this.bannedKeys.set(pubkey, ipHash);
-    this.bannedIps.add(ipHash);
   }
 
   async removeBan(pubkey: string): Promise<void> {
-    const ipHash = this.bannedKeys.get(pubkey);
-    if (ipHash) {
-      this.bannedKeys.delete(pubkey);
-      // Only remove IP ban if no other key shares it
-      const stillBanned = [...this.bannedKeys.values()].includes(ipHash);
-      if (!stillBanned) this.bannedIps.delete(ipHash);
-    }
+    this.bannedKeys.delete(pubkey);
   }
 
   async isBannedKey(pubkey: string): Promise<boolean> {
@@ -124,7 +120,7 @@ export class MemoryRelayStore implements RelayStore {
   }
 
   async isBannedIp(ipHash: string): Promise<boolean> {
-    return this.bannedIps.has(ipHash);
+    return ipHash !== '' && [...this.bannedKeys.values()].includes(ipHash);
   }
 
   async getKeyRecord(pubkey: string): Promise<KeyRecord | null> {
@@ -132,7 +128,8 @@ export class MemoryRelayStore implements RelayStore {
   }
 
   async upsertKeyRecord(record: KeyRecord): Promise<void> {
-    this.keys.set(record.pubkey, { ...record });
+    const firstSeenAt = this.keys.get(record.pubkey)?.firstSeenAt ?? record.firstSeenAt;
+    this.keys.set(record.pubkey, { ...record, firstSeenAt });
   }
 
   async addReport(messageId: string, reporterKey: string): Promise<void> {

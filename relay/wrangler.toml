@@ -17,5 +17,6 @@ ADMIN_PUBKEYS = ""
 # Optional notice shown to all connecting clients.
 ROOM_NOTICE = ""
 # Operator kill switch: set to "open", "readonly", or "closed" to override
-# the stored room mode without a deploy. Unset or empty means use stored mode.
+# the stored room mode via a binding/config update. Empty means use stored mode.
+# IP_SALT is a required secret (at least 16 characters), never a public var.
 ROOM_MODE = ""

@@ -60,15 +60,23 @@ export class Room {
     const frame = parsed.frame;
     if (frame.t === 'ping') return makeEffect(conn, { toSender: [{ t: 'pong', n: frame.n }] });
     if (frame.t === 'hello') return this.handleHello(connId, frame, conn, allConns);
-    if (!conn.helloOk) return makeEffect(conn, { toSender: [err('not_hello', 'Send hello first')] });
+    if (!conn.helloOk) return makeEffect(conn, { toSender: [err('not_hello', 'Send hello first', { id: frame.id })] });
     if (frame.t === 'post') {
       return handlePost(frame, conn, {
         store: this.store, config: this.config, clock: this.clock,
         postBucket: this.postBucket, ipWindow: this.ipWindow, newKeyWindow: this.newKeyWindow,
       });
     }
-    if (frame.t === 'report') return handleReport(frame, conn, this.store, this.clock);
-    if (frame.t === 'admin') return handleAdmin(frame, conn, this.store, this.config, this.clock, allConns);
+    if (frame.t === 'report' || frame.t === 'admin') {
+      const effect = frame.t === 'report'
+        ? await handleReport(frame, conn, this.store, this.clock)
+        : await handleAdmin(frame, conn, this.store, this.config, this.clock, allConns);
+      // Every signed action has a request id; clients await its ack or error.
+      const failed = effect.toSender.some(f => f.t === 'error');
+      effect.toSender = effect.toSender.map(f => f.t === 'error' ? { ...f, id: frame.id } : f);
+      if (!failed) effect.toSender.push({ t: 'ack', id: frame.id });
+      return effect;
+    }
     return makeEffect(conn, { toSender: [err('bad_frame', 'Unknown frame type')] });
   }
 
@@ -182,7 +190,8 @@ export function countDistinctKeysExcluding(
   for (const [cid, c] of conns) {
     if (cid !== excludeConnId && c.helloOk && c.pubkey) keys.add(c.pubkey);
   }
-  if (excludeKey) keys.delete(excludeKey);
+  // Exclude the socket, not its key: another socket may still own that key.
+  void excludeKey;
   return keys.size;
 }
 

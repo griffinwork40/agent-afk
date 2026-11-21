@@ -74,7 +74,8 @@ export class SqliteRelayStore implements RelayStore {
     }>(
       `SELECT id, ts, pubkey, name, text, sig, badge
        FROM messages WHERE deleted = 0
-       ORDER BY ts DESC LIMIT ?`,
+         AND ts >= COALESCE((SELECT CAST(value AS INTEGER) FROM room_state WHERE key = 'prune_cutoff'), 0)
+       ORDER BY ts DESC, rowid DESC LIMIT ?`,
       n,
     ).toArray();
     // Reverse so result is chronological (oldest first)
@@ -109,8 +110,14 @@ export class SqliteRelayStore implements RelayStore {
   }
 
   async pruneOlderThan(cutoffMs: number): Promise<void> {
-    // Bounded: delete at most 100 rows per call to avoid long microtask pauses
-    this.sql.exec(`DELETE FROM messages WHERE ts < ? AND rowid IN (SELECT rowid FROM messages WHERE ts < ? LIMIT 100)`, cutoffMs, cutoffMs);
+    // Hide all expired rows immediately, but bound physical cleanup per hello.
+    // Synchronous SQL calls are committed together by the DO storage runtime.
+    this.sql.exec(`INSERT INTO room_state (key, value) VALUES ('prune_cutoff', ?)
+      ON CONFLICT(key) DO UPDATE SET value = MAX(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER))`, cutoffMs);
+    this.sql.exec(`DELETE FROM reports WHERE message_id IN
+      (SELECT id FROM messages WHERE ts < ? ORDER BY rowid LIMIT 100)`, cutoffMs);
+    this.sql.exec(`DELETE FROM messages WHERE rowid IN
+      (SELECT rowid FROM messages WHERE ts < ? ORDER BY rowid LIMIT 100)`, cutoffMs);
   }
 
   async countPostsByKeySince(pubkey: string, sinceMs: number): Promise<number> {
