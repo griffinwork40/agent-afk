@@ -282,8 +282,8 @@ export interface CliConfig {
    * ── DATA-EGRESS CONTRACT ──────────────────────────────────────────────────
    * Enabling this flag causes redacted transcript tails (≤`maxInputTokens`×4
    * bytes, default ~4 KB) to be sent to `claude-haiku-4-5` via the Anthropic
-   * API.
-   * API keys, and long opaque hex/base64 strings. No conversation history,
+   * API. The tails are pre-filtered to strip API keys and long opaque
+   * hex/base64 strings. No conversation history,
    * system prompts, or tool results outside the transcript ring buffer are ever
    * included. Session-wide call volume is bounded by `maxSummaryCallsPerSession`
    * (default 200). Do NOT enable in air-gapped or secret-sensitive environments.
