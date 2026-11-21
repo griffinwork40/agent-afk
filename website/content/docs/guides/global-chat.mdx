@@ -60,20 +60,22 @@ Type a message and press Enter to post. Press Esc or Ctrl+C to leave.
 
 ### Inside the view
 
+{/* docs-refs-ignore-start */}
+
 | Input | What it does |
 |---|---|
 | Enter | Post the message you typed. |
 | Backspace | Delete the last character. |
 | Ctrl+U | Clear the input line. |
 | Esc or Ctrl+C | Leave the room. |
-<!-- docs-refs-ignore-start -->
 | `/help` | Show the in-view commands. |
 | `/rules` | Show the room rules. |
 | `/mute <n or name#tag>` | Hide another user's messages locally. |
 | `/unmute <name#tag>` | Stop hiding a muted user. |
 | `/mutes` | List muted users. |
 | `/report <n>` | Report a message to the relay. |
-<!-- docs-refs-ignore-end -->
+
+{/* docs-refs-ignore-end */}
 
 `<n>` is the small number beside a message. Commands entered inside the view start with `/` and are never posted publicly.
 
@@ -81,14 +83,16 @@ Type a message and press Enter to post. Press Esc or Ctrl+C to leave.
 
 Maintainers are public keys listed in the relay config. These commands are accepted only from maintainer keys.
 
+{/* docs-refs-ignore-start */}
+
 | Input | What it does |
 |---|---|
-<!-- docs-refs-ignore-start -->
 | `/ban <n or name#tag>` | Ban a key and disconnect it. |
 | `/unban <64-character hex public key>` | Remove a ban. |
 | `/delete <n>` | Delete a message by number. |
-| `/mode <open|readonly|closed>` | Set the room mode. |
-<!-- docs-refs-ignore-end -->
+| `/mode <mode>` | Set the room mode: `open`, `readonly`, or `closed`. |
+
+{/* docs-refs-ignore-end */}
 
 ## Local moderation
 
