@@ -14,7 +14,8 @@ const modules: Record<Surface, string[]> = {
     'session-provider', 'session-lifecycle', 'construct-session', 'wire-telegram-executors', 'mcp-session', 'afk-hook-bundle']
     .map((s) => `telegram/${s}.ts`),
   web: ['session-owner', 'session-owner.wiring', 'session-owner.provider'].map((s) => `web-server/${s}.ts`),
-  ACP: [`${cli}acp.session.ts`],
+  ACP: ['acp.session', 'acp.session.mcp', 'acp.session.prompt', 'acp.session.provider', 'acp.session.resources', 'chat.mcp-setup']
+    .map((s) => `${cli}${s}.ts`),
 };
 
 // Each probe supplies non-empty optional capabilities and a distinct session cwd.

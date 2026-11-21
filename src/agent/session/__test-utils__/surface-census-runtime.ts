@@ -118,7 +118,6 @@ export class SurfaceRuntime {
     values['createTerminalStateGate'] = () => ({});
     values['buildDaemonGetModel'] = () => () => 'sonnet';
     values['daemonDefaultCwd'] = () => 'daemon-cwd';
-    values['makeGateBlockTraceOwner'] = (writer: unknown) => writer;
     return new Proxy(values, { get(target, key: string) {
       if (key === '__esModule') return true;
       if (!(key in target)) throw new Error(`Unreviewed census boundary ${file} export ${key}`);

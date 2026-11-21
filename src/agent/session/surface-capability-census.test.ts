@@ -68,17 +68,20 @@ const census: Record<Surface, Record<string, Cell>> = {
     userHooks: gap, modelRouting: gap, outerOrchestration: unchecked('Builder chain runs; SDK/network/disk infrastructure and process startup are faked.'),
   },
   ACP: {
-    sessionTrace: gap, childTrace: gap, skillTrace: gap,
-    sessionPrompt: gap, childPrompt: gap, childOverlay: gap,
-    sessionOverlay: gap, hooksAtSessionCwd: gap,
-    childCwd: gap, nestedCwd: gap, background: gap, diskMcp: gap,
-    userHooks: wired, modelRouting: gap, outerOrchestration: unchecked('Builder chain runs; SDK/network/disk infrastructure and process startup are faked.'),
+    sessionTrace: wired, childTrace: wired, skillTrace: wired,
+    sessionPrompt: wired, childPrompt: wired, childOverlay: wired,
+    sessionOverlay: wired, hooksAtSessionCwd: wired,
+    childCwd: wired, nestedCwd: wired,
+    background: intentional('ACP lists "No background subagents" as a surface limit (website/content/docs/surfaces/acp.mdx:264); executor wiring leaves it unconfigured.',
+      ownership, 'elsewhere background dispatch reports as unconfigured'),
+    diskMcp: wired, userHooks: wired, modelRouting: wired,
+    outerOrchestration: unchecked('Builder chain runs with explicit inputs; JSON-RPC server, client-supplied MCP list and approval bridge are not executed.'),
   },
 };
 
 const hookDirectories: Record<Surface, string | undefined> = {
   REPL: 'session-cwd', chat: 'session-cwd', daemon: 'session-cwd',
-  Telegram: 'session-cwd', web: undefined, ACP: 'host-cwd',
+  Telegram: 'session-cwd', web: undefined, ACP: 'session-cwd',
 };
 
 function actual(rt: SurfaceRuntime, otherModel: SurfaceRuntime): Record<string, boolean> {
