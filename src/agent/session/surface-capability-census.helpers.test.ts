@@ -46,6 +46,20 @@ describe('surface census detector contracts', () => {
       .toThrow('Unreviewed census import new-options.ts');
   });
 
+  it('lets a builder import a side-effecting built-in but fails when the chain calls it', () => {
+    const root = fixture({
+      'surface.ts': `import { mkdirSync } from 'node:fs'; import { spawn } from 'node:child_process';
+        import { randomUUID } from 'node:crypto'; import * as os from 'node:os';
+        export function quiet() { return typeof randomUUID() === 'string' && typeof os.tmpdir() === 'string'; }
+        export function disk() { mkdirSync('census-must-not-create-this'); }
+        export function proc() { spawn('true'); }`,
+    });
+    const surface = new SurfaceRuntime(root, ['surface.ts']).load('surface.ts');
+    expect(surface['quiet']()).toBe(true);
+    expect(() => surface['disk']()).toThrow('Census sandbox: surface.ts called node:fs.mkdirSync');
+    expect(() => surface['proc']()).toThrow('Census sandbox: surface.ts called node:child_process.spawn');
+  });
+
   it('discovers new production bootstraps, aliases and namespace calls, ignoring comments/tests', () => {
     const root = fixture({
       'new.ts': `import { AgentSession as S } from './session.js'; const Alias = S;

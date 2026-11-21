@@ -10,6 +10,21 @@ type Bag = Record<string, any>; // Test sandbox: production exports have heterog
 export const token = Object.freeze({ census: 'present' });
 const realRequire = createRequire(import.meta.url);
 
+// Contract: only Node built-ins that cannot touch the machine are handed to
+// sandboxed builders for real. Every other built-in (fs, child_process, net,
+// http, ...) is a stub whose members throw when CALLED, so a builder may import
+// one but the census fails if its chain ever uses it. This is what makes "no
+// disk, no processes, no network" a check instead of a convention.
+const pureBuiltins = new Set(['node:crypto', 'node:os', 'node:path', 'node:url', 'node:util']);
+function nodeBuiltin(id: string, importer: string): unknown {
+  if (pureBuiltins.has(id)) return realRequire(id);
+  return new Proxy({}, {
+    get: (_target, member) => member === '__esModule' ? false : () => {
+      throw new Error(`Census sandbox: ${importer} called ${id}.${String(member)}; real ${id} access is not allowed.`);
+    },
+  });
+}
+
 // Contract: execute real surface builders, not a facsimile of their option lists.
 // Only infrastructure boundaries are faked. Helpers/spreads in the allowed module
 // graph execute normally; an import moved outside that graph fails closed and
@@ -45,7 +60,7 @@ export class SurfaceRuntime {
       fileName: filename,
     }).outputText;
     const require = (id: string): unknown => {
-      if (id.startsWith('node:')) return realRequire(id);
+      if (id.startsWith('node:')) return nodeBuiltin(id, relative);
       const target = path.posix.normalize(path.posix.join(path.posix.dirname(relative), id)).replace(/\.js$/, '.ts');
       return this.modules.includes(target) ? this.load(target) : this.boundary(target);
     };
