@@ -123,6 +123,12 @@ export interface OpenTurn {
   doneRecorded: boolean;
   /** The ledger was sealed under this turn: discard whatever it still emits. */
   sealed: boolean;
+  /**
+   * A provider `error` event was seen during settlement. When true, the
+   * synthetic `done` must use `buildFatalDone` rather than `buildInterruptedDone`
+   * even though `settle()` sets `interrupted = true` unconditionally.
+   */
+  hadProviderError: boolean;
   /** Resolves once the turn's terminal event has been pulled. */
   readonly ended: Promise<void>;
   readonly markEnded: () => void;
@@ -241,6 +247,7 @@ export class ProviderTurns {
       settling: false,
       doneRecorded: false,
       sealed: false,
+      hadProviderError: false,
       ended,
       markEnded: () => markEnded(),
     };
@@ -344,6 +351,9 @@ export class ProviderTurns {
       iterator: turn.iterator,
       consume: async (event) => {
         if (turn.sealed) return null;
+        // Track whether the provider reported an error so the synthetic done
+        // can distinguish a provider error from a clean interrupt (#5173 R1.3).
+        if (event.type === 'error') turn.hadProviderError = true;
         const output = await this.hooks.consume(event, turn.deps);
         if (output?.type === 'done') turn.doneRecorded = true;
         return output;

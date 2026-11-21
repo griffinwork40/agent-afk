@@ -129,7 +129,8 @@ export class TurnStreamRunner {
     this.turns = new ProviderTurns({
       consume: (event, turnDeps) => this.consumeProviderEvent(event, turnDeps),
       interruptProvider: () => this.deps.getProviderQuery().interrupt(),
-      recordSyntheticDone: (turn) => this.recordSyntheticDone(turn.turnStartMs, turn.interrupted),
+      recordSyntheticDone: (turn) =>
+        this.recordSyntheticDone(turn.turnStartMs, turn.interrupted && !turn.hadProviderError),
     });
     // Every seal path (close, reset, abort) must leave the ledger with an
     // abandoned turn's `done`, even when it has not finished stopping (#4830).
@@ -424,7 +425,7 @@ export class TurnStreamRunner {
         // single terminal while events.jsonl readers always see a `done` with
         // stopReason / durationMs. See turn-stream-runner.fatal-done.ts for the
         // stopReason mapping.
-        if (!doneYielded) this.recordSyntheticDone(turnStartMs);
+        if (!doneYielded) this.recordSyntheticDone(turnStartMs, turn.interrupted);
       }
     }
   }

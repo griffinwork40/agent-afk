@@ -690,3 +690,253 @@ describe('end-of-turn work finishes before the turn is released', () => {
     expect(messageTexts(after)).toEqual(['Echo: after']);
   }, 5000);
 });
+
+// ---------------------------------------------------------------------------
+// R1.2 / R1.3 regression tests (#5173)
+// ---------------------------------------------------------------------------
+
+/**
+ * A provider for R1.2: the turn emits one text delta, then — once the
+ * interrupt fires — the iterator ends with `{done:true}` (no `turn.completed`
+ * terminal).  This is the live-reader case: the consumer is still reading
+ * when `result.done` is true, so the `finally` block records the synthetic
+ * done and must pass `turn.interrupted`.
+ */
+function createNoTerminalProvider(sessionId: string): ModelProvider {
+  const abort = new AbortCoordinator();
+  return {
+    name: 'no-terminal-provider',
+    query(): ProviderQuery {
+      let closed = false;
+      const q: ProviderQuery = {
+        async *[Symbol.asyncIterator](): AsyncIterator<ProviderEvent> {
+          yield {
+            type: 'session.init',
+            info: {
+              sessionId,
+              model: 'claude-sonnet-5',
+              permissionMode: 'bypassPermissions',
+              cwd: process.cwd(),
+              tools: [],
+              slashCommands: [],
+              skills: [],
+              plugins: [],
+              mcpServers: [],
+              apiKeySource: 'api-key',
+              version: 'no-terminal-v1',
+            },
+          };
+          while (!closed) {
+            // Pull the next user message.
+            const controller = abort.begin();
+            try {
+              // Yield one delta so the consumer has something to read and ESC
+              // can fire while the turn is live.
+              yield { type: 'delta.text', text: 'starting', sessionId };
+              // Wait for the interrupt.
+              if (!controller.signal.aborted) {
+                await new Promise<void>((resolve) => {
+                  controller.signal.addEventListener('abort', () => resolve(), { once: true });
+                });
+              }
+              // End the iterator WITHOUT yielding turn.completed — the iterator
+              // just returns, producing {done:true} in the live loop.
+              return;
+            } finally {
+              abort.clear(controller);
+            }
+          }
+        },
+        async interrupt(reason = 'interrupted') {
+          abort.requestAbort(reason);
+        },
+        async setModel() {},
+        async setPermissionMode() {},
+        async supportedCommands() { return []; },
+        async supportedModels() { return []; },
+        async supportedAgents() { return []; },
+        async getContextUsage() {
+          return { tools: [], agents: [], isAutoCompactEnabled: false, apiUsage: null };
+        },
+        async mcpServerStatus() { return []; },
+        async accountInfo() { return { subscriptionType: 'api-key' }; },
+        async rewindFiles() { return { canRewind: false }; },
+        close() { closed = true; abort.markClosed(); },
+      };
+      return q;
+    },
+  };
+}
+
+/**
+ * A provider for R1.3: a "long" turn that — after the interrupt — emits a
+ * provider `error` event and then ends.  The consumer breaks on the first
+ * post-ESC event, so the error arrives during settlement (the abandoned-turn
+ * path), not during live reading.
+ */
+function createSettleErrorProvider(sessionId: string): {
+  provider: ModelProvider;
+  releaseTail: () => void;
+} {
+  let releaseTail: () => void = () => {};
+  const tailGate = new Promise<void>((r) => { releaseTail = r; });
+  const abort = new AbortCoordinator();
+  let turnCount = 0;
+
+  const provider: ModelProvider = {
+    name: 'settle-error-provider',
+    query(): ProviderQuery {
+      let closed = false;
+      const q: ProviderQuery = {
+        async *[Symbol.asyncIterator](): AsyncIterator<ProviderEvent> {
+          yield {
+            type: 'session.init',
+            info: {
+              sessionId,
+              model: 'claude-sonnet-5',
+              permissionMode: 'bypassPermissions',
+              cwd: process.cwd(),
+              tools: [],
+              slashCommands: [],
+              skills: [],
+              plugins: [],
+              mcpServers: [],
+              apiKeySource: 'api-key',
+              version: 'settle-error-v1',
+            },
+          };
+          while (!closed) {
+            const controller = abort.begin();
+            try {
+              if (controller.signal.aborted) { abort.clear(controller); return; }
+              const thisTurn = ++turnCount;
+              if (thisTurn === 1) {
+                // "long" first turn: emit a delta so the consumer has something
+                // to read, then wait for the abort.
+                yield { type: 'delta.text', text: 'starting', sessionId };
+                if (!controller.signal.aborted) {
+                  await new Promise<void>((resolve) => {
+                    controller.signal.addEventListener('abort', () => resolve(), { once: true });
+                  });
+                }
+                // The consumer already broke on `aborting:` (the first post-ESC
+                // event), so whatever we yield from here is in settlement.
+                // Emit a delta so the consumer can break, THEN emit the error.
+                yield { type: 'delta.text', text: 'aborting', sessionId };
+                // Wait for the test to release the tail (slow-to-die tool).
+                await tailGate;
+                // During settlement: emit the provider error.
+                yield { type: 'error', error: new Error('provider 500') };
+                return;
+              } else {
+                // Second turn: a clean echo.
+                yield { type: 'assistant.message', text: 'Echo: after', sessionId };
+                abort.clear(controller);
+                yield {
+                  type: 'turn.completed',
+                  usage: {
+                    resultSubtype: 'success',
+                    stopReason: 'end_turn',
+                    durationMs: 5,
+                    totalCostUsd: 0.001,
+                    inputTokens: 10,
+                    outputTokens: 2,
+                    raw: { input_tokens: 10, output_tokens: 2 },
+                  },
+                  sessionId,
+                };
+              }
+            } finally {
+              abort.clear(controller);
+            }
+          }
+        },
+        async interrupt(reason = 'interrupted') {
+          abort.requestAbort(reason);
+        },
+        async setModel() {},
+        async setPermissionMode() {},
+        async supportedCommands() { return []; },
+        async supportedModels() { return []; },
+        async supportedAgents() { return []; },
+        async getContextUsage() {
+          return { tools: [], agents: [], isAutoCompactEnabled: false, apiUsage: null };
+        },
+        async mcpServerStatus() { return []; },
+        async accountInfo() { return { subscriptionType: 'api-key' }; },
+        async rewindFiles() { return { canRewind: false }; },
+        close() { closed = true; abort.markClosed(); },
+      };
+      return q;
+    },
+  };
+  return { provider, releaseTail };
+}
+
+describe('synthetic done label: live-reader fallback (R1.2 #5173)', () => {
+  /**
+   * When the user ESCs and the provider iterator ends with `{done:true}` (no
+   * terminal `turn.completed`) the synthetic done must carry
+   * `stopReason: 'interrupted'`, not `'error'`.
+   *
+   * Pre-fix: `recordSyntheticDone(turnStartMs)` was called without the
+   * `turn.interrupted` flag, so the signal-based fallback always mapped to
+   * 'error' (the abort signal is not set on the session when the user ESCs).
+   */
+  it('records stopReason interrupted when the iterator ends with done=true after ESC', async () => {
+    const sessionId = `r1-2-interrupted-${Date.now()}`;
+    const provider = createNoTerminalProvider(sessionId);
+    const session = new AgentSession({ model: 'sonnet', provider });
+
+    // sendThenEscAndBreak: ESC fires while the live reader is reading events,
+    // then it breaks on the next event.  The provider interrupt sets the abort
+    // flag and returns from its generator, so result.done=true in the live loop.
+    await sendThenEscAndBreak(session, 'long task');
+    await session.close();
+
+    const records: LedgerRecord[] = [];
+    for await (const r of readLedger(sessionId)) records.push(r);
+    const done = records.find((r) => r.kind === 'done');
+    // Before the fix this was 'error'; after the fix it must be 'interrupted'.
+    expect(done?.stopReason).toBe('interrupted');
+  });
+});
+
+describe('synthetic done label: abandoned-turn settlement error (R1.3 #5173)', () => {
+  /**
+   * When an abandoned turn's settlement encounters a provider `error` event
+   * (stream stall, 4xx, connection error) the synthetic done must carry a
+   * fatal stopReason (`'error'`), not `'interrupted'`.
+   *
+   * Pre-fix: `settle()` always set `turn.interrupted = true` unconditionally,
+   * so the hook always called `buildInterruptedDone` even when the stream
+   * errored rather than completing cleanly.
+   */
+  it('records a fatal stopReason when settlement sees a provider error event', async () => {
+    const sessionId = `r1-3-settle-error-${Date.now()}`;
+    const { provider, releaseTail } = createSettleErrorProvider(sessionId);
+    const session = new AgentSession({ model: 'sonnet', provider });
+
+    // ESC the first turn so it becomes abandoned; the consumer breaks on the
+    // first post-ESC delta ('aborting'), leaving the error event for settle().
+    await sendThenEscAndBreak(session, 'long task');
+
+    // Start the second (clean) turn while the first is still settling.
+    const afterDone = collect(session, 'after');
+    // Let the tail release so the error event is emitted during settlement.
+    await new Promise((r) => setTimeout(r, 20));
+    releaseTail();
+
+    await afterDone;
+    await session.close();
+
+    const records: LedgerRecord[] = [];
+    for await (const r of readLedger(sessionId)) records.push(r);
+    const dones = records.filter((r) => r.kind === 'done');
+    // The first done (the abandoned+error turn) must NOT be 'interrupted'.
+    expect(dones[0]?.stopReason).not.toBe('interrupted');
+    // It should map to a fatal reason: the signal is not aborted (user ESC
+    // only aborts the provider scope, not the session signal), so 'error'.
+    expect(dones[0]?.stopReason).toBe('error');
+  }, 5000);
+});
