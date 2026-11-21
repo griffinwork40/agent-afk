@@ -20,6 +20,7 @@ export interface GlobalChatClientOptions extends TransportOptions {
 type UnsignedAction = Extract<ClientFrame, { id: string }> extends infer F
   ? F extends { id: string } ? Omit<F, 'sig'> : never : never;
 interface Pending {
+  sent: boolean;
   resolve(result: ChatActionResult): void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -116,8 +117,9 @@ export class GlobalChatClient implements ChatClient {
         this.#pending.delete(frame.id);
         resolve({ ok: false, id: frame.id, code: 'timeout', message: 'Chat action timed out' });
       }, 10_000);
-      this.#pending.set(frame.id, { resolve, timer });
-      if (!this.#transport.send({ ...frame, sig })) this.#settle(frame.id, disconnected());
+      const pending: Pending = { resolve, timer, sent: false };
+      this.#pending.set(frame.id, pending);
+      if (!this.#transport.send({ ...frame, sig }, () => { pending.sent = true; })) this.#failPending();
     });
   }
   #settle(id: string, result: ChatActionResult): void {
@@ -128,7 +130,11 @@ export class GlobalChatClient implements ChatClient {
     pending.resolve(result);
   }
   #failPending(): void {
-    for (const id of this.#pending.keys()) this.#settle(id, disconnected());
+    for (const [id, pending] of this.#pending) {
+      this.#settle(id, pending.sent
+        ? { ok: false, id, code: 'delivery_unknown', message: 'Connection lost before delivery was confirmed' }
+        : disconnected());
+    }
   }
   async #clean(message: Msg): Promise<boolean> {
     return await verifyMsg(message) && sanitizeChatText(message.text) === message.text &&

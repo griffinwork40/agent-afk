@@ -73,9 +73,14 @@ export class ChatTransport {
     this.#status('connecting');
     this.#dial();
   }
-  send(frame: object): boolean {
+  send(frame: object, handedToSocket?: () => void): boolean {
     if (!this.#socket || this.#stopped) return false;
-    try { this.#socket.send(JSON.stringify(frame)); return true; }
+    try {
+      const data = JSON.stringify(frame);
+      handedToSocket?.();
+      this.#socket.send(data);
+      return true;
+    }
     catch { this.#lost(); return false; }
   }
   welcomed(): void {

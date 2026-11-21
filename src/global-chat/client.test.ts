@@ -820,19 +820,20 @@ describe('terminal error codes', () => {
 // 12. PENDING ACTIONS FAILED ON DISCONNECT
 // ============================================================
 describe('pending actions failed on disconnect', () => {
-  it('resolves pending post with not_connected when socket drops', async () => {
+  it('resolves transmitted post with delivery_unknown when socket drops', async () => {
     const ctx = await setup();
     const sock = await connectAndWelcome(ctx);
     const postP = ctx.client.post('hello world');
     await flushAsync();
+    expect(sentOfType(sock, 'post')).toHaveLength(1);
     sock.triggerClose();
     await flushAsync();
     const result = await postP;
     expect(result.ok).toBe(false);
-    expect((result as { code: string }).code).toBe('not_connected');
+    expect((result as { code: string }).code).toBe('delivery_unknown');
   });
 
-  it('resolves pending report with not_connected on close()', async () => {
+  it('resolves transmitted report with delivery_unknown on close()', async () => {
     const ctx = await setup();
     await connectAndWelcome(ctx);
     const reportP = ctx.client.report('a'.repeat(32));
@@ -840,7 +841,7 @@ describe('pending actions failed on disconnect', () => {
     ctx.client.close();
     const result = await reportP;
     expect(result.ok).toBe(false);
-    expect((result as { code: string }).code).toBe('not_connected');
+    expect((result as { code: string }).code).toBe('delivery_unknown');
   });
 });
 
