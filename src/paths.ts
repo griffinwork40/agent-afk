@@ -834,4 +834,5 @@ export { getRemoteHostsPath } from './paths.remote.js';
 export * from './paths.checkpoint.js';
 export { getArtifactRegistryDir, getArtifactStoreDir, getArtifactIndexPath } from './paths.artifact.js';
 export { getWorkspaceExperimentDir } from './paths.experiments.js';
+export { getGlobalChatDir, getGlobalChatIdentityPath, getGlobalChatMutesPath } from './paths.global-chat.js';
 
