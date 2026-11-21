@@ -10,17 +10,15 @@
  *
  * The canonical session `cwd` is NOT stored here: it lives in a per-session
  * record (acp.session-record.ts). An earlier build stored it in this map as
- * `{ afkId?, cwd? }`; that shape still loads, and its `cwd` is readable through
- * readLegacyAcpCwd as a fallback for sessions without a record.
+ * `{ afkId?, cwd? }`; that shape still loads for id resolution only.
  *
  * Contract:
  *   - The map is a flat JSON object written atomically. An entry is a string
- *     (the afkId) or, from the earlier build, `{ afkId?, cwd? }`.
+ *     (the afkId) or, from the earlier build, `{ afkId?, cwd? }` (cwd ignored).
  *   - readAcpSessionMap / writeAcpSessionMap are the only I/O entry-points.
  *   - resolveAcpId returns the afkId if mapped, otherwise the acpId itself
  *     (fast path: seeded id == journal id, no afkId needed); both shapes resolve.
- *   - recordAcpMapping is a no-op when acpId === afkId (fast path); it is the
- *     only writer and keeps a legacy `cwd` already in the entry.
+ *   - recordAcpMapping is a no-op when acpId === afkId (fast path).
  *
  * @module cli/commands/acp.session-map
  */
@@ -33,6 +31,8 @@ import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
 
 export interface AcpSessionEntry { afkId?: string; cwd?: string }
 export type AcpSessionMap = Record<string, string | AcpSessionEntry>;
+// Note: `cwd` in AcpSessionEntry is from an earlier build; it is preserved on
+// disk for forward-compatibility but is no longer read by this module.
 
 function entryOf(value: unknown): AcpSessionEntry {
   if (typeof value === 'string') return { afkId: value };
@@ -72,17 +72,8 @@ export async function writeAcpSessionMap(map: AcpSessionMap): Promise<void> {
 export async function recordAcpMapping(acpId: string, afkId: string): Promise<void> {
   if (acpId === afkId) return;
   const map = readAcpSessionMap();
-  const legacyCwd = entryOf(map[acpId]).cwd;
-  map[acpId] = legacyCwd === undefined ? afkId : { afkId, cwd: legacyCwd };
+  map[acpId] = afkId;
   await writeAcpSessionMap(map);
-}
-
-/**
- * Read-only: the `cwd` an earlier build stored in the map entry for `acpId`,
- * or undefined (string entry, unknown id, or no `cwd`). Nothing writes it now.
- */
-export function readLegacyAcpCwd(acpId: string): string | undefined {
-  return entryOf(readAcpSessionMap()[acpId]).cwd;
 }
 
 /**

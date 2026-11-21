@@ -27,7 +27,7 @@ vi.mock('../../config/env.js', () => ({
 }));
 
 // Import AFTER mock registration so paths resolve against tmpHome.
-const { readAcpSessionMap, writeAcpSessionMap, recordAcpMapping, resolveAcpId, readLegacyAcpCwd } =
+const { readAcpSessionMap, writeAcpSessionMap, recordAcpMapping, resolveAcpId } =
   await import('./acp.session-map.js');
 
 beforeEach(() => {
@@ -82,34 +82,31 @@ describe('resolveAcpId', () => {
 });
 
 describe('legacy object entries (written by an earlier build)', () => {
-  it('an object entry still resolves its afkId and exposes its cwd read-only', async () => {
+  it('an object entry still resolves its afkId', async () => {
     await writeAcpSessionMap({ 'acp-id': { afkId: 'afk-id', cwd: '/ws' } });
     expect(resolveAcpId('acp-id')).toBe('afk-id');
-    expect(readLegacyAcpCwd('acp-id')).toBe('/ws');
   });
 
   it('a cwd-only entry resolves to the acp id itself', async () => {
     await writeAcpSessionMap({ 'acp-1': { cwd: '/ws' } });
     expect(resolveAcpId('acp-1')).toBe('acp-1');
-    expect(readLegacyAcpCwd('acp-1')).toBe('/ws');
   });
 
-  it('a string entry or an unknown id has no legacy cwd', async () => {
+  it('a string entry resolves normally', async () => {
     await writeAcpSessionMap({ 'acp-legacy': 'afk-legacy' });
-    expect(readLegacyAcpCwd('acp-legacy')).toBeUndefined();
-    expect(readLegacyAcpCwd('unknown')).toBeUndefined();
     expect(resolveAcpId('acp-legacy')).toBe('afk-legacy');
   });
 
-  it('recording a mapping keeps a legacy cwd already in the entry', async () => {
+  it('recording a mapping over a legacy object entry writes only the afkId string', async () => {
     await writeAcpSessionMap({ 'acp-id': { cwd: '/ws' } });
     await recordAcpMapping('acp-id', 'afk-id');
     expect(resolveAcpId('acp-id')).toBe('afk-id');
-    expect(readLegacyAcpCwd('acp-id')).toBe('/ws');
+    expect(readAcpSessionMap()['acp-id']).toBe('afk-id');
   });
 
-  it('the module no longer writes a cwd into the shared map', async () => {
+  it('readLegacyAcpCwd is no longer exported', async () => {
     const mod: Record<string, unknown> = await import('./acp.session-map.js');
+    expect(mod['readLegacyAcpCwd']).toBeUndefined();
     expect(mod['recordAcpCwd']).toBeUndefined();
     expect(mod['acpSessionMapSettled']).toBeUndefined();
   });
