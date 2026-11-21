@@ -135,10 +135,10 @@ export interface CliConfig {
       targets?: number[];
     };
     /**
-     * AFK-mode "Done" verification gate (opt-in; default off when omitted). When
-     * true, a terminal-state push whose kind is `Done` is relabelled
-     * "⚠️ Done (unverified)" unless the turn produced corroborating evidence — a
-     * successful file write/edit or executed command (see
+     * "Done" verification gate for Telegram pushes (opt-in; default off when
+     * omitted). When true, a terminal-state push whose kind is `Done` is
+     * relabelled "⚠️ Done (unverified)" unless the turn produced corroborating
+     * evidence — a successful file write/edit or executed command (see
      * `doneHasCorroboratingEvidence` in `afk-push.ts`). Keeps the "get pinged
      * when it finishes" notification honest without blocking the turn.
      */
@@ -256,15 +256,14 @@ export interface CliConfig {
    */
   fallbackModel?: string;
   /**
-   * AFK-mode terminal-state enforcement gate (opt-in; default off when omitted).
-   * When true, in autonomous mode a turn that self-certifies `Done` with no
-   * corroborating evidence — a successful file write/edit or executed command
-   * (see `doneHasCorroboratingEvidence` in `afk-push.ts`) — gets a framework
+   * Terminal-state enforcement gate (opt-in; default off when omitted). When
+   * true, a turn that self-certifies `Done` with no corroborating evidence — a
+   * successful file write/edit or executed command (see
+   * `doneHasCorroboratingEvidence` in `afk-push.ts`) — gets a framework
    * correction injected into the NEXT turn, which must substantiate or downgrade
    * the claim (issue #237). Human-tier: a self-honesty check the agent must not
-   * disable on its own config (same rationale as `telegram.verifyDone`). The
-   * sibling `telegram.verifyDone` only relabels the Telegram push; this one
-   * bounces the turn.
+   * disable on its own config. The sibling `telegram.verifyDone` only relabels
+   * the Telegram push; this one bounces the turn.
    */
   enforceDoneEvidence?: boolean;
   /**
@@ -386,7 +385,8 @@ export interface ConfigFileSchema {
   maxTokens?: number;
   temperature?: number;
   systemPrompt?: string;
-  /** Session permission mode (validated on load): plan | bypassPermissions | acceptEdits | dontAsk | auto. */
+  /** Session permission mode (validated on load): plan | bypassPermissions | acceptEdits | dontAsk | auto.
+   * Note: `autonomous` was removed in #5165. */
   permissionMode?: string;
   autoRouting?: {
     interactive?: boolean;
