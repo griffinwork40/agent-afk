@@ -6,7 +6,7 @@ describe('onboarding screens', () => {
   it('notice fits one 80x24 screen and covers the required points', () => {
     expect(NOTICE_LINES.length + 1).toBeLessThanOrEqual(24);
     const text = renderNotice(80, 24).map(stripAnsi).join('\n');
-    for (const s of ['public', '7 days', 'public key', 'salted', 'only if banned', 'agent context', 'no chat tool', 'not a sandbox', 'no spam', 'no secrets', '/global off']) {
+    for (const s of ['public', '7 days', 'public key', 'salted', 'only if banned', 'agent context', 'no chat tool', 'not sandboxed', 'no spam', 'no secrets', '/global off']) {
       expect(text).toContain(s);
     }
     for (const l of renderNotice(80, 24)) expect(displayWidth(l)).toBeLessThanOrEqual(80);
