@@ -66,7 +66,7 @@ describe('Windows backend — script building', () => {
     const backend = createWindowsBackend();
     await backend.screenshot({ displayIndex: 2 }, SIDECAR);
 
-    const calls = (execFile as ReturnType<typeof vi.fn>).mock.calls;
+    const calls = vi.mocked(execFile).mock.calls;
     const script = (calls[0]![1] as string[])[3]!;
     expect(script).toContain('$idx = 2');
   });
@@ -80,7 +80,7 @@ describe('Windows backend — script building', () => {
     const backend = createWindowsBackend();
     await backend.screenshot({ displayIndex: 0, region: { x: 10, y: 20, width: 400, height: 300 } }, SIDECAR);
 
-    const script = ((execFile as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string[])[3]!;
+    const script = (vi.mocked(execFile).mock.calls[0]![1] as string[])[3]!;
     expect(script).toContain('$useRegion = $true');
     expect(script).toContain('$rx = 10');
     expect(script).toContain('$ry = 20');
@@ -97,7 +97,7 @@ describe('Windows backend — script building', () => {
     const backend = createWindowsBackend();
     await backend.screenshot({ displayIndex: 0 }, SIDECAR);
 
-    const script = ((execFile as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string[])[3]!;
+    const script = (vi.mocked(execFile).mock.calls[0]![1] as string[])[3]!;
     expect(script).toContain('$useRegion = $false');
   });
 
@@ -110,7 +110,7 @@ describe('Windows backend — script building', () => {
     const backend = createWindowsBackend();
     await backend.screenshot({ displayIndex: 1, region: { x: 50, y: 60, width: 400, height: 300 } }, SIDECAR);
 
-    const script = ((execFile as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string[])[3]!;
+    const script = (vi.mocked(execFile).mock.calls[0]![1] as string[])[3]!;
     // The script adds screen.Bounds.X to rx — verify the formula is present
     expect(script).toContain('$absX = $screen.Bounds.X + $rx');
     expect(script).toContain('$absY = $screen.Bounds.Y + $ry');

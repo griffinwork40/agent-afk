@@ -89,7 +89,7 @@ describe('macOS backend — buildArgs / screencapture invocation', () => {
     const backend = createMacOsBackend();
     await backend.screenshot({ displayIndex: 0 }, SIDECAR);
 
-    const calls = (execFile as ReturnType<typeof vi.fn>).mock.calls;
+    const calls = vi.mocked(execFile).mock.calls;
     const screencaptureCall = calls.find((c: unknown[]) => c[0] === 'screencapture');
     expect(screencaptureCall).toBeDefined();
     const args = screencaptureCall![1] as string[];
@@ -110,7 +110,7 @@ describe('macOS backend — buildArgs / screencapture invocation', () => {
     const backend = createMacOsBackend();
     await backend.screenshot({ displayIndex: 2 }, SIDECAR);
 
-    const calls = (execFile as ReturnType<typeof vi.fn>).mock.calls;
+    const calls = vi.mocked(execFile).mock.calls;
     const sc = calls.find((c: unknown[]) => c[0] === 'screencapture');
     const args = sc![1] as string[];
     expect(args[args.indexOf('-D') + 1]).toBe('3');
@@ -125,7 +125,7 @@ describe('macOS backend — buildArgs / screencapture invocation', () => {
     const backend = createMacOsBackend();
     await backend.screenshot({ displayIndex: 0, region: { x: 10, y: 20, width: 400, height: 300 } }, SIDECAR);
 
-    const calls = (execFile as ReturnType<typeof vi.fn>).mock.calls;
+    const calls = vi.mocked(execFile).mock.calls;
     const sc = calls.find((c: unknown[]) => c[0] === 'screencapture');
     const args = sc![1] as string[];
     expect(args).toContain('-R');
