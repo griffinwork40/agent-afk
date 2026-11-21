@@ -42,11 +42,24 @@ export function worktreeScratchRule(scratchPath: string): string {
   );
 }
 
-/** Worktree-only preamble paragraphs for `cwd`; empty outside a worktree. */
-export function renderWorktreeRules(cwd: string | undefined): string[] {
+/**
+ * Worktree-only preamble paragraphs for `cwd`; empty outside a worktree.
+ *
+ * @param scratchDisposable - Pass `true` only when the worktree's
+ *   `.afk-worktree-meta.json` carries `scratchDisposable: true` (set by
+ *   `createManagedWorktree` at creation time). When false or absent the
+ *   scratch-dir sentence is suppressed: the directory is protected by the
+ *   sweep's ignored-local-state check and must not be described as disposable.
+ */
+export function renderWorktreeRules(
+  cwd: string | undefined,
+  scratchDisposable?: boolean,
+): string[] {
   if (cwd === undefined || !isWorktreeCwd(cwd)) return [];
   const root = extractWorktreePath(cwd);
   const rules = [WORKTREE_STASH_RULE];
-  if (root !== undefined) rules.push(worktreeScratchRule(`${root}/${AFK_SCRATCH_DIR}/`));
+  if (root !== undefined && scratchDisposable === true) {
+    rules.push(worktreeScratchRule(`${root}/${AFK_SCRATCH_DIR}/`));
+  }
   return rules;
 }

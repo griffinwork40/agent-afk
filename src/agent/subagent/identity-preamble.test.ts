@@ -174,15 +174,38 @@ describe('renderSubagentIdentityPreamble', () => {
     expect(out).toContain(WORKTREE_STASH_RULE);
   });
 
-  it('emits the scratch-dir rule naming the worktree ROOT .afk-scratch/ when cwd is in a worktree', () => {
+  it('emits the scratch-dir rule naming the worktree ROOT .afk-scratch/ when cwd is in a worktree AND scratchDisposable is true', () => {
     const out = renderSubagentIdentityPreamble({
       isNonInteractive: true,
       depth: 1,
       maxDepth: 3,
       cwd: '/repo/.afk-worktrees/my-slug/src/deep',
+      scratchDisposable: true,
     });
     expect(out).toContain(worktreeScratchRule('/repo/.afk-worktrees/my-slug/.afk-scratch/'));
     expect(out).toContain('deleted with the worktree');
+  });
+
+  it('does NOT emit the scratch-dir rule when in a worktree but scratchDisposable is absent (opt-in required)', () => {
+    const out = renderSubagentIdentityPreamble({
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      cwd: '/repo/.afk-worktrees/my-slug/src/deep',
+      // scratchDisposable intentionally omitted
+    });
+    expect(out).not.toContain('.afk-scratch');
+  });
+
+  it('does NOT emit the scratch-dir rule when in a worktree but scratchDisposable is false', () => {
+    const out = renderSubagentIdentityPreamble({
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      cwd: '/repo/.afk-worktrees/my-slug/src/deep',
+      scratchDisposable: false,
+    });
+    expect(out).not.toContain('.afk-scratch');
   });
 
   it('does NOT emit the scratch-dir rule outside a worktree', () => {
