@@ -70,7 +70,7 @@ export interface ResumeHistoryTurn {
  * at `src/cli/commands/interactive/loop-iteration.ts`.
  */
 export interface PlanExitControls {
-  /** Flip the live session permission mode on approval (e.g. 'default' | 'bypassPermissions'). */
+  /** Flip the live session permission mode on approval (e.g. 'plan' | 'bypassPermissions'). */
   setPermissionMode(mode: PermissionMode): Promise<void>;
   /**
    * Queue the crafted implement-turn message AND the approved mode for the REPL

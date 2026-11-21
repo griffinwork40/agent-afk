@@ -109,7 +109,7 @@ export function registerConfigCommand(program: Command): void {
         console.log(`  Permission Mode: ${bypassEnabled ? palette.warning(`${permissionMode} (bypass — path containment off)`) : palette.info(`${permissionMode} (path containment on)`)}`);
 
         console.log(palette.meta('\n  Edit config:'));
-        console.log(palette.meta('    afk config set permissionMode default  # re-enable path containment'));
+        console.log(palette.meta('    afk config set permissionMode plan      # re-enable path containment'));
         console.log(palette.meta('    afk config set <key> <value>      e.g. afk config set model opus'));
         console.log(palette.meta('    afk config env set <KEY> [value]  e.g. afk config env set AFK_EFFORT high'));
         console.log(palette.meta('    afk config get [key] / afk config env get [key]'));

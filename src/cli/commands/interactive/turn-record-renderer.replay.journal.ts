@@ -211,7 +211,7 @@ async function renderTurn(turn: ReplayTurn, sink: WriterSink): Promise<void> {
     // passing it to formatSubmittedEcho, which writes it to the terminal.
     // Fix: derive isTTY from the same forceNonTty:true setting that renderRound
     // uses, so piped/redirected stdout never sees an inconsistent prompt style.
-    sink.fn(formatSubmittedEcho({ buffer: stripEscapeSequences(turn.user), promptText: buildPrompt('default'), isTTY: false }));
+    sink.fn(formatSubmittedEcho({ buffer: stripEscapeSequences(turn.user), promptText: buildPrompt('bypassPermissions'), isTTY: false }));
   }
   // Invariant: one renderer per model ROUND, each disposed before the next
   // starts. dispose() is the flush gate that commits pending markdown, and on
