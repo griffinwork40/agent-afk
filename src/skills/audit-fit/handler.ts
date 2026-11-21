@@ -10,6 +10,7 @@ import { mkdir, appendFile } from 'fs/promises';
 import { join } from 'path';
 import { loadSkillPrompts } from '../_lib/prompt-loader.js';
 import type { SkillExecutionContext } from '../index.js';
+import { forkConfigGate } from '../../agent/tools/nesting.can-use-tool.js';
 import { resolveChildModel, defaultTierModelFallback } from '../../agent/subagent/resolve-child-model.js';
 import { SubagentManager } from '../../agent/subagent.js';
 import { runWave } from '../../agent/subagent/wave.js';
@@ -83,6 +84,7 @@ async function runInspectors(
   skillCallId: string | undefined,
   inspectorTools: Set<string>,
   modelFallback?: { model: string },
+  childGate?: SkillExecutionContext['childGate'],
 ): Promise<Verdict[]> {
   if (configs.length === 0) return [];
 
@@ -103,7 +105,8 @@ async function runInspectors(
         config: {
           model: subagentModel,
           systemPrompt: `${researchAgent.systemPrompt}\n\n${cfg.prompt}`,
-          canUseTool: createCanUseTool(),
+          // Inspector allowlist first, then the surface gate (ctx.childGate).
+          ...forkConfigGate(childGate, `inspector-${cfg.type}`, createCanUseTool()),
         },
         idPrefix: `inspector-${cfg.type}`,
         agentType: `inspector-${cfg.type}`,
@@ -333,7 +336,7 @@ export async function handler(
   }
 
   const allVerdicts = await runInspectors(
-    inspectorConfigs, manager, subagentModel, sessionId, skillCallId, inspectorTools, modelFallback,
+    inspectorConfigs, manager, subagentModel, sessionId, skillCallId, inspectorTools, modelFallback, ctx?.childGate,
   );
 
   const { inventory, misfits } = aggregateVerdicts(allVerdicts);

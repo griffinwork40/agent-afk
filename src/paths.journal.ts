@@ -1,6 +1,6 @@
 import { join } from 'path';
 
-import { getSessionLedgerDir } from './paths.js';
+import { getSessionLedgerDir, getAfkStateDir, isSafeLedgerSessionId } from './paths.js';
 
 /**
  * Message-journal paths (docs/message-journal.md). Everything lives inside the
@@ -53,4 +53,34 @@ export function getSessionLedgerArchivePath(sessionId: string, stamp: string): s
     throw new Error(`Invalid ledger archive stamp: ${JSON.stringify(stamp)}`);
   }
   return join(getSessionLedgerDir(sessionId), `events.reset-${stamp}.jsonl`);
+}
+
+/**
+ * Path for the ACP-id → AFK-journal-id mapping file.
+ *
+ * Lives at `$AFK_STATE_DIR/acp/session-map.json`, a single JSON object
+ * `{ [acpId: string]: string | { afkId?: string; cwd?: string } }` written
+ * atomically via atomicWriteFileAsync. It is written only when a provider
+ * reports a journal id other than the ACP id. A string entry is the afkId; the
+ * object shape was written by an earlier build, whose `cwd` is read only as a
+ * fallback for sessions without a per-session record
+ * ({@link getAcpSessionRecordPath}). Host-local only; not a credential or
+ * portable export.
+ */
+export function getAcpSessionMapPath(): string {
+  return join(getAfkStateDir(), 'acp', 'session-map.json');
+}
+
+/**
+ * Per-session ACP record: `$AFK_STATE_DIR/acp/sessions/<acpId>.json`, holding
+ * `{ "cwd": "<canonical session directory>" }`. One file per ACP session id, so
+ * two `afk acp` processes never write the same file.
+ *
+ * @throws if `acpId` fails {@link isSafeLedgerSessionId} (the ledger id guard).
+ */
+export function getAcpSessionRecordPath(acpId: string): string {
+  if (!isSafeLedgerSessionId(acpId)) {
+    throw new Error(`Invalid ACP session id for record path: ${JSON.stringify(acpId)}`);
+  }
+  return join(getAfkStateDir(), 'acp', 'sessions', `${acpId}.json`);
 }

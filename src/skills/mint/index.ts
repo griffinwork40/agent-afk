@@ -19,6 +19,7 @@
 import { registerSkill, type SkillExecutionContext, type SkillMetadata } from '../index.js';
 import { resolveChildModel, defaultTierModelFallback } from '../../agent/subagent/resolve-child-model.js';
 import { setMintModelFallback } from './_phases/model-fallback.js';
+import { setMintChildGate } from './_phases/child-gate.js';
 import type { AgentModelInput, IAgentSession } from '../../agent/types.js';
 import type { TraceSink } from '../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../agent/workspace/index.js';
@@ -378,6 +379,7 @@ function finalizeAfterSpec(sessionId: string, result: MintResult): MintResult {
     // Remove the module-scoped fallbackBySession entry so long-lived daemon
     // processes do not accumulate one entry per completed mint invocation.
     setMintModelFallback(sessionId, undefined);
+    setMintChildGate(sessionId, undefined);
   }
   return result;
 }
@@ -405,6 +407,7 @@ async function handler(
   const defaultSubagentModel = resolvedPhaseModel.model;
   // Every mint phase fork reads this back (see _phases/model-fallback.ts).
   setMintModelFallback(parentSessionId, defaultTierModelFallback(resolvedPhaseModel, ctx?.defaultModel));
+  setMintChildGate(parentSessionId, ctx?.childGate); // surface approval gate (_phases/child-gate.ts)
 
   // Resume path — caller-supplied resumeFrom wins; otherwise reload the last
   // paused state for this session from disk.
@@ -423,6 +426,7 @@ async function handler(
       // accumulate stale entries. finalizeAfterSpec handles the success path;
       // calling setMintModelFallback(…, undefined) twice is a no-op. (#4203)
       setMintModelFallback(parentSessionId, undefined);
+      setMintChildGate(parentSessionId, undefined);
     }
   }
 
@@ -468,6 +472,7 @@ async function handler(
   } finally {
     // Guard: clean up fallbackBySession on throw. (#4203)
     setMintModelFallback(parentSessionId, undefined);
+    setMintChildGate(parentSessionId, undefined);
   }
 }
 

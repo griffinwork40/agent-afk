@@ -4,6 +4,7 @@
  * Re-runs verification after applying fixes.
  */
 
+import { mintChildGate } from './child-gate.js';
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../../agent/workspace/index.js';
@@ -124,6 +125,7 @@ export async function runHealPhase(
         model: defaultSubagentModel,
         systemPrompt: healPrompt,
         apiKey: resolveCredentialForModel(defaultSubagentModel),
+        ...mintChildGate(parentSession.sessionId, 'mint-heal'), // surface approval gate
       },
       idPrefix: 'mint-heal',
       agentType: 'mint-heal',
