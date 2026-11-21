@@ -132,6 +132,15 @@ describe('/global command', () => {
     expect(h.client.posts).toEqual([]);
   });
 
+  it('explains how to recover a corrupt or unreadable identity without overwriting it', async () => {
+    const h = harness();
+    h.identity.isNoticeAccepted = async () => { throw new Error('corrupt'); };
+    await h.cmd.handler(h.ctx, '');
+    expect(h.all()).toContain('Move it aside');
+    expect(h.all()).toContain('Nothing was overwritten');
+    expect(h.compositor.suspendInput).not.toHaveBeenCalled();
+  });
+
   it('reports storage failures in one line', async () => {
     const h = harness();
     h.identity.disable = async () => { throw new Error('disk'); };
@@ -140,7 +149,7 @@ describe('/global command', () => {
     const h2 = harness();
     h2.identity.isNoticeAccepted = async () => { throw new Error('disk'); };
     await h2.cmd.handler(h2.ctx, '');
-    expect(h2.out.error).toHaveBeenCalledWith(expect.stringContaining('could not start'));
+    expect(h2.out.error).toHaveBeenCalledWith(expect.stringContaining('Could not read the chat identity file'));
     expect(h2.compositor.suspendInput).not.toHaveBeenCalled();
   });
 });

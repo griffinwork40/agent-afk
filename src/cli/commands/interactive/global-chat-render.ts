@@ -139,7 +139,7 @@ const HINT = 'Enter send | PgUp/PgDn scroll | /help | Esc leave';
 
 function tinyFrame(state: ChatViewState, cols: number, rows: number): ChatFrame {
   const lines: string[] = [];
-  if (rows >= 2) lines.push(palette.dim('enlarge window'));
+  if (rows >= 2) lines.push(palette.dim(`Enlarge window to at least ${MIN_COLUMNS}x${MIN_ROWS}.`));
   while (lines.length < rows - 1) lines.push('');
   if (rows >= 1) lines.push(inputLine(state, cols));
   return { lines: lines.map((l) => truncateDisplayWidth(l, cols)), maxScroll: 0 };

@@ -18,6 +18,7 @@ import type { ChatClient, ChatIdentity, IdentityStore, MuteStore } from '../../.
 import { NOTICE_VERSION } from '../../../global-chat/client-types.js';
 import { formatDisplayName } from '../../../global-chat/names.js';
 import { validateChatUrl } from '../../../global-chat/client.transport.js';
+import { getGlobalChatIdentityPath } from '../../../paths.js';
 import { runGlobalChatView, realClock, type ChatClock } from '../../commands/interactive/global-chat-view.js';
 import { explainIdentityFailure } from '../../commands/interactive/global-chat-messages.js';
 import type { ChatCompositor, ChatStdin, ChatStdout } from '../../commands/interactive/global-chat-terminal.js';
@@ -86,7 +87,7 @@ async function openRoom(ctx: SlashContext, deps: GlobalCommandDeps, compositor: 
       ...(deps.hasPendingWork ? { hasPendingWork: deps.hasPendingWork } : {}),
     });
   } catch {
-    ctx.out.error('Global chat could not start (could not read its local state).');
+    ctx.out.error(`Could not read the chat identity file at ${getGlobalChatIdentityPath()}. Move it aside to create a new identity with a new tag. Nothing was overwritten.`);
   } finally {
     ctx.resumeFooter?.();
   }

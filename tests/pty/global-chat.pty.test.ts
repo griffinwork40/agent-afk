@@ -72,6 +72,15 @@ describe.skipIf(!avail.ok)('global chat view in a real pty: behaviours', () => {
     } finally { s.dispose(); }
   });
 
+  it('keeps a removed message as a placeholder in the real terminal', async () => {
+    const s = await openChat();
+    try {
+      s.signal('SIGUSR1');
+      await s.waitForText('[removed]');
+      await leaveAndCheckRepl(s, ESC);
+    } finally { s.dispose(); }
+  });
+
   it('a refused post restores the text and shows the reason', async () => {
     const s = await openChat();
     try {
@@ -230,6 +239,19 @@ describe.skipIf(!avail.ok)('global chat first run in a real pty', () => {
       await s.waitFor(() => s.term.buffer.active.type === 'normal', 'normal buffer');
       s.type('back\r');
       expect((await s.waitForEvent('done'))['submitted']).toBe('back');
+    } finally { s.dispose(); }
+  });
+
+  it('does not ask for consent until the full notice fits', async () => {
+    const s = await openChat(40, 12, 'smallnotice');
+    try {
+      await s.waitForText('Enlarge window to 80x');
+      expect(s.screen().join('\n')).not.toContain('Join?');
+      s.type('y');
+      await s.sleep(100);
+      expect(s.screen().join('\n')).toContain('Enlarge window');
+      s.type(ESC);
+      await s.waitForEvent('closed');
     } finally { s.dispose(); }
   });
 
