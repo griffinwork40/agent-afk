@@ -25,6 +25,28 @@ const NAMED: Readonly<Record<string, ChatKey>> = {
   '\x1b[a': { kind: 'lineUp' }, '\x1b[b': { kind: 'lineDown' },
 };
 
+const PASTE_END = '\x1b[201~';
+// eslint-disable-next-line no-control-regex
+const INCOMPLETE_TAIL = /^(?:|\[[0-?]*[ -/]*|O|\][^\x07\x1b]*)$/;
+
+/**
+ * Split a chunk into the part that can be parsed now and a trailing part that
+ * may continue in the next read.
+ *
+ * External constraint: a terminal delivers an escape sequence or a bracketed
+ * paste in as many reads as the kernel pty decides, so a lone `ESC` byte can be
+ * the first half of an arrow key, PgUp, or paste. The caller holds `pending`
+ * and either prepends it to the next chunk or, after a short timeout with no
+ * more bytes, parses it alone (a real Esc press).
+ */
+export function splitPending(s: string): { ready: string; pending: string } {
+  const pasteAt = s.lastIndexOf(PASTE_START);
+  if (pasteAt >= 0 && s.indexOf(PASTE_END, pasteAt) < 0) return { ready: s.slice(0, pasteAt), pending: s.slice(pasteAt) };
+  const escAt = s.lastIndexOf('\x1b');
+  if (escAt >= 0 && INCOMPLETE_TAIL.test(s.slice(escAt + 1))) return { ready: s.slice(0, escAt), pending: s.slice(escAt) };
+  return { ready: s, pending: '' };
+}
+
 export function parseKeys(input: Buffer | string): ChatKey[] {
   const s = typeof input === 'string' ? input : input.toString('utf8');
   if (s.includes('\x03')) return [{ kind: 'interrupt' }];

@@ -54,7 +54,7 @@ describe('runGlobalChatView lifecycle', () => {
     expect(h.log.slice(0, 3)).toEqual(['suspend', 'pause', 'write:ENTER']);
     expect(h.stdin.raw).toEqual([true]);
     expect(h.client.connected).toBe(1);
-    h.stdin.type('\x1b');
+    h.stdin.type('\x1b'); h.clock.flush();
     expect(await h.done).toBe('left');
     const tail = h.log.slice(h.log.indexOf('write:LEAVE'));
     expect(tail).toEqual(['write:LEAVE', 'resumeRec', 'resume', 'repaint']);
@@ -211,7 +211,7 @@ describe('runGlobalChatView onboarding', () => {
     await tick(); await tick();
     expect(h.identity.calls).toEqual(['create:admin', 'create:neo', 'accept']);
     expect(h.createClient).toHaveBeenCalledWith(expect.objectContaining({ name: 'neo' }));
-    h.stdin.type('\x1b');
+    h.stdin.type('\x1b'); h.clock.flush();
     expect(await h.done).toBe('left');
   });
 
@@ -223,5 +223,32 @@ describe('runGlobalChatView onboarding', () => {
     expect(h.createClient).toHaveBeenCalledOnce();
     h.stdin.type('\x03');
     await h.done;
+  });
+
+  it('an Esc split from the rest of a PgUp or paste is not read as leave', async () => {
+    const h = await open();
+    h.stdin.type('\x1b');
+    h.stdin.type('[5~');
+    h.stdin.type('\x1b');
+    h.stdin.type('[200~split paste\x1b[201~');
+    expect(screen(h)).toContain('> split paste');
+    expect(h.compositor.resumeInput).not.toHaveBeenCalled();
+    h.stdin.type('\x1b'); h.clock.flush();
+    expect(await h.done).toBe('left');
+  });
+
+  it('repaints again after a resize settles so footer rows drawn on resize are covered', async () => {
+    const h = await open();
+    h.clock.flush();
+    h.stdout.columns = 50;
+    h.stdout.emit('resize');
+    expect(h.clock.tasks.some((t) => t.live && t.ms === 200)).toBe(true);
+    h.stdout.write('\x1b[20;1H\x1b[2K  · idle');
+    h.stdout.writes = [];
+    h.clock.flush();
+    expect(h.stdout.text()).toContain('\x1b[2J');
+    expect(stripAnsi(h.stdout.text())).toContain('Esc leave');
+    h.stdin.type('\x1b'); h.clock.flush();
+    expect(await h.done).toBe('left');
   });
 });

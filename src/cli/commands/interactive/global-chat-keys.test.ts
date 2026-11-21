@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseKeys } from './global-chat-keys.js';
+import { parseKeys, splitPending } from './global-chat-keys.js';
 
 describe('parseKeys', () => {
   it('maps control keys', () => {
@@ -26,5 +26,18 @@ describe('parseKeys', () => {
     expect(parseKeys('\x1b[200~x\ny\x1b[201~')).toEqual([{ kind: 'text', text: '\x1b[200~x\ny\x1b[201~' }]);
     expect(parseKeys('one\ntwo')).toEqual([{ kind: 'text', text: 'one\ntwo' }]);
     expect(parseKeys('hi\r')).toEqual([{ kind: 'text', text: 'hi\r' }]);
+  });
+});
+
+describe('splitPending (escape and paste split across reads)', () => {
+  it('holds a trailing lone ESC or an unfinished CSI', () => {
+    expect(splitPending('\x1b')).toEqual({ ready: '', pending: '\x1b' });
+    expect(splitPending('ab\x1b[5')).toEqual({ ready: 'ab', pending: '\x1b[5' });
+    expect(splitPending('\x1b[5~')).toEqual({ ready: '\x1b[5~', pending: '' });
+    expect(splitPending('x\x1b[Ay')).toEqual({ ready: 'x\x1b[Ay', pending: '' });
+  });
+  it('holds an unfinished bracketed paste until its end marker', () => {
+    expect(splitPending('\x1b[200~half')).toEqual({ ready: '', pending: '\x1b[200~half' });
+    expect(splitPending('\x1b[200~a\x1b[201~')).toEqual({ ready: '\x1b[200~a\x1b[201~', pending: '' });
   });
 });

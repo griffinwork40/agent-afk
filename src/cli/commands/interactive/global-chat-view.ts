@@ -19,7 +19,7 @@ import {
   deleteMessage, mute, scrollDown, scrollUp, setMode, setOnline, setStatus, tagForPubkey, type ChatViewState,
 } from './global-chat-model.js';
 import { renderChat } from './global-chat-render.js';
-import { parseKeys, type ChatKey } from './global-chat-keys.js';
+import { parseKeys, splitPending, type ChatKey } from './global-chat-keys.js';
 import { relayErrorLine, submitLine, type ActionContext } from './global-chat-actions.js';
 import { renderNameScreen, renderNotice } from './global-chat-onboarding.js';
 import { explainIdentityFailure } from './global-chat-messages.js';
@@ -54,6 +54,16 @@ export type GlobalChatOutcome = 'left' | 'declined';
 
 const PAINT_DELAY_MS = 16;
 const PENDING_POLL_MS = 1000;
+/** How long a trailing ESC (or an unfinished paste) waits for the rest of its sequence. */
+const ESC_WAIT_MS = 50;
+const PASTE_WAIT_MS = 500;
+/**
+ * External constraint: REPL footer rows (the loop-stage rail, the verdict
+ * ledger) repaint on ResizeBus's 150ms-debounced resize and are not all
+ * stopped by `ctx.suspendFooter`, so they draw onto this screen after a
+ * resize. A second full repaint after the debounce covers them.
+ */
+const RESIZE_SETTLE_MS = 200;
 const PENDING_BANNER = 'Your agent has results waiting. Esc to return.';
 const NAME_CHARS = /[^a-z0-9_-]/g;
 
@@ -83,6 +93,9 @@ function startSession(deps: GlobalChatViewDeps, pre: Preload, resolve: (o: Globa
   let unsubscribe: (() => void) | null = null;
   let cancelPaint: (() => void) | null = null;
   let cancelPoll: (() => void) | null = null;
+  let pendingInput = '';
+  let cancelPending: (() => void) | null = null;
+  let cancelSettle: (() => void) | null = null;
 
   // Teardown is written before setup (ordered-sequence rule).
   const detach = (): void => {
@@ -91,6 +104,8 @@ function startSession(deps: GlobalChatViewDeps, pre: Preload, resolve: (o: Globa
     stdout.removeListener('resize', onResize);
     cancelPaint?.(); cancelPaint = null;
     cancelPoll?.(); cancelPoll = null;
+    cancelPending?.(); cancelPending = null;
+    cancelSettle?.(); cancelSettle = null;
     try { unsubscribe?.(); } catch { /* ignore */ }
     try { client?.close(); } catch { /* ignore */ }
   };
@@ -205,7 +220,23 @@ function startSession(deps: GlobalChatViewDeps, pre: Preload, resolve: (o: Globa
 
   function onData(data: Buffer | string): void {
     if (!open) return;
-    for (const key of parseKeys(data)) {
+    cancelPending?.(); cancelPending = null;
+    const chunk = pendingInput + (typeof data === 'string' ? data : data.toString('utf8'));
+    pendingInput = '';
+    const { ready, pending } = chunk.includes('\x03') ? { ready: chunk, pending: '' } : splitPending(chunk);
+    if (pending) {
+      pendingInput = pending;
+      cancelPending = clock.schedule(() => {
+        cancelPending = null;
+        const held = pendingInput;
+        pendingInput = '';
+        dispatchKeys(held);
+      }, pending === '\x1b' ? ESC_WAIT_MS : PASTE_WAIT_MS);
+    }
+    if (ready) dispatchKeys(ready);
+  }
+  function dispatchKeys(input: string): void {
+    for (const key of parseKeys(input)) {
       if (!open) return;
       if (key.kind === 'interrupt') return finish(phase.kind === 'chat' ? 'left' : 'declined');
       if (phase.kind === 'notice') onNoticeKey(key);
@@ -215,8 +246,10 @@ function startSession(deps: GlobalChatViewDeps, pre: Preload, resolve: (o: Globa
   }
   function onResize(): void {
     if (!open) return;
-    stdout.write('\x1b[2J');
-    paintNow();
+    const full = (): void => { if (open) { stdout.write('\x1b[2J'); paintNow(); } };
+    full();
+    cancelSettle?.();
+    cancelSettle = clock.schedule(() => { cancelSettle = null; full(); }, RESIZE_SETTLE_MS);
   }
 
   const takeover = takeTerminal({

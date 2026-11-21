@@ -29,16 +29,37 @@ export interface ChatStdout {
 export interface ChatTeardownGuards {
   /** Runs on the REPL's signal/close cleanup path. Returns an unregister function. */
   registerCleanup(fn: () => Promise<void>): () => void;
-  /** Runs synchronously on process exit. Returns a remove function. */
+  /** Runs synchronously on process exit and first on SIGTERM/SIGHUP. Returns a remove function. */
   onProcessExit(fn: () => void): () => void;
+}
+
+const TERM_SIGNALS = ['SIGTERM', 'SIGHUP'] as const;
+
+/**
+ * External constraint: the REPL's SIGTERM/SIGHUP handler closes readline, and
+ * the close handler prints the exit summary synchronously BEFORE it runs the
+ * cleanup registry. So the view also listens for those signals and is put
+ * FIRST in line, leaving the alternate screen before that summary is written.
+ * If the view is the only listener it re-raises, so the signal still ends the
+ * process as it would have without the view.
+ */
+export function onProcessExitOrSignal(fn: () => void): () => void {
+  const onSignal = (sig: NodeJS.Signals): void => {
+    fn();
+    if (process.listenerCount(sig) === 1) { remove(); process.kill(process.pid, sig); }
+  };
+  const remove = (): void => {
+    process.removeListener('exit', fn);
+    for (const sig of TERM_SIGNALS) process.removeListener(sig, onSignal);
+  };
+  process.on('exit', fn);
+  for (const sig of TERM_SIGNALS) process.prependListener(sig, onSignal);
+  return remove;
 }
 
 export const defaultGuards: ChatTeardownGuards = {
   registerCleanup: registerProcessCleanup,
-  onProcessExit: (fn) => {
-    process.on('exit', fn);
-    return () => { process.removeListener('exit', fn); };
-  },
+  onProcessExit: onProcessExitOrSignal,
 };
 
 // DEC private mode 1049 (alternate screen). Teardown constant is declared
