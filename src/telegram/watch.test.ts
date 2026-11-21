@@ -722,16 +722,17 @@ describe('SessionWatchManager — getWatched (criterion 4)', () => {
   });
 });
 
-describe('Criterion 4: daemon /abort writes a HMAC-signed abort_request', () => {
-  it('a signed abort_request written like the daemon /abort handler does verifies correctly', () => {
-    // This test simulates what bot.ts /abort does: read the key, sign, and write.
+describe('Criterion 4: a HMAC-signed abort_request verifies', () => {
+  it('a signed abort_request verifies correctly', () => {
+    // Read the key, sign, and build the record (the retired Telegram /abort
+    // command did this; the library contract remains).
     // Verifying the record with the real verifyAbortRequest confirms the
     // REPL abort-watcher would accept it (Invariant #4).
     const id = freshId();
     const key = ensureSessionKey(id)!;
     expect(key).toBeTruthy();
 
-    // Simulate the /abort command path: sign a nonce exactly as bot.ts does.
+    // Sign a fresh nonce.
     const nonce = freshChannelId();
     const hmac = signAbortRequest(key, id, nonce);
 

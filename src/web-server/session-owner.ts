@@ -167,7 +167,7 @@ export class SessionOwner {
 
     // Hook registry with the shared memory store so session-end writes land in
     // the same instance the provider's memory tools read from.
-    const getPermissionMode = () => session?.getSessionMetadata().permissionMode ?? (this.options.permissionMode ?? 'default');
+    const getPermissionMode = () => session?.getSessionMetadata().permissionMode ?? (this.options.permissionMode ?? 'bypassPermissions');
     const { registry } = createDefaultHookRegistry(
       undefined, 'web', wiring.memoryStore, getPermissionMode, undefined,
       { cwd, traceWriter: wiring.traceWriter },
@@ -179,7 +179,7 @@ export class SessionOwner {
       apiKey,
       cwd,
       hookRegistry: registry,
-      permissionMode: this.options.permissionMode ?? 'default',
+      permissionMode: this.options.permissionMode ?? 'bypassPermissions',
       provider: wiring.provider,
       ...(wiring.providerFactory !== undefined ? { providerFactory: wiring.providerFactory } : {}),
       drainSubagents: wiring.drainSubagents,

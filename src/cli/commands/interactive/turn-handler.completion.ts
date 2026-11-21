@@ -27,8 +27,7 @@ import {
 } from '../../_lib/capture-mode.js';
 import { parseTerminalState, findTerminalStateHeadingOffset, type TerminalState } from './terminal-state.js';
 import { renderVerdictCard } from './verdict-card.js';
-import { pushTerminalStateToTelegram, doneHasCorroboratingEvidence, classifyDoneEvidence } from './afk-push.js';
-import { loadTelegramConfig } from '../../config.js';
+import { doneHasCorroboratingEvidence, classifyDoneEvidence } from './afk-push.js';
 import { printTurnFooter, printTurnSeparator } from './turn-handler.footer.js';
 
 // ─── Context ─────────────────────────────────────────────────────────────────
@@ -136,14 +135,7 @@ export async function handleTurnCompletion(ctx: TurnCompletionContext): Promise<
           h.onTerminalState(verdict, { doneHasCorroboratingEvidence: hasCorroboratingEvidence, doneEvidenceClassification: evidenceClassification });
         } catch { /* ledger update is best-effort */ }
       }
-      // AFK mode: push terminal state to Telegram. Fire-and-forget.
-      if (stats.permissionMode === 'autonomous') {
-        const unverified =
-          verdict.kind === 'done' &&
-          loadTelegramConfig().verifyDone === true &&
-          !hasCorroboratingEvidence;
-        void pushTerminalStateToTelegram(verdict, undefined, { unverified });
-      }
+
     }
 
     printTurnFooter(state.doneMeta, stats, writeAbove);

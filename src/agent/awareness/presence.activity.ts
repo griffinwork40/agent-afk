@@ -19,7 +19,6 @@
  */
 
 import { patchPresenceFile } from './presence.js';
-import { redactSecrets } from '../redact-secrets.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -46,7 +45,7 @@ export const ACTIVITY_PROMPT_HEAD_MAX = 120;
 export interface PresenceActivity {
   /**
    * First ≤120 chars of the raw user-typed text for this turn, after whitespace
-   * collapsing and newline normalization, passed through `redactSecrets`.
+   * collapsing and newline normalization.
    * Set at TURN START so a busy session shows what it is doing now. Absent when
    * the first turn ended before a session id was minted (extremely rare) and no
    * raw text was passed to setPresenceActivityTurnEnd.
@@ -75,7 +74,7 @@ export interface PresenceActivity {
  * Normalize raw user text for safe storage in the presence file:
  *   1. Collapse all whitespace runs (newlines, tabs, etc.) to a single space.
  *   2. Trim leading/trailing whitespace.
- *   3. Run through {@link redactSecrets} on the FULL collapsed string BEFORE
+ *   3. Sliced to ACTIVITY_PROMPT_HEAD_MAX on the FULL collapsed string BEFORE
  *      truncating — truncating first can split a secret below the redactor's
  *      minimum match length (e.g. generic tokens need ≥32 chars, sk-ant- needs
  *      ≥20 chars after the prefix) and leave a near-complete credential.
@@ -90,7 +89,7 @@ export function normalizePromptHead(raw: string): string | undefined {
   if (collapsed.length === 0) return undefined;
   // Invariant: redact before truncating so a secret straddling the boundary
   // is never split below the pattern's minimum match length.
-  return redactSecrets(collapsed).slice(0, ACTIVITY_PROMPT_HEAD_MAX);
+  return collapsed.slice(0, ACTIVITY_PROMPT_HEAD_MAX);
 }
 
 // ---------------------------------------------------------------------------

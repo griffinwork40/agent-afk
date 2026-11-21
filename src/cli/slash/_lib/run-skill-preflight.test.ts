@@ -50,7 +50,7 @@ function makeStats(cwd?: string): SessionStats {
     turnTokens: [],
     turns: [],
     model: 'sonnet',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     ...(cwd !== undefined ? { cwd } : {}),
   };
 }

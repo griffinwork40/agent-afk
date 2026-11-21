@@ -113,13 +113,13 @@ export function finalizeTelegramSession(
     console.warn(palette.warning(
         '[telegram] permissionMode="plan" is not supported on the Telegram surface ' +
         '(the plan-exit seed drain runs only in the REPL loop). ' +
-        'Downgrading to "default" for this session.',
+        'Downgrading to "bypassPermissions" for this session.',
       ),
     );
   }
-  // Resolve the effective mode: 'plan' → 'default', anything else unchanged.
+  // Resolve the effective mode: 'plan' → 'bypassPermissions', anything else unchanged.
   const effectivePermissionMode: PermissionMode =
-    sessionConfig.permissionMode === 'plan' ? 'default' : (sessionConfig.permissionMode ?? 'default');
+    sessionConfig.permissionMode === 'plan' ? 'bypassPermissions' : (sessionConfig.permissionMode ?? 'bypassPermissions');
 
   // -- System-prompt assembly -----------------------------------------------
   // Identical across all three branches: apply auto-routing directives on top
@@ -131,9 +131,9 @@ export function finalizeTelegramSession(
     : layeredBasePrompt;
 
   // -- Hook bundle ----------------------------------------------------------
-  // The AFK autonomous-safety registry must be built before the session so
-  // its hookRegistry is available at construction time. The mode getter is
-  // late-bound below (after `attachMcpCleanup`) via `sessionForMode`.
+  // The hook registry must be built before the session so its hookRegistry is
+  // available at construction time. The mode getter is late-bound below (after
+  // `attachMcpCleanup`) via `sessionForMode`.
   let sessionForMode: AgentSession | undefined;
   const hookBundle = createTelegramAfkHookBundle({
     memoryStore,
@@ -203,11 +203,6 @@ export function finalizeTelegramSession(
   // correction. `onStopInjectContext` queues the string via
   // `queueFrameworkContext` so it rides the next outbound user turn, mirroring
   // the REPL's `pendingStopInjection` delivery path.
-  //
-  // Permission mode: Telegram sessions run in 'default' or 'autonomous' (AFK)
-  // depending on whether `/afk on` is active. The terminal-state gate is
-  // autonomous-only, so it fires only when AFK mode is on. Shell hooks are off
-  // unless `enableShellHooks` is true in afk.config.json.
   session.wireStopHook?.({
     getHasNextTurn: () => true,
     onStopInjectContext: (text) => { session.queueFrameworkContext(text); },

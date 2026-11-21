@@ -15,16 +15,16 @@ describe('loadHosts — permissionMode validation', () => {
   }
 
   it('accepts a valid permissionMode', async () => {
-    const p = await writeHosts({ myhost: { ssh: 'user@host', permissionMode: 'default' } });
+    const p = await writeHosts({ myhost: { ssh: 'user@host', permissionMode: 'bypassPermissions' } });
     const hosts = await loadHosts(p);
-    expect(hosts['myhost']!.permissionMode).toBe('default');
+    expect(hosts['myhost']!.permissionMode).toBe('bypassPermissions');
     await rm(dir, { recursive: true });
   });
 
-  it('accepts autonomous as a valid permissionMode', async () => {
-    const p = await writeHosts({ myhost: { ssh: 'user@host', permissionMode: 'autonomous' } });
+  it('accepts bypassPermissions as a valid permissionMode', async () => {
+    const p = await writeHosts({ myhost: { ssh: 'user@host', permissionMode: 'bypassPermissions' } });
     const hosts = await loadHosts(p);
-    expect(hosts['myhost']!.permissionMode).toBe('autonomous');
+    expect(hosts['myhost']!.permissionMode).toBe('bypassPermissions');
     await rm(dir, { recursive: true });
   });
 

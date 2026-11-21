@@ -846,8 +846,8 @@ describe('buildChildConfig', () => {
 describe('permission-mode inheritance (ADR-0001 premise — previously pinned by ZERO tests)', () => {
   // Invariant: a forked child must NOT inherit a bypassed parent's permission
   // mode. docs/decisions/0001-bash-tool-path-containment.md states the premise
-  // outright ("Forked sub-agents run permissionMode = 'default' — they do not
-  // inherit bypass"), and both that ADR's warn-only reasoning and the
+  // outright ("Forked sub-agents never inherit bypass — the fork auto-deny in
+  // path-approval-hook.ts gates containment"), and both that ADR's reasoning and the
   // path-approval hook's fork auto-deny depend on it. An audit on 2026-07-26
   // found the premise relied on by three documents and asserted by no test, so
   // an accidental flip in EITHER direction — a child silently gaining bypass, or
@@ -857,19 +857,21 @@ describe('permission-mode inheritance (ADR-0001 premise — previously pinned by
     expect(childConfig.permissionMode).toBeUndefined();
   });
 
-  it('resolves an unset child permissionMode to "default" (containment ON)', () => {
+  it('resolves an unset child permissionMode to "bypassPermissions" (default fallback)', () => {
     const { childConfig } = buildChildConfig(baseArgs());
     const { metadata } = buildInitialState(childConfig, 'sonnet');
-    expect(metadata.permissionMode).toBe('default');
+    expect(metadata.permissionMode).toBe('bypassPermissions');
   });
 
-  it('leaves the child contained even though every top-level surface defaults to bypass', () => {
-    // Parent side: the CLI default really is a containment-disabling mode.
+  it('child defaults to bypassPermissions matching the top-level surface default', () => {
+    // Both top-level surfaces and child agents now default to bypassPermissions.
+    // Path containment for sub-agents is enforced via the fork auto-deny in
+    // path-approval-hook.ts (isSubagentContext check), not by pinning 'default'.
     expect(DEFAULT_CLI_PERMISSION_MODE).toBe('bypassPermissions');
     expect(pathContainmentBypassed(DEFAULT_CLI_PERMISSION_MODE)).toBe(true);
-    // Child side: resolves to 'default', which does NOT disable containment.
+    // Child side: also resolves to 'bypassPermissions'.
     const { childConfig } = buildChildConfig(baseArgs());
     const { metadata } = buildInitialState(childConfig, 'sonnet');
-    expect(pathContainmentBypassed(metadata.permissionMode)).toBe(false);
+    expect(pathContainmentBypassed(metadata.permissionMode)).toBe(true);
   });
 });

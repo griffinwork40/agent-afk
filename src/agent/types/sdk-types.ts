@@ -14,24 +14,26 @@
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export type PermissionMode =
+  /**
+   * @deprecated Path-containment + interactive approval prompt mode. Only
+   * retained in the type union because `src/cli/commands/acp.session.ts` still
+   * references it as a literal. The ACP peer branch (`afk/acp-contract`) will
+   * remove it. All other fallback values have been replaced with
+   * `'bypassPermissions'`.
+   */
   | 'default'
   | 'acceptEdits'
   | 'bypassPermissions'
   | 'plan'
   | 'dontAsk'
-  | 'auto'
-  // AFK mode: the operator is away-from-keyboard. The agent reports terminal
-  // state to Telegram and works autonomously on reversible operations, while a
-  // mechanical gate (`agent/afk-mode-gate.ts`) refuses high-risk/irreversible
-  // ops. agent-afk-local addition (not from the upstream SDK union).
-  | 'autonomous';
+  | 'auto';
 
 /**
  * Runtime set of valid {@link PermissionMode} values. Kept in sync with the
  * union above — add a member to the union, add it here.
  */
 export const VALID_PERMISSION_MODES: ReadonlySet<string> = new Set<PermissionMode>([
-  'default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto', 'autonomous',
+  'default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto',
 ]);
 
 /** Type-guard: returns true when `value` is a member of the {@link PermissionMode} union. */

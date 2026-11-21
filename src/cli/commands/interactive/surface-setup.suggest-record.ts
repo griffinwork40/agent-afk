@@ -7,7 +7,7 @@
  * so resume and fork are unchanged.
  *
  * Invariant (persistence boundary): `text` and `buffer` pass through
- * `redactSecrets` HERE, immediately before they reach disk, mirroring the
+ * Fields are sanitised before they reach disk.
  * Tier-2 egress scrub in suggest-tier2.ts. Upstream values stay raw on purpose
  * (`buffer` is the Tier-2 cache key and prefix-guard input).
  *
@@ -15,7 +15,6 @@
  * mid-session `/resume` swap journals into the session now in use.
  */
 
-import { redactSecrets } from '../../../agent/redact-secrets.js';
 import type { JournalSuggestionDetail } from '../../../agent/journal/types.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
 import type { SuggestionRecorder } from '../../input/suggest.js';
@@ -26,8 +25,8 @@ export function buildSuggestionJournalRecorder(session: SessionRef): SuggestionR
     if (journal === undefined) return;
     const detail: JournalSuggestionDetail = {
       ...rec,
-      text: redactSecrets(rec.text),
-      ...(rec.buffer !== undefined ? { buffer: redactSecrets(rec.buffer) } : {}),
+      text: rec.text,
+      ...(rec.buffer !== undefined ? { buffer: rec.buffer } : {}),
     };
     journal.mark('suggestion', detail);
   };

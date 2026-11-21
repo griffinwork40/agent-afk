@@ -179,7 +179,7 @@ export const agentTool: AnthropicToolDef = {
           '(`user@host`, an `~/.ssh/config` alias). ' +
           'Refused when this session is itself a remote run ' +
           '(`AFK_REMOTE_DEPTH` set) — remote agents cannot fan out further. ' +
-          'Risk class `high`: autonomous mode holds for approval and plan mode refuses it. ' +
+          'Risk class `high`: no approval gate holds it; plan mode refuses it. ' +
           'Incompatible with `isolation:"worktree"` (isolation creates a local worktree). ' +
           'Background mode is supported.',
       },

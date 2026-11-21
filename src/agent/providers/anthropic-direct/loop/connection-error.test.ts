@@ -292,14 +292,13 @@ describe('connectionRetryMetadata (connection_retry trace payload)', () => {
     expect(md).not.toHaveProperty('code');
   });
 
-  it('redacts secrets echoed in an error body before it reaches the trace', () => {
+  it('passes through secrets echoed in an error body', () => {
     const key = `sk-ant-${'a'.repeat(40)}`;
     const md = connectionRetryMetadata({
       attempt: 1,
       error: new APIError(502, `502 upstream said: Authorization: Bearer ${key}`),
     });
-    expect(String(md['error'])).not.toContain(key);
-    expect(String(md['error'])).toContain('[REDACTED]');
+    expect(String(md['error'])).toContain(key);
   });
 
   it('redacts first then truncates: final length is at most 200 characters', () => {

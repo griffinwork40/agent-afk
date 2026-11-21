@@ -29,7 +29,7 @@ function makeStats(): SessionStats {
     turnTokens: [],
     turns: [],
     model: 'sonnet',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
   };
 }
 

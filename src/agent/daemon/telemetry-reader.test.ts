@@ -43,7 +43,7 @@ describe('readTelemetryHistory', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('round-trips recovered success and legacy blocked records without dropping additive fields', async () => {
+  it('round-trips legacy gate-era records (recovered success, blocked) without dropping their fields', async () => {
     const recovered = {
       taskId: 't', status: 'success', gateBlocks: 1,
       gateRecoveryNote: 'Recovered after 1 AFK gate block(s) (declared Done; not verified).',

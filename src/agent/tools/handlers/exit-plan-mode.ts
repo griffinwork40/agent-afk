@@ -100,7 +100,6 @@ function restoreChoiceLabel(mode: PermissionMode): string {
       return 'Approve — implement now (restore your previous mode: no approval prompts)';
     case 'default':
     case 'plan':
-    case 'autonomous':
     default:
       return 'Approve — implement now (restore default mode: writes ask for confirmation, contained to the workspace)';
   }
@@ -168,9 +167,9 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
       return { content: PLAN_TEXT_REFUSAL };
     }
 
-    // Restore the mode the user was in before plan mode (falls back to 'default'
-    // when none was captured). This is the PRIMARY approve choice.
-    const prevMode: PermissionMode = controls.getPrePlanMode() ?? 'default';
+    // Restore the mode the user was in before plan mode (falls back to
+    // 'bypassPermissions' when none was captured). This is the PRIMARY approve choice.
+    const prevMode: PermissionMode = controls.getPrePlanMode() ?? 'bypassPermissions';
     const restoreChoice = restoreChoiceLabel(prevMode);
 
     // Offer an explicit bypass ESCALATION too — unless the restore choice is

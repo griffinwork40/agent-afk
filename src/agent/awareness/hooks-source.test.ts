@@ -36,7 +36,7 @@ afterEach(() => {
 function source(getCwd = () => cwd) {
   return buildRuntimeStateSource({
     surface: 'cli', getCwd, modelName: 'sonnet', providerName: 'anthropic-direct',
-    permissionMode: 'default', getEnabledToolNames: () => [], getMcpTools: () => [],
+    permissionMode: 'bypassPermissions', getEnabledToolNames: () => [], getMcpTools: () => [],
     getMcpServerStates: () => [], getSubagents: () => ({ active: [], backgroundJobs: [] }),
   });
 }

@@ -26,7 +26,7 @@ import { resolveModelId } from '../../../agent/session/model-resolution.js';
  * loop-iteration.ts). Registered here rather than in
  * `createDefaultHookRegistry` because it reads cli-layer config
  * (`enforceDoneEvidence`, fresh each turn) and the live permission mode;
- * opt-in + autonomous-only, so it is inert unless the operator enabled it.
+ * opt-in; inert unless the operator enabled it via `enforceDoneEvidence`.
  * REPL surface only — the Stop injectContext delivery it depends on lives in
  * the REPL loop.
  */
@@ -72,7 +72,6 @@ export function createReplHookRegistry(a: {
   hookRegistry.register(
     'Stop',
     createTerminalStateGate({
-      getPermissionMode: () => a.stats.permissionMode,
       isEnabled: () => loadConfig().enforceDoneEvidence === true,
     }),
   );

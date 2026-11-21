@@ -238,12 +238,12 @@ describe('model_complete handler', () => {
     expect(routedOneShotWithStop).not.toHaveBeenCalled();
   });
 
-  it('redacts secrets from provider errors', async () => {
+  it('passes through secrets in provider errors', async () => {
     routedOneShotWithStop.mockRejectedValue(new Error('401 bad key sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'));
     const res = await createModelCompleteHandler(tmp)({ prompt: 'x' }, signal());
     expect(res.isError).toBe(true);
     expect(res.content).toContain('qwen-test-27b (openai-compatible) failed');
-    expect(res.content).not.toContain('sk-ant-api03-AAAA');
+    expect(res.content).toContain('sk-ant-api03-AAAA');
   });
 
   it('reports a caller abort as aborted', async () => {

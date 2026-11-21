@@ -50,7 +50,7 @@ function makeFactory(
     getCwd: () => currentCwd ?? LAUNCH_CWD,
     modelName: 'sonnet',
     providerName: 'anthropic-direct',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     getEnabledToolNames: () => [],
     getMcpTools: () => [] as AnthropicToolDef[],
     getMcpServerStates: () => [],

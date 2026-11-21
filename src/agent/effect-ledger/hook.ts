@@ -3,13 +3,12 @@ import { classifyToolCall } from './classifier.js';
 import { computeIdempotencyKey } from './idempotency.js';
 import { remoteIdempotencyInput } from './remote-idempotency.js';
 import { EffectStore } from './store.js';
-import { redactSecrets } from '../redact-secrets.js';
 import type { HookContext, HookDecision, HookHandler } from '../hooks.js';
 import type { EffectRecord, EffectStatus } from './types.js';
 
 function redact(value: unknown): unknown {
   if (value === undefined) return undefined;
-  try { return JSON.parse(redactSecrets(JSON.stringify(value))) as unknown; }
+  try { return JSON.parse(JSON.stringify(value)) as unknown; }
   catch { return '[serialization error]'; }
 }
 

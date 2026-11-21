@@ -3,20 +3,20 @@ title: "Run afk without a human at the keyboard"
 description: "Choose an unattended execution mode, arrange phone supervision, and require evidence before trusting completion."
 ---
 
-AFK can keep working while you are away, but a background process, a daemon, and an autonomous interactive session have different lifetimes and safety boundaries. Choose the smallest surface that fits the job, tell it what success means, and arrange a way to inspect the result.
+AFK can keep working while you are away, but a background process and a daemon have different lifetimes and safety boundaries. Choose the smallest surface that fits the job, tell it what success means, and arrange a way to inspect the result.
 
 ## Choose the right mode
 
 | Need | Use |
 | --- | --- |
-| Leave an interactive session working with phone supervision | The REPL with `/afk on`. |
+| Leave an interactive session working with phone supervision | The REPL with the [daemon](/surfaces/daemon) or the [Telegram bot](/surfaces/telegram). |
 | Run recurring, startup, or one-shot tasks | [Scheduling](/guides/scheduling) with the [daemon](/surfaces/daemon). |
 | Keep the daemon or Telegram bot running after terminal exit | [An OS service](/guides/run-as-service). |
 | Keep a server or long shell command running during a REPL session | [Supervised background processes](/guides/background-processes). |
 | Call AFK from CI or a script and parse the response | [Headless chat](/guides/headless). |
 | Execute on another machine's files and accounts | [Remote dispatch](/guides/remote-dispatch). |
 
-Autonomous mode is a permission mode, not a process supervisor. It does not make a laptop stay awake, restart a crashed REPL, or turn session-owned background jobs into services.
+The daemon and Telegram bot are process supervisors separate from permission mode.
 
 ## Leave an interactive session safely
 
@@ -32,15 +32,9 @@ afk telegram start
 Complete setup with your own bot token and allowed chat ID. Keep the bot running, or install it through `afk service install telegram`. See the [Telegram guide](/surfaces/telegram) for setup and routing.
 </Step>
 <Step>
-### Establish the session, then arm AFK mode
+### Start the daemon or Telegram bot
 
-Start `afk` in the repository and complete one message so the session has an ID. Then enter:
-
-```text
-/afk on
-```
-
-AFK warns if Telegram is not configured. If you enable it before the first completed message, the phone relay cannot yet bind to a session ID: complete a turn and run `/afk on` again. Do not walk away while the UI says the relay is keyboard-only or its signing key could not be established.
+Start the daemon for headless scheduled work, or run the Telegram bot for interactive phone-supervised sessions. See the [Telegram guide](/surfaces/telegram) for setup and routing. Keep the process running, or install it through `afk service install telegram`.
 </Step>
 <Step>
 ### Give a bounded task
@@ -54,23 +48,13 @@ messages to third parties. Report Done with the changed files and test results,
 or Blocked with the exact dependency that prevents completion.
 ```
 
-Name the working directory, verification command, forbidden effects, and completion evidence. `/afk off` restores default permissions when you return.
+Name the working directory, verification command, forbidden effects, and completion evidence.
 </Step>
 </Steps>
 
-## Autonomous permissions and phone approvals
+## Daemon permissions
 
-In AFK mode, safe and medium-risk operations can proceed without an ordinary keyboard permission prompt. High-risk operations, such as destructive commands, writes outside the trusted workspace, and schedule mutations, require special handling.
-
-For the top-level interactive session, AFK routes an **approve or deny this single call** request through the phone channel, racing the keyboard fallback. Telegram displays an inline choice with the operation and input preview. Approval permits only that call, not every future operation of the same type.
-
-The default approval window is five minutes, starting when the request is actually shown. Denial, cancellation, no reachable operator, an invalid response, or timeout refuses the call. Subagents cannot obtain their own high-risk approval through this gate; they must report the blocker to the parent.
-
-<Callout type="warn">
-The gate is a best-effort classifier, not a shell sandbox. A command's risk classification does not replace a clear task boundary. Do not use `bypassPermissions` as a substitute for autonomous mode's safety posture, and do not assume the classifier catches every possible shell side effect.
-</Callout>
-
-The daemon has a different contract: it bypasses ordinary interactive permission prompts, but separately applies the autonomous high-risk gate with phone approval disabled. High-risk operations are refused immediately rather than left waiting for a human. A task may disable itself through a narrowly scoped exception; that is not general permission to modify other schedules.
+The daemon runs scheduled tasks in `bypassPermissions`. There is no high-risk gate or phone approval step: unconditional blocking hooks (such as the hooks that block `git reset --hard`, `git push --force`, `git clean -f`, and npm/pnpm publish) are the only pre-execution refusals. Many destructive shell patterns are observe-tier: they are recorded in the trace but not blocked. Write a clear task boundary and verification step into the task prompt rather than relying on the daemon to refuse harmful commands at runtime. See [Safety](/concepts/safety) for which patterns block and which observe.
 
 ## Check what Done means
 
@@ -86,6 +70,8 @@ Ask for a terminal state and evidence you can inspect:
 A successful process exit or an agent saying Done does not certify the task's correctness. For code work, require meaningful tests or checks **after the last change**.
 
 For REPL-to-Telegram reporting, `telegram.verifyDone: true` enables an evidence check. It looks for successful evidence-producing tool calls and, when code changed, a recognized successful verification step afterward. An unsupported Done claim is labeled **Done (unverified)** rather than treated as proven.
+
+A Done push whose report has no Pending bullet shows **Pending: not stated**, so a report that says nothing about remaining work reads differently from one that says `Pending: none`.
 
 Daemon completion notifications use `daemon.verifyDone`, enabled by default unless explicitly set to `false`. That daemon check is narrower: it looks for a successful evidence-producing tool name in the turn. It is not equivalent to independently validating the artifact or proving that a test ran after the final edit.
 

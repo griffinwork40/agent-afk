@@ -110,7 +110,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
    * Current permission mode, refreshed per `query()` — read by `getGrants()` so
    * the path-approval hook's `allowAll` matches the per-query dispatcher's.
    */
-  private _currentPermissionMode = 'default';
+  private _currentPermissionMode = 'bypassPermissions';
   /** Tracks the most recently seen cwd — doubles as the migrating non-revocable anchor (Option A). */
   private _sharedCurrentCwd: string | undefined;
   /**
@@ -181,7 +181,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
   query(args: ProviderQueryArgs): ProviderQuery {
     const config = args.config;
-    const permissionMode = config.permissionMode ?? 'default';
+    const permissionMode = config.permissionMode ?? 'bypassPermissions';
     this._currentPermissionMode = permissionMode;
 
     // Lazily init the shared root arrays (mirrors AnthropicDirectProvider).

@@ -127,7 +127,7 @@ describe('two-way AFK round-trip (real daemon ↔ real REPL over one ledger)', (
     await writer.close();
   }, 15_000);
 
-  it('abort: a daemon /abort-style signed write fires the REPL abort-watcher exactly once', async () => {
+  it('abort: a signed abort_request write fires the REPL abort-watcher exactly once', async () => {
     const id = freshId();
     const key = ensureSessionKey(id);
     expect(key).toBeTruthy();
@@ -145,8 +145,9 @@ describe('two-way AFK round-trip (real daemon ↔ real REPL over one ledger)', (
     });
     await sleep(80);
 
-    // --- DAEMON SIDE: write an abort_request exactly as bot.ts's /abort does
-    // (fresh nonce + signAbortRequest + a single-record SessionLedgerWriter). ---
+    // --- WRITER SIDE: a signed abort_request (fresh nonce + signAbortRequest +
+    // a single-record SessionLedgerWriter). The Telegram /abort command that
+    // used to write this was retired; the library contract is still tested. ---
     const nonce = freshChannelId();
     const hmac = signAbortRequest(key!, id, nonce);
     new SessionLedgerWriter(id).record({ kind: 'abort_request', nonce, hmac });

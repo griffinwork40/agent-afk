@@ -29,7 +29,7 @@ Run `/keys` for the built-in quick reference and `/help` for commands. Plain out
 | Ctrl+D | Empty TUI input | Signal EOF through the cancel path. At idle, the exit confirmation behavior still applies. Use `/exit` for a direct exit. |
 | Ctrl+D | Non-empty TUI input | Delete the character after the cursor. |
 | Ctrl+L | Prompt or streaming input | Clear the screen and repaint, without clearing conversation context. |
-| Shift+Tab | Prompt or streaming input | Cycle `default → plan → bypassPermissions → default`. From AFK mode, exit AFK and land on default. |
+| Shift+Tab | Prompt or streaming input | Toggle between `plan` and `bypassPermissions`. |
 | Ctrl+B | Running turn | First promote eligible foreground subagents; otherwise detach eligible bash/compose calls; otherwise do nothing. Never detaches the whole turn. |
 | Ctrl+B | Idle normal TUI | No action. |
 | Ctrl+O | Normal TUI | Open the current draft in `$VISUAL`, or `$EDITOR` if VISUAL is unset. Successful edits return to the buffer without sending. |

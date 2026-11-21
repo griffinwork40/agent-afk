@@ -55,7 +55,6 @@ adversarial. A bypass here is a security bug.
 | **SSRF / egress guard** | Rejects HTTP requests to private/loopback/link-local/cloud-metadata ranges before they leave the process. | `src/http-client/egress-guard.ts`, `src/agent/tools/handlers/web-scrape.ts:22` |
 | **Telegram allowlist** | Inbound messages from chat IDs not in `AFK_TELEGRAM_ALLOWED_CHAT_IDS` are silently dropped; outbound sends are routed only to allowlisted IDs. | `src/telegram/notify-routing.ts` |
 | **Web-server / daemon HMAC auth** | Abort requests and elicitation responses on the ledger channel are HMAC-verified per session key; a stray write with a bad HMAC is silently ignored. | `src/agent/afk-ledger-channel.ts:14-17` |
-| **Egress secret redaction** | `redactSecrets` strips common token shapes from error text before it is written to the trace `errorHead` or returned to the model. | `src/agent/redact-secrets.ts`, `src/agent/tools/handlers/model-complete.ts:181` |
 | **Human-gated config keys** | System prompt, hooks, API keys, and endpoint base URLs cannot be set by the model via `config_set`; the agent receives a hard refusal directing it to the `afk config` CLI. | `src/config/settable-keys.ts:121-123`, `src/config/mutate.ts:88` |
 | **No MCP for forks** | Forked sub-agents are built without an `mcpManager`; MCP tools are visible only to the top-level session. Prevents privilege escalation through child dispatch. | `src/agent/tools/permissions.ts:60`, `src/agent/tools/nesting.ts` |
 

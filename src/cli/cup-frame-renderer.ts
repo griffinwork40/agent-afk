@@ -44,8 +44,7 @@
 
 import type { Writable } from 'node:stream';
 import { env } from '../config/env.js';
-import { hardWrapToWidth } from './wrap.js';
-import { displayWidth } from './display.js';
+import { hardWrapToWidth, isFullWidthByWrap } from './wrap.js';
 import { cup, ERASE_LINE, SYNC_START, SYNC_END, CURSOR_SHOW } from './cup-frame-renderer.escapes.js';
 import { CupCursorTracker } from './cup-frame-renderer.cursor.js';
 import { CupWriteBatcher } from './cup-frame-renderer.batcher.js';
@@ -227,7 +226,7 @@ export class CupFrameRenderer {
     for (let i = 0; i < lineCount; i++) {
       const row = newTopRow + i;
       const line = frameLines[i] ?? '';
-      const tail = displayWidth(line) < width ? '\x1b[K' : '';
+      const tail = isFullWidthByWrap(line, width) ? '' : '\x1b[K';
       this.batcher.append(cup(row, 1) + line + tail);
     }
 
