@@ -1,5 +1,6 @@
 import type { RelayStore, KeyRecord } from '../../src/global-chat/relay/store.js';
 import type { Msg, RoomMode } from '../../src/global-chat/protocol.js';
+import type { RelaySqlStorage } from './platform.js';
 
 // Contract:
 // SqliteRelayStore wraps ctx.storage.sql (Durable Object SQLite).
@@ -10,10 +11,8 @@ import type { Msg, RoomMode } from '../../src/global-chat/protocol.js';
 // Reports are stored as (messageId, reporterKey) unique pairs.
 // Room mode defaults to 'open' when no row exists.
 
-type SqlStorage = DurableObjectState['storage']['sql'];
-
 export class SqliteRelayStore implements RelayStore {
-  constructor(private readonly sql: SqlStorage) {}
+  constructor(private readonly sql: RelaySqlStorage) {}
 
   ensureSchema(): void {
     this.sql.exec(`

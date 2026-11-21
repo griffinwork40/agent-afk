@@ -1,5 +1,6 @@
 import { Room, countDistinctKeys } from '../../src/global-chat/relay/room.js';
 import { SqliteRelayStore } from './sqlite-store.js';
+import type { RelayContext, RelayPlatform, RelaySocket } from './platform.js';
 import type { ConnRecord, RelayConfig, RoomEffect } from '../../src/global-chat/relay/room-types.js';
 import { MAX_CLIENT_FRAME_BYTES, type RoomMode } from '../../src/global-chat/protocol.js';
 import { realClock } from '../../src/global-chat/relay/limiter.js';
@@ -44,12 +45,12 @@ async function hashIp(salt: string, ip: string): Promise<string> {
   return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
 }
 
-export class ChatRoom implements DurableObject {
+export class ChatRoom {
   private room: Room | null = null;
   private queue: Promise<void> = Promise.resolve();
-  private readonly pending = new WeakMap<WebSocket, number>();
+  private readonly pending = new WeakMap<RelaySocket, number>();
 
-  constructor(private readonly ctx: DurableObjectState, private readonly env: Env) {}
+  constructor(private readonly ctx: RelayContext, private readonly env: Env) {}
 
   private enqueue<T>(run: () => Promise<T>): Promise<T> {
     const result = this.queue.then(run);
@@ -67,12 +68,12 @@ export class ChatRoom implements DurableObject {
     return this.room;
   }
 
-  private sockets(): WebSocket[] {
+  private sockets(): RelaySocket[] {
     // getWebSockets can include sockets whose closing handshake is unfinished.
     return this.ctx.getWebSockets().filter(ws => ws.readyState === 1 && !this.record(ws)?._closed);
   }
 
-  private record(ws: WebSocket): Attachment | null {
+  private record(ws: RelaySocket): Attachment | null {
     return ws.deserializeAttachment() as Attachment | null;
   }
 
@@ -101,17 +102,21 @@ export class ChatRoom implements DurableObject {
       if (sockets.filter(ws => this.record(ws)?.ipHash === ipHash).length >= MAX_CONNECTIONS_PER_IP) {
         return new Response('Address connection limit reached', { status: 429 });
       }
+      // Workers supply this global; worker.ts checks the structural bridge.
+      const { WebSocketPair } = globalThis as unknown as RelayPlatform;
       const { 0: client, 1: server } = new WebSocketPair();
       const connId = generateConnId();
       const conn = this.getRoom().onConnect(connId, ipHash);
       server.serializeAttachment({ ...conn, _connId: connId, _helloDeadline: Date.now() + HELLO_TIMEOUT_MS });
       this.ctx.acceptWebSocket(server);
       await this.scheduleDeadline();
-      return new Response(null, { status: 101, webSocket: client });
+      // Node's ResponseInit omits the Workers-only upgrade option.
+      const init = { status: 101, webSocket: client };
+      return new Response(null, init as ResponseInit);
     });
   }
 
-  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+  webSocketMessage(ws: RelaySocket, message: string | ArrayBuffer): Promise<void> {
     if (ws.readyState !== 1) return Promise.resolve();
     const count = this.pending.get(ws) ?? 0;
     if (typeof message !== 'string' || message.length > MAX_CLIENT_FRAME_BYTES ||
@@ -136,15 +141,15 @@ export class ChatRoom implements DurableObject {
     }).finally(() => { this.pending.set(ws, (this.pending.get(ws) ?? 1) - 1); });
   }
 
-  webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
+  webSocketClose(ws: RelaySocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
     return this.enqueue(() => this.handleClose(ws, 1000));
   }
 
-  webSocketError(ws: WebSocket, _error: unknown): Promise<void> {
+  webSocketError(ws: RelaySocket, _error: unknown): Promise<void> {
     return this.enqueue(() => this.handleClose(ws, 1011));
   }
 
-  private async handleClose(ws: WebSocket, code: number): Promise<void> {
+  private async handleClose(ws: RelaySocket, code: number): Promise<void> {
     const rec = this.record(ws);
     if (!rec || rec._closed) return;
     const allConns = this.buildAllConns();
@@ -179,7 +184,7 @@ export class ChatRoom implements DurableObject {
     else await this.ctx.storage.deleteAlarm();
   }
 
-  private closeSocket(ws: WebSocket, code: number, reason: string): void {
+  private closeSocket(ws: RelaySocket, code: number, reason: string): void {
     const rec = this.record(ws);
     if (rec) ws.serializeAttachment({ ...rec, _closed: true });
     try { ws.close(code, reason); } catch { /* already closed */ }
@@ -195,7 +200,7 @@ export class ChatRoom implements DurableObject {
     }
   }
 
-  private applyEffect(senderWs: WebSocket, connId: string, effect: RoomEffect): void {
+  private applyEffect(senderWs: RelaySocket, connId: string, effect: RoomEffect): void {
     senderWs.serializeAttachment({ ...this.record(senderWs), ...effect.conn, _connId: connId });
     for (const frame of effect.toSender) {
       try { senderWs.send(JSON.stringify(frame)); } catch { /* closing socket */ }

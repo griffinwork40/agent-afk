@@ -1,4 +1,15 @@
 import { ChatRoom } from './room-object.js';
+import type { RelayContext, RelayPlatform, RelaySocket } from './platform.js';
+
+// Compile-only checks live at the Worker entry point, outside root test imports.
+// Any change to the adapter's platform surface must still fit Cloudflare's types.
+type Assignable<Expected, Actual extends Expected> = Actual;
+export type PlatformContract = [
+  Assignable<RelayContext, DurableObjectState>,
+  Assignable<DurableObject, ChatRoom>,
+  Assignable<RelayPlatform['WebSocketPair'], typeof WebSocketPair>,
+  Assignable<RelaySocket, NonNullable<ResponseInit['webSocket']>>,
+];
 
 export { ChatRoom };
 
