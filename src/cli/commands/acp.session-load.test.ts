@@ -25,8 +25,9 @@ const mockBuildAcpSession = vi.fn(async (_opts: unknown) => ({
 const mockCloseAcpSession = vi.fn(async (_h: unknown) => undefined);
 const mockResolveAcpId = vi.fn((id: string): string => id);
 const mockEmitReplayUpdates = vi.fn(async () => undefined);
-const mockReadAcpCwd = vi.fn((_id: string): string | undefined => undefined);
-const mockRecordAcpCwd = vi.fn(async (_id: string, _cwd: string) => undefined);
+const mockReadLegacyAcpCwd = vi.fn((_id: string): string | undefined => undefined);
+const mockReadRecord = vi.fn((_id: string): { cwd: string } | undefined => undefined);
+const mockWriteRecord = vi.fn((_id: string, _r: { cwd: string }): void => undefined);
 
 vi.mock('../../agent/journal/reader.js', () => ({
   journalExists: (id: string) => mockJournalExists(id),
@@ -39,9 +40,12 @@ vi.mock('./acp.session.js', () => ({
 
 vi.mock('./acp.session-map.js', () => ({
   resolveAcpId: (id: string) => mockResolveAcpId(id),
-  readAcpCwd: (id: string) => mockReadAcpCwd(id),
-  acpSessionMapSettled: async () => undefined,
-  recordAcpCwd: (id: string, cwd: string) => mockRecordAcpCwd(id, cwd),
+  readLegacyAcpCwd: (id: string) => mockReadLegacyAcpCwd(id),
+}));
+
+vi.mock('./acp.session-record.js', () => ({
+  readAcpSessionRecord: (id: string) => mockReadRecord(id),
+  writeAcpSessionRecord: (id: string, r: { cwd: string }) => mockWriteRecord(id, r),
 }));
 
 vi.mock('./acp.replay.js', () => ({
@@ -65,8 +69,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockJournalExists.mockReturnValue(true);
   mockResolveAcpId.mockImplementation((id) => id);
-  mockReadAcpCwd.mockReturnValue(undefined);
-  mockRecordAcpCwd.mockResolvedValue(undefined);
+  mockReadLegacyAcpCwd.mockReturnValue(undefined);
+  mockReadRecord.mockReturnValue(undefined);
+  mockWriteRecord.mockReturnValue(undefined);
   mockBuildAcpSession.mockResolvedValue({
     session: { close: vi.fn().mockResolvedValue(undefined) },
     memoryStore: { close: vi.fn() },
@@ -207,32 +212,53 @@ describe('loadAcpSession — original cwd required', () => {
   const root = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'acp-load-cwd-')));
   const other = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'acp-load-other-')));
 
-  it('accepts the stored cwd and does not rewrite it', async () => {
-    mockReadAcpCwd.mockReturnValue(root);
+  it('accepts the recorded cwd and does not rewrite it', async () => {
+    mockReadRecord.mockReturnValue({ cwd: root });
     await loadAcpSession({ ...BASE_PARAMS, cwd: root }, BASE_OPTS);
     expect(mockBuildAcpSession).toHaveBeenCalledOnce();
-    expect(mockRecordAcpCwd).not.toHaveBeenCalled();
+    expect(mockWriteRecord).not.toHaveBeenCalled();
   });
 
   it('rejects a different cwd as invalid params before building anything', async () => {
-    mockReadAcpCwd.mockReturnValue(root);
+    mockReadRecord.mockReturnValue({ cwd: root });
     await expect(loadAcpSession({ ...BASE_PARAMS, cwd: other }, BASE_OPTS)).rejects.toBeInstanceOf(AcpInvalidParams);
     expect(mockBuildAcpSession).not.toHaveBeenCalled();
   });
 
-  it('accepts a legacy entry without a stored cwd and backfills it', async () => {
-    mockReadAcpCwd.mockReturnValue(undefined);
+  it('accepts a session without a record and writes its record before returning', async () => {
     await loadAcpSession({ ...BASE_PARAMS, cwd: other }, BASE_OPTS);
     expect(mockBuildAcpSession).toHaveBeenCalledOnce();
-    expect(mockRecordAcpCwd).toHaveBeenCalledWith(BASE_PARAMS.sessionId, other);
+    expect(mockWriteRecord).toHaveBeenCalledWith(BASE_PARAMS.sessionId, { cwd: other });
+  });
+
+  it('a failed record write fails the load and closes the session it built', async () => {
+    mockWriteRecord.mockImplementation(() => { throw new Error('EACCES'); });
+    await expect(loadAcpSession({ ...BASE_PARAMS, cwd: other }, BASE_OPTS)).rejects.toThrow('EACCES');
+    expect(mockCloseAcpSession).toHaveBeenCalledOnce();
+  });
+
+  it('an unreadable record fails the load (not treated as no record) before building', async () => {
+    mockReadRecord.mockImplementation(() => { throw new Error('malformed'); });
+    mockReadLegacyAcpCwd.mockReturnValue(other);
+    await expect(loadAcpSession({ ...BASE_PARAMS, cwd: other }, BASE_OPTS)).rejects.toThrow('malformed');
+    expect(mockBuildAcpSession).not.toHaveBeenCalled();
+    expect(mockWriteRecord).not.toHaveBeenCalled();
+  });
+
+  it('a legacy cwd in the shared map stands in for a missing record', async () => {
+    mockReadLegacyAcpCwd.mockReturnValue(root);
+    await expect(loadAcpSession({ ...BASE_PARAMS, cwd: other }, BASE_OPTS)).rejects.toBeInstanceOf(AcpInvalidParams);
+    await loadAcpSession({ ...BASE_PARAMS, cwd: root }, BASE_OPTS);
+    expect(mockBuildAcpSession).toHaveBeenCalledOnce();
+    expect(mockWriteRecord).not.toHaveBeenCalled();
   });
 
   it('accepts a symlinked spelling of the same directory (canonical comparison)', async () => {
     const link = path.join(other, 'link-to-root');
     symlinkSync(root, link, process.platform === 'win32' ? 'junction' : 'dir');
-    mockReadAcpCwd.mockReturnValue(link);
+    mockReadRecord.mockReturnValue({ cwd: link });
     await loadAcpSession({ ...BASE_PARAMS, cwd: root }, BASE_OPTS);
-    mockReadAcpCwd.mockReturnValue(root);
+    mockReadRecord.mockReturnValue({ cwd: root });
     await loadAcpSession({ ...BASE_PARAMS, cwd: link }, BASE_OPTS);
     expect(mockBuildAcpSession).toHaveBeenCalledTimes(2);
   });

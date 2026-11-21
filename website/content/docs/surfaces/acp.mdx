@@ -20,7 +20,7 @@ Common options:
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-m, --model <model>` | configured default | Model for every session on this server |
-| `--max-turns <n>` | `0` | Maximum messages sent per session (`0` means no cap). A prompt past the cap is answered with `stopReason: "max_turn_requests"` and the session stays open |
+| `--max-turns <n>` | `0` | Maximum messages sent per session (`0` means no cap; a negative or non-numeric value is rejected). A prompt past the cap is answered with `stopReason: "max_turn_requests"` and the session stays open |
 | `--dangerously-skip-permissions` | off | Skip all permission prompts for every session (see [Permissions](#permissions)) |
 
 Any model the CLI can route works on this surface. The `--model` flag selects a model using the same provider-routing logic as the terminal. The approval prompt is forwarded for every provider family.
@@ -238,7 +238,7 @@ Cancellation of an idle or unknown session is a no-op.
 
 `session/resume` restores without replay and returns `{}`. `mcpServers` is optional on resume; omitting it is equivalent to an empty array.
 
-Both methods return resource-not-found (`-32002`, with `data.sessionId`) for unknown ids. A session already open and idle on this connection can be loaded or resumed without closing it first: AFK keeps the open session, `session/load` replays its history again, and `session/resume` replies with no replay. Reopening with a different `cwd` or `mcpServers` list is invalid-params (`-32602`). Loading or resuming a session that is not open also requires the `cwd` it was created with (compared after resolving symbolic links); a different directory is invalid-params (`-32602`). While a prompt is running, or the session is closing or replaying, the request is invalid-request (`-32600`) and the prompt is not cancelled.
+Both methods return resource-not-found (`-32002`, with `data.sessionId`) for unknown ids. A session already open and idle on this connection can be loaded or resumed without closing it first: AFK keeps the open session, `session/load` replays its history again, and `session/resume` replies with no replay. Reopening with a different `cwd` or `mcpServers` list is invalid-params (`-32602`). Loading or resuming a session that is not open also requires the `cwd` it was created with (compared after resolving symbolic links); a different directory is invalid-params (`-32602`). `session/new` stores that directory in a per-session record (`$AFK_STATE_DIR/acp/sessions/<sessionId>.json`) before it replies; if the record cannot be written, `session/new` fails with internal-error (`-32603`) and no session is created. A record that cannot be read fails load or resume with internal-error. A session with no record (created by an older AFK) is accepted with the requested `cwd`, and that directory is then recorded so later loads are checked; if recording fails, the load or resume fails with internal-error. While a prompt is running, or the session is closing or replaying, the request is invalid-request (`-32600`) and the prompt is not cancelled.
 
 ## Error codes
 

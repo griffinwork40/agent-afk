@@ -16,7 +16,8 @@ vi.mock('./acp.replay.js', () => ({ emitReplayUpdates: vi.fn(async () => undefin
 
 import * as acpSession from './acp.session.js';
 import { AcpError, handleRestore, handleSessionNew, startPrompt, type ServerContext } from './acp.handlers.js';
-import { acpSessionMapSettled, readAcpCwd, writeAcpSessionMap } from './acp.session-map.js';
+import { writeAcpSessionMap } from './acp.session-map.js';
+import { readAcpSessionRecord, writeAcpSessionRecord } from './acp.session-record.js';
 import { INVALID_PARAMS } from './acp.server.protocol.js';
 
 const mBuild = vi.mocked(acpSession.buildAcpSession);
@@ -70,13 +71,12 @@ describe('original cwd on load/resume (profile §2)', () => {
   it('session/new records the canonical cwd', async () => {
     const ctx = makeCtx(0);
     const { sessionId } = await handleSessionNew(ctx, { cwd: WS, mcpServers: [] });
-    await acpSessionMapSettled();
-    expect(readAcpCwd(sessionId)).toBe(WS);
+    expect(readAcpSessionRecord(sessionId)).toEqual({ cwd: WS });
   });
 
   it.each(['load', 'resume'] as const)('%s of a non-live session with another cwd is invalid params', async (mode) => {
     const id = `cwd-mismatch-${mode}`;
-    await writeAcpSessionMap({ [id]: { cwd: WS } });
+    writeAcpSessionRecord(id, { cwd: WS });
     const err = await handleRestore(makeCtx(0), { sessionId: id, cwd: OTHER, mcpServers: [] }, mode).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AcpError);
     expect((err as AcpError).code).toBe(INVALID_PARAMS);
@@ -90,10 +90,10 @@ describe('original cwd on load/resume (profile §2)', () => {
     expect((err as AcpError).code).toBe(INVALID_PARAMS);
   });
 
-  it('a legacy entry is restored and its cwd backfilled', async () => {
+  it('a session without a record is restored and its record written', async () => {
     const id = 'legacy-entry';
     await writeAcpSessionMap({ [id]: id });
     await expect(handleRestore(makeCtx(0), { sessionId: id, cwd: OTHER, mcpServers: [] }, 'resume')).resolves.toEqual({});
-    expect(readAcpCwd(id)).toBe(OTHER);
+    expect(readAcpSessionRecord(id)).toEqual({ cwd: OTHER });
   });
 });

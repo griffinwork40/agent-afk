@@ -8,19 +8,19 @@
  * persists a durable mapping so subsequent load/resume can resolve the ACP id
  * to the actual journal id.
  *
- * It also stores the canonical session `cwd` recorded at `session/new`, so a
- * later load or resume of a session that is not live can require the original
- * directory (profile §2).
+ * The canonical session `cwd` is NOT stored here: it lives in a per-session
+ * record (acp.session-record.ts). An earlier build stored it in this map as
+ * `{ afkId?, cwd? }`; that shape still loads, and its `cwd` is readable through
+ * readLegacyAcpCwd as a fallback for sessions without a record.
  *
  * Contract:
- *   - The map is a flat JSON object written atomically. An entry is either a
- *     legacy string (the afkId) or `{ afkId?, cwd? }`.
- *   - readAcpSessionMap / writeAcpSessionMap are the only I/O entry-points;
- *     in-process read-modify-write updates are serialised through one queue.
+ *   - The map is a flat JSON object written atomically. An entry is a string
+ *     (the afkId) or, from the earlier build, `{ afkId?, cwd? }`.
+ *   - readAcpSessionMap / writeAcpSessionMap are the only I/O entry-points.
  *   - resolveAcpId returns the afkId if mapped, otherwise the acpId itself
- *     (fast path: seeded id == journal id, no afkId needed).
- *   - recordAcpMapping is a no-op when acpId === afkId (fast path).
- *   - readAcpCwd is undefined for entries written before cwd was stored.
+ *     (fast path: seeded id == journal id, no afkId needed); both shapes resolve.
+ *   - recordAcpMapping is a no-op when acpId === afkId (fast path); it is the
+ *     only writer and keeps a legacy `cwd` already in the entry.
  *
  * @module cli/commands/acp.session-map
  */
@@ -42,24 +42,6 @@ function entryOf(value: unknown): AcpSessionEntry {
     ...(typeof o['afkId'] === 'string' ? { afkId: o['afkId'] } : {}),
     ...(typeof o['cwd'] === 'string' ? { cwd: o['cwd'] } : {}),
   };
-}
-
-/** Compact form: a mapping without cwd stays a plain string (legacy shape). */
-function packEntry(e: AcpSessionEntry): string | AcpSessionEntry {
-  return e.cwd === undefined && e.afkId !== undefined ? e.afkId : e;
-}
-
-let updateQueue: Promise<void> = Promise.resolve();
-
-/** Serialise read-modify-write updates so concurrent sessions do not drop entries. */
-function updateEntry(acpId: string, patch: (e: AcpSessionEntry) => AcpSessionEntry): Promise<void> {
-  const run = updateQueue.then(async () => {
-    const map = readAcpSessionMap();
-    map[acpId] = packEntry(patch(entryOf(map[acpId])));
-    await writeAcpSessionMap(map);
-  });
-  updateQueue = run.catch(() => undefined);
-  return run;
 }
 
 /** Read the map from disk. Returns {} on any read/parse error. */
@@ -89,21 +71,17 @@ export async function writeAcpSessionMap(map: AcpSessionMap): Promise<void> {
  */
 export async function recordAcpMapping(acpId: string, afkId: string): Promise<void> {
   if (acpId === afkId) return;
-  await updateEntry(acpId, (e) => ({ ...e, afkId }));
+  const map = readAcpSessionMap();
+  const legacyCwd = entryOf(map[acpId]).cwd;
+  map[acpId] = legacyCwd === undefined ? afkId : { afkId, cwd: legacyCwd };
+  await writeAcpSessionMap(map);
 }
 
-/** Settles once every update queued so far in this process has been written (or failed). */
-export function acpSessionMapSettled(): Promise<void> {
-  return updateQueue;
-}
-
-/** Persist the canonical session cwd for `acpId`, keeping any afkId mapping. */
-export async function recordAcpCwd(acpId: string, cwd: string): Promise<void> {
-  await updateEntry(acpId, (e) => ({ ...e, cwd }));
-}
-
-/** The canonical cwd stored for `acpId`, or undefined (legacy or unknown entry). */
-export function readAcpCwd(acpId: string): string | undefined {
+/**
+ * Read-only: the `cwd` an earlier build stored in the map entry for `acpId`,
+ * or undefined (string entry, unknown id, or no `cwd`). Nothing writes it now.
+ */
+export function readLegacyAcpCwd(acpId: string): string | undefined {
   return entryOf(readAcpSessionMap()[acpId]).cwd;
 }
 

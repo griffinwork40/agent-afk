@@ -24,7 +24,7 @@ afk acp
 | Flag | Default | Description |
 |---|---|---|
 | `-m, --model <model>` | configured default | Model for every session created by this server |
-| `--max-turns <n>` | `0` | Maximum messages sent per session (`0` means no cap); a prompt past the cap returns `stopReason: "max_turn_requests"` |
+| `--max-turns <n>` | `0` | Maximum messages sent per session (`0` means no cap; a negative or non-numeric value is rejected); a prompt past the cap returns `stopReason: "max_turn_requests"` |
 | `--dangerously-skip-permissions` | off | Skip all permission prompts for every session on this server (see [Permissions](#permissions)) |
 
 ## What AFK currently supports on this surface
@@ -414,7 +414,14 @@ servers and conversation): `session/load` replays its history again before
 replying, and `session/resume` replies with no replay. Reopening with a
 different `cwd` or `mcpServers` list is invalid params. Loading or resuming a
 session that is not open requires the `cwd` it was created with, compared after
-resolving symbolic links; a different directory is invalid params. If a prompt is running,
+resolving symbolic links; a different directory is invalid params.
+`session/new` stores that directory in a per-session record,
+`$AFK_STATE_DIR/acp/sessions/<sessionId>.json`, before it replies. If the record
+cannot be written, `session/new` fails with internal error (`-32603`) and no
+session is created. A record that cannot be read fails load or resume with
+internal error. A session with no record (created by an older AFK) is accepted
+with the requested `cwd`, and that directory is then recorded so later loads are
+checked; if recording fails, the load or resume fails with internal error. If a prompt is running,
 or the session is closing or already replaying, the request is refused with
 `{"code":-32600,"message":"Invalid request"}`; a running prompt is never
 cancelled by it.

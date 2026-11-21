@@ -46,4 +46,31 @@ describe('ACP console redirect', () => {
       expect(stderr).toHaveBeenCalledWith('diagnostic\n', expect.anything());
     } finally { restore(); }
   });
+
+  it.each(['first-installed released first', 'last-installed released first'] as const)(
+    'overlapping installs restore the originals only after the last release (%s)', (order) => {
+      const originals = { log: console.log, info: console.info, debug: console.debug };
+      const a = new PassThrough();
+      const b = new PassThrough();
+      const releaseA = installAcpConsoleRedirect(a);
+      const releaseB = installAcpConsoleRedirect(b);
+      const [first, second] = order === 'first-installed released first' ? [releaseA, releaseB] : [releaseB, releaseA];
+      first();
+      first(); // idempotent: a repeated release does not count twice
+      expect(console.log).not.toBe(originals.log);
+      expect(console.info).not.toBe(originals.info);
+      expect(console.debug).not.toBe(originals.debug);
+      second();
+      expect(console.log).toBe(originals.log);
+      expect(console.info).toBe(originals.info);
+      expect(console.debug).toBe(originals.debug);
+      second();
+      expect(console.log).toBe(originals.log);
+      // A later install still captures and restores correctly.
+      const releaseC = installAcpConsoleRedirect(a);
+      expect(console.log).not.toBe(originals.log);
+      releaseC();
+      expect(console.log).toBe(originals.log);
+    },
+  );
 });

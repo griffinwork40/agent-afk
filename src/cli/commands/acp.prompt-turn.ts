@@ -213,6 +213,9 @@ export async function runPromptTurn(
       meta = await consumeStream(live, turn, text, deps);
     } catch (err) {
       if (!turn.cancelled) {
+        // Deny open permission requests first, so no card is marked failed
+        // while its session/request_permission is still open at the client.
+        try { live.gate?.cancelAll(); } catch (e) { deps.log(`[acp] gate cancelAll failed: ${String(e)}`); }
         await sendClosingUpdates(live, deps, false);
         throw err;
       }

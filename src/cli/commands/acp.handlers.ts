@@ -13,7 +13,8 @@ import { resolveModelInput } from '../../agent/session/model-slots.js';
 import { getVersion } from '../version.js';
 import { buildAcpSession, closeAcpSession, type AcpSessionOptions } from './acp.session.js';
 import { AcpNotFoundError, loadAcpSession, replayHistory } from './acp.session-load.js';
-import { recordAcpCwd, recordAcpMapping, resolveAcpId } from './acp.session-map.js';
+import { recordAcpMapping, resolveAcpId } from './acp.session-map.js';
+import { writeAcpSessionRecord } from './acp.session-record.js';
 import { createAcpPermissionGate } from './acp.permission.js';
 import { createTranslatorState } from './acp.translate.js';
 import { AcpInvalidParams, parseSessionSetup, type SessionSetup } from './acp.params.js';
@@ -152,12 +153,16 @@ export async function handleSessionNew(ctx: ServerContext, params: unknown): Pro
   } catch (err) {
     throw internal(ctx, 'session construction failed', err);
   }
+  // Profile §2: load/resume require the original canonical cwd, so it is stored
+  // in the session's own record before the session is registered or answered.
+  // A session this version creates therefore always has a record.
+  try {
+    writeAcpSessionRecord(sessionId, { cwd: setup.cwd });
+  } catch (err) {
+    await releaseSession(ctx, live);
+    throw internal(ctx, 'session construction failed', err);
+  }
   ctx.sessions.set(sessionId, live);
-  // Profile §2: load/resume require the original canonical cwd. Not awaited, so
-  // the reply is not delayed by disk I/O; a later load in this process waits for
-  // the map queue first. A failed write leaves a legacy entry, backfilled on load.
-  void recordAcpCwd(sessionId, setup.cwd)
-    .catch((err: unknown) => ctx.log(`[acp] could not record session cwd for ${sessionId}: ${String(err)}`));
   const recording = recordProviderId(ctx, live);
   if (recording) await recording;
   return { sessionId };

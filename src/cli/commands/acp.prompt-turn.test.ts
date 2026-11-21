@@ -196,6 +196,22 @@ describe('runPromptTurn closes announced tool calls on every exit path', () => {
     expect(failedFor(sent, 't2')).toHaveLength(1);
   });
 
+  it('a stream error denies pending permission requests before failing open cards', async () => {
+    const order: string[] = [];
+    const { live } = makeLive(async function* () {
+      announce(live, 'child-1-t5', 'pending');
+      yield { type: 'error', error: new Error('boom') } as OutputEvent;
+    });
+    const cancelAll = vi.fn(() => { order.push('cancelAll'); });
+    live.gate = { canUseTool: vi.fn() as never, cancelAll };
+    const { peer, sent } = makePeer();
+    peer.notify.mockImplementation(async (_m: string, p: unknown) => { sent.push(p); order.push('update'); });
+    await expect(runPromptTurn(live, 'x', { peer, log: () => {} })).rejects.toBeInstanceOf(AcpTurnFailed);
+    expect(cancelAll).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['cancelAll', 'update']);
+    expect(failedFor(sent, 'child-1-t5')).toHaveLength(1);
+  });
+
   it('normal completion with only terminal calls emits nothing extra', async () => {
     const { live } = makeLive(async function* () {
       announce(live, 't3', 'completed');

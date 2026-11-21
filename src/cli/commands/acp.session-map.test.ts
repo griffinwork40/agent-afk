@@ -27,7 +27,7 @@ vi.mock('../../config/env.js', () => ({
 }));
 
 // Import AFTER mock registration so paths resolve against tmpHome.
-const { readAcpSessionMap, writeAcpSessionMap, recordAcpMapping, resolveAcpId, recordAcpCwd, readAcpCwd } =
+const { readAcpSessionMap, writeAcpSessionMap, recordAcpMapping, resolveAcpId, readLegacyAcpCwd } =
   await import('./acp.session-map.js');
 
 beforeEach(() => {
@@ -81,30 +81,36 @@ describe('resolveAcpId', () => {
   });
 });
 
-describe('session cwd (profile §2)', () => {
-  it('stores the cwd alongside an existing afkId mapping without losing either', async () => {
-    await recordAcpMapping('acp-id', 'afk-id');
-    await recordAcpCwd('acp-id', '/ws');
+describe('legacy object entries (written by an earlier build)', () => {
+  it('an object entry still resolves its afkId and exposes its cwd read-only', async () => {
+    await writeAcpSessionMap({ 'acp-id': { afkId: 'afk-id', cwd: '/ws' } });
     expect(resolveAcpId('acp-id')).toBe('afk-id');
-    expect(readAcpCwd('acp-id')).toBe('/ws');
+    expect(readLegacyAcpCwd('acp-id')).toBe('/ws');
   });
 
   it('a cwd-only entry resolves to the acp id itself', async () => {
-    await recordAcpCwd('acp-1', '/ws');
+    await writeAcpSessionMap({ 'acp-1': { cwd: '/ws' } });
     expect(resolveAcpId('acp-1')).toBe('acp-1');
-    expect(readAcpCwd('acp-1')).toBe('/ws');
+    expect(readLegacyAcpCwd('acp-1')).toBe('/ws');
   });
 
-  it('a legacy string entry has no stored cwd', async () => {
+  it('a string entry or an unknown id has no legacy cwd', async () => {
     await writeAcpSessionMap({ 'acp-legacy': 'afk-legacy' });
-    expect(readAcpCwd('acp-legacy')).toBeUndefined();
+    expect(readLegacyAcpCwd('acp-legacy')).toBeUndefined();
+    expect(readLegacyAcpCwd('unknown')).toBeUndefined();
     expect(resolveAcpId('acp-legacy')).toBe('afk-legacy');
   });
 
-  it('concurrent updates for different sessions keep every entry', async () => {
-    await Promise.all([recordAcpCwd('a', '/a'), recordAcpCwd('b', '/b'), recordAcpMapping('c', 'afk-c')]);
-    expect(readAcpCwd('a')).toBe('/a');
-    expect(readAcpCwd('b')).toBe('/b');
-    expect(resolveAcpId('c')).toBe('afk-c');
+  it('recording a mapping keeps a legacy cwd already in the entry', async () => {
+    await writeAcpSessionMap({ 'acp-id': { cwd: '/ws' } });
+    await recordAcpMapping('acp-id', 'afk-id');
+    expect(resolveAcpId('acp-id')).toBe('afk-id');
+    expect(readLegacyAcpCwd('acp-id')).toBe('/ws');
+  });
+
+  it('the module no longer writes a cwd into the shared map', async () => {
+    const mod: Record<string, unknown> = await import('./acp.session-map.js');
+    expect(mod['recordAcpCwd']).toBeUndefined();
+    expect(mod['acpSessionMapSettled']).toBeUndefined();
   });
 });

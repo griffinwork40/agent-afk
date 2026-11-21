@@ -11,11 +11,23 @@
  * @module cli/commands/acp
  */
 
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import { exitAfterServer, runAcpServer } from './acp.server.js';
 import { handleCommandError } from '../errors/index.js';
 import { getModel } from '../shared-helpers.js';
 import type { AgentModelInput } from '../../agent/types.js';
+
+/**
+ * `--max-turns` value: a non-negative integer, 0 meaning no cap. A negative or
+ * non-numeric value is a CLI error before the server starts (a negative cap
+ * would read as no cap here but as exceeded in the shared runner).
+ */
+export function parseMaxTurns(value: string): string {
+  if (!/^\d+$/.test(value.trim()) || !Number.isSafeInteger(Number(value.trim()))) {
+    throw new InvalidArgumentError(`--max-turns must be a non-negative integer (0 = uncapped), got "${value}"`);
+  }
+  return String(Number(value.trim()));
+}
 
 export function registerAcpCommand(program: Command): void {
   program
@@ -28,6 +40,7 @@ export function registerAcpCommand(program: Command): void {
     .option(
       '--max-turns <n>',
       'maximum messages sent per session (0 = uncapped; default: 0)',
+      parseMaxTurns,
       '0',
     )
     // Fix #1: add --dangerously-skip-permissions flag
@@ -44,7 +57,7 @@ export function registerAcpCommand(program: Command): void {
         try {
           await runAcpServer({
             model: options.model ?? getModel(),
-            maxTurns: parseInt(options.maxTurns, 10),
+            maxTurns: Number(options.maxTurns),
             input: process.stdin,
             output: process.stdout,
             dangerouslySkipPermissions: options.dangerouslySkipPermissions,
