@@ -66,7 +66,7 @@ The launcher finds AFK using explicit `afkPath`, the non-interactive PATH, the i
 
 The result footer includes the remote host, session ID, and run ID. To continue that conversation, ask for another `remote_agent` call on the **same host**, passing the returned session ID as `resume` and a new prompt. Do not pass a local session ID or confuse the run ID with the session ID.
 
-The call normally blocks until a remote answer or error arrives. For long work outside autonomous mode, a local background agent can make the call while the main agent continues. In autonomous mode, a child cannot obtain approval for this high-risk tool, so keep the approval-bearing call in the top-level session.
+The call normally blocks until a remote answer or error arrives. For long work, a local background agent can make the call while the main agent continues.
 
 ## Connections, cancellation, and evidence
 
@@ -106,7 +106,7 @@ This opt-in stores another machine's login password in your local keychain and t
 
 ## Safety boundaries
 
-`remote_agent` is high risk because it starts work under another machine's accounts and permissions. Plan mode refuses it. Autonomous mode requires top-level operator approval.
+`remote_agent` is high risk because it starts work under another machine's accounts and permissions. Plan mode refuses it.
 
 The remote runs under its own resolved configuration unless `hosts.json` pins `permissionMode`; the launcher does not silently substitute your local permission mode. Set a host mode explicitly rather than assuming what a preconfigured remote will permit. In particular, a remote configured with `bypassPermissions` can execute without ordinary permission prompts.
 
@@ -114,40 +114,36 @@ Remote runs cannot dispatch local subagents or further remote agents through the
 
 The launcher does not forward a local `--max-budget-usd` value. Configure budgets on the remote and remember that subscription cost accounting may not make a dollar cap enforceable.
 
-## Stop a watched REPL from your phone
+## Watch a REPL from Telegram
 
-Phone control is separate from SSH dispatch. The Telegram bot can watch a local REPL that has armed `/afk on`, then send it a signed abort request.
+The Telegram bot can follow a local REPL session and stream its activity to your chat. This requires the bot to be running against the same AFK state directory as the REPL. Watching is read-only: the bot cannot stop or steer the watched session.
 
 <Steps>
 <Step>
-### Arm the session
+### Start the REPL session
 
-Complete a turn in that REPL so it has a session ID, then run `/afk on`.
+Complete a turn in that REPL so it has a session ID.
 </Step>
 <Step>
 ### Watch from Telegram
 
-Keep the Telegram bot running against the same AFK state. Its presence scanner automatically discovers AFK CLI sessions and starts watching one per allowed chat. You can also use Telegram `/watch` with a known session ID.
+Send `/watch` with no argument to list the sessions the bot can watch, then send `/watch <session-id>`. New activity from that session streams to your chat.
 </Step>
 <Step>
-### Abort the active work
+### Stop watching
 
-Send `/abort` **to the Telegram bot** to stop the currently watched REPL's active work.
+Send `/unwatch` to stop following the session.
 </Step>
 </Steps>
 
-The REPL's abort watcher accepts only a request signed for that session. A missing signing key makes remote abort unavailable rather than accepting an unsigned request. `/afk off` clears AFK presence, restores keyboard-only handling, and stops the abort watcher; the bot stops its corresponding watch when presence clears or disappears.
-
-<Callout type="info">
-Presence discovery reads the bot machine's local AFK state. It does not discover arbitrary SSH hosts or make a detached `remote_agent` run appear as a watched interactive REPL. Telegram `/abort` is not a universal remote process killer, and it is not a REPL slash command for choosing any session on another machine.
-</Callout>
+The bot does not discover sessions on its own, and it reads only the local AFK state on the machine where it runs. It does not see arbitrary SSH hosts, and a detached `remote_agent` run does not appear as a watchable REPL.
 
 For communication between local AFK sessions rather than executing on a different computer, use [peer messaging](/guides/peer-messaging).
 
 ## Related
 
 <Cards>
-<Card title="Run without a human" href="/guides/unattended-runs" description="Set up autonomous operation and phone approvals." />
+<Card title="Run without a human" href="/guides/unattended-runs" description="Choose a surface and set safe unattended boundaries." />
 <Card title="Telegram surface" href="/surfaces/telegram" description="Configure the bot, watch sessions, and respond from your phone." />
 <Card title="Headless chat" href="/guides/headless" description="Understand the structured stream used by remote runs." />
 <Card title="Peer messaging" href="/guides/peer-messaging" description="Coordinate sessions that share a machine." />

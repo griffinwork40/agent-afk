@@ -17,7 +17,6 @@ import { createReleaseBoundaryDetect } from './release-boundary-detect.js';
 import { createShadowGitDetect } from './shadow-git-detect.js';
 import { MemoryStore, createMemorySessionEndHook, createChildMemoryHotBlockHook } from './memory/index.js';
 import { createPlanModeGate } from './plan-mode-gate.js';
-import { createAfkModeGate } from './afk-mode-gate.js';
 import { cleanupComposeSpills } from './tools/compose-executor.format.js';
 import { runReceiptSessionEndHook } from './trace/receipt.js';
 import { createFacetSessionEndHook } from './facets/session-end-hook.js';
@@ -215,7 +214,6 @@ type AgentOptions = {
   cwd?: string;
   sessionId?: string;
   traceWriter?: TraceSink;
-  afkPromptForApproval?: boolean;
   getTranscriptPath?: () => string | null;
   /**
    * Live getter for the resolved model identifier active for the current turn.
@@ -224,7 +222,6 @@ type AgentOptions = {
    * in the stdin JSON payload and as `AFK_HOOK_MODEL` in the subprocess env.
    */
   getModel?: () => string | undefined;
-  daemonTaskId?: string;
 };
 
 /**
@@ -240,42 +237,13 @@ function registerShadowVerifyNudge(registry: HookRegistry): void {
 }
 
 /**
- * Register the plan-mode gate and AFK-mode safety ceiling when a permission
- * mode getter is provided. Both read the same getter; they are mutually
- * exclusive (autonomous vs. plan), so at most one fires per tool call.
- * The AFK gate applies tree-wide (no subagent exemption) and is long-running
- * because it may await an operator approve/deny via elicitationRouter.
+ * Register the plan-mode gate when a permission mode getter is provided.
  */
 function registerPermissionModeGates(
   registry: HookRegistry,
   getPermissionMode: () => PermissionMode,
-  agentOptions: AgentOptions | undefined,
-  getCwd: (() => string | undefined) | undefined,
 ): void {
   registry.register('PreToolUse', createPlanModeGate(getPermissionMode));
-  // AFK-mode safety ceiling. getCwd (live) is preferred over the static
-  // agentOptions.cwd so the gate's workspace-escape rule tracks a mid-session
-  // /cwd change — it is the SOLE path-safety layer in AFK mode (path-approval
-  // is disabled via allowAll for 'autonomous'; see agent/permission-policy.ts).
-  registry.register(
-    'PreToolUse',
-    createAfkModeGate(getPermissionMode, agentOptions?.cwd, getCwd, {
-      ...(agentOptions?.traceWriter !== undefined ? { traceWriter: agentOptions.traceWriter } : {}),
-      // Surface-scoped approval posture. The REPL leaves this default (true =
-      // keep-and-fix). The always-on Telegram host passes false → high-risk /
-      // irreversible ops HARD-REFUSE + Asking summary. See
-      // docs/afk-telegram-native-host.md.
-      ...(agentOptions?.afkPromptForApproval !== undefined
-        ? { promptForApproval: agentOptions.afkPromptForApproval }
-        : {}),
-      ...(agentOptions?.sessionId !== undefined ? { sessionId: agentOptions.sessionId } : {}),
-      ...(agentOptions?.daemonTaskId !== undefined ? { daemonTaskId: agentOptions.daemonTaskId } : {}),
-    }),
-    // Longrunning: on a high-risk op the gate awaits elicitationRouter.route()
-    // (deny-on-timeout). Bypass the 30s per-handler deadline; the gate
-    // forwards the turn signal so session/turn teardown cancels the prompt.
-    { longRunning: true },
-  );
 }
 
 /**
@@ -412,7 +380,7 @@ export function createDefaultHookRegistry(
   registry.register('PreToolUse', createShadowGitDetect());
   const store = memoryStore ?? new MemoryStore();
   if (getPermissionMode !== undefined) {
-    registerPermissionModeGates(registry, getPermissionMode, agentOptions, getCwd);
+    registerPermissionModeGates(registry, getPermissionMode);
   }
   const addPreviewDiffRef = registerEditPreviewHook(registry);
   registerPathApprovalAndBashHooks(registry, surface, getCwd, agentOptions);

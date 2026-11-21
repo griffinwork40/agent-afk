@@ -85,11 +85,6 @@ describe('formatStatusLine — basic assembly with all fields populated', () => 
     expect(out).toContain('● plan');
   });
 
-  it('renders AFK mode chip', () => {
-    const out = stripAll(formatStatusLine({ model: 'sonnet', permissionMode: 'autonomous' }, 200));
-    expect(out).toContain('◐ AFK');
-  });
-
   it('renders bypass mode chip', () => {
     const out = stripAll(formatStatusLine({ model: 'sonnet', permissionMode: 'bypassPermissions' }, 200));
     expect(out).toContain('⚡ bypass');
@@ -267,15 +262,6 @@ describe('formatStatusLine — priority-based shedding at narrow widths', () => 
       30,
     ));
     expect(out).toContain('● plan');
-    expect(out).not.toContain('tok');
-  });
-
-  it('never drops permission mode chip (AFK)', () => {
-    const out = stripAll(formatStatusLine(
-      { model: 'sonnet', cwd: '/tmp', cost: 0.05, tokens: 1200, permissionMode: 'autonomous' },
-      30,
-    ));
-    expect(out).toContain('◐ AFK');
     expect(out).not.toContain('tok');
   });
 

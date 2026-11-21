@@ -90,7 +90,7 @@ export class PlanExitBridge {
           current === 'default' && this.modeBeforeDefault !== undefined
             ? this.modeBeforeDefault
             : current;
-        this.prePlanMode = effectivePrev === 'autonomous' ? undefined : effectivePrev;
+        this.prePlanMode = effectivePrev;
       }
     } else if (mode === 'default') {
       // Stash the privileged mode being left so the NEXT `default → plan` press

@@ -13,20 +13,6 @@
 
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// Module-level mock so the bot.ts import binding is replaced before any
-// TelegramBot is constructed.  vi.spyOn cannot replace a constructor that
-// bot.ts already holds a direct reference to via its top-level import.
-const mockLedgerRecord = vi.fn();
-vi.mock('../agent/session-ledger.js', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('../agent/session-ledger.js')>();
-  return {
-    ...orig,
-    SessionLedgerWriter: class {
-      constructor(_sid: string) {}
-      record(...args: unknown[]) { mockLedgerRecord(...args); }
-    },
-  };
-});
 import { TelegramBot } from './bot.js';
 import type { Context, Telegraf } from 'telegraf';
 import type { AgentConfig } from '../agent/types.js';
@@ -296,75 +282,6 @@ describe('TelegramBot — setupHandlers() closure coverage', () => {
   });
 
   // -------------------------------------------------------------------------
-  // /abort — closures on lines 209-234
-  // -------------------------------------------------------------------------
-  describe('/abort command closure', () => {
-    test('replies with guidance when not watching any session', async () => {
-      // Drive via the registered closure using no-chat path via public method
-      // (no-chat cannot be reached via handleUpdate; use handleClear analog pattern).
-      // We test the happy no-chat guard via the watchManager.getWatched early exit.
-      const wm = (
-        bot as unknown as {
-          watchManager: { getWatched: (id: number) => string | undefined };
-        }
-      ).watchManager;
-      vi.spyOn(wm, 'getWatched').mockReturnValue(undefined);
-      const api = await fireCommand(bot, '/abort');
-      // No session watched — bot replies with guidance text
-      expect(api).toHaveBeenCalledWith(
-        'sendMessage',
-        expect.objectContaining({
-          text: expect.stringContaining('Not watching any session'),
-        }),
-      );
-    });
-
-    test('replies "key not found" when readSessionKey returns null', async () => {
-      const wm = (
-        bot as unknown as {
-          watchManager: { getWatched: (id: number) => string | undefined };
-        }
-      ).watchManager;
-      vi.spyOn(wm, 'getWatched').mockReturnValue('sess-123');
-
-      const channel = await import('../agent/afk-channel.js');
-      vi.spyOn(channel, 'readSessionKey').mockReturnValue(null);
-
-      const api = await fireCommand(bot, '/abort');
-      expect(api).toHaveBeenCalledWith(
-        'sendMessage',
-        expect.objectContaining({
-          text: expect.stringContaining('Session key not found'),
-        }),
-      );
-    });
-
-    test('happy path: signs abort and writes ledger record', async () => {
-      const wm = (
-        bot as unknown as {
-          watchManager: { getWatched: (id: number) => string | undefined };
-        }
-      ).watchManager;
-      vi.spyOn(wm, 'getWatched').mockReturnValue('sess-happy');
-
-      const channel = await import('../agent/afk-channel.js');
-      vi.spyOn(channel, 'readSessionKey').mockReturnValue('secret-key');
-      vi.spyOn(channel, 'freshChannelId').mockReturnValue('nonce-1');
-      vi.spyOn(channel, 'signAbortRequest').mockReturnValue('hmac-sig');
-
-      mockLedgerRecord.mockClear();
-      const api = await fireCommand(bot, '/abort');
-      expect(mockLedgerRecord).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: 'abort_request' }),
-      );
-      expect(api).toHaveBeenCalledWith(
-        'sendMessage',
-        expect.objectContaining({ text: expect.stringContaining('Abort sent') }),
-      );
-    });
-  });
-
-  // -------------------------------------------------------------------------
   // bot.on('text') → runDetached — line 264
   // The runDetached catch path (lines 253-263) fires when messageHandler.handle
   // rejects; the void-catch logs the sanitized error.
@@ -588,79 +505,6 @@ describe('TelegramBot — setupHandlers() closure coverage', () => {
         .mockResolvedValue(undefined);
       await fireAction(bot, 'afk:sw:sess-abc', 99999);
       expect(spy).not.toHaveBeenCalled();
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // runAutoSubscribeTick inner loop — line 573 (watchManager.watching guard)
-  // -------------------------------------------------------------------------
-  describe('runAutoSubscribeTick — inner session loop', () => {
-    test('starts a watch for a discovered AFK session not already watched', async () => {
-      const presence = await import('../agent/awareness/presence.js');
-      vi.spyOn(presence, 'readLivePresenceFiles').mockResolvedValueOnce([
-        {
-          sessionId: 'sess-new',
-          surface: 'cli' as const,
-          afk: true,
-          pid: 1,
-          startedAt: new Date().toISOString(),
-        },
-      ]);
-      const wm = (
-        bot as unknown as {
-          watchManager: {
-            getWatched: (id: number) => string | undefined;
-            watching: (id: number) => string | undefined;
-            start: (...a: unknown[]) => void;
-          };
-        }
-      ).watchManager;
-      vi.spyOn(wm, 'getWatched').mockReturnValue(undefined);
-      vi.spyOn(wm, 'watching').mockReturnValue(undefined);
-      const startSpy = vi.spyOn(wm, 'start').mockImplementation(() => {});
-
-      await (
-        bot as unknown as { runAutoSubscribeTick: () => Promise<void> }
-      ).runAutoSubscribeTick();
-
-      expect(startSpy).toHaveBeenCalledWith(
-        12345,
-        'sess-new',
-        expect.any(Function),
-        expect.any(Function),
-      );
-    });
-
-    test('skips start when session is already watched', async () => {
-      const presence = await import('../agent/awareness/presence.js');
-      vi.spyOn(presence, 'readLivePresenceFiles').mockResolvedValueOnce([
-        {
-          sessionId: 'sess-existing',
-          surface: 'cli' as const,
-          afk: true,
-          pid: 1,
-          startedAt: new Date().toISOString(),
-        },
-      ]);
-      const wm = (
-        bot as unknown as {
-          watchManager: {
-            getWatched: (id: number) => string | undefined;
-            watching: (id: number) => string | undefined;
-            start: (...a: unknown[]) => void;
-          };
-        }
-      ).watchManager;
-      vi.spyOn(wm, 'getWatched').mockReturnValue(undefined);
-      // watching() returns the same session → already watching, skip
-      vi.spyOn(wm, 'watching').mockReturnValue('sess-existing');
-      const startSpy = vi.spyOn(wm, 'start').mockImplementation(() => {});
-
-      await (
-        bot as unknown as { runAutoSubscribeTick: () => Promise<void> }
-      ).runAutoSubscribeTick();
-
-      expect(startSpy).not.toHaveBeenCalled();
     });
   });
 

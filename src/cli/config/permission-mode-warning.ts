@@ -1,10 +1,13 @@
-// Invariant: warn once per process, buffered across the REPL startup screen clear.
-let warnedPermissionModeRemoval = false;
+// Invariant: warn once per removed mode per process, buffered across the REPL startup screen clear.
+const warnedRemovedModes = new Set<RemovedPermissionMode>();
 let deferredPermissionModeWarnings: string[] | null = null;
+
+/** Permission modes that existed before v6 and are no longer accepted in config files. */
+export type RemovedPermissionMode = 'default' | 'autonomous';
 
 /** Test-only reset of the warn-once tracker and deferral buffer. Internal API. */
 export function _resetPermissionModeWarnCache(): void {
-  warnedPermissionModeRemoval = false;
+  warnedRemovedModes.clear();
   deferredPermissionModeWarnings = null;
 }
 
@@ -21,11 +24,11 @@ export function flushDeferredPermissionModeWarnings(): void {
   for (const msg of pending) console.warn(msg);
 }
 
-export function warnPermissionModeRemoval(): void {
-  if (warnedPermissionModeRemoval) return;
-  warnedPermissionModeRemoval = true;
+export function warnPermissionModeRemoval(mode: RemovedPermissionMode): void {
+  if (warnedRemovedModes.has(mode)) return;
+  warnedRemovedModes.add(mode);
   const message =
-    '[afk] permissionMode "default" was removed. The session will run in bypassPermissions. Set "permissionMode": "plan" for a read-only session.';
+    `[afk] permissionMode "${mode}" was removed. The session will run in bypassPermissions. Set "permissionMode": "plan" for a read-only session.`;
   if (deferredPermissionModeWarnings !== null) {
     deferredPermissionModeWarnings.push(message);
   } else {

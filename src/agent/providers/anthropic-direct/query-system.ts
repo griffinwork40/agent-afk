@@ -1,6 +1,5 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { getCacheTtl, isCacheEnabled, withSystemBreakpoint } from './cache-policy.js';
-import { buildAfkModeAddendumBlock } from './afk-mode-addendum.js';
 import { buildPlanModeAddendumBlock } from './plan-mode-addendum.js';
 import { refreshEnvironmentDate } from '../shared/date-rollover.js';
 import { WORKSPACE_PREAMBLE_MARKERS } from '../../workspace/workspace-preamble.js';
@@ -163,8 +162,6 @@ export function composeQuerySystem(options: {
 
   const planBlock = buildPlanModeAddendumBlock(state.currentPermissionMode);
   if (planBlock !== null) blocks.push(planBlock);
-  const afkBlock = buildAfkModeAddendumBlock(state.currentPermissionMode);
-  if (afkBlock !== null) blocks.push(afkBlock);
 
   if (blocks.length === 0) return null;
   if (!cacheEnabled) return blocks;

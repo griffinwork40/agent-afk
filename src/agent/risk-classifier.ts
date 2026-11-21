@@ -28,8 +28,8 @@ export type RiskLevel = 'safe' | 'medium' | 'high';
 /**
  * Named category for a gate verdict — the stable, enumerable "why" dimension
  * that the `hook_decision` trace event records alongside the risk level and the
- * concrete `reason` diagnostic. One definition shared by the classifier, the
- * AFK gate, and the trace schema so they can never drift.
+ * concrete `reason` diagnostic. One definition shared by the classifier and
+ * the trace schema so they can never drift.
  *
  * Categories map to the broad rule family that produced the verdict:
  *   `read-only`          — no side-effects; tool or command is purely observational.
@@ -82,8 +82,8 @@ export type RiskCategory = (typeof RISK_CATEGORIES)[number];
  * wait_for command), a background bash launch raised from safe, or a
  * node_modules write target (including the selected patch_apply verdict).
  * Other `medium` verdicts omit it; all `safe` verdicts omit it.
- * The field remains optional: callers such as the AFK gate must tolerate its
- * absence when building refusal text, rather than assuming every verdict
+ * The field remains optional: callers must tolerate its absence when
+ * building display or refusal text, rather than assuming every verdict
  * explains its level.
  *
  * `category` is always present and names the broad rule family that produced
@@ -278,8 +278,8 @@ export function classifyRisk(
 
 /**
  * Like {@link classifyRisk}, but also returns a short concrete `reason` naming
- * the rule that fired (always set for `'high'`). The AFK gate surfaces the
- * reason in its refusal so a blocked agent knows exactly what to change.
+ * the rule that fired (always set for `'high'`) so callers can show exactly
+ * which rule produced the level.
  */
 export function classifyRiskDetailed(
   toolName: string,
@@ -333,12 +333,12 @@ export function classifyRiskDetailed(
   // remote_agent executes arbitrary code on another machine over SSH. The
   // remote afk process runs in headless/bypassPermissions mode by default
   // (no --permission-mode flag is injected by the launcher), so a destructive
-  // prompt could bypass the local AFK gate by routing through the remote.
-  // High risk ensures autonomous mode (AFK gate) holds this tool for approval.
+  // prompt can mutate arbitrary state on the remote machine. High risk records
+  // that; no approval gate holds it, but plan mode refuses it (plan-mode-gate.ts).
   if (tool === 'remote_agent') return { level: 'high', reason: 'remote-exec', category: 'remote-exec' };
   // `agent` with `host` set has the same risk profile as `remote_agent` — the
   // underlying SSH transport is identical. The schema description promises this
-  // classification; the AFK gate must hold it for approval in autonomous mode.
+  // classification; plan mode refuses it like remote_agent.
   if (tool === 'agent' && typeof input === 'object' && input !== null && 'host' in input && (input as Record<string, unknown>)['host'] !== undefined) {
     return { level: 'high', reason: 'remote-exec', category: 'remote-exec' };
   }
@@ -348,15 +348,13 @@ export function classifyRiskDetailed(
   // server (postgres, filesystem, GitHub, …). The classifier has NO visibility
   // into what it does, so it cannot tell a safe MCP read from a destructive
   // mutation (`mcp__postgres__drop_table`, `mcp__fs__delete`). Failing open
-  // (returning 'safe') would let an unattended run silently execute arbitrary
-  // external side-effects — exactly what the AFK gate exists to prevent.
+  // (returning 'safe') would label arbitrary external side-effects as harmless.
   //
   // Policy (conservative default, operator-upgradable): a destructive verb in
-  // any post-prefix token → 'high' (gated behind approval); all other MCP tools
-  // → 'medium' (may have network/quota side-effects but not obviously
-  // destructive, and medium is allowed in AFK so autonomous research stays
-  // useful). See DESTRUCTIVE_VERBS / mcpSubNameTokens above for the exact scan
-  // rule and why it covers 2-segment names and matches on word boundaries.
+  // any post-prefix token → 'high'; all other MCP tools → 'medium' (may have
+  // network/quota side-effects but not obviously destructive). See
+  // DESTRUCTIVE_VERBS / mcpSubNameTokens above for the exact scan rule and why
+  // it covers 2-segment names and matches on word boundaries.
   //
   // Prefix test uses the already-lowercased `tool` so mixed-case `Mcp__…` names
   // are classified too, not silently dropped to the 'safe' default below.
@@ -404,8 +402,7 @@ export function classifyRiskDetailed(
   // can submit forms, click "Delete", trigger purchases, or navigate to
   // arbitrary URLs — side-effects that survive the session and may be
   // irreversible. They are 'medium' rather than 'high' because they are
-  // generally recoverable (navigate away, close the tab) and the AFK posture
-  // allows medium ops unattended. browser_screenshot and browser_observe are
+  // generally recoverable (navigate away, close the tab). browser_screenshot and browser_observe are
   // read-only; browser_close is a cleanup op — all safe.
   if (tool === 'browser_act' || tool === 'browser_open') return { level: 'medium', category: 'browser-action' };
   if (tool === 'browser_observe' || tool === 'browser_screenshot' || tool === 'browser_close') {
@@ -416,7 +413,7 @@ export function classifyRiskDetailed(
   // web_scrape issues outbound HTTP requests (and optionally headless-browser
   // renders for JS-heavy pages). It may hit rate-limited, metered, or
   // auth-gated endpoints. 'medium' — notable network side-effect but recoverable
-  // and broadly necessary for autonomous research work in AFK mode.
+  // and broadly necessary for unattended research work.
   if (tool === 'web_scrape') return { level: 'medium', category: 'network-mutation' };
 
   // ---- web_request ---------------------------------------------------------

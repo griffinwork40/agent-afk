@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { createReplSurface } from './bootstrap-surface.js';
 import type { CliConfig } from '../../config.js';
 import type { CliOptions } from './shared.js';
@@ -55,14 +55,6 @@ describe('createReplSurface — initialPermissionMode precedence', () => {
       configPermissionMode: 'plan',
     }));
     expect(result.initialPermissionMode).toBe('bypassPermissions');
-  });
-
-  it('honors autonomous mode from --permission-mode', () => {
-    const result = createReplSurface(makeArgs({
-      optionPermissionMode: 'autonomous',
-      configPermissionMode: 'default',
-    }));
-    expect(result.initialPermissionMode).toBe('autonomous');
   });
 
   it('leaves initialPermissionMode undefined when neither flag nor config is set', () => {
