@@ -1,0 +1,100 @@
+---
+title: "Chat with other afk users"
+description: "An opt-in public chat room inside the terminal REPL, between agent turns. For people only."
+---
+
+`/global` opens a shared public chat room inside the AFK terminal REPL. It is designed for humans to talk to each other between agent turns. The agent never sees the room, is never shown messages, and has no tool or skill that can open, post to, or read the chat.
+
+<Callout type="warn">
+No public relay is running yet. `/global` only works when `AFK_GLOBAL_CHAT_URL` points at a relay someone runs. See `relay/README.md` in the repo for how to run one. With the env var unset the command explains the situation and exits cleanly.
+</Callout>
+
+## What the relay sees and stores
+
+The relay receives every message you send. It stores messages for up to 7 days and keeps the most recent 50 as a backlog for new joiners. It records your display name, your public key (a hex-encoded Ed25519 key), the first time it saw your key, and the last time you changed your name. It records the IP-hash of your connection (a one-way hash, not the raw IP) for rate limiting and ban enforcement. It stores report counts on individual messages. It never receives your private key; that stays on your machine.
+
+The relay is run by whoever operates the instance `AFK_GLOBAL_CHAT_URL` points at. Read their privacy policy, if any, before connecting.
+
+## Opt in and set up
+
+<Steps>
+<Step>
+
+Point `AFK_GLOBAL_CHAT_URL` at a relay:
+
+```bash
+export AFK_GLOBAL_CHAT_URL=wss://relay.example.com/global
+```
+
+Add it to `afk.env` to make it persistent.
+
+</Step>
+<Step>
+
+Run `/global` in the REPL. The first time, the command shows an opt-in notice and asks you to choose a display name. Names must be 2 to 16 characters, lowercase letters, digits, hyphens, or underscores. You can change your name once per 24 hours.
+
+</Step>
+<Step>
+
+Type a message and press Enter to post. Press Esc or Ctrl+C to leave.
+
+</Step>
+</Steps>
+
+## Commands
+
+### Inside the view
+
+| Input | What it does |
+|---|---|
+| Enter | Post the message you typed |
+| Backspace | Delete the last character |
+| Ctrl+U | Clear the input line |
+| Esc or Ctrl+C | Leave the room |
+
+### Slash subcommands (outside the room)
+
+| Command | What it does |
+|---|---|
+| `/global` | Open the room |
+| `/global name <name>` | Set or change your display name |
+| `/global status` | Show local state without connecting |
+| `/global off` | Clear consent; your identity is kept |
+
+### Maintainer commands (inside the view)
+
+Maintainers are public keys listed in the relay config. These in-view commands are only accepted from maintainer keys.
+
+| In-view input | What it does |
+|---|---|
+| `ban <pubkey>` | Ban a key and disconnect it |
+| `unban <pubkey>` | Remove a ban |
+| `delete <id>` | Delete a message by ID |
+| `mode open` | Set the room to open mode |
+| `mode readonly` | Set the room to read-only mode |
+| `mode closed` | Set the room to closed mode |
+
+## Local moderation
+
+You can mute another user from inside the view. A muted user's messages are hidden locally only; they still reach everyone else. Mutes are stored in `~/.afk/state/global-chat/mutes.json`.
+
+## Privacy and isolation
+
+The chat view does not write to the transcript, session ledger, witness trace, or peer inbox. The TTY recorder (`AFK_TTY_TRACE`) is paused while the view is open so other people's messages are not written into a cast file.
+
+The command requires a real interactive TTY REPL with a live compositor. It refuses when run from a context without a terminal, so an agent cannot open it programmatically. The state directory (`~/.afk/state/global-chat/`) is on the agent's read denylist; the agent cannot read the identity file or the mute list.
+
+Stated limit: an agent with shell access can run any command the user can, including `afk`. The isolation is at the tool layer, not the OS layer.
+
+## Turn off
+
+Run `/global off` to clear your opt-in. Your identity and private key are kept so you can opt back in without generating a new key. To opt back in, run `/global` again.
+
+To remove your identity entirely, delete `~/.afk/state/global-chat/identity.json`.
+
+## Related
+
+<Cards>
+<Card title="Use the interactive REPL" href="/surfaces/repl" description="Terminal controls and REPL session commands." />
+<Card title="Peer messaging" href="/guides/peer-messaging" description="Send messages between afk sessions on the same machine." />
+</Cards>

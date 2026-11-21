@@ -12,6 +12,9 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- add `/global` public chat room: opt-in terminal REPL chat between agent turns, with relay client, identity and mute stores, moderation, secret detection, and TTY recording pause
+
 ## [5.360.0] - 2026-11-19
 
 ### Added

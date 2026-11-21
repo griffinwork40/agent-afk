@@ -4513,6 +4513,11 @@
     },
     {
       "kind": "slash",
+      "name": "/global",
+      "source": "src/cli/slash/commands/global.ts"
+    },
+    {
+      "kind": "slash",
       "name": "/goal",
       "source": "src/cli/slash/commands/goal.ts"
     },
