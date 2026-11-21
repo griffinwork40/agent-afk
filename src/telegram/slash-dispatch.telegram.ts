@@ -2,7 +2,7 @@
  * Generic Telegram slash dispatch through the shared slash registry.
  *
  * Telegram-only commands (/start, /cd, /sessions, /new, /watch, /unwatch,
- * /abort, /afk, /inbox, /insights, /good, /bad) are registered as Telegraf
+ * /inbox, /insights, /good, /bad) are registered as Telegraf
  * `bot.command` handlers and never reach here. Everything else that starts
  * with `/` is classified: native (run with the Telegram context + writer),
  * refused (capability/lifecycle reason), skill (forwarded to the agent),

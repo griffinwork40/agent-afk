@@ -43,7 +43,7 @@ function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
     turnTokens: [],
     turns: [],
     model: 'sonnet',
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
     ...overrides,
   };
 }
@@ -509,18 +509,18 @@ describe('performResumeSwap — waitForInitialization rejection', () => {
 // ---------------------------------------------------------------------------
 
 describe('performResumeSwap — stats.permissionMode reset', () => {
-  it('resets stats.permissionMode to default on successful swap with stored session', async () => {
+  it('resets stats.permissionMode to bypassPermissions on successful swap with stored session', async () => {
     const { deps, stats } = buildDeps();
     stats.permissionMode = 'plan';
     await performResumeSwap(makeTarget('t-plan', makeStoredSession()), deps);
-    expect(stats.permissionMode).toBe('default');
+    expect(stats.permissionMode).toBe('bypassPermissions');
   });
 
-  it('resets stats.permissionMode to default on successful swap with no stored session', async () => {
+  it('resets stats.permissionMode to bypassPermissions on successful swap with no stored session', async () => {
     const { deps, stats } = buildDeps();
     stats.permissionMode = 'plan';
     await performResumeSwap(makeTarget('bare-id'), deps);
-    expect(stats.permissionMode).toBe('default');
+    expect(stats.permissionMode).toBe('bypassPermissions');
   });
 });
 
@@ -563,7 +563,7 @@ describe('reseedStatsFromStored wiring — shared helper', () => {
     const stats = {
       totalTurns: 0, totalCostUsd: 0, totalTokens: 0, totalDurationMs: 0,
       sessionStartTime: 0, turnCosts: [], turnTokens: [], turns: [],
-      model: 'sonnet' as const, permissionMode: 'default',
+      model: 'sonnet' as const, permissionMode: 'bypassPermissions',
     } as import('../../slash/types.js').SessionStats;
     const stored: import('../../session-store.js').StoredSession = {
       model: 'opus', totalTurns: 5, totalCostUsd: 1.5, totalTokens: 30000,
@@ -582,7 +582,7 @@ describe('reseedStatsFromStored wiring — shared helper', () => {
     const stats = {
       totalTurns: 0, totalCostUsd: 0, unpricedTurns: 0, totalTokens: 0, totalDurationMs: 0,
       sessionStartTime: 0, turnCosts: [], turnTokens: [], turns: [],
-      model: 'sonnet' as const, permissionMode: 'default',
+      model: 'sonnet' as const, permissionMode: 'bypassPermissions',
     } as import('../../slash/types.js').SessionStats;
     // Stored session with unpricedTurns set
     const stored: import('../../session-store.js').StoredSession = {
@@ -599,7 +599,7 @@ describe('reseedStatsFromStored wiring — shared helper', () => {
     const stats = {
       totalTurns: 0, totalCostUsd: 0, unpricedTurns: 5, totalTokens: 0, totalDurationMs: 0,
       sessionStartTime: 0, turnCosts: [], turnTokens: [], turns: [],
-      model: 'sonnet' as const, permissionMode: 'default',
+      model: 'sonnet' as const, permissionMode: 'bypassPermissions',
     } as import('../../slash/types.js').SessionStats;
     // Legacy stored session without unpricedTurns
     const stored: import('../../session-store.js').StoredSession = {

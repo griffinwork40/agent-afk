@@ -37,7 +37,12 @@ vi.mock('../shared-helpers.js', () => ({
   getApiKeyForModel: () => 'test-key', getModel: () => 'sonnet', getDefaultSubagentModel: () => 'sonnet',
 }));
 vi.mock('../../agent/auth/credential-source.js', () => ({ tryCredentialSourceForModel: () => undefined }));
-vi.mock('../provider-selection.js', () => ({ cliProviderFamily: () => 'anthropic' }));
+// Partial mock: `afk acp` now selects its provider through the real
+// parseProvider, which needs this module's other exports (selectCliProvider).
+vi.mock('../provider-selection.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../provider-selection.js')>()),
+  cliProviderFamily: () => 'anthropic',
+}));
 vi.mock('../../agent/providers/anthropic-direct/index.js', () => ({
   AnthropicDirectProvider: class { query = createMockProvider().query; name = 'mock'; },
 }));

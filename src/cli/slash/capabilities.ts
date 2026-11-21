@@ -26,7 +26,6 @@ const LEGACY_REQUIREMENTS: Readonly<Record<string, readonly SurfaceCapability[]>
   '/thinking': ['sessionControl'],
   '/fast': ['sessionControl'],
   '/plan': ['permissionMode'],
-  '/afk': ['permissionMode'],
   '/retry': ['conversationRetry'],
   '/init': ['consoleOutput'],
   '/sh': ['shellJobs'],

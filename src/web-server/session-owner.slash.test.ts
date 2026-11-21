@@ -35,7 +35,7 @@ const FAKE_STATS = {
   turnTokens: [],
   turns: [],
   model: 'claude-3-5-sonnet-20241022',
-  permissionMode: 'default' as const,
+  permissionMode: 'bypassPermissions' as const,
 };
 
 beforeEach(() => {

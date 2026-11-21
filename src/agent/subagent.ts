@@ -31,6 +31,8 @@ import type { AbortOrigin, TraceSink } from './trace/index.js';
 import type { Surface } from './awareness/types.js';
 import { admitFork, type SpawnReceipt, type DelegationBudget } from './subagent/fork-budget.js';
 import { WorktreeMainRootCache } from './subagent/worktree-main-root-cache.js';
+import { isScratchDisposable } from './worktree/worktree-scratch.js';
+import { extractWorktreePath, isWorktreeCwd } from './manifest/worktree.js';
 import { type ReadScopeInputs } from './subagent-read-scope.js';
 import { resolveReadScope, composeWriteRoots } from './subagent/resolve-fork-scope.js';
 import { providerForModel, type BundledProviderName } from './providers/index.js';
@@ -415,6 +417,14 @@ export class SubagentManager {
       // Write-root composition (#435): see ./subagent/resolve-fork-scope.
       const composedWriteRoots = composeWriteRoots(options.config.writeRoots, effectiveChildCwd);
 
+      // Scratch-dir disposability: read the worktree meta once, before
+      // assembleChildConfig, so the identity preamble can gate the
+      // scratch-dir sentence on a confirmed opt-in. Only meaningful for
+      // worktree children; resolves to false for all other paths.
+      // isScratchDisposable never throws (see worktree-scratch.ts invariant).
+      const worktreeRoot = isWorktreeCwd(effectiveChildCwd ?? '') ? extractWorktreePath(effectiveChildCwd ?? '') : undefined;
+      const scratchDisposable = worktreeRoot !== undefined ? await isScratchDisposable(worktreeRoot) : false;
+
       // Assemble the child AgentConfig. All fork-time invariants (seal ownership,
       // output cap, credential gating, anti-hang constraints, scope inheritance,
       // phase-role enforcement) live in assembleChildConfig with their Invariant:/
@@ -440,6 +450,9 @@ export class SubagentManager {
         // block for named typed agents that carry their own curated prompts.
         // Absent (undefined) for bare/unnamed dispatches — they receive the block.
         ...(options.resolvedAgentType !== undefined ? { resolvedAgentType: options.resolvedAgentType } : {}),
+        // Scratch-dir opt-in (#5043): only emit the scratch-dir preamble sentence
+        // when the worktree meta confirms the directory is disposable.
+        ...(scratchDisposable ? { scratchDisposable: true } : {}),
       });
       childConfig = applyContinuationSeed(childConfig, options); // D8: no-op unless a continuation
 

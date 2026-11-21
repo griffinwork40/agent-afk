@@ -145,7 +145,7 @@ function makeMinimalCtx(backgroundRegistry: BackgroundAgentRegistry): Interactiv
       turnTokens: [],
       turns: [],
       model: 'sonnet',
-      permissionMode: 'default',
+      permissionMode: 'bypassPermissions',
       sessionId: 'mock',
     },
     statusLine: {
@@ -158,7 +158,7 @@ function makeMinimalCtx(backgroundRegistry: BackgroundAgentRegistry): Interactiv
     gitStatusSampler: { refresh: vi.fn(async () => {}), setOnUpdate: vi.fn(), getBranch: () => undefined, getPr: () => undefined },
     completionWriter: { fn: () => {}, idleFn: () => {} },
     replRenderer: { writeLine: vi.fn(), setCompositor: vi.fn() },
-    slashCtx: { stats: { permissionMode: 'default' } },
+    slashCtx: { stats: { permissionMode: 'bypassPermissions' } },
     rl: { close: vi.fn() },
     options: { thinkingUi: undefined },
     backgroundRegistry,

@@ -86,12 +86,17 @@ function runHook(
     fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, 'pnpm'), `#!/bin/sh\necho "$@" >> "${shellPath(pnpmLog)}"\nexit \${PNPM_EXIT:-0}\n`, 'utf8');
     fs.chmodSync(path.join(bin, 'pnpm'), 0o755);
-    const cmd = shellCommandArgs(`AFK_ALLOW_MAIN_PUSH='${options.override ?? ''}' "${shellPath(hook)}"`);
+    const cmd = shellCommandArgs(`"${shellPath(hook)}"`);
     const result = spawnSync(cmd.command, cmd.args, {
       cwd: dir,
       input: options.setup?.(dir) ?? stdin,
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, PNPM_EXIT: String(options.pnpmExit ?? 0) },
+      env: {
+        ...process.env,
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+        PNPM_EXIT: String(options.pnpmExit ?? 0),
+        AFK_ALLOW_MAIN_PUSH: options.override ?? '',
+      },
     });
     return Object.assign(result, { dir, pnpmLog });
   } catch (err) {
@@ -170,10 +175,31 @@ describe('direct main push guard', () => {
     } finally { cleanup(result); }
   });
 
+  it('names the offending commit before refusing a disallowed subject', () => {
+    let shortSha = '';
+    const subject = 'fix: accidental direct push';
+    const result = runHook('', { setup(dir) {
+      const base = commit(dir, 'chore(release): base');
+      commit(dir, subject);
+      shortSha = git(dir, 'rev-parse', '--short', 'HEAD');
+      return mainUpdate(commit(dir, 'docs(changelog): prep'), base);
+    } });
+    try {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`pre-push: offending commit: ${shortSha} ${subject}\n${refusal}`);
+      expect(fs.existsSync(result.pnpmLog)).toBe(false);
+    } finally { cleanup(result); }
+  });
+
   it('refuses when the remote range cannot be inspected', () => {
     const result = runHook('', { setup: (dir) => mainUpdate(commit(dir, 'chore(release): v1'), 'f'.repeat(40)) });
-    try { expect(result.status).toBe(1); expect(result.stderr).toContain(refusal); }
-    finally { cleanup(result); }
+    try {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('pre-push: cannot inspect main push range');
+      expect(result.stderr).toContain('git fetch');
+      expect(result.stderr).not.toContain(refusal);
+      expect(fs.existsSync(result.pnpmLog)).toBe(false);
+    } finally { cleanup(result); }
   });
 
   it.each([
@@ -192,6 +218,23 @@ describe('direct main push guard', () => {
     } });
     try { expect(result.status).toBe(status); }
     finally { cleanup(result); }
+  });
+
+  it('allows a release push where local ref is also refs/heads/main (atomic push shape)', () => {
+    // The real release flow (scripts/release.mjs) runs:
+    //   git push --atomic origin main <tag>
+    // which sends "refs/heads/main <sha> refs/heads/main <base>" plus a tag line.
+    // The guard keys on the remote ref; this test pins that exact shape.
+    const result = runHook('', { setup(dir) {
+      const base = commit(dir, 'feat: already on remote');
+      const tip = commit(dir, 'chore(release): v1');
+      // Local ref is refs/heads/main (same as remote), plus a tag ref.
+      return `refs/heads/main ${tip} refs/heads/main ${base}\r\nrefs/tags/v1 ${tip} refs/tags/v1 ${zero}\n`;
+    } });
+    try {
+      expect(result.status).toBe(0);
+      expect(fs.existsSync(result.pnpmLog)).toBe(true);
+    } finally { cleanup(result); }
   });
 
   it('does not restrict new tags or other branches', () => {
@@ -354,6 +397,21 @@ describe('scripts/git-hooks/pre-push', () => {
       return mainUpdate(signedSha, base);
     } });
     try {
+      // Precondition: verify the fixture actually produces signature output on
+      // this platform/git version.  Without the fix, the hook's git log reads
+      // that extra line as a commit subject and incorrectly refuses the push.
+      // If this git produces no extra output (the fixture stops working), the
+      // test would pass vacuously — catch that here so CI turns red instead.
+      const sigOutput = execFileSync(
+        'git',
+        ['-C', result.dir, '-c', 'log.showSignature=true', 'log', '--format=%H', '-1'],
+        { encoding: 'utf8' },
+      );
+      expect(
+        sigOutput.trim().split('\n').length,
+        'fixture precondition: git log with log.showSignature=true must produce more than one output line (signature noise + hash); if this fails the fixture no longer exercises the showSignature bug path',
+      ).toBeGreaterThan(1);
+
       // The push must succeed (exit 0): the hook must not refuse a
       // chore(release): commit just because log.showSignature is set.
       expect(result.status).toBe(0);

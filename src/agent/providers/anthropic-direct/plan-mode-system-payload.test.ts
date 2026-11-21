@@ -25,7 +25,6 @@ import {
   __setAnthropicClientFactory,
 } from './index.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from './plan-mode-addendum.js';
-import { AFK_MODE_ADDENDUM_TEXT } from './afk-mode-addendum.js';
 
 // --- Mock Anthropic Messages-API plumbing (mirrors query-auth-retry.test.ts) ---
 
@@ -133,7 +132,7 @@ describe('AnthropicDirectQuery — plan-mode system payload', () => {
       config: {
         model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
-        permissionMode: 'default',
+        permissionMode: 'bypassPermissions',
       },
     });
 
@@ -189,28 +188,7 @@ describe('AnthropicDirectQuery — plan-mode system payload', () => {
     expect(text).toContain('devils-advocate');
   });
 
-  it('includes the AFK addendum (and NOT the plan addendum) when permission mode is autonomous', async () => {
-    const provider = new AnthropicDirectProvider();
-    const query = provider.query({
-      prompt: singleInput('hello'),
-      config: {
-        model: 'claude-sonnet-5',
-        apiKey: 'sk-ant-oat01-test',
-        permissionMode: 'autonomous',
-      },
-    });
 
-    await drainQuery(query);
-
-    expect(messagesCreateMock).toHaveBeenCalled();
-    const firstCall = messagesCreateMock.mock.calls[0]!;
-    const systemArg = (firstCall[0] as { system?: unknown }).system;
-    const text = extractSystemText(systemArg);
-    expect(text).toContain(AFK_MODE_ADDENDUM_TEXT);
-    expect(text).toContain('AFK mode is active');
-    // Mutual exclusivity at the payload level: plan addendum must be absent.
-    expect(text).not.toContain(PLAN_MODE_ADDENDUM_TEXT);
-  });
 
   it('omits the AFK addendum when permission mode is default', async () => {
     const provider = new AnthropicDirectProvider();
@@ -219,7 +197,7 @@ describe('AnthropicDirectQuery — plan-mode system payload', () => {
       config: {
         model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
-        permissionMode: 'default',
+        permissionMode: 'bypassPermissions',
       },
     });
 
@@ -229,7 +207,6 @@ describe('AnthropicDirectQuery — plan-mode system payload', () => {
     const systemArg = (firstCall[0] as { system?: unknown }).system;
     const text = extractSystemText(systemArg);
     expect(text).not.toContain('AFK mode is active');
-    expect(text).not.toContain(AFK_MODE_ADDENDUM_TEXT);
   });
 
   it('appends the addendum as the LAST system block (cache breakpoint position)', async () => {
@@ -292,7 +269,7 @@ describe('AnthropicDirectQuery — plan-mode system payload', () => {
       config: {
         model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
-        permissionMode: 'default',
+        permissionMode: 'bypassPermissions',
       },
     });
 

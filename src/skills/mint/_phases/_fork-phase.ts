@@ -13,6 +13,7 @@
  * four files).
  */
 
+import { mintChildGate } from './child-gate.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
@@ -103,6 +104,7 @@ export async function forkMintPhase(opts: ForkMintPhaseOptions): Promise<string>
       model,
       systemPrompt,
       apiKey: resolveCredentialForModel(model),
+      ...mintChildGate(parentSessionId, phaseId), // surface approval gate
     },
     idPrefix: phaseId,
     agentType: phaseId,

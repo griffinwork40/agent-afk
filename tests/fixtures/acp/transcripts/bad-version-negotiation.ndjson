@@ -1,0 +1,2 @@
+{"direction":"client_to_agent","frame":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":0}}}
+{"direction":"agent_to_client","frame":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"name":"afk","title":"AFK","version":"6.0.0"},"authMethods":[],"agentCapabilities":{"loadSession":true,"promptCapabilities":{"image":false,"audio":false,"embeddedContext":true},"mcpCapabilities":{"http":false,"sse":false},"sessionCapabilities":{"resume":{},"close":{}}}}}}

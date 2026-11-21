@@ -76,7 +76,7 @@ function makeStubSession(): AgentSession {
     sessionId: 'stub-session',
     wireStopHook: vi.fn(),
     queueFrameworkContext: vi.fn(),
-    getSessionMetadata: vi.fn(() => ({ permissionMode: 'default' })),
+    getSessionMetadata: vi.fn(() => ({ permissionMode: 'bypassPermissions' })),
     close: vi.fn(async () => {}),
     abort: vi.fn(),
     reset: vi.fn(async () => {}),
@@ -330,7 +330,7 @@ describe('finalizeTelegramSession — plan-mode guard (#3833)', () => {
 
     expect(vi.mocked(constructTelegramSession)).toHaveBeenCalledOnce();
     const capturedBaseConfig = vi.mocked(constructTelegramSession).mock.calls[0]![0];
-    expect(capturedBaseConfig.permissionMode).toBe('default');
+    expect(capturedBaseConfig.permissionMode).toBe('bypassPermissions');
   });
 
   it('logs a console.warn when permissionMode="plan" is downgraded', () => {
@@ -372,7 +372,7 @@ describe('finalizeTelegramSession — plan-mode guard (#3833)', () => {
     expect(capturedBaseConfig.permissionMode).toBe('bypassPermissions');
   });
 
-  it('defaults permissionMode to "default" when not set in sessionConfig', () => {
+  it('defaults permissionMode to "bypassPermissions" when not set in sessionConfig', () => {
     const sessionConfig: AgentConfig = {
       model: 'claude-sonnet',
       apiKey: 'test-key',
@@ -386,6 +386,6 @@ describe('finalizeTelegramSession — plan-mode guard (#3833)', () => {
     );
 
     const capturedBaseConfig = vi.mocked(constructTelegramSession).mock.calls[0]![0];
-    expect(capturedBaseConfig.permissionMode).toBe('default');
+    expect(capturedBaseConfig.permissionMode).toBe('bypassPermissions');
   });
 });

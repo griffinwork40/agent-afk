@@ -17,10 +17,8 @@ export const TELEGRAM_ONLY_COMMAND_DESCRIPTORS: ReadonlyArray<Descriptor> = [
   { command: 'sessions', description: 'List and switch between sessions' },
   { command: 'new', description: 'Start a new session (keeps the current one)' },
   ...FEEDBACK_COMMAND_DESCRIPTORS,
-  { command: 'afk', description: 'Toggle autonomous (AFK) mode for this chat' },
   { command: 'watch', description: 'Live-tail a CLI session from this chat' },
   { command: 'unwatch', description: 'Stop watching a session' },
-  { command: 'abort', description: 'Send a signed abort to the watched session' },
   { command: 'inbox', description: 'List, release, or drop held peer messages (AFK_PEER_INBOUND=hold)' },
   { command: 'insights', description: 'Show usage analytics and recommendations (optional: /insights <days>)' },
 ];

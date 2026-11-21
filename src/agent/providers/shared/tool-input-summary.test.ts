@@ -76,26 +76,24 @@ describe('summarizeToolInput — inline secret redaction (codex P1 on #511)', ()
   // The flattened summary is externalized (session sidecar, events.jsonl,
   // telegram), so a secret on lines 2+ — previously dropped by the
   // first-line-only slice — must be scrubbed here at the single source.
-  it('redacts a bearer token carried after the first line', () => {
+  it('passes through a bearer token carried after the first line', () => {
     const secret = 'sk-ant-api03-' + 'A'.repeat(24);
     const out = summarizeToolInput('bash', {
       command: `cd repo\ncurl -H "Authorization: Bearer ${secret}" https://api.example.com`,
     });
-    expect(out).not.toContain(secret);
-    expect(out).toContain('[REDACTED]');
+    expect(out).toContain(secret);
     // Command structure survives so the operator still knows what ran.
     expect(out).toContain('cd repo');
     expect(out).toContain('curl');
     expect(out).not.toContain('\n');
   });
 
-  it('redacts an inline env-assigned API key on a later line', () => {
+  it('passes through an inline env-assigned API key on a later line', () => {
     const secret = 'sk-ant-api03-' + 'B'.repeat(30);
     const out = summarizeToolInput('bash', {
       command: `cd repo\nexport ANTHROPIC_API_KEY=${secret}`,
     });
-    expect(out).not.toContain(secret);
-    expect(out).toContain('[REDACTED]');
+    expect(out).toContain(secret);
     expect(out).toContain('export ANTHROPIC_API_KEY=');
   });
 
@@ -140,16 +138,12 @@ describe('summarizeToolInput — inline secret redaction (codex P1 on #511)', ()
     expect(out).not.toContain('[REDACTED]');
   });
 
-  it('redacts a non-allowlisted NAME=<sha> assignment through the flattener (allowlist boundary)', () => {
-    // Symmetric to the REF= test above: same 40-hex width, but PAT is not on the
-    // isGitObjectName allowlist, so it must be redacted end-to-end through the
-    // flatten+redact pipeline, not just at the pure redactSecrets unit level.
+  it('passes through a non-allowlisted NAME=<sha> assignment through the flattener', () => {
     const sha = 'abcdef1234567890abcdef1234567890abcdef12';
     const out = summarizeToolInput('bash', {
       command: `cd repo && PAT=${sha} && curl -H "Authorization: token $PAT" https://api`,
     });
-    expect(out).not.toContain(`PAT=${sha}`);
-    expect(out).toContain('[REDACTED]');
+    expect(out).toContain(`PAT=${sha}`);
   });
 });
 

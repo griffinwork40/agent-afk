@@ -15,12 +15,24 @@ import type { ModelProvider } from '../../provider.js';
 import type { ChildProviderFactoryArgs } from '../nesting.js';
 import type { AgentConfig } from '../../types.js';
 import type { JournalMessage } from '../../journal/types.js';
+import type { ChildCanUseToolFactory, ChildToolOrigin } from '../nesting.can-use-tool.js';
+import type { SessionToolDispatcher } from '../dispatcher.js';
 
-const transport = vi.hoisted(() => ({ build: undefined as unknown as (args: ChildProviderFactoryArgs) => ModelProvider }));
-vi.mock('../nesting.js', async (original) => ({
-  ...await original<typeof import('../nesting.js')>(),
-  createChildProviderFactory: () => (args: ChildProviderFactoryArgs) => transport.build(args),
+const transport = vi.hoisted(() => ({
+  build: undefined as unknown as (args: ChildProviderFactoryArgs) => ModelProvider,
+  /** The REAL factory bound to the options wireExecutors passed (child-gate test). */
+  real: undefined as unknown as (args: ChildProviderFactoryArgs) => ModelProvider,
 }));
+vi.mock('../nesting.js', async (original) => {
+  const actual = await original<typeof import('../nesting.js')>();
+  return {
+    ...actual,
+    createChildProviderFactory: (opts: Parameters<typeof actual.createChildProviderFactory>[0]) => {
+      transport.real = actual.createChildProviderFactory(opts);
+      return (args: ChildProviderFactoryArgs) => transport.build(args);
+    },
+  };
+});
 vi.mock('../../routing-telemetry.js', () => ({ appendRoutingDecision: vi.fn().mockResolvedValue(undefined) }));
 
 import { wireExecutors } from '../../session/wire-executors.js';
@@ -79,7 +91,7 @@ function installTransport(seen: Seen[], opts: { hold?: Promise<void>; cutFrom?: 
                 // whose JournalSync.seed() writes the seeded history into the
                 // child's journal. The fake only appends THIS run's messages.
                 const state = createSessionState({
-                  model: 'claude-sonnet-4-5', permissionMode: 'default', userSystem: null, toolDispatcher: {} as never,
+                  model: 'claude-sonnet-4-5', permissionMode: 'bypassPermissions', userSystem: null, toolDispatcher: {} as never,
                   ...(cfg.resumeMessages !== undefined && cfg.resumeMessages.length > 0
                     ? { initialMessages: anthropicJournalAdapter.fromJournalMessages(cfg.resumeMessages) } : {}),
                   ...(cfg.messageJournal !== undefined ? { messageJournal: cfg.messageJournal } : {}),
@@ -102,7 +114,7 @@ function installTransport(seen: Seen[], opts: { hold?: Promise<void>; cutFrom?: 
   };
 }
 
-async function setup(extra: { backgroundRegistry?: BackgroundAgentRegistry; traceWriter?: InMemoryTraceWriter } = {}) {
+async function setup(extra: { backgroundRegistry?: BackgroundAgentRegistry; traceWriter?: InMemoryTraceWriter; childCanUseTool?: ChildCanUseToolFactory } = {}) {
   const session = new AgentSession({ model: 'sonnet', apiKey: 'test-key', provider: createMockProvider() });
   await session.waitForInitialization();
   await session.sendMessage?.('hello').catch(() => undefined);
@@ -111,6 +123,7 @@ async function setup(extra: { backgroundRegistry?: BackgroundAgentRegistry; trac
     defaultSubagentModel: 'sonnet', resolveApiKeyForModel: () => 'test-key', pluginConfigs: [],
     ...(extra.backgroundRegistry !== undefined ? { backgroundRegistry: extra.backgroundRegistry } : {}),
     ...(extra.traceWriter !== undefined ? { traceWriter: extra.traceWriter, skillTraceWriter: extra.traceWriter } : {}),
+    ...(extra.childCanUseTool !== undefined ? { childCanUseTool: extra.childCanUseTool } : {}),
   });
   const registry = (wired.subagentExecutor as unknown as { ctx: { continuationRegistry: ContinuationRegistry } }).ctx.continuationRegistry;
   let c = 0;
@@ -504,6 +517,62 @@ describe('D8 continuation through the agent executor', () => {
     expect(started).toHaveLength(2);
     expect(started[0]!.chainId).toBeUndefined();
     expect(started[1]).toMatchObject({ chainId, continuationOf: prev, continuationIndex: 1 });
+    await session.close();
+  }, 20000);
+});
+
+describe('surface child gate on continuation links', () => {
+  /** Each link's child provider, built by the REAL factory (wired with the gate) next to the fake transport. */
+  function gatedBuilds(seen: Seen[]): ModelProvider[] {
+    installTransport(seen);
+    const fake = transport.build;
+    const real: ModelProvider[] = [];
+    transport.build = (args) => { real.push(transport.real(args)); return fake(args); };
+    return real;
+  }
+  async function writeVia(p: ModelProvider, dir: string): Promise<ToolResult> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const d = (p as any).buildDispatcher('default', { cwd: dir, readRoots: [dir], writeRoots: [dir], sessionId: 'root', parentSessionId: 'root', subagentId: 'c' }) as SessionToolDispatcher;
+    return d.execute({ id: 'w', name: 'write_file', input: { file_path: join(dir, 'f.txt'), content: 'x' }, signal: new AbortController().signal });
+  }
+
+  it('the continuation child is built through the gated factory and a deny stops its tool', async () => {
+    const origins: ChildToolOrigin[] = [];
+    const childCanUseTool: ChildCanUseToolFactory = (origin) => {
+      origins.push(origin);
+      return async (tool) => (tool === 'write_file' ? { behavior: 'deny', message: 'GUI denied write_file' } : { behavior: 'allow' });
+    };
+    const seen: Seen[] = [];
+    const real = gatedBuilds(seen);
+    const { run, session } = await setup({ childCanUseTool });
+    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5, id_prefix: 'chain-root' });
+    const chainId = first.continuation!.chainId;
+    const second = await run({ prompt: 'keep going', continuation_chain_id: chainId, max_tool_use_iterations: 5, id_prefix: 'link-2' });
+    expect(second.isError, second.content).not.toBe(true);
+    expect(real).toHaveLength(2);
+    expect(origins.map((o) => o.label)).toEqual(['chain-root', 'link-2']);
+    expect(origins[1]).toMatchObject({ route: 'agent', depth: 1 });
+    const dir = mkdtempSync(join(tmpdir(), 'afk-cont-gate-'));
+    const denied = await writeVia(real[1]!, dir);
+    expect(denied.failureClass).toBe('permission-denied');
+    expect(existsSync(join(dir, 'f.txt'))).toBe(false);
+    for (const p of real) p.close?.();
+    await session.close();
+  }, 20000);
+
+  it('absent: continuation children carry no gate and write normally', async () => {
+    const seen: Seen[] = [];
+    const real = gatedBuilds(seen);
+    const { run, session } = await setup();
+    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+    await run({ prompt: 'keep going', continuation_chain_id: first.continuation!.chainId, max_tool_use_iterations: 5 });
+    expect(real).toHaveLength(2);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((real[1] as any).canUseTool).toBeUndefined();
+    const dir = mkdtempSync(join(tmpdir(), 'afk-cont-nogate-'));
+    expect((await writeVia(real[1]!, dir)).isError).toBeFalsy();
+    expect(existsSync(join(dir, 'f.txt'))).toBe(true);
+    for (const p of real) p.close?.();
     await session.close();
   }, 20000);
 });

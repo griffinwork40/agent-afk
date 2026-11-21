@@ -244,6 +244,15 @@ describe('hook_decision payload', () => {
     ).not.toThrow();
   });
 
+  it('parses a legacy on-disk hook_decision row carrying approvalOutcome:hard-block', () => {
+    // Traces written before the AFK gate was removed still carry this field.
+    const legacyLine = '{"ts":"2026-10-01T12:00:00.000Z","seq":3,"kind":"hook_decision",'
+      + '"payload":{"hookEvent":"PreToolUse","decision":"block","blockedTool":"bash",'
+      + '"durationMs":5,"approvalOutcome":"hard-block"}}';
+    const parsed = TraceEventSchema.safeParse(JSON.parse(legacyLine));
+    expect(parsed.success).toBe(true);
+  });
+
   it('rejects an unknown approvalOutcome value', () => {
     expect(() =>
       HookDecisionPayloadSchema.parse({

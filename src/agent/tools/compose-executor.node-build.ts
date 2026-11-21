@@ -13,6 +13,7 @@ import { defaultTierModelFallback } from '../subagent/resolve-child-model.js';
 import { prepareDispatchModel } from './dispatch-preparation.js';
 import { resolveChildBudgets } from './subagent/child-config.helpers.js';
 import { resolveComposeNodeProvider } from './compose-node-provider.js';
+import { composeNodeGated } from './nesting.can-use-tool.js';
 import {
   resolvedAgentToolRestriction,
   resolveComposeAgentPrompt,
@@ -120,6 +121,9 @@ export async function buildComposeDagNode(args: BuildComposeDagNodeArgs): Promis
 
   // Default-tier fallback: the node's provider is pre-built for nodeModel's
   // family, so the retry rebuilds it with the same gates for the parent model.
+  // Surface gate origin cwd: known only for a non-isolated node (an isolated
+  // node's worktree does not exist yet) whose own cwd is absent or absolute.
+  const nodeCwd = n.isolation === 'worktree' ? undefined : (n.cwd ?? currentCwd);
   const nodeFallback = defaultTierModelFallback(nodeResolved, ctx.defaultModel);
   const resolvedNodeApiKey = nodeResolved.apiKey;
 
@@ -234,9 +238,9 @@ export async function buildComposeDagNode(args: BuildComposeDagNodeArgs): Promis
     ...(n.isolation === 'worktree' ? { isolation: 'worktree' as const } : {}),
     ...(n.isolation === 'worktree' && n.task_slug !== undefined ? { taskSlug: n.task_slug } : {}),
     // Node provider carries workspace + named-agent gates (compose-node-provider.ts).
-    ...resolveComposeNodeProvider(nodeModel, ctx.workspaceStore, ctx.openaiBaseUrl, resolvedAgent),
+    ...resolveComposeNodeProvider(nodeModel, ctx.workspaceStore, ctx.openaiBaseUrl, composeNodeGated(resolvedAgent, ctx.childCanUseTool, n, depth, nodeCwd)),
     ...(nodeFallback !== undefined
-      ? { modelFallback: { ...nodeFallback, buildProvider: (m: string) => resolveComposeNodeProvider(m, ctx.workspaceStore, ctx.openaiBaseUrl, resolvedAgent).provider } }
+      ? { modelFallback: { ...nodeFallback, buildProvider: (m: string) => resolveComposeNodeProvider(m, ctx.workspaceStore, ctx.openaiBaseUrl, composeNodeGated(resolvedAgent, ctx.childCanUseTool, n, depth, nodeCwd)).provider } }
       : {}),
     // Per-node resolved attachments; depth+1/maxDepth for preamble (#2266).
     ...(resolvedAttachments !== undefined ? { resolvedAttachments } : {}), depth: depth + 1, maxDepth,

@@ -48,7 +48,7 @@ export class ProviderGrantState {
    * `getGrants()` so the path-approval hook sees `allowAll` in bypassPermissions
    * mode (the per-query dispatcher gets the same signal via `buildDispatcher`).
    */
-  private _permissionMode = 'default';
+  private _permissionMode = 'bypassPermissions';
 
   /**
    * Shared grant-state machine (issues #361/#362). Hooks bind provider

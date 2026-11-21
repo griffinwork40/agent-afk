@@ -12,6 +12,7 @@
  */
 
 import { SubagentManager } from '../../subagent.js';
+import { chainCanUseTool, childGateFor, skillChildOrigin } from '../nesting.can-use-tool.js';
 import { resolveChildManagerReadRoots } from '../../subagent-read-scope.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import {
@@ -86,6 +87,39 @@ function buildSkillChildManager(
 }
 
 /**
+ * Depth-cap / no-factory fallback provider for a forked skill child. At the
+ * cap no executors are possible, so missing subagentExecutor/skillExecutor is
+ * harmless — but readOnlyBash and readOnlyMemory still matter: `bash` is a
+ * builtin gated by the dispatcher's readOnlyBash classifier, NOT routed
+ * through an executor, so dropping that gate here would re-open mutating bash
+ * even at the cap. Read-only (with or without a `tools:` list) gets
+ * buildReadOnlyReconProvider restricted to the declared RECON subset (issue
+ * #499 finding 2); a non-read-only `tools:` list gets buildSkillRestrictedProvider.
+ * The surface approval gate (nesting.can-use-tool.ts) is appended as a trailing
+ * argument only when configured, so the absent case calls both builders exactly
+ * as before; with no prebuilt provider it lands on `config.canUseTool`, which
+ * the child's bare provider resolver reads.
+ */
+function applyCapPathProvider(
+  ctx: SkillExecutorInternals['ctx'],
+  childConfig: AgentConfig,
+  readOnly: boolean,
+  effectiveAllowed: string[] | undefined,
+  depth: number,
+  skillDispatchName: string | undefined,
+): void {
+  const capGate = childGateFor(ctx.childProviderFactory, skillChildOrigin(depth + 1, skillDispatchName));
+  const gateArg = capGate !== undefined ? [capGate] as const : [] as const;
+  if (readOnly) {
+    childConfig.provider = buildReadOnlyReconProvider(childConfig.model, ctx.openaiBaseUrl, effectiveAllowed, ctx.workspaceStore, ...gateArg);
+  } else if (effectiveAllowed !== undefined) {
+    childConfig.provider = buildSkillRestrictedProvider(effectiveAllowed, childConfig.model, false, ctx.openaiBaseUrl, ctx.workspaceStore, ...gateArg);
+  } else if (capGate !== undefined) {
+    childConfig.canUseTool = chainCanUseTool(childConfig.canUseTool, capGate);
+  }
+}
+
+/**
  * Wire a forked skill child for nested dispatch.
  *
  * Mirrors {@link SubagentExecutor.execute} lines that build a grandchild
@@ -139,40 +173,7 @@ export function buildForkedChildConfig(
   const effectiveReadOnlyBash = readOnly;
 
   if (!ctx.childProviderFactory || depth >= maxDepth) {
-    // Depth-cap / no-factory fallback. At the cap no executors are possible,
-    // so missing subagentExecutor/skillExecutor is harmless — but readOnlyBash
-    // and readOnlyMemory still matter: `bash` is a builtin gated by the
-    // dispatcher's readOnlyBash classifier, NOT routed through an executor, so
-    // dropping that gate here would re-open mutating bash even at the cap.
-    if (readOnly) {
-      // readOnly (with OR without a tools: list): buildReadOnlyReconProvider
-      // carries readOnlyBash + readOnlyMemory. Pass effectiveAllowed so a
-      // read-only skill that DECLARED `tools:` is restricted to its declared
-      // subset (the RECON intersection) instead of the full RECON superset —
-      // matching the factory path below (issue #499, finding 2: the cap path
-      // previously ignored effectiveAllowed and granted the whole RECON set,
-      // e.g. web_scrape egress to a `tools: [bash]` skill). When the skill
-      // declared no `tools:`, effectiveAllowed is the full RECON set, so the
-      // historical behavior is unchanged. Either branch preserves the
-      // mutating-bash gate, closing the cap-path readOnlyBash fail-open for a
-      // `read-only: true` + `tools: bash` skill forked at the depth cap.
-      childConfig.provider = buildReadOnlyReconProvider(
-        childConfig.model,
-        ctx.openaiBaseUrl,
-        effectiveAllowed,
-        ctx.workspaceStore,
-      );
-    } else if (effectiveAllowed !== undefined) {
-      // Non-readOnly tools: allowlist at the cap. Restrict to the declared
-      // tools (no readOnlyBash — the skill did not declare read-only).
-      childConfig.provider = buildSkillRestrictedProvider(
-        effectiveAllowed,
-        childConfig.model,
-        effectiveReadOnlyBash,
-        ctx.openaiBaseUrl,
-        ctx.workspaceStore,
-      );
-    }
+    applyCapPathProvider(ctx, childConfig, readOnly, effectiveAllowed, depth, baseConfig.skillDispatchName);
     return { childConfig, childManager: undefined };
   }
 
@@ -297,7 +298,7 @@ export function buildForkedChildConfig(
     ...(childSkillExecutor !== undefined ? { childSkillExecutor } : {}),
     ...(childConfig.model !== undefined ? { model: childConfig.model } : {}),
     ...(effectiveAllowed !== undefined ? { allowedTools: effectiveAllowed } : {}),
-    ...(effectiveReadOnlyBash ? { readOnlyBash: true } : {}),
+    ...(effectiveReadOnlyBash ? { readOnlyBash: true } : {}), origin: skillChildOrigin(depth + 1, baseConfig.skillDispatchName, currentCwd),
   });
 
   return { childConfig, childManager };

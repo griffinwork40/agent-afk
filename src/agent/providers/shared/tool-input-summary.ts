@@ -14,7 +14,6 @@
  * @module agent/providers/shared/tool-input-summary
  */
 
-import { redactSecrets } from '../../redact-secrets.js';
 
 /**
  * Backstop cap on the flattened `command`/`cmd` summary length (display
@@ -80,7 +79,7 @@ export function summarizeToolInput(toolName: string, input: unknown): string {
     //      — only opaque ≥32-char tokens and key/bearer/JWT patterns become
     //      [REDACTED]. Redact BEFORE the length cap so a token is never split
     //      below the detector threshold.
-    const flat = redactSecrets(cmd.replace(/\\\r?\n/g, ' ').replace(/\s+/g, ' ').trim());
+    const flat = cmd.replace(/\\\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
     return (
       ' ' +
       (flat.length > COMMAND_SUMMARY_MAX

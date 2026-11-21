@@ -7,7 +7,14 @@
  *   --no-pager, -c core.pager=cat, -c core.fsmonitor=false, -c diff.external=
  *   (plus --no-ext-diff/--no-textconv forced per subcommand by the policy),
  *   and --no-optional-locks (status would otherwise refresh the index).
- *   Read-only subcommands run no hooks.
+ * Repository-controlled program paths are closed per call (git-read.exec-guard.ts):
+ *   every configured filter driver (clean/smudge/process) is overridden to
+ *   pass-through with required=false via GIT_CONFIG_COUNT, after enumerating
+ *   them with `git config` (fails closed: enumeration error = refusal);
+ *   core.hooksPath points at a directory that cannot exist (worktree `diff`
+ *   runs post-index-change); diff.submodule=short and
+ *   --ignore-submodules=dirty on status/diff keep git out of submodule
+ *   repositories, whose drivers the enumeration cannot see.
  * Inherited `GIT_*` env vars are dropped (no GIT_DIR / GIT_CONFIG_* / GIT_EXTERNAL_DIFF
  * redirection) and GIT_PAGER=PAGER=cat, GIT_EDITOR=:, GIT_OPTIONAL_LOCKS=0 are set.
  * The process runs in the session cwd; output is bounded.
@@ -19,6 +26,7 @@ import { execFile as execFileCallback } from 'node:child_process';
 import type { ToolHandler, ToolHandlerContext, ToolResult } from '../types.js';
 import { buildChildEnv } from './bash-env-scrub.js';
 import { planGitRead } from '../git-read.policy.js';
+import { enumerateFilterDrivers, filterNeutralisingEnv, GIT_READ_EXEC_GUARD_ARGS, guardSubmoduleArgv } from './git-read.exec-guard.js';
 
 /** Default and hard ceiling on returned bytes. */
 export const GIT_READ_DEFAULT_MAX_BYTES = 50 * 1024;
@@ -44,6 +52,7 @@ export const GIT_READ_GLOBAL_ARGS: readonly string[] = [
   '-c', 'gpg.openpgp.program=false',
   '-c', 'gpg.ssh.program=false',
   '-c', 'gpg.x509.program=false',
+  ...GIT_READ_EXEC_GUARD_ARGS,
 ];
 
 /** Child env: inherited env minus every `GIT_*` override, plus pager/editor pins. */
@@ -103,7 +112,12 @@ async function gitReadImpl(input: unknown, signal: AbortSignal, context: ToolHan
   const plan = planGitRead({ subcommand: req['subcommand'], args: req['args'], paths: req['paths'], pattern: req['pattern'] }, cwd);
   if (!plan.ok) return { content: `git_read: ${plan.error}`, isError: true };
   const maxBytes = clampMaxBytes(req['max_bytes']);
-  const out = await runGit([...GIT_READ_GLOBAL_ARGS, ...plan.argv], cwd, buildGitReadEnv(context?.env), signal);
+  const env = buildGitReadEnv(context?.env);
+  const drivers = await enumerateFilterDrivers(GIT_READ_GLOBAL_ARGS, cwd, env, signal);
+  if (!drivers.ok) {
+    return { content: `git_read: refused: could not list the repository's filter drivers, so the read cannot be made safe (${drivers.error}).`, isError: true };
+  }
+  const out = await runGit([...GIT_READ_GLOBAL_ARGS, ...guardSubmoduleArgv(plan.argv)], cwd, { ...env, ...filterNeutralisingEnv(drivers.names) }, signal);
   if (out.error !== undefined) return { content: `git_read: failed to run git: ${out.error}`, isError: true };
   // git grep exits 1 for "no matches" — not an error.
   const noMatch = plan.argv[0] === 'grep' && out.code === 1 && out.stderr.trim() === '';

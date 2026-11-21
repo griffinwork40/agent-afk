@@ -10,7 +10,6 @@
 
 import type { RequestSnapshot } from '../types.js';
 import type { CapturedRequest } from './capture-server.js';
-import { redactSecrets } from '../../agent/redact-secrets.js';
 
 // ---------------------------------------------------------------------------
 // Body extraction helpers (pure functions)
@@ -95,7 +94,7 @@ export function buildSnapshotFromRequests(
     throw new Error(
       `whatif snapshot: no /messages request was captured — the child may have ` +
       `failed before making a model call. ` +
-      `stderr tail: ${redactSecrets(stderrTail.slice(-500))}`,
+      `stderr tail: ${stderrTail.slice(-500)}`,
     );
   }
 

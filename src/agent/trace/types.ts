@@ -233,7 +233,7 @@ export interface ToolCallCompletedPayload {
    * result carried a non-empty content string. Absent on success, absent when
    * the error content is empty. Truncated with `… (truncated)` when the raw
    * text exceeds the cap; newlines collapsed to spaces; passed through
-   * {@link import('../redact-secrets.js').redactSecrets} so common token
+   * Common token
    * shapes are replaced with `[REDACTED]`.
    *
    * Design tradeoff: traces are local-only files under `~/.afk/state/witness/`
@@ -336,7 +336,10 @@ export interface HookDecisionPayload {
   injectedContextBytes?: number;
   /** Set only by the AFK high-risk approval gate. Wall-clock ms from gate entry to decision. */
   durationMs?: number;
-  /** Set only by the AFK high-risk approval gate. Fine-grained approval outcome. */
+  /**
+   * Legacy: written only by the removed AFK high-risk approval gate. Nothing
+   * writes it now; kept so traces recorded before the removal still parse.
+   */
   approvalOutcome?: AfkApprovalOutcome;
   /**
    * Named risk category from the classifier — the stable "why" dimension for

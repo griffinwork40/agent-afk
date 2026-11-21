@@ -236,7 +236,7 @@ The non-TUI model listing marks unavailable aliases with `needs sign-in`. The cu
 
 ## Plan safely and manage tasks
 
-**Shift+Tab** cycles `default → plan → bypassPermissions → default`. In autonomous mode it exits AFK and lands on `default`; it never enters AFK. Use `/afk` to enter autonomous operation. The status line and transient mode notice show the active mode.
+**Shift+Tab** cycles `default → plan → bypassPermissions → default`. The status line and transient mode notice show the active mode.
 
 <Callout type="warn">
 `bypassPermissions` removes path-approval prompts and containment. Do not treat Shift+Tab as only a plan toggle: cycling from plan lands in bypass. See [Permissions](/configuration/permissions).
@@ -254,7 +254,7 @@ Other slash-command highlights, grouped by task:
 | --- | --- |
 | Inspect the session | `/stats`, `/tools`, `/mcp`, `/debug`, `/doctor`. |
 | Manage context and goals | `/compact`, `/goal`, `/todo`, `/spine`. |
-| Control access | `/allow-dir`, `/afk`, Shift+Tab. |
+| Control access | `/allow-dir`, Shift+Tab. |
 | Discover extensions | `/skills`, `/agents`, `/reload-plugins`. |
 | Start guided work | `/get-started`, `/mint`, `/diagnose`, `/service-setup`, `/telegram-setup`. |
 | Project maintenance | `/init`. |

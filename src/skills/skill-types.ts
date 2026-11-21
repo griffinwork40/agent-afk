@@ -133,6 +133,35 @@ export interface SkillExecutionContext {
    * test stubs that do not provide it).
    */
   delegationBudget?: import('../agent/tools/delegation-budget.js').DelegationBudget;
+  /**
+   * Surface approval gate for children this handler forks through its OWN
+   * `SubagentManager`: returns the `CanUseTool` for a child labelled
+   * `agentType` (origin route `skill`, depth = handler depth + 1), or
+   * undefined. Handlers MUST put it on the fork's `config.canUseTool`
+   * (chained after any own allowlist, see `forkConfigGate`). Absent when the
+   * surface supplies no `childCanUseTool` (agent/tools/nesting.can-use-tool.ts).
+   */
+  childGate?: (agentType: string) => import('../agent/types.js').CanUseTool | undefined;
+  /**
+   * The parent session's working directory, absolute. Inline handlers that
+   * fork sub-agents through their OWN `new SubagentManager(...)` MUST pass
+   * this as `cwd` on the manager so the forked child runs in the right
+   * project directory, not the server's `process.cwd()`.
+   *
+   * On surfaces where the session directory equals `process.cwd()` (the REPL,
+   * daemon, CLI) this field has no visible effect. On `afk acp` a GUI client
+   * names the session directory, which may be entirely unrelated to the server
+   * launch directory, so the distinction is load-bearing.
+   *
+   * Also forwarded to `inlineChildGateOpt` / `inlineSkillChildGate` so the
+   * approval gate's `ChildToolOrigin.cwd` matches the directory the child
+   * actually uses — letting a surface gate resolve relative paths correctly.
+   *
+   * Optional: callers must handle `undefined` (older SkillExecutor versions,
+   * test stubs, or surfaces that do not track a session directory). In that
+   * case forking falls back to `process.cwd()`, as before.
+   */
+  sessionCwd?: string;
 }
 
 export interface SkillMetadata {

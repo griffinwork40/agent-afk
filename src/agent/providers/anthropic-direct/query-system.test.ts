@@ -32,7 +32,7 @@ function disableCache(): void {
 }
 
 /** Minimal stub that satisfies the `SessionState` type surface used by `composeQuerySystem`. */
-function makeState(userSystem: string | null, permissionMode = 'default'): SessionState {
+function makeState(userSystem: string | null, permissionMode = 'bypassPermissions'): SessionState {
   return {
     messages: [],
     currentModel: 'test-model',
@@ -262,19 +262,8 @@ describe('composeQuerySystem — addendum placement', () => {
     expect(last.cache_control).toBeDefined();
   });
 
-  it('afk addendum is the last block in autonomous mode', () => {
-    const userSystem = makeAssembled('STABLE', '- Working directory: /x');
-    const state = makeState(userSystem, 'autonomous');
-    const blocks = composeQuerySystem({ state, systemPrefix: null }) as ContentBlockParam[];
-
-    const last = blocks[blocks.length - 1] as { type: string; text: string; cache_control?: unknown };
-    expect(last.type).toBe('text');
-    expect(last.text).toContain('AFK mode is active');
-    expect(last.cache_control).toBeDefined();
-  });
-
   it('stable prefix block always has cache_control regardless of addendum presence', () => {
-    for (const mode of ['default', 'plan', 'autonomous']) {
+    for (const mode of ['default', 'plan']) {
       const userSystem = makeAssembled('STABLE', '- Working directory: /x');
       const state = makeState(userSystem, mode);
       const blocks = composeQuerySystem({ state, systemPrefix: null }) as ContentBlockParam[];

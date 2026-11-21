@@ -99,7 +99,7 @@ function makeCtx(abortSignal: AbortSignal): InteractiveCtx {
     stats: {
       totalTurns: 0,
       model: 'sonnet',
-      permissionMode: 'default',
+      permissionMode: 'bypassPermissions',
       sessionId: 'mock-session',
     },
     statusLine: {

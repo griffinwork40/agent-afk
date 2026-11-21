@@ -26,7 +26,7 @@ function makeCtx(): { ctx: SlashContext; lines: string[] } {
       turnTokens: [],
       turns: [],
       model: 'sonnet',
-      permissionMode: 'default',
+      permissionMode: 'bypassPermissions',
     } satisfies SessionStats,
     out: {
       line: (t = ''): void => { lines.push(t); },

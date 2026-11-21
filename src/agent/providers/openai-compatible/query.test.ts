@@ -32,7 +32,6 @@ import { z } from 'zod';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import type { ToolHandler } from '../../tools/types.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../anthropic-direct/plan-mode-addendum.js';
-import { AFK_MODE_ADDENDUM_TEXT } from '../anthropic-direct/afk-mode-addendum.js';
 import { computeLineDiff } from '../../../utils/diff.js';
 import type { ToolCall, ToolResult } from '../anthropic-direct/types.js';
 import { setSlotBindings, resetSlotBindings } from '../../session/model-slots.js';
@@ -2084,10 +2083,6 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
       config: baseConfig(),
       toolDispatcher: dispatcher,
     });
-    // AFK (autonomous) must bypass path containment like bypassPermissions so an
-    // unattended session never stalls on a keyboard path-approval prompt.
-    await q.setPermissionMode('autonomous');
-    expect(dispatcher.getGrants().allowAll).toBe(true);
     await q.setPermissionMode('bypassPermissions');
     expect(dispatcher.getGrants().allowAll).toBe(true);
     // Containment-restoring modes turn it back off.
@@ -2137,60 +2132,7 @@ describe('OpenAICompatibleQuery — plan-mode addendum (U2)', () => {
   });
 });
 
-describe('OpenAICompatibleQuery — AFK-mode addendum (U2-afk)', () => {
-  it('appends AFK_MODE_ADDENDUM_TEXT to system message when permissionMode is autonomous', async () => {
-    pendingChunks = [
-      {
-        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      },
-    ];
-    const q = buildQueryFromConfig(
-      baseConfig({ permissionMode: 'autonomous', systemPrompt: 'be helpful' }),
-      singleInput('hi'),
-    );
-    await collect(q);
-    expect(createCalls).toHaveLength(1);
-    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
-    expect(args.messages[0]?.role).toBe('system');
-    expect(args.messages[0]?.content).toContain('be helpful');
-    expect(args.messages[0]?.content).toContain(AFK_MODE_ADDENDUM_TEXT);
-  });
 
-  it('does not append AFK_MODE_ADDENDUM_TEXT when permissionMode is default', async () => {
-    pendingChunks = [
-      {
-        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      },
-    ];
-    const q = buildQueryFromConfig(
-      baseConfig({ systemPrompt: 'be helpful' }),
-      singleInput('hi'),
-    );
-    await collect(q);
-    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
-    expect(args.messages[0]?.content).toBe('be helpful');
-    expect(args.messages[0]?.content).not.toContain(AFK_MODE_ADDENDUM_TEXT);
-  });
-
-  it('does not append PLAN_MODE_ADDENDUM_TEXT when permissionMode is autonomous (modes are mutually exclusive)', async () => {
-    pendingChunks = [
-      {
-        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      },
-    ];
-    const q = buildQueryFromConfig(
-      baseConfig({ permissionMode: 'autonomous', systemPrompt: 'be helpful' }),
-      singleInput('hi'),
-    );
-    await collect(q);
-    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
-    expect(args.messages[0]?.content).not.toContain(PLAN_MODE_ADDENDUM_TEXT);
-    expect(args.messages[0]?.content).toContain(AFK_MODE_ADDENDUM_TEXT);
-  });
-});
 
 describe('OpenAICompatibleQuery — toolName on tool.output (I3)', () => {
   beforeEach(() => {
@@ -3866,8 +3808,8 @@ describe('OpenAICompatibleQuery — setPermissionMode mid-session seen by next t
     let ev: IteratorResult<ProviderEvent>;
     do { ev = await iter.next(); } while (!ev.done && ev.value.type !== 'turn.completed');
 
-    // Sanity: mode starts as 'default'.
-    expect(q.currentPermissionMode).toBe('default');
+    // Sanity: mode starts as 'bypassPermissions' (normalizePermissionMode fallback).
+    expect(q.currentPermissionMode).toBe('bypassPermissions');
 
     // Switch to plan mode mid-session.
     await q.setPermissionMode('plan');

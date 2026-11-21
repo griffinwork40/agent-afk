@@ -92,7 +92,7 @@ function echoDispatcher(): SessionToolDispatcher {
 }
 
 function transformDeps(): TransformDeps {
-  let meta: SessionMetadata = { sessionId: 's', model: 'gpt-5', permissionMode: 'default' };
+  let meta: SessionMetadata = { sessionId: 's', model: 'gpt-5', permissionMode: 'bypassPermissions' };
   const history: Message[] = [];
   return {
     conversationHistory: history,
