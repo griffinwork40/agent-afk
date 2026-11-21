@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-11-21
+
 ### Removed
 
 - **Breaking: `autonomous` (AFK) permission mode removed.** The `autonomous`
