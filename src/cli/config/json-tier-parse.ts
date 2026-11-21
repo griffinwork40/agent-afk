@@ -18,7 +18,7 @@
 
 import { readFileSync, existsSync } from 'fs';
 import { parseToolsConfig } from './json-tier-parse.tools.js';
-import { warnPermissionModeRemoval } from './permission-mode-warning.js';
+import { warnPermissionModeRemoval, warnPermissionModeUnknown } from './permission-mode-warning.js';
 import { parseDaemonBlock } from './json-tier-parse.daemon.js';
 import { parseTelegramBlock } from './json-tier-parse.telegram.js';
 import { parseInteractiveBlock } from './json-tier-parse.interactive.js';
@@ -96,6 +96,8 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
       config.permissionMode = pm;
     } else if (pm === 'default' || pm === 'autonomous') {
       warnPermissionModeRemoval(pm);
+    } else {
+      warnPermissionModeUnknown(pm);
     }
   }
 

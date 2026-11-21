@@ -1,13 +1,18 @@
-// Invariant: warn once per removed mode per process, buffered across the REPL startup screen clear.
-const warnedRemovedModes = new Set<RemovedPermissionMode>();
-let deferredPermissionModeWarnings: string[] | null = null;
+import { VALID_PERMISSION_MODE_SET } from '../../utils/permission-mode.js';
+import type { RemovedPermissionMode } from '../../utils/permission-mode.js';
+export { classifyPermissionMode } from '../../utils/permission-mode.js';
+export type { RemovedPermissionMode } from '../../utils/permission-mode.js';
 
-/** Permission modes that existed before v6 and are no longer accepted in config files. */
-export type RemovedPermissionMode = 'default' | 'autonomous';
+// Invariant: warn once per removed mode per process, buffered across the REPL startup screen clear.
+const warnedRemovedModes = new Set<string>();
+// Warn once per unknown value per process (keyed by the raw string).
+const warnedUnknownModes = new Set<string>();
+let deferredPermissionModeWarnings: string[] | null = null;
 
 /** Test-only reset of the warn-once tracker and deferral buffer. Internal API. */
 export function _resetPermissionModeWarnCache(): void {
   warnedRemovedModes.clear();
+  warnedUnknownModes.clear();
   deferredPermissionModeWarnings = null;
 }
 
@@ -29,6 +34,20 @@ export function warnPermissionModeRemoval(mode: RemovedPermissionMode): void {
   warnedRemovedModes.add(mode);
   const message =
     `[afk] permissionMode "${mode}" was removed. The session will run in bypassPermissions. Set "permissionMode": "plan" for a read-only session.`;
+  if (deferredPermissionModeWarnings !== null) {
+    deferredPermissionModeWarnings.push(message);
+  } else {
+    // eslint-disable-next-line no-console -- one-shot operator UX warning
+    console.warn(message);
+  }
+}
+
+export function warnPermissionModeUnknown(value: string): void {
+  if (warnedUnknownModes.has(value)) return;
+  warnedUnknownModes.add(value);
+  const valid = [...VALID_PERMISSION_MODE_SET].join(', ');
+  const message =
+    `[afk] permissionMode "${value}" is not recognised and will be ignored. Valid modes: ${valid}.`;
   if (deferredPermissionModeWarnings !== null) {
     deferredPermissionModeWarnings.push(message);
   } else {

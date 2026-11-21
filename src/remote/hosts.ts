@@ -17,7 +17,7 @@
 import { promises as fs } from 'node:fs';
 import { getRemoteHostsPath } from '../paths.js';
 import type { PermissionMode } from '../agent/types/sdk-types.js';
-import { isValidPermissionMode, VALID_PERMISSION_MODES } from '../agent/types/sdk-types.js';
+import { classifyPermissionMode, VALID_PERMISSION_MODE_SET } from '../utils/permission-mode.js';
 
 export interface RemoteHost {
   name: string;
@@ -70,13 +70,20 @@ export async function loadHosts(path: string = getRemoteHostsPath()): Promise<Re
     if (typeof entry['afkPath'] === 'string' && entry['afkPath'] !== '') host.afkPath = entry['afkPath'];
     if (entry['unlockKeychain'] === true) host.unlockKeychain = true;
     if (typeof entry['permissionMode'] === 'string' && entry['permissionMode'] !== '') {
-      if (!isValidPermissionMode(entry['permissionMode'])) {
-        throw new Error(
-          `${path}: host "${name}" has invalid permissionMode "${entry['permissionMode']}". ` +
-          `Valid modes: ${[...VALID_PERMISSION_MODES].join(', ')}`,
-        );
+      const pm = entry['permissionMode'];
+      const kind = classifyPermissionMode(pm);
+      if (kind === 'valid') {
+        host.permissionMode = pm as PermissionMode;
+      } else if (kind === 'removed') {
+        // eslint-disable-next-line no-console -- one-shot operator UX warning
+        console.warn(`[afk] hosts.json: host "${name}" has permissionMode "${pm}" which was removed. The host will run without a pinned mode. Set "permissionMode": "plan" for a read-only session.`);
+        // field is dropped; host continues to load without a pinned mode
+      } else {
+        const valid = [...VALID_PERMISSION_MODE_SET].join(', ');
+        // eslint-disable-next-line no-console -- one-shot operator UX warning
+        console.warn(`[afk] hosts.json: host "${name}" has unrecognised permissionMode "${pm}" and will be ignored. Valid modes: ${valid}.`);
+        // field is dropped; host continues to load without a pinned mode
       }
-      host.permissionMode = entry['permissionMode'];
     }
     hosts[name] = host;
   }

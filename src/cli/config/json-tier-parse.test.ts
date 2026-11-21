@@ -80,4 +80,22 @@ describe('parseJsonConfigFile — permissionMode', () => {
     expect(result!.config.permissionMode).toBe('bypassPermissions');
     expect(warnSpy).not.toHaveBeenCalled();
   });
+
+  it('unknown permissionMode is dropped with a warning naming the value and valid modes', () => {
+    const p = writeConfig(tmpDir, { permissionMode: 'acceptEdits' });
+    const result = parseJsonConfigFile(p);
+    expect(result).toBeDefined();
+    expect(result!.config.permissionMode).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy.mock.calls[0]![0]).toContain('"acceptEdits"');
+    expect(warnSpy.mock.calls[0]![0]).toContain('Valid modes:');
+  });
+
+  it('unknown permissionMode warning fires only once per value', () => {
+    const p = writeConfig(tmpDir, { permissionMode: 'typo' });
+    parseJsonConfigFile(p);
+    parseJsonConfigFile(p);
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy.mock.calls[0]![0]).toContain('"typo"');
+  });
 });
