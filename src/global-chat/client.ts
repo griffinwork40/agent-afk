@@ -4,7 +4,7 @@ import type {
 } from './client-types.js';
 import {
   canonicalAdmin, canonicalHello, canonicalPost, canonicalReport,
-  MAX_LINKS, MAX_TEXT_CHARS, PROTOCOL_VERSION,
+  CLOCK_SKEW_MS, RETENTION_MS, MAX_LINKS, MAX_TEXT_CHARS, PROTOCOL_VERSION,
   type AdminOp, type ClientFrame, type Msg, type RelayFrame,
 } from './protocol.js';
 import { deriveTag, randomMessageId, verifyMsg } from './crypto.js';
@@ -12,6 +12,10 @@ import { countLinks, sanitizeChatText } from './sanitize.js';
 import { detectSecrets } from './secret-detect.js';
 import { ChatTransport, type TransportOptions } from './client.transport.js';
 export type { ChatSocket, ChatSocketConstructor, ChatTimers } from './client.transport.js';
+
+// Allow relay/client clock skew plus 30 seconds of delivery latency for live posts.
+export const LIVE_MESSAGE_FRESHNESS_MS = CLOCK_SKEW_MS + 30_000;
+export const MAX_RECENT_MESSAGE_IDS = 4096;
 
 export interface GlobalChatClientOptions extends TransportOptions {
   identity: IdentityStore;
@@ -32,6 +36,7 @@ export class GlobalChatClient implements ChatClient {
   readonly #transport: ChatTransport;
   readonly #subscribers = new Set<Partial<ChatClientEvents>>();
   readonly #pending = new Map<string, Pending>();
+  readonly #recentIds = new Set<string>();
   #you: ChatIdentity | null = null;
   #connectGeneration = 0;
   #signing: Promise<unknown> = Promise.resolve();
@@ -136,6 +141,12 @@ export class GlobalChatClient implements ChatClient {
         : disconnected());
     }
   }
+  #remember(id: string): void {
+    this.#recentIds.add(id);
+    if (this.#recentIds.size > MAX_RECENT_MESSAGE_IDS) {
+      this.#recentIds.delete(this.#recentIds.values().next().value!);
+    }
+  }
   async #clean(message: Msg): Promise<boolean> {
     return await verifyMsg(message) && sanitizeChatText(message.text) === message.text &&
       sanitizeChatText(message.name) === message.name;
@@ -144,13 +155,26 @@ export class GlobalChatClient implements ChatClient {
     if (frame.t === 'welcome') {
       if (frame.you.pubkey !== this.#you?.pubkey || frame.you.name !== this.#you.name) return;
       const backlog: Msg[] = [];
-      for (const message of frame.backlog) if (await this.#clean(message)) backlog.push(message);
+      let lastTimestamp = -1;
+      for (const message of frame.backlog) {
+        if (message.ts < this.#now() - RETENTION_MS || message.ts > this.#now() + LIVE_MESSAGE_FRESHNESS_MS ||
+          message.ts < lastTimestamp || this.#recentIds.has(message.id)) continue;
+        if (await this.#clean(message) && current()) {
+          lastTimestamp = message.ts;
+          this.#remember(message.id);
+          backlog.push(message);
+        }
+      }
       const tag = await deriveTag(frame.you.pubkey);
       if (!current()) return;
       this.#transport.welcomed();
       this.#emit('onWelcome', { ...frame, backlog, you: { ...frame.you, tag } });
     } else if (frame.t === 'msg') {
-      if (await this.#clean(frame.m) && current()) this.#emit('onMessage', frame.m);
+      if (Math.abs(this.#now() - frame.m.ts) > LIVE_MESSAGE_FRESHNESS_MS || this.#recentIds.has(frame.m.id)) return;
+      if (await this.#clean(frame.m) && current()) {
+        this.#remember(frame.m.id);
+        this.#emit('onMessage', frame.m);
+      }
     } else if (frame.t === 'error') {
       // Relay descriptions are untrusted: do not surface reflected text or key material.
       const error: ChatRelayError = { ...frame, message: 'Chat relay refused the request' };
@@ -160,7 +184,7 @@ export class GlobalChatClient implements ChatClient {
       this.#emit('onError', error);
     } else if (frame.t === 'ack') this.#settle(frame.id, { ok: true, id: frame.id });
     else if (frame.t === 'presence') this.#emit('onPresence', frame.online);
-    else if (frame.t === 'deleted') this.#emit('onDeleted', frame.id);
+    else if (frame.t === 'deleted') { this.#remember(frame.id); this.#emit('onDeleted', frame.id); }
     else if (frame.t === 'mode') this.#emit('onMode', frame.mode);
     else if (frame.t === 'pong') this.#transport.pong(frame.n);
   }

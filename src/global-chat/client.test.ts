@@ -6,8 +6,8 @@
  */
 import { describe, it, expect } from 'vitest';
 import { ChatTransport, MAX_PENDING_RELAY_FRAMES, validateChatUrl } from './client.transport.js';
-import { GlobalChatClient } from './client.js';
-import { PROTOCOL_VERSION, type Msg } from './protocol.js';
+import { GlobalChatClient, LIVE_MESSAGE_FRESHNESS_MS, MAX_RECENT_MESSAGE_IDS } from './client.js';
+import { PROTOCOL_VERSION, RETENTION_MS, type Msg } from './protocol.js';
 import {
   makeKeyPair, makeMsg, makeForgedMsg, makeFakeIdentityStore,
   FakeSocket, FakeSocketFactory, FakeTimers, flushAsync,
@@ -65,7 +65,7 @@ async function setup(name = 'alice'): Promise<Ctx> {
   const store = makeFakeIdentityStore(kp);
   const factory = new FakeSocketFactory();
   const timers = new FakeTimers();
-  const now = { value: 1_700_000_000_000 };
+  const now = { value: Date.now() };
   const client = new GlobalChatClient({
     url: 'wss://relay.example.com',
     WebSocket: factory.Constructor,
@@ -234,11 +234,22 @@ describe('hello frame', () => {
 // 4. WELCOME BACKLOG: ORDER, VERIFIED, DIRTY REJECTED
 // ============================================================
 describe('welcome backlog', () => {
+  it('filters expired, future, out-of-order and duplicate backlog entries', async () => {
+    const ctx = await setup();
+    const a = await makeMsg(ctx.kp, { ts: ctx.now.value - 2000 });
+    const b = await makeMsg(ctx.kp, { ts: ctx.now.value - 1000 });
+    const old = await makeMsg(ctx.kp, { ts: ctx.now.value - RETENTION_MS - 1 });
+    const disorder = await makeMsg(ctx.kp, { ts: ctx.now.value - 3000 });
+    const future = await makeMsg(ctx.kp, { ts: ctx.now.value + LIVE_MESSAGE_FRESHNESS_MS + 1 });
+    const welcomeP = awaitWelcome(ctx.client);
+    await connectAndWelcome(ctx, [old, a, a, disorder, b, future]);
+    expect((await welcomeP).backlog.map(m => m.id)).toEqual([a.id, b.id]);
+  });
   it('delivers backlog in order, only verified messages', async () => {
     const ctx = await setup();
     const other = await makeKeyPair('bob');
-    const m1 = await makeMsg(ctx.kp, { ts: 1000 });
-    const m2 = await makeMsg(other, { ts: 2000 });
+    const m1 = await makeMsg(ctx.kp, { ts: ctx.now.value - 2000 });
+    const m2 = await makeMsg(other, { ts: ctx.now.value - 1000 });
     const forged = await makeForgedMsg(ctx.kp, other);
 
     // awaitWelcome waits for the real async crypto to complete before asserting
@@ -283,6 +294,39 @@ describe('welcome backlog', () => {
 // 5. LIVE MESSAGES: VERIFIED OR DROPPED
 // ============================================================
 describe('live messages', () => {
+  it('drops stale, future, duplicated and deleted genuine messages', async () => {
+    const ctx = await setup();
+    const received: Msg[] = [];
+    ctx.client.subscribe({ onMessage: m => received.push(m) });
+    const socket = await connectAndWelcome(ctx);
+    const valid = await makeMsg(ctx.kp, { ts: ctx.now.value });
+    const deleted = await makeMsg(ctx.kp, { ts: ctx.now.value });
+    socket.triggerMessageStr({ t: 'deleted', id: deleted.id });
+    for (const m of [await makeMsg(ctx.kp, { ts: ctx.now.value - LIVE_MESSAGE_FRESHNESS_MS - 1 }),
+      await makeMsg(ctx.kp, { ts: ctx.now.value + LIVE_MESSAGE_FRESHNESS_MS + 1 }), valid, valid, deleted]) {
+      socket.triggerMessageStr({ t: 'msg', m });
+    }
+    await flushAsync();
+    expect(received.map(m => m.id)).toEqual([valid.id]);
+  });
+
+  it('bounds replay memory by evicting oldest ids first', async () => {
+    const ctx = await setup();
+    const received: Msg[] = [];
+    ctx.client.subscribe({ onMessage: m => received.push(m) });
+    const socket = await connectAndWelcome(ctx);
+    const m = await makeMsg(ctx.kp, { ts: ctx.now.value });
+    socket.triggerMessageStr({ t: 'deleted', id: m.id });
+    await flushAsync();
+    for (let i = 0; i < MAX_RECENT_MESSAGE_IDS; i++) {
+      socket.triggerMessageStr({ t: 'deleted', id: i.toString(16).padStart(32, '0') });
+      if (i % 16 === 15) await flushAsync(1);
+    }
+    await flushAsync();
+    socket.triggerMessageStr({ t: 'msg', m });
+    await flushAsync();
+    expect(received).toHaveLength(1);
+  });
   it('emits onMessage for valid signed messages', async () => {
     const ctx = await setup();
     const other = await makeKeyPair('bob');
@@ -1245,8 +1289,8 @@ describe('close during backlog verification', () => {
   it('welcome backlog emitted even if close() fires mid-verify', async () => {
     const ctx = await setup();
     const other = await makeKeyPair('bob');
-    const m1 = await makeMsg(ctx.kp, { ts: 1000 });
-    const m2 = await makeMsg(other, { ts: 2000 });
+    const m1 = await makeMsg(ctx.kp, { ts: ctx.now.value - 2000 });
+    const m2 = await makeMsg(other, { ts: ctx.now.value - 1000 });
 
     // Capture welcome via observer before closing; use short timeout since
     // close() may suppress delivery — a timeout rejection is also valid here.
