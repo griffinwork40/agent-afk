@@ -70,6 +70,23 @@ const NAME_CHARS = /[^a-z0-9_-]/g;
 
 type Phase = { kind: 'notice' } | { kind: 'name'; input: string; error: string | null; busy: boolean } | { kind: 'chat' };
 
+function handleChatKey(state: ChatViewState, key: ChatKey, rows: number, leave: () => void, submit: () => void): boolean {
+  const page = Math.max(1, rows - 5);
+  switch (key.kind) {
+    case 'escape': leave(); return false;
+    case 'text': return false;
+    case 'backspace': backspace(state); break;
+    case 'clear': clearInput(state); break;
+    case 'enter': submit(); return false;
+    case 'pageUp': scrollUp(state, page); break;
+    case 'pageDown': scrollDown(state, page); break;
+    case 'lineUp': scrollUp(state, 1); break;
+    case 'lineDown': scrollDown(state, 1); break;
+    default: return false;
+  }
+  return false;
+}
+
 /** Run the view. Resolves after the terminal is restored. */
 export async function runGlobalChatView(deps: GlobalChatViewDeps): Promise<GlobalChatOutcome> {
   // Storage is read before the takeover so a slow or failing disk never
@@ -153,36 +170,37 @@ function startSession(deps: GlobalChatViewDeps, pre: Preload, resolve: (o: Globa
     if (!state.me) state.me = { ...identity };
     client = deps.createClient(identity);
     actions.client = client;
-    const relayHost = deps.relayHost;
-    unsubscribe = client.subscribe({
-      onWelcome: (w) => { applyWelcome(state, w); paint(); },
-      onMessage: (m) => { addMessage(state, m); paint(); },
-      onPresence: (n) => { setOnline(state, n); paint(); },
-      onDeleted: (id) => { deleteMessage(state, id); paint(); },
-      onMode: (mode) => { setMode(state, mode); paint(); },
-      onStatus: (s) => {
-        setStatus(state, s);
-        if (s === 'open') {
-          if (outageShown) addSystem(state, 'Connected to the relay again.');
-          outageShown = false;
-          reconnects = 0;
-        } else if (s === 'reconnecting') {
-          reconnects++;
-          if (reconnects >= 3 && !outageShown) {
-            addSystem(state, `Cannot reach ${relayHost}. Still trying. Press Esc to leave.`, 'error');
-            outageShown = true;
-          }
-        }
-        paint();
-      },
-      onError: (e) => { const line = relayErrorLine(e); if (line) { addSystem(state, line, 'error'); paint(); } },
-    });
+    unsubscribe = subscribeChatEvents(client);
     client.connect().catch(() => {
       if (open) { addSystem(state, 'Could not connect to the relay.', 'error'); paint(); }
     });
     pollPending();
     paint();
   };
+
+  const subscribeChatEvents = (chatClient: ChatClient): (() => void) => chatClient.subscribe({
+    onWelcome: (w) => { applyWelcome(state, w); paint(); },
+    onMessage: (m) => { addMessage(state, m); paint(); },
+    onPresence: (n) => { setOnline(state, n); paint(); },
+    onDeleted: (id) => { deleteMessage(state, id); paint(); },
+    onMode: (mode) => { setMode(state, mode); paint(); },
+    onStatus: (s) => {
+      setStatus(state, s);
+      if (s === 'open') {
+        if (outageShown) addSystem(state, 'Connected to the relay again.');
+        outageShown = false;
+        reconnects = 0;
+      } else if (s === 'reconnecting') {
+        reconnects++;
+        if (reconnects >= 3 && !outageShown) {
+          addSystem(state, `Cannot reach ${deps.relayHost}. Still trying. Press Esc to leave.`, 'error');
+          outageShown = true;
+        }
+      }
+      paint();
+    },
+    onError: (e) => { const line = relayErrorLine(e); if (line) { addSystem(state, line, 'error'); paint(); } },
+  });
 
   const submitName = async (p: Extract<Phase, { kind: 'name' }>): Promise<void> => {
     p.busy = true; p.error = null; paint();
@@ -224,23 +242,11 @@ function startSession(deps: GlobalChatViewDeps, pre: Preload, resolve: (o: Globa
   };
 
   const onChatKey = (key: ChatKey): void => {
-    const page = Math.max(1, (stdout.rows ?? 24) - 5);
-    switch (key.kind) {
-      case 'escape': return finish('left');
-      case 'text':
-        if (appendInput(state, key.text) && !inputTruncated) {
-          addSystem(state, `Input was shortened to ${state.input.length} characters.`, 'error');
-          inputTruncated = true;
-        }
-        break;
-      case 'backspace': backspace(state); break;
-      case 'clear': clearInput(state); break;
-      case 'enter': void submitLine(actions); return;
-      case 'pageUp': scrollUp(state, page); break;
-      case 'pageDown': scrollDown(state, page); break;
-      case 'lineUp': scrollUp(state, 1); break;
-      case 'lineDown': scrollDown(state, 1); break;
-      default: return;
+    const truncated = key.kind === 'text' && appendInput(state, key.text);
+    handleChatKey(state, key, stdout.rows ?? 24, () => finish('left'), () => { void submitLine(actions); });
+    if (truncated && !inputTruncated) {
+      addSystem(state, `Input was shortened to ${state.input.length} characters.`, 'error');
+      inputTruncated = true;
     }
     paint();
   };
