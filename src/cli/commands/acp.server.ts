@@ -136,6 +136,16 @@ async function runConnection(options: AcpServerOptions): Promise<void> {
     ));
   };
 
+  // Route SIGINT and SIGTERM into the same bounded teardown as EOF: destroy the
+  // input stream so the for-await loop exits, then the finally block calls shutdown().
+  let signalReceived = false;
+  const onSignal = (): void => {
+    log('[acp] signal received; shutting down');
+    signalReceived = true;
+    options.input.destroy();
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
   options.output.on('error', onOutputError);
   try {
     for await (const line of readLines(options.input, MAX_LINE_BYTES)) {
@@ -158,8 +168,10 @@ async function runConnection(options: AcpServerOptions): Promise<void> {
       }
     }
   } catch (err) {
-    if (!outputBroken) throw err;
+    if (!outputBroken && !signalReceived) throw err;
   } finally {
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
     try { await shutdown(ctx, inflight, options.shutdownDeadlineMs ?? SHUTDOWN_DEADLINE_MS); }
     finally { options.output.removeListener('error', onOutputError); }
   }
