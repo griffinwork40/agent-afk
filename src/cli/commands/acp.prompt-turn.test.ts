@@ -161,3 +161,64 @@ describe('runPromptTurn child card closing (D9)', () => {
     expect(order).toEqual(['endTurn', 'finish']);
   });
 });
+
+describe('runPromptTurn closes announced tool calls on every exit path', () => {
+  const announce = (live: LiveSession, id: string, status: 'pending' | 'in_progress' | 'completed' | 'failed'): void => {
+    live.translator.tools.set(id, { name: 'bash', announced: true, content: [], status });
+  };
+  const failedFor = (sent: unknown[], id: string) => sent.filter((p) => {
+    const u = (p as { update: SessionUpdate }).update;
+    return u.sessionUpdate === 'tool_call_update' && u.toolCallId === id && u.status === 'failed';
+  });
+
+  it('cancel that outlasts the grace window fails the in-flight call before resolving', async () => {
+    const { live } = makeLive(async function* () {
+      announce(live, 't1', 'in_progress');
+      yield { type: 'chunk', chunk: { type: 'content', content: 'a' } } as OutputEvent;
+      await new Promise<void>(() => {});
+    });
+    const { peer, sent } = makePeer();
+    const p = runPromptTurn(live, 'x', { peer, log: () => {}, cancelGraceMs: 10 });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    cancelTurn(live, () => {});
+    await expect(p).resolves.toBe('cancelled');
+    expect(failedFor(sent, 't1')).toHaveLength(1);
+    expect(live.translator.tools.get('t1')?.status).toBe('failed');
+  });
+
+  it('a stream error mid-turn fails the in-flight call, then throws', async () => {
+    const { live } = makeLive(async function* () {
+      announce(live, 't2', 'pending');
+      yield { type: 'error', error: new Error('boom') } as OutputEvent;
+    });
+    const { peer, sent } = makePeer();
+    await expect(runPromptTurn(live, 'x', { peer, log: () => {} })).rejects.toBeInstanceOf(AcpTurnFailed);
+    expect(failedFor(sent, 't2')).toHaveLength(1);
+  });
+
+  it('normal completion with only terminal calls emits nothing extra', async () => {
+    const { live } = makeLive(async function* () {
+      announce(live, 't3', 'completed');
+      announce(live, 't4', 'failed');
+      yield { type: 'done', metadata: {} } as OutputEvent;
+    });
+    const { peer, sent } = makePeer();
+    expect(await runPromptTurn(live, 'x', { peer, log: () => {} })).toBe('end_turn');
+    expect(sent).toEqual([{ sessionId: 's1', update: { sessionUpdate: 'usage_update', used: 1, size: 2 } }]);
+  });
+});
+
+describe('runPromptTurn turn cap', () => {
+  it('answers max_turn_requests without starting a stream once the cap is reached', async () => {
+    const { live } = makeLive(async function* () { yield { type: 'done' } as OutputEvent; });
+    const session = live.handle!.session as unknown as { getTurnCount: () => number; sendMessageStream: ReturnType<typeof vi.fn> };
+    session.getTurnCount = () => 1;
+    const { peer, sent } = makePeer();
+    expect(await runPromptTurn(live, 'x', { peer, log: () => {}, maxTurns: 1 })).toBe('max_turn_requests');
+    expect(session.sendMessageStream).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    expect(live.active).toBeUndefined();
+    session.getTurnCount = () => 0;
+    expect(await runPromptTurn(live, 'x', { peer, log: () => {}, maxTurns: 0 })).toBe('end_turn');
+  });
+});

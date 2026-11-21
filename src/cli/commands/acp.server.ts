@@ -12,6 +12,7 @@ import type { Readable, Writable } from 'node:stream';
 import type { AgentModelInput } from '../../agent/types.js';
 import { createAcpRpcPeer } from './acp.rpc-peer.js';
 import { readLines } from './acp.lines.js';
+import { installAcpConsoleRedirect } from './acp.server.console.js';
 import {
   AcpError, handleCancel, handleClose, handleInitialize, handleRestore, handleSessionNew,
   releaseSession, startPrompt, type ServerContext,
@@ -71,17 +72,24 @@ async function dispatch(ctx: ServerContext, req: RpcRequest): Promise<unknown> {
  * outbound request is rejected and every live session is cancelled/released.
  */
 export async function runAcpServer(options: AcpServerOptions): Promise<void> {
+  const restoreConsole = installAcpConsoleRedirect();
+  try { await runConnection(options); }
+  finally { restoreConsole(); }
+}
+
+async function runConnection(options: AcpServerOptions): Promise<void> {
   const log = options.log ?? ((line: string) => { process.stderr.write(line.endsWith('\n') ? line : `${line}\n`); });
-  const rawWrite = createSerialWriter(options.output);
   let outputBroken = false;
+  const onOutputError = (): void => {
+    outputBroken = true;
+    // Wake the pending input read; the finally block owns the same bounded teardown as EOF.
+    options.input.destroy();
+  };
+  const rawWrite = createSerialWriter(options.output, () => !outputBroken);
   const write = async (frame: RpcFrame): Promise<void> => {
-    if (outputBroken) throw new Error('output closed');
-    try {
-      await rawWrite(frame);
-    } catch (err) {
-      outputBroken = true;
-      throw err;
-    }
+    if (outputBroken) return;
+    try { await rawWrite(frame); }
+    catch { onOutputError(); }
   };
   const peer = createAcpRpcPeer({ write });
   const ctx: ServerContext = {
@@ -128,8 +136,10 @@ export async function runAcpServer(options: AcpServerOptions): Promise<void> {
     ));
   };
 
+  options.output.on('error', onOutputError);
   try {
     for await (const line of readLines(options.input, MAX_LINE_BYTES)) {
+      if (outputBroken) break;
       if (line.kind === 'oversize') { track(send(errorResponse(null, INVALID_REQUEST))); continue; }
       if (line.kind === 'bad-utf8') { track(send(errorResponse(null, PARSE_ERROR))); continue; }
       const text = line.text.trim();
@@ -147,8 +157,11 @@ export async function runAcpServer(options: AcpServerOptions): Promise<void> {
         case 'request': handleRequest(frame.frame); break;
       }
     }
+  } catch (err) {
+    if (!outputBroken) throw err;
   } finally {
-    await shutdown(ctx, inflight, options.shutdownDeadlineMs ?? SHUTDOWN_DEADLINE_MS);
+    try { await shutdown(ctx, inflight, options.shutdownDeadlineMs ?? SHUTDOWN_DEADLINE_MS); }
+    finally { options.output.removeListener('error', onOutputError); }
   }
 }
 
@@ -170,9 +183,14 @@ async function shutdown(ctx: ServerContext, inflight: Set<Promise<void>>, deadli
 
 /** D17: after the server resolves, flush stdout (bounded) and end the process with its exit code. */
 export async function exitAfterServer(output: Writable, exit: (code: number) => void, flushMs = 1_000): Promise<void> {
-  await withDeadline(() => new Promise<void>((resolve) => {
-    if (output.writableEnded || output.destroyed) { resolve(); return; }
-    output.write('', () => resolve());
-  }), flushMs);
+  // The connection listener is gone now; flush callbacks can also report EPIPE.
+  const onError = (): void => {};
+  output.on('error', onError);
+  try {
+    await withDeadline(() => new Promise<void>((resolve) => {
+      if (output.writableEnded || output.destroyed) { resolve(); return; }
+      output.write('', () => resolve());
+    }), flushMs);
+  } finally { output.removeListener('error', onError); }
   exit(typeof process.exitCode === 'number' ? process.exitCode : 0);
 }

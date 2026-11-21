@@ -177,6 +177,19 @@ describe('buildAcpSession — approvals (D8, D9)', () => {
   });
 });
 
+describe('buildAcpSession — hook registry cwd (T1)', () => {
+  it('hands the session cwd and id, not the process directory, to the hook registry', async () => {
+    const { createDefaultHookRegistry } = await import('../../agent/default-hook-registry.js');
+    const { loadHooksConfig } = await import('../../agent/hooks/config-loader.js');
+    const sessionCwd = process.platform === 'win32' ? 'C:\\client\\project' : '/client/project';
+    expect(sessionCwd).not.toBe(process.cwd());
+    await buildAcpSession({ model: 'sonnet', maxTurns: 10, cwd: sessionCwd, sessionId: 'acp-1' });
+    const call = vi.mocked(createDefaultHookRegistry).mock.calls.at(-1);
+    expect(call?.[5]).toMatchObject({ cwd: sessionCwd, sessionId: 'acp-1' });
+    expect(vi.mocked(loadHooksConfig)).toHaveBeenLastCalledWith({ cwd: sessionCwd });
+  });
+});
+
 describe('closeAcpSession — double-drain invariant [C3]', () => {
   it('a double close calls the underlying drain exactly once', async () => {
     // closeAcpSession calls session.close() (which drains subagents) and then

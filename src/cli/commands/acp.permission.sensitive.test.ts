@@ -65,7 +65,7 @@ describe('sensitive write targets (profile section 6)', () => {
     expect(grantFits('write_file', { file_path: 'docs/afk-notes.md', content: 'x' }, cwd, undefined, path.posix)).toBe(true);
   });
   it('ordinary files are not sensitive', () => {
-    for (const p of ['notes.md', 'src/git.ts', '.github/workflows/ci.yml', '.gitignore', 'settings.json', 'docs/.afk.md', 'mcp.json']) {
+    for (const p of ['notes.md', 'src/git.ts', 'github/workflows/ci.yml', '.gitignore', 'settings.json', 'docs/.afk.md', 'mcp.json']) {
       expect(sensitiveMarker(p, cwd, path.posix), p).toBe('');
     }
   });

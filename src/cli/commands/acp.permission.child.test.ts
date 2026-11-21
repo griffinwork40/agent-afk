@@ -39,6 +39,19 @@ describe('D9 child labels', () => {
     expect(childPrefix(undefined)).toBe('[subagent]');
     expect(childPrefix({ route: 'agent', depth: 1, label: '] [x\n' } as never)).toBe('[subagent x]');
   });
+
+  it('escapes direction overrides and invisible characters in the origin, also in the closing card text', async () => {
+    expect(childPrefix({ route: 'agent', depth: 1, agentType: 'a\u202Egpj.exe', label: 'l\u200Bx' }))
+      .toBe('[subagent a<U+202E>gpj.exe l<U+200B>x]');
+    const t = setup();
+    const p = t.gate.forChild!({ route: 'agent', depth: 1, agentType: '\u202Eevil', label: 'x\u2066y' })('bash', { command: 'ls' }, opts('rlo'));
+    await untilRequests(t.requests, 1);
+    t.requests[0]!.resolve(pick('allow_once'));
+    expect(await p).toEqual({ behavior: 'allow' });
+    const closing = JSON.stringify(t.emits.at(-1)!.content);
+    expect(closing).toContain('Runs inside subagent <U+202E>evil x<U+2066>y');
+    for (const e of t.emits) expect(JSON.stringify(e)).not.toMatch(/[\u202E\u2066]/);
+  });
 });
 
 describe('D9 child approval lifecycle', () => {

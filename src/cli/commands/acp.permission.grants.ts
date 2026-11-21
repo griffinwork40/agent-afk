@@ -2,13 +2,15 @@
  * Which tools may be remembered with "Always allow" (profile section 6, D18).
  * Opt-in and fail closed: a tool is grantable only when listed here, and a
  * remembered grant covers a call only when every argument of that call is one
- * the entry knows and every declared location resolves inside the session cwd.
+ * the entry knows and every declared location resolves inside the session cwd,
+ * lexically and by real path (acp.permission.realpath).
  *
  * @module cli/commands/acp.permission.grants
  */
 import path from 'node:path';
 import { driveless, isContained, type PathFlavor } from './acp.permission.paths.js';
-import { sensitiveMarkers } from './acp.permission.sensitive.js';
+import { sensitiveMarker, sensitiveMarkers } from './acp.permission.sensitive.js';
+import { nativeProbe, realTarget, type FsProbe } from './acp.permission.realpath.js';
 
 // Contract: each entry was written from the tool's real handler, not its name.
 //  - write_file (handlers/write-file.ts parseWriteFileInput, resolveAndContain):
@@ -74,14 +76,36 @@ function insideLocation(raw: unknown, base: string, root: string, p: PathFlavor)
 }
 
 /**
+ * Filesystem half of the fit (A1): the REAL path each location would reach
+ * (links and junctions followed, a not-yet-existing remainder re-appended) is
+ * inside the REAL session directory and not sensitive there. Any doubt is false.
+ */
+function realFits(locations: unknown[], base: string, root: string, p: PathFlavor, probe: FsProbe): boolean {
+  const realRoot = realTarget(root, p, probe);
+  if (realRoot === undefined) return false;
+  return locations.every((raw) => {
+    if (typeof raw !== 'string') return false;
+    const real = realTarget(p.resolve(base, raw), p, probe);
+    if (real === undefined || !isContained(realRoot, real, p)) return false;
+    // Only the part below the session directory is checked: its ancestors are not written.
+    return sensitiveMarker(p.relative(realRoot, real), undefined, p) === '';
+  });
+}
+
+/**
  * True when a remembered grant for this tool may cover this exact call (and when
  * this call may be offered "Always allow"): the tool is listed, every argument
- * is known, every location resolves inside `cwd`, and no location is a
- * sensitive target (acp.permission.sensitive). Any doubt is false.
+ * is known, every location resolves inside `cwd` both lexically and by real
+ * path, and no location is a sensitive target (acp.permission.sensitive),
+ * lexically or by real path. Any doubt is false.
+ *
+ * `probe` is the file system the real-path step asks. It defaults to the host
+ * file system when `p` is the host's own path flavour (always, in production);
+ * `null` (the default for a foreign flavour in tests) runs the lexical half only.
  */
 export function grantFits(
   toolName: string, input: Record<string, unknown>, cwd: string | undefined, callerCwd?: string,
-  p: PathFlavor = path,
+  p: PathFlavor = path, probe: FsProbe | null = p === path ? nativeProbe : null,
 ): boolean {
   const entry = GRANTABLE.get(toolName);
   if (entry === undefined) return false;
@@ -94,5 +118,6 @@ export function grantFits(
   const base = callerCwd === undefined ? root : p.resolve(callerCwd);
   if (!locations.every((raw) => insideLocation(raw, base, root, p))) return false;
   // Git internals and project config that runs commands are asked every time.
-  return sensitiveMarkers(toolName, input, base, p).length === 0;
+  if (sensitiveMarkers(toolName, input, base, p).length > 0) return false;
+  return probe === null || realFits(locations, base, root, p, probe);
 }

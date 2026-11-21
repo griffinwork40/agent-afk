@@ -13,6 +13,7 @@ import type {
   AcpClientPeer, AcpPermissionGate, SessionUpdate, StopReason, ToolCallStart, TranslatorState, TurnMetadata,
 } from './acp.wire.js';
 import { sanitizeDisplay } from './acp.translate.bounds.js';
+import { closeOpenToolCalls, observeSentUpdate } from './acp.translate.terminal.js';
 
 export interface ActiveTurn {
   abort: AbortController;
@@ -43,6 +44,8 @@ export interface PromptTurnDeps {
   log(line: string): void;
   /** How long to keep draining queued updates after cancellation. */
   cancelGraceMs?: number;
+  /** Session `--max-turns` cap (0 or absent: no cap). */
+  maxTurns?: number;
 }
 
 const DEFAULT_CANCEL_GRACE_MS = 2000;
@@ -148,6 +151,7 @@ async function consumeStream(
       }
       if (ev.type === 'done') meta = ev.metadata;
       for (const u of translateOutputEvent(ev, live.translator, { cwd: live.cwd })) {
+        observeSentUpdate(live.translator, u);
         await sendUpdate(deps.peer, live.id, u);
       }
       next = it.next();
@@ -163,13 +167,38 @@ async function consumeStream(
 }
 
 /**
+ * Profile §3: the session's turn cap is reached. Read from the session's own
+ * completed-turn count (the same count the shared runner's pre-turn guard,
+ * `assertCanSend` in src/agent/session/turn-stream-runner.ts, compares with
+ * `maxTurns`), so the cap is answered before that guard throws and the
+ * session stays open.
+ */
+function maxTurnsReached(live: LiveSession, maxTurns: number | undefined): boolean {
+  if (!maxTurns || maxTurns <= 0) return false;
+  const count = live.handle?.session.getTurnCount?.();
+  return typeof count === 'number' && count >= maxTurns;
+}
+
+/** Close every announced, non-terminal tool call before the prompt response. */
+async function sendClosingUpdates(live: LiveSession, deps: PromptTurnDeps, mustSucceed: boolean): Promise<void> {
+  try {
+    for (const u of closeOpenToolCalls(live.translator)) await sendUpdate(deps.peer, live.id, u);
+  } catch (err) {
+    if (mustSucceed) throw err;
+    deps.log(`[acp] closing tool calls failed: ${String(err)}`);
+  }
+}
+
+/**
  * Run one prompt turn. Resolves with the stop reason; throws
  * {@link AcpTurnFailed} (or the underlying error) for internal failures.
- * Cancellation always wins: a cancelled turn resolves `cancelled`.
+ * Cancellation always wins: a cancelled turn resolves `cancelled`. On every
+ * exit path, announced tool calls are made terminal before the response.
  */
 export async function runPromptTurn(
   live: LiveSession, text: string, deps: PromptTurnDeps,
 ): Promise<StopReason> {
+  if (maxTurnsReached(live, deps.maxTurns)) return 'max_turn_requests';
   let settle: () => void = () => {};
   const turn: ActiveTurn = {
     abort: new AbortController(),
@@ -183,11 +212,15 @@ export async function runPromptTurn(
     try {
       meta = await consumeStream(live, turn, text, deps);
     } catch (err) {
-      if (!turn.cancelled) throw err;
+      if (!turn.cancelled) {
+        await sendClosingUpdates(live, deps, false);
+        throw err;
+      }
     }
     // D9: no child-originated card may stay pending or in progress after the turn.
     turn.ending = true;
     try { await live.gate?.endTurn?.(); } catch (err) { deps.log(`[acp] endTurn failed: ${String(err)}`); }
+    await sendClosingUpdates(live, deps, !turn.cancelled);
     let finished;
     try {
       finished = finishTurn(live.translator, meta);

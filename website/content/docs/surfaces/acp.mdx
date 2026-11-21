@@ -20,7 +20,7 @@ Common options:
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-m, --model <model>` | configured default | Model for every session on this server |
-| `--max-turns <n>` | `0` | Maximum messages sent per session (`0` means no cap) |
+| `--max-turns <n>` | `0` | Maximum messages sent per session (`0` means no cap). A prompt past the cap is answered with `stopReason: "max_turn_requests"` and the session stays open |
 | `--dangerously-skip-permissions` | off | Skip all permission prompts for every session (see [Permissions](#permissions)) |
 
 Any model the CLI can route works on this surface. The `--model` flag selects a model using the same provider-routing logic as the terminal. The approval prompt is forwarded for every provider family.
@@ -142,11 +142,11 @@ The `kind` field classifies the tool's intent for display:
 
 | Kind | Examples |
 | --- | --- |
-| `read` | `read_file`, `list_directory`, `grep`, `glob` |
+| `read` | `read_file`, `list_directory` |
 | `edit` | `write_file`, `edit_file`, `patch_apply` |
 | `execute` | `bash`, `test_run` |
 | `fetch` | `web_scrape`, `web_request` |
-| `search` | `memory_search`, `workspace_query` |
+| `search` | `grep`, `glob`, `memory_search`, `workspace_query` |
 | `think` | `agent`, `skill`, `compose`, `remote_agent` |
 | `other` | MCP tools and everything else |
 
@@ -223,7 +223,7 @@ A rejected tool produces a failed `tool_call_update` with text `Permission denie
 {"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"..."}}
 ```
 
-For an active turn, the server stops model and tool work, flushes final updates, and resolves the prompt with `stopReason: "cancelled"`. When cancelling while a permission request is outstanding, the client must also answer that request with the cancelled outcome:
+For an active turn, the server stops model and tool work, flushes final updates, and resolves the prompt with `stopReason: "cancelled"`. Every tool call the turn announced that has not finished gets a final `tool_call_update` with `status: "failed"` before the prompt response, on cancellation, on error and at a normal end, so no card is left running. When cancelling while a permission request is outstanding, the client must also answer that request with the cancelled outcome:
 
 ```jsonc
 {"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"..."}}
@@ -238,14 +238,14 @@ Cancellation of an idle or unknown session is a no-op.
 
 `session/resume` restores without replay and returns `{}`. `mcpServers` is optional on resume; omitting it is equivalent to an empty array.
 
-Both methods return resource-not-found (`-32002`, with `data.sessionId`) for unknown ids. A session already open and idle on this connection can be loaded or resumed without closing it first: AFK keeps the open session, `session/load` replays its history again, and `session/resume` replies with no replay. Reopening with a different `cwd` or `mcpServers` list is invalid-params (`-32602`). While a prompt is running, or the session is closing or replaying, the request is invalid-request (`-32600`) and the prompt is not cancelled.
+Both methods return resource-not-found (`-32002`, with `data.sessionId`) for unknown ids. A session already open and idle on this connection can be loaded or resumed without closing it first: AFK keeps the open session, `session/load` replays its history again, and `session/resume` replies with no replay. Reopening with a different `cwd` or `mcpServers` list is invalid-params (`-32602`). Loading or resuming a session that is not open also requires the `cwd` it was created with (compared after resolving symbolic links); a different directory is invalid-params (`-32602`). While a prompt is running, or the session is closing or replaying, the request is invalid-request (`-32600`) and the prompt is not cancelled.
 
 ## Error codes
 
 | Code | Meaning |
 | --- | --- |
-| `-32700` | Parse error (malformed JSON or line over 1 MiB) |
-| `-32600` | Invalid request |
+| `-32700` | Parse error (malformed JSON or invalid UTF-8) |
+| `-32600` | Invalid request (including a line over 1 MiB) |
 | `-32601` | Method not found |
 | `-32602` | Invalid params |
 | `-32002` | Resource not found (unknown or closed session id); `data.sessionId` repeats the id |

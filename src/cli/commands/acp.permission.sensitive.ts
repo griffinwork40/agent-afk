@@ -32,6 +32,13 @@ import type { PathFlavor } from './acp.permission.paths.js';
 //    (agent/agents/registry.ts:270 scans `<cwd>/.claude/agents/` for
 //    Claude Code compatible project-scoped agent definition files).
 //    Under win32 the 8.3 short name `CLAUDE~N` counts as `.claude`.
+//  - project files other tools execute later, outside AFK: `.envrc` (direnv
+//    runs it on `cd`) and any `.husky` (git hooks via core.hooksPath),
+//    `.vscode` (tasks, launch configs, settings naming executables), `.github`
+//    (CI workflows) or `.devcontainer` (build and lifecycle commands) segment.
+//    Under win32 their 8.3 short names count too, by the rule the entries
+//    above follow (leading dot dropped, base cut to six characters, `~N`):
+//    `ENVRC~N`, `HUSKY~N`, `VSCODE~N`, `GITHUB~N`, `DEVCON~N`.
 // The project files are matched at any depth, since a child may run elsewhere.
 // Precedence: git internals, then command-running config, then instructions.
 export const GIT_MARKER = '(git internals)';
@@ -39,7 +46,10 @@ export const CONFIG_MARKER = '(project config that runs commands)';
 export const AGENT_MARKER = '(agent instructions or definitions)';
 
 const GIT_FILES = new Set(['.gitattributes', '.gitmodules']);
-const CONFIG_FILES = new Set(['.mcp.json', 'afk.config.json']);
+const CONFIG_FILES = new Set(['.mcp.json', 'afk.config.json', '.envrc']);
+const CONFIG_DIRS = new Set(['.husky', '.vscode', '.github', '.devcontainer']);
+const SHORT_CONFIG = /^(?:husky|vscode|github|devcon)~\d+$/;
+const SHORT_ENVRC = /^envrc~\d+$/;
 const AFK_CONFIG_FILES = new Set(['settings.json', 'worktree-setup.json']);
 const SHORT_GIT = /^git(?:att|mod)?~\d+$/;
 const INSTRUCTION_FILES = new Set(['afk.md']);
@@ -64,10 +74,12 @@ export function sensitiveMarker(raw: string, base: string | undefined, p: PathFl
   if (base !== undefined && p.isAbsolute(base)) lists.push(segments(p.resolve(base, raw), p));
   const isGit = (s: string): boolean => s === '.git' || GIT_FILES.has(s) || (p.sep === '\\' && SHORT_GIT.test(s));
   if (lists.some((segs) => segs.some(isGit))) return GIT_MARKER;
+  const isConfigSegment = (s: string): boolean => CONFIG_DIRS.has(s) || (p.sep === '\\' && SHORT_CONFIG.test(s));
   for (const segs of lists) {
     const last = segs[segs.length - 1] ?? '';
     const parent = segs[segs.length - 2] ?? '';
     if (CONFIG_FILES.has(last) || (parent === '.afk' && AFK_CONFIG_FILES.has(last))) return CONFIG_MARKER;
+    if (segs.some(isConfigSegment) || (p.sep === '\\' && SHORT_ENVRC.test(last))) return CONFIG_MARKER;
   }
   const isAfk = (s: string): boolean => s === '.afk' || (p.sep === '\\' && SHORT_AFK.test(s));
   const isClaude = (s: string): boolean => s === '.claude' || (p.sep === '\\' && SHORT_CLAUDE.test(s));

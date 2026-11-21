@@ -24,7 +24,7 @@ afk acp
 | Flag | Default | Description |
 |---|---|---|
 | `-m, --model <model>` | configured default | Model for every session created by this server |
-| `--max-turns <n>` | `0` | Maximum messages sent per session (`0` means no cap) |
+| `--max-turns <n>` | `0` | Maximum messages sent per session (`0` means no cap); a prompt past the cap returns `stopReason: "max_turn_requests"` |
 | `--dangerously-skip-permissions` | off | Skip all permission prompts for every session on this server (see [Permissions](#permissions)) |
 
 ## What AFK currently supports on this surface
@@ -137,8 +137,10 @@ A complete text-only exchange (abbreviated from `text-turn.ndjson`):
 ```
 
 The final response contains only `stopReason`. Possible values: `end_turn`,
-`max_tokens`, `max_turn_requests`, `refusal`, `cancelled`. Provider and session
-errors return a JSON-RPC error response with code `-32603`.
+`max_tokens`, `max_turn_requests`, `refusal`, `cancelled`. A prompt sent after the
+session reached `--max-turns` is answered with `max_turn_requests` without
+running, and the session stays open. Provider and session errors return a
+JSON-RPC error response with code `-32603`.
 
 Sessions are stateful. Subsequent `session/prompt` calls on the same `sessionId`
 continue the conversation with full context.
@@ -210,7 +212,9 @@ should display `rawInput.command` in full for `bash` calls. A path outside
 A read tool auto-starts at `in_progress`. A write or other consent-requiring
 tool starts at `pending` and waits for a permission decision before moving to
 `in_progress`. After execution, a terminal `tool_call_update` sets `status` to
-`completed` or `failed`.
+`completed` or `failed`. A tool call that has not finished when the turn ends
+(cancellation, error or normal end) gets a final `tool_call_update` with
+`status: "failed"` before the prompt response; a result arriving later is dropped.
 
 Edit tools emit diff content items alongside text results. Each diff has this
 shape:
@@ -408,7 +412,9 @@ A session that is already open and idle on this connection can be loaded or
 resumed without closing it first. AFK keeps the open session (its grants, MCP
 servers and conversation): `session/load` replays its history again before
 replying, and `session/resume` replies with no replay. Reopening with a
-different `cwd` or `mcpServers` list is invalid params. If a prompt is running,
+different `cwd` or `mcpServers` list is invalid params. Loading or resuming a
+session that is not open requires the `cwd` it was created with, compared after
+resolving symbolic links; a different directory is invalid params. If a prompt is running,
 or the session is closing or already replaying, the request is refused with
 `{"code":-32600,"message":"Invalid request"}`; a running prompt is never
 cancelled by it.
@@ -434,7 +440,7 @@ is invalid params (from `bad-version-negotiation.ndjson`):
 | `-32700` | Parse error (malformed JSON or invalid UTF-8) |
 | `-32600` | Invalid request (bad envelope, line exceeds 1 MiB, duplicate initialize, session method before initialize, duplicate active prompt, load or resume while a prompt is running) |
 | `-32601` | Method not found |
-| `-32602` | Invalid params (bad cwd, unsupported block type, unsupported MCP transport, nonempty additional roots, non-null system prompt) |
+| `-32602` | Invalid params (bad cwd, load or resume with a cwd other than the session's, unsupported block type, unsupported MCP transport, nonempty additional roots, non-null system prompt) |
 | `-32002` | Resource not found (unknown or closed session id); `data.sessionId` repeats the id from the request |
 | `-32603` | Internal error (provider or session failure; details logged to stderr only) |
 

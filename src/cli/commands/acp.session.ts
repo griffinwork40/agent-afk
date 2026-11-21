@@ -114,7 +114,14 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
           memoryStore,
           () => permissionMode,
           loadHooksConfig({ cwd }),
-          {},
+          // Project shell hooks run in the client's session directory, not the
+          // directory the server was launched from (config-bridge falls back to
+          // process.cwd() when cwd is absent).
+          {
+            cwd,
+            ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
+            ...(traceWriter !== undefined ? { traceWriter } : {}),
+          },
         ).registry,
         provider,
         cwd,

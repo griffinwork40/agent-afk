@@ -58,8 +58,10 @@ export function getSessionLedgerArchivePath(sessionId: string, stamp: string): s
 /**
  * Path for the ACP-id → AFK-journal-id mapping file.
  *
- * Lives at `$AFK_STATE_DIR/acp/session-map.json` — a single JSON object
- * `{ [acpId: string]: string }` written atomically via atomicWriteFileAsync.
+ * Lives at `$AFK_STATE_DIR/acp/session-map.json`, a single JSON object
+ * `{ [acpId: string]: string | { afkId?: string; cwd?: string } }` written
+ * atomically via atomicWriteFileAsync. A string entry is the legacy shape (the
+ * afkId only); `cwd` is the canonical session directory recorded at creation.
  * Host-local only; not a credential or portable export.
  */
 export function getAcpSessionMapPath(): string {

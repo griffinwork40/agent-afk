@@ -32,29 +32,31 @@ export const MAX_LINE_BYTES = 1_048_576;
 /** Write one JSON frame as an NDJSON line, honouring backpressure. */
 export function writeJson(output: Writable, obj: unknown): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const line = JSON.stringify(obj) + '\n';
-    const ok = output.write(line, (err) => {
-      if (err) reject(err);
-      else if (ok) resolve();
-    });
-    if (!ok) {
-      const cleanup = (): void => {
-        output.removeListener('drain', onDrain);
-        output.removeListener('error', onError);
-      };
-      const onDrain = (): void => { cleanup(); resolve(); };
-      const onError = (err: Error): void => { cleanup(); reject(err); };
-      output.once('drain', onDrain);
-      output.once('error', onError);
+    const cleanup = (): void => {
+      output.removeListener('drain', onDrain);
+      output.removeListener('error', onError);
+    };
+    const onDrain = (): void => { cleanup(); resolve(); };
+    const onError = (err: Error): void => { cleanup(); reject(err); };
+    // Listen even when write() returns true: its callback can still fail later.
+    output.once('error', onError);
+    try {
+      const ok = output.write(JSON.stringify(obj) + '\n', (err) => {
+        if (err) onError(err);
+        else if (ok) { cleanup(); resolve(); }
+      });
+      if (!ok) output.once('drain', onDrain);
+    } catch (err) {
+      cleanup(); reject(err);
     }
   });
 }
 
-/** Serialize all protocol writes so frames never interleave. */
-export function createSerialWriter(output: Writable): (frame: RpcFrame) => Promise<void> {
+/** Serialize all protocol writes; recheck connection state when each queued write starts. */
+export function createSerialWriter(output: Writable, isOpen: () => boolean = () => true): (frame: RpcFrame) => Promise<void> {
   let chain: Promise<void> = Promise.resolve();
   return (frame) => {
-    const next = chain.then(() => writeJson(output, frame));
+    const next = chain.then(() => isOpen() ? writeJson(output, frame) : undefined);
     chain = next.catch(() => undefined);
     return next;
   };

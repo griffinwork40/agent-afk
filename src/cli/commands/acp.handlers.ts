@@ -13,7 +13,7 @@ import { resolveModelInput } from '../../agent/session/model-slots.js';
 import { getVersion } from '../version.js';
 import { buildAcpSession, closeAcpSession, type AcpSessionOptions } from './acp.session.js';
 import { AcpNotFoundError, loadAcpSession, replayHistory } from './acp.session-load.js';
-import { recordAcpMapping, resolveAcpId } from './acp.session-map.js';
+import { recordAcpCwd, recordAcpMapping, resolveAcpId } from './acp.session-map.js';
 import { createAcpPermissionGate } from './acp.permission.js';
 import { createTranslatorState } from './acp.translate.js';
 import { AcpInvalidParams, parseSessionSetup, type SessionSetup } from './acp.params.js';
@@ -153,6 +153,11 @@ export async function handleSessionNew(ctx: ServerContext, params: unknown): Pro
     throw internal(ctx, 'session construction failed', err);
   }
   ctx.sessions.set(sessionId, live);
+  // Profile §2: load/resume require the original canonical cwd. Not awaited, so
+  // the reply is not delayed by disk I/O; a later load in this process waits for
+  // the map queue first. A failed write leaves a legacy entry, backfilled on load.
+  void recordAcpCwd(sessionId, setup.cwd)
+    .catch((err: unknown) => ctx.log(`[acp] could not record session cwd for ${sessionId}: ${String(err)}`));
   const recording = recordProviderId(ctx, live);
   if (recording) await recording;
   return { sessionId };
@@ -225,6 +230,8 @@ export async function handleRestore(
       live.handle = await loadAcpSession({ sessionId: id, cwd: setup.cwd, mcpServers: setup.wireMcp }, options);
     } catch (err) {
       if (err instanceof AcpNotFoundError) throw unknownSession(id);
+      // Same kind and code as the live-session cwd mismatch in reopenLive.
+      if (err instanceof AcpInvalidParams) throw new AcpError(INVALID_PARAMS, err.detail);
       throw internal(ctx, `session ${mode} failed`, err);
     }
     if (mode === 'load') {
@@ -267,7 +274,7 @@ export function startPrompt(ctx: ServerContext, params: unknown): Promise<Prompt
   // D15: a reload's replay must finish before a new turn streams into it.
   if (ctx.restoring.has(sessionId)) throw new AcpError(INVALID_REQUEST, 'session is being reloaded');
   const turn = runPromptTurn(live, text, {
-    peer: ctx.peer, log: ctx.log,
+    peer: ctx.peer, log: ctx.log, maxTurns: ctx.opts.maxTurns,
     ...(ctx.opts.cancelGraceMs !== undefined ? { cancelGraceMs: ctx.opts.cancelGraceMs } : {}),
   });
   return turn.then(

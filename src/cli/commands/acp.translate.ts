@@ -7,6 +7,7 @@ import type {
 import { toolKind, toolTitle, toolLocations } from './acp.tool-kind.js';
 import { translateDiff } from './acp.diff.js';
 import { inputRecord } from './acp.translate.paths.js';
+import { isClosedByTurnEnd } from './acp.translate.terminal.js';
 import { boundedContent, boundedRawInput, boundedResult, boundStartDisplay, parseToolInput } from './acp.translate.bounds.js';
 
 // Kept on the session state, not in a second global singleton/map. Public
@@ -62,6 +63,8 @@ function translateDetail(chunk: ToolUseDetailChunk, st: TranslatorState, ctx: Tr
 
 function translateResult(chunk: ToolResultChunk, st: TranslatorState, ctx: TranslatorContext): SessionUpdate[] {
   if (!chunk.toolUseId) return [];
+  // A call already closed at turn end keeps its one terminal update.
+  if (isClosedByTurnEnd(st, chunk.toolUseId)) return [];
   const tool = st.tools.get(chunk.toolUseId) ?? newTool('');
   st.tools.set(chunk.toolUseId, tool);
   const updates: SessionUpdate[] = tool.announced ? [] : [startTool(chunk.toolUseId, tool, ctx)];
@@ -76,7 +79,7 @@ function translateResult(chunk: ToolResultChunk, st: TranslatorState, ctx: Trans
 }
 
 function translateToolDiff(chunk: ToolDiffChunk, st: TranslatorState, ctx: TranslatorContext): SessionUpdate[] {
-  if (!chunk.toolUseId) return [];
+  if (!chunk.toolUseId || isClosedByTurnEnd(st, chunk.toolUseId)) return [];
   const tool = st.tools.get(chunk.toolUseId);
   if (!tool?.announced) return [];
   const diffs = translateDiff(chunk.diff, tool.input, ctx.cwd);

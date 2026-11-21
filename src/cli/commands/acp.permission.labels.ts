@@ -5,6 +5,7 @@
  * @module cli/commands/acp.permission.labels
  */
 import type { ChildToolOrigin } from '../../agent/tools/nesting.can-use-tool.js';
+import { escapeInvisible } from './acp.tool-title.js';
 
 const DELEGATION_TOOLS = new Set(['agent', 'skill', 'compose', 'remote_agent']);
 /** In-process children are asked per tool call (D9). */
@@ -22,7 +23,10 @@ const ROUTE_WORD: Record<string, string> = { agent: 'subagent', skill: 'skill', 
 function clean(value: unknown): string {
   if (typeof value !== 'string') return '';
   // Control characters and brackets cannot forge a second label in the title.
-  return value.replace(/[\u0000-\u001f\u007f[\]]/g, '').trim().slice(0, 64);
+  // Direction overrides and other invisible characters become visible `<U+XXXX>`
+  // escapes (the write boundary's pass), so the origin reaches the child card's
+  // closing text (acp.permission closeChildCard) in the same safe form.
+  return escapeInvisible(value.replace(/[\u0000-\u001f\u007f[\]]/g, '').trim().slice(0, 64));
 }
 
 /**

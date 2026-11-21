@@ -196,3 +196,20 @@ describe('ACP final usage and stop reason', () => {
     expect(st.tools.size).toBe(1);
   });
 });
+
+describe('turn-end closing of announced tool calls', () => {
+  it('fails each open call once and suppresses a late real result or diff', async () => {
+    const { closeOpenToolCalls } = await import('./acp.translate.terminal.js');
+    const st = createTranslatorState();
+    emit(st, detail('bash', 'open', '{"command":"ls"}'));
+    emit(st, detail('read_file', 'done'));
+    emit(st, { type: 'tool_result', toolUseId: 'done', content: 'ok' } as MessageChunk);
+    const closing = checked(closeOpenToolCalls(st));
+    expect(closing).toHaveLength(1);
+    expect(closing[0]).toMatchObject({ sessionUpdate: 'tool_call_update', toolCallId: 'open', status: 'failed' });
+    expect(closeOpenToolCalls(st)).toEqual([]);
+    expect(emit(st, { type: 'tool_result', toolUseId: 'open', content: 'late' } as MessageChunk)).toEqual([]);
+    expect(emit(st, { type: 'tool_diff', toolUseId: 'open', diff } as MessageChunk)).toEqual([]);
+    expect(st.tools.get('open')?.status).toBe('failed');
+  });
+});

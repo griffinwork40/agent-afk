@@ -7,6 +7,9 @@
  * @module cli/commands/acp.session-load.test
  */
 
+import { mkdtempSync, realpathSync, symlinkSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
@@ -22,6 +25,8 @@ const mockBuildAcpSession = vi.fn(async (_opts: unknown) => ({
 const mockCloseAcpSession = vi.fn(async (_h: unknown) => undefined);
 const mockResolveAcpId = vi.fn((id: string): string => id);
 const mockEmitReplayUpdates = vi.fn(async () => undefined);
+const mockReadAcpCwd = vi.fn((_id: string): string | undefined => undefined);
+const mockRecordAcpCwd = vi.fn(async (_id: string, _cwd: string) => undefined);
 
 vi.mock('../../agent/journal/reader.js', () => ({
   journalExists: (id: string) => mockJournalExists(id),
@@ -34,6 +39,9 @@ vi.mock('./acp.session.js', () => ({
 
 vi.mock('./acp.session-map.js', () => ({
   resolveAcpId: (id: string) => mockResolveAcpId(id),
+  readAcpCwd: (id: string) => mockReadAcpCwd(id),
+  acpSessionMapSettled: async () => undefined,
+  recordAcpCwd: (id: string, cwd: string) => mockRecordAcpCwd(id, cwd),
 }));
 
 vi.mock('./acp.replay.js', () => ({
@@ -57,6 +65,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockJournalExists.mockReturnValue(true);
   mockResolveAcpId.mockImplementation((id) => id);
+  mockReadAcpCwd.mockReturnValue(undefined);
+  mockRecordAcpCwd.mockResolvedValue(undefined);
   mockBuildAcpSession.mockResolvedValue({
     session: { close: vi.fn().mockResolvedValue(undefined) },
     memoryStore: { close: vi.fn() },
@@ -186,5 +196,44 @@ describe('replayHistory', () => {
     const peer = { request: vi.fn(), notify: vi.fn().mockResolvedValue(undefined) };
     await replayHistory('acp-id', peer);
     expect(mockEmitReplayUpdates).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadAcpSession — stored canonical cwd (profile §2)
+// ---------------------------------------------------------------------------
+
+describe('loadAcpSession — original cwd required', () => {
+  const root = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'acp-load-cwd-')));
+  const other = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'acp-load-other-')));
+
+  it('accepts the stored cwd and does not rewrite it', async () => {
+    mockReadAcpCwd.mockReturnValue(root);
+    await loadAcpSession({ ...BASE_PARAMS, cwd: root }, BASE_OPTS);
+    expect(mockBuildAcpSession).toHaveBeenCalledOnce();
+    expect(mockRecordAcpCwd).not.toHaveBeenCalled();
+  });
+
+  it('rejects a different cwd as invalid params before building anything', async () => {
+    mockReadAcpCwd.mockReturnValue(root);
+    await expect(loadAcpSession({ ...BASE_PARAMS, cwd: other }, BASE_OPTS)).rejects.toBeInstanceOf(AcpInvalidParams);
+    expect(mockBuildAcpSession).not.toHaveBeenCalled();
+  });
+
+  it('accepts a legacy entry without a stored cwd and backfills it', async () => {
+    mockReadAcpCwd.mockReturnValue(undefined);
+    await loadAcpSession({ ...BASE_PARAMS, cwd: other }, BASE_OPTS);
+    expect(mockBuildAcpSession).toHaveBeenCalledOnce();
+    expect(mockRecordAcpCwd).toHaveBeenCalledWith(BASE_PARAMS.sessionId, other);
+  });
+
+  it('accepts a symlinked spelling of the same directory (canonical comparison)', async () => {
+    const link = path.join(other, 'link-to-root');
+    symlinkSync(root, link, process.platform === 'win32' ? 'junction' : 'dir');
+    mockReadAcpCwd.mockReturnValue(link);
+    await loadAcpSession({ ...BASE_PARAMS, cwd: root }, BASE_OPTS);
+    mockReadAcpCwd.mockReturnValue(root);
+    await loadAcpSession({ ...BASE_PARAMS, cwd: link }, BASE_OPTS);
+    expect(mockBuildAcpSession).toHaveBeenCalledTimes(2);
   });
 });
