@@ -63,6 +63,16 @@ describe('writeAcpSessionRecord / readAcpSessionRecord', () => {
     expect(() => readAcpSessionRecord('dir')).toThrow();
   });
 
+  it('throws, on every platform, when a parent of the record path is a file', () => {
+    mkdirSync(path.join(state, 'acp'), { recursive: true });
+    writeFileSync(path.join(state, 'acp', 'sessions'), 'not a directory');
+    expect(() => readAcpSessionRecord('blocked-1')).toThrow();
+  });
+
+  it('returns undefined when the sessions directory does not exist yet', () => {
+    expect(readAcpSessionRecord('fresh-1')).toBeUndefined();
+  });
+
   it('throws when the write fails', () => {
     mkdirSync(path.join(state, 'acp'), { recursive: true });
     writeFileSync(path.join(state, 'acp', 'sessions'), 'not a directory');
