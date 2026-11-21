@@ -92,9 +92,10 @@ export class ChatRoom implements DurableObject {
         return new Response('Relay configuration error: IP_SALT must contain at least 16 characters', { status: 503 });
       }
       const ipHash = await hashIp(this.env.IP_SALT, request.headers.get('CF-Connecting-IP') ?? 'unknown');
-      const conns = this.buildAllConns();
-      if (conns.size >= MAX_TOTAL_CONNECTIONS) return new Response('Room connection limit reached', { status: 503 });
-      if ([...conns.values()].filter(c => c.ipHash === ipHash).length >= MAX_CONNECTIONS_PER_IP) {
+      // Include closing sockets in resource caps until the runtime releases them.
+      const sockets = this.ctx.getWebSockets();
+      if (sockets.length >= MAX_TOTAL_CONNECTIONS) return new Response('Room connection limit reached', { status: 503 });
+      if (sockets.filter(ws => this.record(ws)?.ipHash === ipHash).length >= MAX_CONNECTIONS_PER_IP) {
         return new Response('Address connection limit reached', { status: 429 });
       }
       const { 0: client, 1: server } = new WebSocketPair();

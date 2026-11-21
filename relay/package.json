@@ -6,11 +6,15 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test --test-reporter=spec test/*.test.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241127.0",
+    "esbuild": "0.28.2",
+    "miniflare": "3.20250718.3",
+    "tsx": "4.23.15",
     "typescript": "^5.7.2",
-    "wrangler": "^3.95.0"
+    "wrangler": "3.114.17"
   }
 }

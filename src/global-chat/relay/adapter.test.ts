@@ -86,6 +86,15 @@ describe('Durable Object admission and lifecycle', () => {
     expect(response.status).toBe(503);
   });
 
+  it('caps pending sockets per address hash before accepting', async () => {
+    const { object, sockets } = setup(5);
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('test-salt-at-least-sixteenunknown'));
+    const hash = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+    for (const socket of sockets) socket.attachment.ipHash = hash;
+    const response = await object.fetch(new Request('http://local/', { headers: { Upgrade: 'websocket' } }));
+    expect(response.status).toBe(429);
+  });
+
   it('alarm closes expired pending sockets and re-arms the earliest remaining deadline', async () => {
     const { object, sockets, ctx } = setup(2);
     sockets[0]!.attachment._helloDeadline = Date.now() - 1;
