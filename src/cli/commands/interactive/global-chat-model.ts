@@ -8,7 +8,7 @@
  * @module cli/commands/interactive/global-chat-model
  */
 
-import type { Badge, Msg, RoomMode } from '../../../global-chat/protocol.js';
+import { MAX_TEXT_CHARS, type Badge, type Msg, type RoomMode } from '../../../global-chat/protocol.js';
 import type { ChatConnectionStatus, ChatIdentity, ChatWelcome } from '../../../global-chat/client-types.js';
 import { sanitizeChatText } from '../../../global-chat/sanitize.js';
 import { previousGraphemeIndex } from '../../display.js';
@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 
 export const MAX_ENTRIES = 300;
 /** Local input cap; the relay limit is enforced by the relay and shown as a counter. */
-export const MAX_INPUT_CHARS = 2000;
+export const MAX_INPUT_CHARS = MAX_TEXT_CHARS;
 
 export interface ChatMessageEntry {
   kind: 'msg';

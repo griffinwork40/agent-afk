@@ -57,7 +57,7 @@ export function explainFailure(result: Failure, verb = 'Message'): string {
     case 'unknown_target': return 'That message no longer exists on the relay.';
     case 'duplicate': return 'The relay already has that message.';
     case 'stale_timestamp': return 'Your clock looks wrong, so the relay refused this. Check your system time.';
-    default: return `${verb} failed (${result.code}).`;
+    default: return `${verb} failed.`;
   }
 }
 
