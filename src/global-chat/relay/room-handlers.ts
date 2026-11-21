@@ -53,7 +53,7 @@ export async function handlePost(
   const [keyBanned, ipBanned] = await Promise.all([
     store.isBannedKey(pubkey), store.isBannedIp(conn.ipHash),
   ]);
-  if (keyBanned || ipBanned) return makeEffect(conn, { toSender: [err('banned', 'You are banned')] });
+  if (keyBanned || ipBanned) return makeEffect(conn, { toSender: [err('banned', 'You are banned', { id: frame.id })] });
 
   // 4. room mode
   const storedMode = await store.getRoomMode();

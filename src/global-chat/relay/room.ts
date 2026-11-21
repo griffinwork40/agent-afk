@@ -60,7 +60,7 @@ export class Room {
     const frame = parsed.frame;
     if (frame.t === 'ping') return makeEffect(conn, { toSender: [{ t: 'pong', n: frame.n }] });
     if (frame.t === 'hello') return this.handleHello(connId, frame, conn, allConns);
-    if (!conn.helloOk) return makeEffect(conn, { toSender: [err('not_hello', 'Send hello first')] });
+    if (!conn.helloOk) return makeEffect(conn, { toSender: [err('not_hello', 'Send hello first', { id: frame.id })] });
     if (frame.t === 'post') {
       return handlePost(frame, conn, {
         store: this.store, config: this.config, clock: this.clock,

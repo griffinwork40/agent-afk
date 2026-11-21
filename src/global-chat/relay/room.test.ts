@@ -120,6 +120,7 @@ describe('Room hello', () => {
     expect(effect.toSender[0]?.t).toBe('error');
     const e = effect.toSender[0] as Extract<typeof effect.toSender[0], { t: 'error' }>;
     expect(e.code).toBe('not_hello');
+    expect(e.id).toBe(id);
   });
 
   it('error bad_frame on malformed JSON', async () => {
@@ -346,6 +347,7 @@ describe('Room post checks (order)', () => {
     const effect = await room.onMessage('c1', frame, conn, allConns);
     const e = effect.toSender[0] as Extract<typeof effect.toSender[0], { t: 'error' }>;
     expect(e.code).toBe('banned');
+    expect(e.id).toBe(id);
   });
 
   it('successful post: ack sent, msg broadcast, verifyMsg passes', async () => {
