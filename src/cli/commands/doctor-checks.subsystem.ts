@@ -92,6 +92,10 @@ export async function checkMemoryStore(deps: MemoryStoreDeps = {}): Promise<Chec
         detail: 'not yet created (will be initialised on first use)',
       };
     }
+    // Note: there is an inherent TOCTOU race between pathExists and openAndCount
+    // — the file could be created or removed between the two calls.  The catch
+    // block below handles both ENOENT (file removed) and other I/O errors
+    // (including EACCES), so the race is benign in practice.
     const count = await openAndCount(dbPath);
     return {
       name: 'Memory Store (SQLite)',
