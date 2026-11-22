@@ -79,6 +79,6 @@ describe('parseSessionSetup — systemPrompt field', () => {
       );
     } catch (err) { caught = err; }
     expect(caught).toBeInstanceOf(AcpInvalidParams);
-    expect((caught as AcpInvalidParams).detail).toMatch(/session\/new/);
+    expect((caught as InstanceType<typeof AcpInvalidParams>).detail).toMatch(/session\/new/);
   });
 });
