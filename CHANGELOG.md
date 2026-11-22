@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [6.1.0] - 2026-11-22
+
 ### Added
 - accept systemPrompt on session/new for editor context injection (#5219) (13d693046)
 
