@@ -838,11 +838,6 @@
     },
     {
       "kind": "config",
-      "name": "telegram.verifyDone",
-      "source": "src/config/settable-keys.ts"
-    },
-    {
-      "kind": "config",
       "name": "temperature",
       "source": "src/config/settable-keys.ts"
     },

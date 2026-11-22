@@ -55,25 +55,32 @@ describe('createTelegramAfkHookBundle — hook registry wiring', () => {
   it('the mode getter is LIVE — a mode flip AFTER construction is observed on the next dispatch', async () => {
     // Proves the late-bind contract: the getter reads the current value each call,
     // not a snapshot taken at registry-build time.
-    let mode: PermissionMode = 'default';
+    //
+    // Uses edit_file (a write-category tool) so the plan-mode gate produces
+    // discriminating results: 'plan' → block, 'bypassPermissions' → pass.
+    // A read-only tool (read_file) would resolve in both modes and could not
+    // distinguish a live getter from a snapshotted one.
+    let mode: PermissionMode = 'plan';
     const bundle = createTelegramAfkHookBundle({
       memoryStore: undefined,
       getSession: () => fakeSession(mode),
       cwd: tmp,
       traceWriter: null,
     });
-    // 'default': op resolves.
+    // 'plan': write tool is BLOCKED — plan-mode gate is registered and live.
+    // dispatch() throws HookBlockedError when a handler returns decision:'block'.
     await expect(bundle.registry.dispatch({
       event: 'PreToolUse' as const,
-      toolName: 'read_file',
-      input: { file_path: join(tmp, 'in-workspace.ts') },
-    })).resolves.toBeDefined();
-    // flip to bypassPermissions — still resolves for a safe read.
+      toolName: 'edit_file',
+      input: { file_path: join(tmp, 'in-workspace.ts'), old_string: 'a', new_string: 'b' },
+    })).rejects.toThrow('plan mode');
+
+    // flip to bypassPermissions — same write tool now resolves (no block).
     mode = 'bypassPermissions';
     await expect(bundle.registry.dispatch({
       event: 'PreToolUse' as const,
-      toolName: 'read_file',
-      input: { file_path: join(tmp, 'in-workspace.ts') },
+      toolName: 'edit_file',
+      input: { file_path: join(tmp, 'in-workspace.ts'), old_string: 'a', new_string: 'b' },
     })).resolves.toBeDefined();
   });
 
