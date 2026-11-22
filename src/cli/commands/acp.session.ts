@@ -35,6 +35,8 @@ export interface AcpSessionOptions {
   sessionId?: string;
   /** Already converted from the wire stdio array to AFK's name-keyed config. */
   mcpServers?: AgentConfig['mcpServers'];
+  /** Client-supplied system prompt appended after the operator overlay (session/new only). */
+  systemPrompt?: string;
 }
 
 export interface AcpSessionHandle {
@@ -57,7 +59,11 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
     resources.add(() => memoryStore.close());
     const stateStore = new StateStore(getStateDatabasePath());
     resources.add(() => stateStore.close());
-    const { basePrompt, operatorOverlay, systemPrompt, systemPromptSource } = resolveAcpPrompt(cwd);
+    const { basePrompt, operatorOverlay, systemPrompt: resolvedPrompt, systemPromptSource } = resolveAcpPrompt(cwd);
+    const clientPrompt = opts.systemPrompt;
+    const systemPrompt = (clientPrompt !== undefined && clientPrompt.trim().length > 0)
+      ? (resolvedPrompt !== undefined ? `${resolvedPrompt}\n\n${clientPrompt}` : clientPrompt)
+      : resolvedPrompt;
     const mcpManager = await connectAcpMcp(cwd, opts.mcpServers, traceWriter);
     if (mcpManager !== undefined) resources.add(() => mcpManager.disconnectAll());
     const { proxy: deferredParent, bind: bindParent } = makeDeferredParentProxy();
