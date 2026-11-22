@@ -20,7 +20,7 @@ import {
 } from './__test-utils__/fake-lsp-server.js';
 import { LspServerPool, getIdleShutdownMs, DEFAULT_LSP_IDLE_SHUTDOWN_MS } from './pool.js';
 import { CrashLoopGuard } from './crash-loop-guard.js';
-import { LspClientError } from './client.js';
+import { LspClient, LspClientError } from './client.js';
 import { withPooledFile, awaitSyncDiagnostics } from './query.js';
 import { DiagnosticsStore } from './diagnostics-store.js';
 import { pathToFileURL } from 'node:url';
@@ -153,12 +153,25 @@ describe('LspServerPool', () => {
     expect(spawnCount(logFile)).toBe(2);
   }, 10_000);
 
-  it('kills a start every acquirer abandoned after the grace window', async () => {
+  it('a timeout-abandoned start keeps warming and evicts once its init deadline fires', async () => {
+    // A silent server whose only acquirer times out must keep warming (not be
+    // grace-killed). Once the client's own initialize deadline fires the entry
+    // is counted as a crash and evicted.
     const { spec } = setup({ silent: true });
-    const pool = newPool({ abandonedStartGraceMs: 50 });
-    const err = await pool.acquire(spec, tempDir, { timeoutMs: 100 }).catch((e: unknown) => e);
+    const guard = new CrashLoopGuard({ now: () => Date.now() });
+    // Short startClient timeout (200 ms) so the test does not wait 30 s.
+    const pool = newPool({
+      guardFor: () => guard,
+      startClient: (s, root) => LspClient.start(s, root, { timeoutMs: 200 }),
+    });
+    const err = await pool.acquire(spec, tempDir, { timeoutMs: 50 }).catch((e: unknown) => e);
     expect((err as LspClientError).kind).toBe('timeout');
-    await until(() => pool.size === 0);
+    // Entry stays alive while the start is still warming.
+    expect(pool.size).toBe(1);
+    // After the client's own init deadline (200 ms) the entry is evicted and
+    // the timeout is counted as an incident.
+    await until(() => pool.size === 0, 3000);
+    expect(guard.recentCrashes).toBe(1);
   }, 10_000);
 
   it('reads the idle window from AFK_LSP_IDLE_SHUTDOWN_MS', () => {
