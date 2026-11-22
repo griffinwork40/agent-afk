@@ -144,32 +144,9 @@ export class FailureStreakTracker {
     return { action: 'none' };
   }
 
-  /** Inspect a live failure streak, or undefined for an empty/unknown task. */
-  getStreak(taskId: string): Readonly<StreakSnapshot> | undefined {
-    const state = this.streaks.get(taskId);
-    return state?.count ? state : undefined;
-  }
-
   /** Return a detached snapshot suitable for stamping on a run row. */
   snapshot(taskId: string): StreakSnapshot {
     return { ...(this.streaks.get(taskId) ?? emptyStreak()) };
-  }
-
-  /** List cached streaks meeting a threshold, without treating decisions as deliveries. */
-  listBreachedStreaks(threshold = DEFAULT_FAILURE_STREAK_THRESHOLD): Array<{
-    taskId: string;
-    count: number;
-    failingSince: string;
-    lastError: string | undefined;
-  }> {
-    return [...this.streaks]
-      .filter(([, s]) => s.count >= threshold)
-      .map(([taskId, s]) => ({
-        taskId,
-        count: s.count,
-        failingSince: s.failingSince ?? '',
-        lastError: s.lastError,
-      }));
   }
 
   /** Clear all process-local state for tests. */
