@@ -365,7 +365,32 @@ describe('SubagentExecutor — isolation:"worktree" wiring', () => {
   });
 
   // ------------------------------------------------------------------------
-  // (5) #4374: depth-2+ nesting inherits worktree cwd, not parent repo root.
+  // (5) #5177: fork-mode background gate fires BEFORE isolation setup.
+  // A worktree must NOT be created when the dispatch is rejected because it
+  // is mode:"background" inside a fork-mode skill (skillDispatchName set).
+  // ------------------------------------------------------------------------
+  describe('#5177: fork-mode background gate fires before worktree creation', () => {
+    it('mode:"background" + isolation:"worktree" inside a fork-mode skill: rejects before createIsolatedWorktree', async () => {
+      createIsolatedWorktree.mockResolvedValue(ISO_RESULT);
+
+      const executor = makeExecutor({
+        defaultConfig: { apiKey: 'test-key', systemPrompt: 'test', skillDispatchName: 'my-research-skill' },
+      });
+
+      const result = await executor.execute(
+        makeCall({ input: { prompt: 'do work', mode: 'background', isolation: 'worktree' } }),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/Background subagent dispatch is not allowed inside a fork-mode skill/);
+      // Gate fires before setupIsolationWorktree — no locked worktree leaks.
+      expect(createIsolatedWorktree).not.toHaveBeenCalled();
+      expect(mockSubagentMgr.forkSubagent).not.toHaveBeenCalled();
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // (6) #4374: depth-2+ nesting inherits worktree cwd, not parent repo root.
   // When isolation:"worktree" rewrites childConfig.cwd, the two-phase API
   // (buildChildConfigWithoutNesting + completeChildConfigNesting) ensures the
   // child SubagentManager and child executor receive the worktree path — so
