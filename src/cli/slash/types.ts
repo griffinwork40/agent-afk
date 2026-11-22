@@ -132,11 +132,11 @@ export interface SessionStats {
   model: AgentModelInput;
   /**
    * Current REPL permission mode — the single source of truth the prompt
-   * marker, status line, and the plan/AFK gate getters all read. `'plan'`
-   * gates writes (plan mode); `'autonomous'` is AFK mode (the operator is away
-   * — autonomous work + Telegram reporting, with a high-risk gate); `'default'`
-   * is normal interactive operation. Mutually exclusive by construction (one
-   * field), which is why AFK is not a separate boolean alongside plan.
+   * marker, status line, and permission-gate getters all read. `'plan'` gates
+   * writes (plan mode); `'bypassPermissions'` disables path containment and
+   * the path-approval prompt; `'default'` is normal interactive operation.
+   * Mutually exclusive by construction (one field). `'autonomous'` was removed
+   * in #5165.
    */
   permissionMode: PermissionMode;
   /**

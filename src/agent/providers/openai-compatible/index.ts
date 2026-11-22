@@ -487,8 +487,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // Destructive-git gate — parity with anthropic-direct. Blocks checkout/
     // switch/restore/clean/reset --hard/stash drop|clear|pop for all children.
     if (this.providerOpts.blockDestructiveGit === true) dispatcherOpts.blockDestructiveGit = true;
-    // Path-containment bypass: bypassPermissions (explicit) + autonomous (AFK)
-    // both disable path containment for every per-call context.
+    // Path-containment bypass: bypassPermissions disables path containment for
+    // every per-call context.
     dispatcherOpts.allowAll = pathContainmentBypassed(permissionMode);
     // This provider IS the session's GrantManager — parity with
     // AnthropicDirectProvider.buildDispatcher. The dispatcher injects it onto

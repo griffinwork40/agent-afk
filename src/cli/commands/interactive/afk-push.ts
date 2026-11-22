@@ -1,13 +1,11 @@
 /**
- * AFK-mode terminal-state push.
+ * Terminal-state Telegram push.
  *
- * In AFK mode (`permissionMode === 'autonomous'`) the operator is away from
- * keyboard and the transcript is unwatched. At the end of each turn the REPL
- * pushes the turn's parsed terminal state to Telegram so the operator can
- * review asynchronously. This module owns the *formatting*, *scrubbing*, and
+ * At the end of each turn the REPL may push the turn's parsed terminal state
+ * to Telegram. This module owns the *formatting*, *scrubbing*, and
  * *rate-limiting* of that push; the trigger lives in `turn-handler.ts`.
  *
- * Two safety properties, both required by design (see `.afk/plans/afk-mode.md`):
+ * Two safety properties, both required by design:
  *
  *   1. Allowlist by construction. The message is built ONLY from the structured
  *      fields of the parsed {@link TerminalState} (the Done/Blocked/Asking/
@@ -17,12 +15,6 @@
  *   2. Secondary secret scrub. Even the structured fields are passed through
  *      `redactInlineSecrets` before sending, so an API key the model happened to
  *      echo into a bullet is masked before it leaves the machine over HTTPS.
- *
- * Rate limiting: at most one push per turn (one terminal state per turn) plus a
- * per-AFK-session cap (`MAX_PUSHES_PER_SESSION`). On hitting the cap a single
- * "further pushes muted" notice is sent, then pushes stop until the budget is
- * reset (the `/afk` toggle resets it whenever AFK mode is switched ON, so each
- * AFK session gets a fresh budget).
  *
  * @module cli/commands/interactive/afk-push
  */
