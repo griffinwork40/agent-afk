@@ -91,6 +91,8 @@ export interface SessionSetup {
   wireMcp: McpServerStdio[];
   mcpServers: Record<string, McpServerConfig>;
   sessionId?: string;
+  /** Client-supplied system prompt to append to the session prompt (session/new only). */
+  systemPrompt?: string;
 }
 
 /**
@@ -106,14 +108,17 @@ export function parseSessionSetup(
   if (dirs !== undefined && dirs !== null && (!Array.isArray(dirs) || dirs.length > 0)) {
     throw new AcpInvalidParams('additionalDirectories is not supported');
   }
+  let systemPrompt: string | undefined;
   if (p['systemPrompt'] !== undefined && p['systemPrompt'] !== null) {
-    throw new AcpInvalidParams('systemPrompt is not supported');
+    if (mode !== 'new') throw new AcpInvalidParams('systemPrompt is only supported on session/new');
+    if (typeof p['systemPrompt'] !== 'string') throw new AcpInvalidParams('systemPrompt must be a string');
+    if (p['systemPrompt'].trim().length > 0) systemPrompt = p['systemPrompt'];
   }
   const rawMcp = mode === 'resume' && p['mcpServers'] === undefined ? [] : p['mcpServers'];
   const wireMcp = parseMcpServers(rawMcp);
   const mcpServers = convertMcpServers(wireMcp);
   const cwd = validateCwd(p['cwd']);
-  if (mode === 'new') return { cwd, wireMcp, mcpServers };
+  if (mode === 'new') return { cwd, wireMcp, mcpServers, ...(systemPrompt !== undefined ? { systemPrompt } : {}) };
   const sessionId = p['sessionId'];
   if (typeof sessionId !== 'string' || sessionId === '') throw new AcpInvalidParams('sessionId required');
   return { cwd, wireMcp, mcpServers, sessionId };

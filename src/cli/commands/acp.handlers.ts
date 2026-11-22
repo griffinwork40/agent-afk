@@ -132,6 +132,7 @@ function prepareLive(ctx: ServerContext, id: string, setup: SessionSetup): { liv
     cwd: setup.cwd,
     sessionId: id,
     mcpServers: setup.mcpServers,
+    ...(setup.systemPrompt !== undefined ? { systemPrompt: setup.systemPrompt } : {}),
     ...(live.gate ? { canUseTool: live.gate.canUseTool } : {}),
     ...(live.gate?.forChild ? { childCanUseTool: live.gate.forChild } : {}),
   };
