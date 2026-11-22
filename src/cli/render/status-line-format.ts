@@ -30,8 +30,9 @@ export interface StatusLineFields {
   /**
    * Current REPL permission mode. Renders a never-dropped indicator: `○ default`
    * (default/contained mode, success tone), `● plan` (plan mode, warning tone),
-   * or `⚡ bypass` (bypassPermissions, bypass tone — a cool "full-power" badge,
-   * not a caution glyph).
+   * or `⚡ bypass` (bypassPermissions, bypass tone). Only `plan` and
+   * `bypassPermissions` exist alongside `default` (`autonomous` was removed
+   * in #5165).
    */
   permissionMode?: PermissionMode;
   /**
