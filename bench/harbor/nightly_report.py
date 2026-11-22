@@ -8,6 +8,10 @@ import json
 import math
 from pathlib import Path
 
+# Time-limited and budget-capped agent work is behaviour;
+# auth/setup/verifier failures are not.
+_BEHAVIOUR_ERRORS = {"AgentTimeoutError", "AfkBudgetCapError"}
+
 
 def build_record(job_dir: Path, spec: dict, metadata: dict) -> dict:
     """Never lose failed/missing tasks from the denominator or persist raw logs."""
@@ -40,9 +44,6 @@ def build_record(job_dir: Path, spec: dict, metadata: dict) -> dict:
             raise ValueError(f"Invalid reward for {name}")
         if not math.isfinite(reward) or reward not in (0, 1):
             raise ValueError(f"Nonbinary reward for {name}")
-        # Time-limited and budget-capped agent work is behaviour;
-        # auth/setup/verifier failures are not.
-        _BEHAVIOUR_ERRORS = {"AgentTimeoutError", "AfkBudgetCapError"}
         if error and error not in _BEHAVIOUR_ERRORS:
             valid = False
         tasks[name] = {"reward": float(reward), "error": error}
