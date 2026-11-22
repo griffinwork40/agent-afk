@@ -35,7 +35,13 @@ export interface AcpSessionOptions {
   sessionId?: string;
   /** Already converted from the wire stdio array to AFK's name-keyed config. */
   mcpServers?: AgentConfig['mcpServers'];
-  /** Client-supplied system prompt appended after the operator overlay (session/new only). */
+  /**
+   * Client-supplied system prompt appended after the operator overlay.
+   * `buildAcpSession` accepts this field unconditionally; the session/new
+   * restriction (ACP profile §8) is enforced by `parseSessionSetup` before
+   * the options reach this function.  Direct callers (embedders, test doubles)
+   * that bypass `parseSessionSetup` are responsible for their own mode guard.
+   */
   systemPrompt?: string;
 }
 
@@ -61,6 +67,9 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
     resources.add(() => stateStore.close());
     const { basePrompt, operatorOverlay, systemPrompt: resolvedPrompt, systemPromptSource } = resolveAcpPrompt(cwd);
     const clientPrompt = opts.systemPrompt;
+    // parseSessionSetup already rejects whitespace-only values on the ACP path.
+    // This trim guard is defence-in-depth for callers that invoke buildAcpSession
+    // directly (embedders, test doubles) without going through parseSessionSetup.
     const systemPrompt = (clientPrompt !== undefined && clientPrompt.trim().length > 0)
       ? (resolvedPrompt !== undefined ? `${resolvedPrompt}\n\n${clientPrompt}` : clientPrompt)
       : resolvedPrompt;

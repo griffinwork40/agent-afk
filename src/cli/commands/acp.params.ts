@@ -110,8 +110,8 @@ export function parseSessionSetup(
   }
   let systemPrompt: string | undefined;
   if (p['systemPrompt'] !== undefined && p['systemPrompt'] !== null) {
-    if (mode !== 'new') throw new AcpInvalidParams('systemPrompt is only supported on session/new');
     if (typeof p['systemPrompt'] !== 'string') throw new AcpInvalidParams('systemPrompt must be a string');
+    if (mode !== 'new') throw new AcpInvalidParams('systemPrompt is only supported on session/new');
     if (p['systemPrompt'].trim().length > 0) systemPrompt = p['systemPrompt'];
   }
   const rawMcp = mode === 'resume' && p['mcpServers'] === undefined ? [] : p['mcpServers'];

@@ -108,7 +108,7 @@ describe('ACP bootstrap parity', () => {
     const handle = await buildAcpSession({
       model: 'gpt-4.1', maxTurns: 0, cwd: '/workspace', systemPrompt: clientPrompt,
     });
-    // assembleSystemPrompt(undefined, ...) returns undefined/empty — the client prompt stands alone
+    // assembleSystemPrompt(undefined, ...) returns undefined — the client prompt stands alone
     expect(f.config).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: clientPrompt,
     }), f.trace);
