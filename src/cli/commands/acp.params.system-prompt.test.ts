@@ -81,4 +81,30 @@ describe('parseSessionSetup — systemPrompt field', () => {
     expect(caught).toBeInstanceOf(AcpInvalidParams);
     expect((caught as InstanceType<typeof AcpInvalidParams>).detail).toMatch(/session\/new/);
   });
+
+  it('rejects non-string systemPrompt on session/load with "must be a string" detail', () => {
+    // R1.1: type check must fire before mode check so the error names the
+    // actual constraint (type) rather than the secondary one (mode).
+    let caught: unknown;
+    try {
+      parseSessionSetup(
+        { cwd: BASE_CWD, mcpServers: BASE_MCP, sessionId: 'x', systemPrompt: 42 },
+        'load',
+      );
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(AcpInvalidParams);
+    expect((caught as InstanceType<typeof AcpInvalidParams>).detail).toMatch(/must be a string/);
+  });
+
+  it('rejects non-string systemPrompt on session/resume with "must be a string" detail', () => {
+    let caught: unknown;
+    try {
+      parseSessionSetup(
+        { cwd: BASE_CWD, sessionId: 'x', systemPrompt: false },
+        'resume',
+      );
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(AcpInvalidParams);
+    expect((caught as InstanceType<typeof AcpInvalidParams>).detail).toMatch(/must be a string/);
+  });
 });
