@@ -133,7 +133,7 @@ export class TurnStreamRunner {
     });
     // Every seal path (close, reset, abort) must leave the ledger with an
     // abandoned turn's `done`, even when it has not finished stopping (#4830).
-    deps.ledger.setBeforeSeal(() => this.turns.seal());
+    deps.ledger.setBeforeSeal((reason) => this.turns.seal(reason));
   }
 
   /**
