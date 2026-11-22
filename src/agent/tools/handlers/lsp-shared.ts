@@ -21,6 +21,7 @@ export function lspFailureMessage(err: unknown, timeoutMessage: string): string 
     case 'aborted': return 'Aborted';
     case 'spawn': return 'Failed to spawn LSP server';
     case 'exited': return 'LSP server exited before responding';
+    case 'disabled': return 'LSP server is disabled after repeated crashes; it will be retried after a short cooldown';
     case 'response': return err.message === 'Unsupported file type' ? err.message : 'LSP server returned an error';
   }
 }
