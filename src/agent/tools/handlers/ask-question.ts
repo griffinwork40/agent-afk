@@ -148,8 +148,9 @@ export const askQuestionHandler: ToolHandler = async (input, signal, context) =>
   // `allow_skip: true`), and the agent receives `{ action: 'skip' }` in
   // the JSON content. The system prompt in agent/routing-directive.ts
   // documents this distinction: "skip (optional question skipped)" is a
-  // listed action, while "After a `cancel` or `decline`, stop and tell the
-  // user what information you need" only fires for the two error actions.
+  // listed action, while after a `cancel` or `decline` the agent must not
+  // re-ask — it should either proceed on a stated assumption (reversible
+  // work) or end with a Blocked terminal state (irreversible work).
   //
   // The `isError: true` is preserved (the model must still stop on a decline),
   // but it is tagged `failureClass: 'elicitation-declined'` so the
