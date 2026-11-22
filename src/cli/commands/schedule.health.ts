@@ -1,5 +1,5 @@
 import { loadSchedules } from '../../agent/daemon/schedule-store.js';
-import { readStreakHistory } from '../../agent/daemon/scheduler.streak-history.js';
+import { readAllStreakHistories } from '../../agent/daemon/scheduler.streak-history.js';
 import { DEFAULT_FAILURE_STREAK_THRESHOLD } from '../../agent/daemon/scheduler.failure-streak.js';
 import { getTelemetryPath } from '../../paths.js';
 import { palette } from '../palette.js';
@@ -16,9 +16,10 @@ export function positiveThreshold(value: string): number {
 /** Report bounded history; breaches and unknown boundaries set a non-zero exit code. */
 export function runHealthCommand(fallback = DEFAULT_FAILURE_STREAK_THRESHOLD): void {
   const schedules = loadSchedules().filter((s) => s.enabled);
+  const histories = readAllStreakHistories(getTelemetryPath(), schedules.map((s) => ({ id: s.id, createdAt: s.createdAt })));
   let unhealthy = 0;
   for (const task of schedules) {
-    const { snapshot: s, hasRuns } = readStreakHistory(getTelemetryPath(), task.id, task.createdAt);
+    const { snapshot: s, hasRuns } = histories.get(task.id) ?? { snapshot: { count: 0, escalated: false, extraFailures: 0, exact: false }, hasRuns: false };
     const threshold = task.failureStreakThreshold ?? fallback;
     const prefix = `${task.id} (${task.name}), threshold ${threshold}: `;
     if (!hasRuns) {
@@ -54,13 +55,14 @@ export function printScheduleList(schedules: ReturnType<typeof loadSchedules>, t
     console.log(palette.dim('No scheduled tasks.'));
     return;
   }
+  const histories = readAllStreakHistories(telemetryPath, schedules.map((s) => ({ id: s.id, createdAt: s.createdAt })));
   const hasCwd = schedules.some((s) => s.cwd !== undefined);
   const header = 'ID                   | NAME                           | CRON            | ENABLED | LAST STATUS'
     + ' | STREAK | FAILING SINCE | THRESHOLD' + (hasCwd ? ' | CWD' : '');
   console.log(palette.heading(header));
   console.log(palette.dim('-'.repeat(header.length)));
   for (const task of schedules) {
-    const { snapshot: s, hasRuns, lastStatus } = readStreakHistory(telemetryPath, task.id, task.createdAt);
+    const { snapshot: s, hasRuns, lastStatus } = histories.get(task.id) ?? { snapshot: { count: 0, escalated: false, extraFailures: 0, exact: false }, hasRuns: false, lastStatus: undefined };
     const status = !hasRuns
       ? (s.exact ? 'no runs yet' : 'no recent runs found')
       : lastStatus ?? 'indeterminate';
