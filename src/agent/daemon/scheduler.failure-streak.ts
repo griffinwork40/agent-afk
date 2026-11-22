@@ -3,6 +3,7 @@
 // Snapshots survive restart; exactly-once is not guaranteed across a crash
 // between append and delivery. Delivery is a separate, asynchronous fact.
 import { redactInlineSecrets } from '../session/prompt-dump.js';
+import { errorMessage } from '../../utils/errors.js';
 import type { TelemetryRecord, TaskCompletionDetails } from './scheduler.js';
 import type { ScheduledTask } from './triggers.js';
 import { emptyStreak, readStreakHistory, type StreakSnapshot } from './scheduler.streak-history.js';
@@ -86,8 +87,8 @@ export class FailureStreakTracker {
     let createdAt: string | undefined;
     try {
       createdAt = getSchedule(taskId)?.createdAt;
-    } catch {
-      // An unavailable schedule store must not turn an unknown history into an exact one.
+    } catch (err) {
+      console.error(`[daemon] streak hydration: schedule-store read failed for task "${taskId}": ${errorMessage(err)}`);
     }
     this.streaks.set(taskId, readStreakHistory(telemetryPath, taskId, createdAt).snapshot);
   }
@@ -121,9 +122,13 @@ export class FailureStreakTracker {
     }
     state.count++;
     state.failingSince ??= record.triggeredAt;
-    state.lastError = record.errorMessage !== undefined
-      ? redactInlineSecrets(record.errorMessage).slice(0, 200)
-      : undefined;
+    const rawError = record.errorMessage ?? record.responseExcerpt;
+    if (rawError !== undefined) {
+      const lastLine = rawError.trimEnd().split('\n').filter((l) => l.trim() !== '').at(-1) ?? rawError;
+      state.lastError = redactInlineSecrets(lastLine).slice(0, 200);
+    } else {
+      state.lastError = undefined;
+    }
     if (!state.escalated && state.count >= threshold) {
       state.escalated = true;
       return {
@@ -219,6 +224,11 @@ export function applyStreakLogic(
     : action.action === 're-escalate' ? 're-escalation'
     : action.action === 'recover' ? 'recovery'
     : isFailureStatus(record.status) ? 'failure' : 'completion';
+  if (action.action !== 'none') {
+    console.error(
+      `[daemon] streak ${action.action}: task "${record.taskId}" count=${failureStreak.count}${failureStreak.failingSince !== undefined ? ` failingSince=${failureStreak.failingSince}` : ''}`,
+    );
+  }
   return {
     persistedRecord: {
       ...record,
