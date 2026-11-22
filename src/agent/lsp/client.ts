@@ -47,6 +47,13 @@ export interface RequestOptions {
   /** Per-call deadline in ms. Absent = no deadline (signal/death still apply). */
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
+  /**
+   * `LspClient.start` only. When this signal fires the in-flight initialize
+   * is unreferenced (so it no longer holds a one-shot process alive) but NOT
+   * aborted — the server keeps warming under its own initialize deadline.
+   * Ignored by `request`.
+   */
+  readonly unrefSignal?: AbortSignal;
 }
 
 /** Result of `syncFile`: the document uri plus the sync outcome. */
@@ -114,6 +121,15 @@ export class LspClient {
   }
 
   /**
+   * Drop the event-loop reference on the server process. Safe to call at any
+   * time; idempotent. Used by the pool when no acquirer is waiting on a
+   * still-initializing server so a one-shot `afk chat` process can exit.
+   */
+  unref(): void {
+    this.setRef(false);
+  }
+
+  /**
    * Keep the event loop alive while a caller awaits this server. An idle warm
    * server is unref'd so it never holds a finished one-shot process open.
    * Returns the release function (idempotent).
@@ -151,6 +167,12 @@ export class LspClient {
       throw new LspClientError('spawn', 'Failed to spawn LSP server');
     }
     const client = new LspClient(spec, root, proc);
+    // When the pool signals that no acquirer is waiting, drop the event-loop
+    // reference so the server keeps warming but won't hold a one-shot process
+    // open. The abort signal still controls actual cancellation separately.
+    if (opts.unrefSignal) {
+      opts.unrefSignal.addEventListener('abort', () => client.unref(), { once: true });
+    }
     try {
       await client.initialize(opts);
       return client;

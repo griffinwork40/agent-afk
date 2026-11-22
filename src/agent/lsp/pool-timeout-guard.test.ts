@@ -125,39 +125,67 @@ describe('pooled request timeout incidents', () => {
     expect(record).toHaveBeenCalledTimes(3);
   });
 
-  it('never counts a start killed after every acquirer timed out', async () => {
+  it('counts a start whose every acquirer timed out once the client init deadline fires', async () => {
+    // A timeout-abandoned start is kept warming (not grace-killed). When the
+    // client's own initialize deadline fires the rejection counts as one
+    // incident — not one per acquirer.
     const { root, spec, guard } = setup({ silent: true });
     const record = vi.spyOn(guard, 'recordCrash');
     const starts: Array<Promise<unknown>> = [];
     const realStart = LspClient.start.bind(LspClient);
     vi.spyOn(LspClient, 'start').mockImplementation((...args) => {
-      const started = realStart(...args);
+      // Inject a short client-side initialize deadline (100 ms) so the test
+      // does not wait 30 s for the default.
+      const [sSpec, sRoot, sOpts] = args as Parameters<typeof LspClient.start>;
+      const started = realStart(sSpec, sRoot, { ...sOpts, timeoutMs: 100 });
       starts.push(started.catch(() => undefined));
       return started;
     });
     const pool = new LspServerPool({ guardFor: () => guard, abandonedStartGraceMs: 20 });
     pools.push(pool);
     vi.useFakeTimers();
-    for (let i = 1; i <= 3; i++) {
-      const result = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
-      await vi.advanceTimersByTimeAsync(50);
-      expect(await result).toMatchObject({ kind: 'timeout' });
-      expect(guard.recentCrashes).toBe(0);
-      expect(pool.size).toBe(1);
-      await vi.advanceTimersByTimeAsync(20);
-      expect(pool.size).toBe(0);
-      expect(guard.recentCrashes).toBe(0);
-    }
-    expect(guard.failed).toBe(false);
-    // A 4th acquire should still be able to spawn (guard not tripped).
-    const fourth = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
+
+    // First acquire: acquirer times out at 50 ms; start keeps warming.
+    const result1 = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
     await vi.advanceTimersByTimeAsync(50);
-    expect(await fourth).toMatchObject({ kind: 'timeout' });
-    expect(pool.spawned).toBe(4);
-    await vi.advanceTimersByTimeAsync(20);
+    expect(await result1).toMatchObject({ kind: 'timeout' });
+    expect(guard.recentCrashes).toBe(0);
+    expect(pool.size).toBe(1); // still warming
+
+    // Client's own 100 ms deadline fires: one incident, entry evicted.
+    await vi.advanceTimersByTimeAsync(50); // total 100 ms from start
+    await Promise.all(starts.splice(0));
+    expect(guard.recentCrashes).toBe(1);
+    expect(pool.size).toBe(0);
+
+    // A 2nd acquire spawns a fresh start; same pattern.
+    const result2 = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await result2).toMatchObject({ kind: 'timeout' });
+    expect(pool.size).toBe(1);
+    await vi.advanceTimersByTimeAsync(50);
+    await Promise.all(starts.splice(0));
+    expect(guard.recentCrashes).toBe(2);
+    expect(pool.size).toBe(0);
+
+    // 3rd acquire trips the guard.
+    const result3 = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await result3).toMatchObject({ kind: 'timeout' });
+    expect(pool.size).toBe(1);
+    await vi.advanceTimersByTimeAsync(50);
+    await Promise.all(starts.splice(0));
+    expect(guard.recentCrashes).toBe(3);
+    expect(guard.failed).toBe(true);
+    expect(pool.size).toBe(0);
+
+    // 4th acquire is blocked by the tripped guard.
     vi.useRealTimers();
-    await Promise.all(starts);
-    expect(record).not.toHaveBeenCalled();
+    await expect(pool.acquire(spec, root)).rejects.toMatchObject({
+      kind: 'exited', message: 'LSP server disabled: crash-loop guard tripped',
+    });
+    expect(pool.spawned).toBe(3); // no 4th spawn
+    expect(record).toHaveBeenCalledTimes(3);
   });
 
   it('three starts abandoned by abort (never timed out) leave the guard clean and allow a fresh start', async () => {
@@ -189,19 +217,24 @@ describe('pooled request timeout incidents', () => {
     await vi.advanceTimersByTimeAsync(50);
     expect(await fourth).toMatchObject({ kind: 'timeout' });
     expect(pool.spawned).toBe(4);
-    // Advance past the grace window so the 4th start's abandon timer fires and
-    // the aborted start process resolves, allowing Promise.all(starts) to settle.
-    await vi.advanceTimersByTimeAsync(20);
+    // The 4th start is timeout-abandoned: it keeps warming with no grace kill.
+    // disposeAll aborts it so Promise.all(starts) can settle.
     vi.useRealTimers();
+    await pool.disposeAll();
     await Promise.all(starts);
   });
 
-  it('one start with one timeout acquirer and one aborted acquirer records zero incidents after grace', async () => {
+  it('one start with one timeout acquirer and one aborted acquirer keeps warming and counts on init deadline', async () => {
+    // A timed-out acquirer (even mixed with an aborted one) causes the start
+    // to keep warming. The entry stays alive until the client's own init
+    // deadline fires, which counts as one incident.
     const { root, spec, guard } = setup({ silent: true });
     const starts: Array<Promise<unknown>> = [];
     const realStart = LspClient.start.bind(LspClient);
     vi.spyOn(LspClient, 'start').mockImplementation((...args) => {
-      const started = realStart(...args);
+      // Short client-side deadline so the test does not wait 30 s.
+      const [sSpec, sRoot, sOpts] = args as Parameters<typeof LspClient.start>;
+      const started = realStart(sSpec, sRoot, { ...sOpts, timeoutMs: 100 });
       starts.push(started.catch(() => undefined));
       return started;
     });
@@ -220,16 +253,16 @@ describe('pooled request timeout incidents', () => {
     expect(pool.size).toBe(1);
     await vi.advanceTimersByTimeAsync(50);
     expect(await resultA).toMatchObject({ kind: 'timeout' });
-    // Grace window: both acquirers gone but start still live.
+    // Both acquirers gone; start keeps warming (not grace-killed) because A timed out.
     expect(pool.size).toBe(1);
     expect(guard.recentCrashes).toBe(0);
-    await vi.advanceTimersByTimeAsync(20);
-    // Grace timer fired: start was caller-abandoned, so zero incidents.
+    // Client's own 100 ms deadline fires: one incident, entry evicted.
+    await vi.advanceTimersByTimeAsync(50); // total 100 ms from start
+    await Promise.all(starts);
     expect(pool.size).toBe(0);
-    expect(guard.recentCrashes).toBe(0);
+    expect(guard.recentCrashes).toBe(1);
     expect(pool.spawned).toBe(1);
     vi.useRealTimers();
-    await Promise.all(starts);
   });
 
   it('does not count an abandoned start that a new acquirer picks up within grace', async () => {
@@ -408,10 +441,12 @@ describe('pooled request timeout incidents', () => {
       await vi.advanceTimersByTimeAsync(50);
       expect(await result).toMatchObject({ kind: 'timeout' });
       expect(guard.recentCrashes).toBe(0);
-      expect(pool.size).toBe(1); // still in grace
-      await vi.advanceTimersByTimeAsync(20); // fire grace timer -> abort + evict
-      // Settle the hanging start promise so it doesn't block disposeAll.
+      // Timeout-abandoned: start keeps warming (no grace kill), pool stays alive.
+      expect(pool.size).toBe(1);
+      // Manually settle the hanging mock start (rejected as 'aborted', not counted).
       hangAborts[i - 1]!.abort();
+      // Yield so the rejection propagates through the entry's promise chain.
+      await vi.advanceTimersByTimeAsync(0);
       expect(pool.size).toBe(0);
       expect(guard.recentCrashes).toBe(0);
     }

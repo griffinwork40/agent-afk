@@ -7,8 +7,11 @@
  *   - Concurrent `acquire`s for the same key share ONE in-flight start.
  *   - A dead client (crash, exit, failed start) is evicted immediately; the
  *     next `acquire` spawns a fresh one. A dead handle is never returned.
- *   - A start that every acquirer has abandoned (timeout/abort) is disposed,
- *     so a server that never finishes `initialize` is not left orphaned.
+ *   - A start abandoned only by cancellation (abort) is grace-killed so it
+ *     cannot linger forever. A start whose last acquirer timed out instead
+ *     keeps warming under the client's own initialize deadline: a healthy slow
+ *     server then becomes available to the next caller, and a genuinely hung
+ *     one is counted once per 30 s and trips the guard after three.
  *   - Idle timers are `.unref()`ed and every live server is disposed on
  *     graceful cleanup via `registerCleanup`; client-process guards hard exit.
  *
@@ -78,7 +81,15 @@ interface Entry {
   starting: Promise<LspClient> | null;
   /** Acquirers currently waiting on `starting`. */
   waiters: number;
+  /** How many of the current/past waiters gave up via timeout (not abort). */
+  timedOutWaiters: number;
   abortStart: AbortController;
+  /**
+   * Fired when the last timeout-abandoned acquirer gives up: unrefs the
+   * in-flight process without aborting it, so a one-shot `afk chat` process
+   * can exit while the server keeps warming.
+   */
+  unrefStart: AbortController;
   lastAcquiredAt: number;
   idleTimer: NodeJS.Timeout | null;
   abandonTimer: NodeJS.Timeout | null;
@@ -141,15 +152,16 @@ export class LspServerPool {
 
   private createEntry(key: string, spec: ServerSpec, root: string, guard: CrashLoopGuard): Entry {
     const entry: Entry = {
-      key, client: null, starting: null, waiters: 0,
-      abortStart: new AbortController(), idleTimer: null, abandonTimer: null,
+      key, client: null, starting: null, waiters: 0, timedOutWaiters: 0,
+      abortStart: new AbortController(), unrefStart: new AbortController(),
+      idleTimer: null, abandonTimer: null,
       lastAcquiredAt: Date.now(),
     };
     this.entries.set(key, entry);
     this.spawnCount++;
     const start = this.opts.startClient
       ? this.opts.startClient(spec, root)
-      : LspClient.start(spec, root, { signal: entry.abortStart.signal });
+      : LspClient.start(spec, root, { signal: entry.abortStart.signal, unrefSignal: entry.unrefStart.signal });
     entry.starting = start.then(
       (client) => {
         entry.starting = null;
@@ -216,23 +228,36 @@ export class LspServerPool {
         cleanups.push(() => opts.signal?.removeEventListener('abort', onAbort));
       }
     });
-    let gaveUp = false;
+    let gaveUpByTimeout = false;
+    let gaveUpByAbort = false;
     try {
       return await Promise.race([starting, guard]);
     } catch (err) {
-      gaveUp = err instanceof LspClientError && (err.kind === 'timeout' || err.kind === 'aborted');
+      if (err instanceof LspClientError) {
+        if (err.kind === 'timeout') gaveUpByTimeout = true;
+        else if (err.kind === 'aborted') gaveUpByAbort = true;
+      }
       throw err;
     } finally {
       for (const c of cleanups) c();
+      if (gaveUpByTimeout) entry.timedOutWaiters++;
       entry.waiters--;
-      // Last acquirer gave up on a still-starting server: give it a short
-      // grace to finish warming, then kill it so it cannot linger forever.
-      if (gaveUp && entry.waiters === 0 && entry.starting && this.entries.get(entry.key) === entry) {
+      const isLast = (gaveUpByTimeout || gaveUpByAbort) && entry.waiters === 0
+        && entry.starting !== null && this.entries.get(entry.key) === entry;
+      if (isLast && entry.timedOutWaiters > 0) {
+        // At least one acquirer timed out: let the start keep warming under
+        // the client's own initialize deadline. Count a real initialize
+        // timeout or crash when it lands; a healthy slow server becomes
+        // available to the next caller. Unref the process so it won't hold
+        // a finished one-shot `afk chat` process open.
+        entry.unrefStart.abort();
+      } else if (isLast) {
+        // Every acquirer aborted (no timeout): short grace then kill.
+        // Grace-killed starts are never incidents: callers' patience says
+        // nothing about server health.
         entry.abandonTimer = setTimeout(() => {
           entry.abandonTimer = null;
           if (entry.starting && entry.waiters === 0 && this.entries.get(entry.key) === entry) {
-            // Grace-killed starts are never incidents: callers' patience says
-            // nothing about server health.
             entry.abortStart.abort();
             this.evict(entry);
           }
@@ -264,6 +289,9 @@ export class LspServerPool {
     if (entry.abandonTimer) clearTimeout(entry.abandonTimer);
     entry.idleTimer = null;
     entry.abandonTimer = null;
+    // Clean up the unref listener in case evict fires before unrefStart was
+    // triggered (e.g. disposeAll aborts the start directly).
+    entry.unrefStart.abort();
     const client = entry.client;
     entry.client = null;
     if (client) void client.dispose();
