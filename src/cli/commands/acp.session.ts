@@ -82,6 +82,9 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
       ...(operatorOverlay !== undefined ? { operatorOverlay } : {}),
       ...(traceWriter !== undefined ? { traceWriter, skillTraceWriter: traceWriter } : {}),
       ...(opts.childCanUseTool !== undefined ? { childCanUseTool: opts.childCanUseTool } : {}),
+      // No backgroundRegistry: ACP lists "No background subagents" as a surface
+      // limit (website/content/docs/surfaces/acp.mdx:264); background dispatch
+      // is omitted intentionally, not accidentally.
     });
     const shutdown = withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor), continuationRegistry);
     const drainSubagents = onceAcpShutdown(shutdown.drainSubagents);
