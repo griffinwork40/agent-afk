@@ -121,5 +121,6 @@ export function parseSessionSetup(
   if (mode === 'new') return { cwd, wireMcp, mcpServers, ...(systemPrompt !== undefined ? { systemPrompt } : {}) };
   const sessionId = p['sessionId'];
   if (typeof sessionId !== 'string' || sessionId === '') throw new AcpInvalidParams('sessionId required');
+  /* invariant: systemPrompt is always undefined here — mode guard above */
   return { cwd, wireMcp, mcpServers, sessionId };
 }
