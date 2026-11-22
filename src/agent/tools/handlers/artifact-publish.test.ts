@@ -68,7 +68,7 @@ describe('artifact_publish inline content', () => {
 
   it('defaults the MIME type for inline content when omitted', async () => {
     const result = await json({ content: 'default type' });
-    expect(result.media_type).toBe('application/octet-stream');
+    expect(result.media_type).toBe('text/plain');
   });
 
   it('accepts exactly 64 KiB of multi-byte UTF-8 content', async () => {

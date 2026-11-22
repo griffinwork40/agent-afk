@@ -282,7 +282,7 @@ export async function artifactPut(
   }
 
   const mediaType = opts.media_type ?? (
-    opts.path ? (extname(opts.path).slice(1) || 'bin') : 'application/octet-stream'
+    opts.path ? (extname(opts.path).slice(1) || 'bin') : 'text/plain'
   );
   const ext = extForMediaType(mediaType);
   const blobPath = await persistBlob(storeDir, hash, ext, source);

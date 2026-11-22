@@ -60,7 +60,7 @@ const publishCounter = makeSessionCounter();
 // ---------------------------------------------------------------------------
 
 const artifactIdPattern = /^art_[0-9a-f]{32}$/;
-const retentionPattern = /^(permanent|session|ttl:[0-9]+)$/;
+const retentionPattern = /^(permanent|session|ttl:[1-9][0-9]*)$/;
 
 const publishInput = z.object({
   /** Existing filesystem path to register. Mutually exclusive with `content`. */
@@ -70,10 +70,17 @@ const publishInput = z.object({
     (value) => Buffer.byteLength(value, 'utf8') <= INLINE_CONTENT_MAX_BYTES,
     { message: 'Inline content must not exceed 64 KiB of UTF-8 bytes' },
   ).optional(),
-  /** MIME type. Defaults to application/octet-stream for inline content. */
+  /** MIME type. Defaults to text/plain for inline content; inferred from file extension for path inputs. */
   media_type: z.string().max(128).optional(),
-  /** Retention policy: `permanent`, `session` (default), or `ttl:<ms>`. */
-  retention: z.string().regex(retentionPattern).max(64).optional(),
+  /** Retention policy: `permanent`, `session` (default), or `ttl:<ms>` where <ms> is a positive integer. */
+  retention: z.string().regex(retentionPattern).max(64).refine(
+    (v) => {
+      if (!v.startsWith('ttl:')) return true;
+      const ms = parseInt(v.slice(4), 10);
+      return Number.isFinite(ms) && ms > 0 && String(ms) === v.slice(4);
+    },
+    { message: 'ttl value must be a finite positive integer (milliseconds)' },
+  ).optional(),
   /** Stable IDs of input artifacts this was derived from (lineage). */
   inputs: z.array(z.string().regex(artifactIdPattern).max(38)).max(16).optional(),
   /** Free-form key/value tags (bounded). */
@@ -138,9 +145,10 @@ export function createArtifactPublishHandler(
           : DEFAULT_SESSION_LIMIT;
       const key = sessionId ?? PROCESS_QUOTA_KEY;
       if (publishCounter.get(key) >= limit) {
+        const scope = sessionId ? `session ${sessionId}` : 'global (no session id)';
         return {
           content:
-            `artifact_publish: per-session publish cap reached (${limit}). ` +
+            `artifact_publish: per-session publish cap reached (${limit}) for ${scope}. ` +
             `Set AFK_ARTIFACT_SESSION_LIMIT to increase the cap or use fewer publishes per session.`,
           isError: true,
         };
