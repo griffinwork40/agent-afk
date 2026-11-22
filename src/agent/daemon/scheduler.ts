@@ -13,7 +13,7 @@
  */
 
 import { writeRunTelemetry } from './scheduler.telemetry.js';
-import type { CompletionCallback, NotificationDecision } from './scheduler.notification.js';
+import { stampLatchSuppressed, type CompletionCallback, type NotificationDecision } from './scheduler.notification.js';
 import type { StreakSnapshot } from './scheduler.streak-history.js';
 import * as cron from 'node-cron';
 import { IdleDetector } from './idle-detector.js';
@@ -487,9 +487,13 @@ export class CronScheduler {
       // so a slow task does not spam once per cron interval.
       const shouldAlert = this.overlapAlerts.shouldAlert(overlapKey);
       const notifyTask = { ...task, notifyOn: shouldAlert ? ('always' as const) : ('never' as const) };
-      this.writeTelemetry(record, notifyTask, shouldAlert
-        ? { responseText: formatOverlapAlertMessage(task.taskId, record.command, task.cronExpression) }
-        : undefined);
+      this.writeTelemetry(
+        shouldAlert ? record : stampLatchSuppressed(record),
+        notifyTask,
+        shouldAlert
+          ? { responseText: formatOverlapAlertMessage(task.taskId, record.command, task.cronExpression) }
+          : undefined,
+      );
       return record;
     }
     this.inFlightTasks.set(overlapKey, this.now());
@@ -577,10 +581,11 @@ export class CronScheduler {
       // operator hears about it, 'never' for the rest so a full window does
       // not page once per scheduled tick.
       const alert = this.budgetAlerts.shouldAlert(budgetResult);
-      const notifyTask = { ...task, notifyOn: alert ? ('always' as const) : ('never' as const) };
-      this.writeTelemetry(record, notifyTask, {
-        responseText: formatBudgetSkipMessage(budgetResult, task.taskId, this.now()),
-      });
+      this.writeTelemetry(
+        alert ? record : stampLatchSuppressed(record),
+        { ...task, notifyOn: alert ? ('always' as const) : ('never' as const) },
+        { responseText: formatBudgetSkipMessage(budgetResult, task.taskId, this.now()) },
+      );
       return record;
     }
 
