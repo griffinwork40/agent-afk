@@ -70,9 +70,13 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
     // parseSessionSetup already rejects whitespace-only values on the ACP path.
     // This trim guard is defence-in-depth for callers that invoke buildAcpSession
     // directly (embedders, test doubles) without going through parseSessionSetup.
-    const systemPrompt = (clientPrompt !== undefined && clientPrompt.trim().length > 0)
+    const hasClientPrompt = clientPrompt !== undefined && clientPrompt.trim().length > 0;
+    const systemPrompt = hasClientPrompt
       ? (resolvedPrompt !== undefined ? `${resolvedPrompt}\n\n${clientPrompt}` : clientPrompt)
       : resolvedPrompt;
+    const effectiveSystemPromptSource = hasClientPrompt
+      ? `${systemPromptSource}+client`
+      : systemPromptSource;
     const mcpManager = await connectAcpMcp(cwd, opts.mcpServers, traceWriter);
     if (mcpManager !== undefined) resources.add(() => mcpManager.disconnectAll());
     const { proxy: deferredParent, bind: bindParent } = makeDeferredParentProxy();
@@ -144,7 +148,7 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
         provider,
         cwd,
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-        systemPromptSource,
+        systemPromptSource: effectiveSystemPromptSource,
         ...(traceWriter !== undefined ? { traceWriter } : {}),
         ...(opts.resume !== undefined ? { resume: opts.resume } : {}),
         ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),

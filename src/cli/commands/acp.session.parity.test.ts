@@ -115,6 +115,25 @@ describe('ACP bootstrap parity', () => {
     await closeAcpSession(handle);
   });
 
+  it('appends +client to systemPromptSource when a client prompt is present', async () => {
+    const clientPrompt = '# Project context\nThis repo uses pnpm.';
+    const handle = await buildAcpSession({
+      model: 'gpt-4.1', maxTurns: 0, cwd: '/workspace', systemPrompt: clientPrompt,
+    });
+    expect(f.config).toHaveBeenCalledWith(expect.objectContaining({
+      systemPromptSource: 'framework+AFK.md+client',
+    }), f.trace);
+    await closeAcpSession(handle);
+  });
+
+  it('does not append +client to systemPromptSource when no client prompt is provided', async () => {
+    const handle = await buildAcpSession({ model: 'gpt-4.1', maxTurns: 0, cwd: '/workspace' });
+    expect(f.config).toHaveBeenCalledWith(expect.objectContaining({
+      systemPromptSource: 'framework+AFK.md',
+    }), f.trace);
+    await closeAcpSession(handle);
+  });
+
   it('ignores a whitespace-only client systemPrompt', async () => {
     const handle = await buildAcpSession({
       model: 'gpt-4.1', maxTurns: 0, cwd: '/workspace', systemPrompt: '   ',

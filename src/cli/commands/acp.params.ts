@@ -11,6 +11,9 @@ import path from 'node:path';
 import type { McpServerConfig } from '../../agent/mcp/types.js';
 import type { McpServerStdio } from './acp.wire.js';
 
+/** Maximum UTF-8 byte length accepted for a client-supplied systemPrompt (32 KiB). */
+const SYSTEM_PROMPT_MAX_BYTES = 32_768;
+
 /** Thrown for any invalid-params condition; `detail` is for stderr only. */
 export class AcpInvalidParams extends Error {
   constructor(readonly detail: string) {
@@ -112,6 +115,9 @@ export function parseSessionSetup(
   if (p['systemPrompt'] !== undefined && p['systemPrompt'] !== null) {
     if (typeof p['systemPrompt'] !== 'string') throw new AcpInvalidParams('systemPrompt must be a string');
     if (mode !== 'new') throw new AcpInvalidParams('systemPrompt is only supported on session/new');
+    if (Buffer.byteLength(p['systemPrompt'], 'utf8') > SYSTEM_PROMPT_MAX_BYTES) {
+      throw new AcpInvalidParams(`systemPrompt exceeds maximum size of ${SYSTEM_PROMPT_MAX_BYTES} bytes`);
+    }
     if (p['systemPrompt'].trim().length > 0) systemPrompt = p['systemPrompt'];
   }
   const rawMcp = mode === 'resume' && p['mcpServers'] === undefined ? [] : p['mcpServers'];
