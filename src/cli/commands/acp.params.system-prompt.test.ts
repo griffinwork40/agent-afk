@@ -127,4 +127,30 @@ describe('parseSessionSetup — systemPrompt field', () => {
     expect(caught).toBeInstanceOf(AcpInvalidParams);
     expect((caught as InstanceType<typeof AcpInvalidParams>).detail).toMatch(/must be a string/);
   });
+
+  it('rejects a systemPrompt whose UTF-8 encoding exceeds 32 768 bytes (multibyte boundary)', () => {
+    // '😀' encodes to 4 UTF-8 bytes but has .length === 2 (surrogate pair).
+    // 16 384 repetitions → 65 536 UTF-8 bytes, well over the 32 768-byte cap,
+    // but only 32 768 UTF-16 code units — the old .length check would have passed it.
+    const overLimit = '😀'.repeat(16_384);
+    expect(Buffer.byteLength(overLimit, 'utf8')).toBe(65_536);
+    expect(() => parseSessionSetup(newParams({ systemPrompt: overLimit }), 'new'))
+      .toThrow(AcpInvalidParams);
+  });
+
+  it('accepts a systemPrompt whose UTF-8 encoding is exactly at the 32 768-byte limit', () => {
+    // 'A' encodes to 1 UTF-8 byte; 32 768 of them sit exactly on the boundary.
+    const atLimit = 'A'.repeat(32_768);
+    expect(Buffer.byteLength(atLimit, 'utf8')).toBe(32_768);
+    const result = parseSessionSetup(newParams({ systemPrompt: atLimit }), 'new');
+    expect(result.systemPrompt).toBe(atLimit);
+  });
+
+  it('error detail for oversized systemPrompt mentions bytes', () => {
+    const overLimit = 'A'.repeat(32_769);
+    let caught: unknown;
+    try { parseSessionSetup(newParams({ systemPrompt: overLimit }), 'new'); } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(AcpInvalidParams);
+    expect((caught as InstanceType<typeof AcpInvalidParams>).detail).toMatch(/bytes/);
+  });
 });
