@@ -135,7 +135,11 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
   private _status: SubagentStatus = 'idle';
   private _durationMs: number | undefined;
   private _inFlight: Promise<unknown> | null = null;
-  /** Stored so concurrent cancel() calls join the same settling promise (#4965). */
+  /**
+   * Stored so concurrent cancel() calls join the same settling promise (#4965).
+   * Set once in cancel() and never cleared — safe because a cancelled handle is
+   * terminal and is never reused. A future reset path would need to null this out.
+   */
   private _cancelling: Promise<void> | null = null;
   private readonly _controller: AbortController;
   private readonly _request: RemoteRunRequest;
