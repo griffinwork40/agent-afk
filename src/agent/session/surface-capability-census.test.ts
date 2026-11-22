@@ -128,10 +128,21 @@ function checkValues(surface: Surface, rt: SurfaceRuntime): void {
 
 function sourceComments(file: string): string {
   const text = readFileSync(path.join(src, file), 'utf8');
-  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text);
+  // History: the previous implementation used ts.createScanner with skipTrivia=false,
+  // but the TS lexer mis-tokenises template-middle spans that contain \n escape sequences
+  // (e.g. `${a}\n\n${b}`): after the first CloseBraceToken the backslash is emitted as
+  // FirstToken, making the scanner lose track of the template and consume the rest of the
+  // file as a single FirstTemplateToken — swallowing every comment below that point.
+  // ts.getLeadingCommentRanges works at the text level and is unaffected by template
+  // tokenisation; it reliably extracts every // and /* */ comment in the source.
+  const seen = new Set<number>();
   const comments: string[] = [];
-  for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
-    if (kind === ts.SyntaxKind.SingleLineCommentTrivia || kind === ts.SyntaxKind.MultiLineCommentTrivia) comments.push(scanner.getTokenText());
+  for (let pos = 0; pos < text.length; pos++) {
+    const ranges = ts.getLeadingCommentRanges(text, pos);
+    if (ranges === undefined) continue;
+    for (const r of ranges) {
+      if (!seen.has(r.pos)) { seen.add(r.pos); comments.push(text.slice(r.pos, r.end)); }
+    }
   }
   return comments.join('\n');
 }
