@@ -70,6 +70,26 @@ describe('parseSessionSetup — systemPrompt field', () => {
     ).toThrow(AcpInvalidParams);
   });
 
+  it('rejects a systemPrompt that exceeds 32 768 characters', () => {
+    const oversized = 'x'.repeat(32_769);
+    expect(() => parseSessionSetup(newParams({ systemPrompt: oversized }), 'new'))
+      .toThrow(AcpInvalidParams);
+  });
+
+  it('error detail for oversized systemPrompt names the limit', () => {
+    const oversized = 'x'.repeat(32_769);
+    let caught: unknown;
+    try { parseSessionSetup(newParams({ systemPrompt: oversized }), 'new'); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(AcpInvalidParams);
+    expect((caught as InstanceType<typeof AcpInvalidParams>).detail).toMatch(/32768/);
+  });
+
+  it('accepts a systemPrompt at exactly the 32 768-character limit', () => {
+    const atLimit = 'x'.repeat(32_768);
+    const result = parseSessionSetup(newParams({ systemPrompt: atLimit }), 'new');
+    expect(result.systemPrompt).toBe(atLimit);
+  });
+
   it('error detail for load/resume names the session/new restriction', () => {
     let caught: unknown;
     try {
