@@ -408,6 +408,7 @@ export class LspClient {
       try { cb(); } catch { /* listener errors never propagate */ }
     }
     this.exitListeners.clear();
+    this.timeoutListeners.clear();
     try { this.conn.dispose(); } catch { /* ignore */ }
     if (reason !== 'disposed') killServerTree(this.proc);
   }
