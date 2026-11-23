@@ -82,7 +82,7 @@ Reserve \`ask_question\` for the narrow set of things no tool can resolve: a gen
 - Do NOT use when the user has already provided sufficient context — infer and proceed instead.
 - The result \`action\` will be \`accept\` (answered), \`cancel\` (user interrupted), \`decline\` (no handler), or \`skip\` (optional question skipped).
 - \`allow_custom\` (choice/multi_choice only): opt-in to a free-form entry affordance. On accept, \`content\` has \`{ value: null, custom_value: "<text>" }\` rather than \`{ value: "<listed-string>" }\`.
-- After a \`cancel\` or \`decline\`, stop and tell the user what information you need — do not loop and re-ask.`;
+- After a \`cancel\` or \`decline\`, do not loop and re-ask. Either proceed on a stated assumption (reversible work) or end with a **Blocked** terminal state naming exactly what the operator must supply (irreversible work).`;
 
 /**
  * End-of-turn protocol directive — canonical source.

@@ -47,19 +47,17 @@ export interface ResponseMetadata extends Record<string, unknown> {
   errors?: string[];
   /**
    * Names of tools whose invocation completed SUCCESSFULLY (`isError !== true`)
-   * during this turn, in call order (duplicates preserved). Populated by the
-   * stream consumer from `tool.output` events; empty/absent when the turn ran
-   * no tools or none succeeded.
+   * during this turn, in call order (duplicates preserved), except `patch_apply`
+   * previews with `dry_run: true`. A successful preview does not apply a patch
+   * and is omitted so headless consumers cannot mistake it for an applied patch.
+   * Populated by the stream consumer from `tool.output` events; empty/absent
+   * when no qualifying invocation completed. Other tools retain their existing
+   * success semantics, including read-only tools; this is not a mutation list.
    *
-   * Deliberately POLICY-FREE: this is the raw observation, not a verdict. It
-   * exists so headless surfaces that never see the per-chunk tool stream — the
-   * daemon, which drains `sendMessage` and keeps only the final Message — can
-   * still reconstruct corroborating-evidence signals the REPL derives from its
-   * live `ToolEvent[]`. The consumer of this list owns the policy decision:
-   * e.g. the daemon feeds it through `doneHasCorroboratingEvidence`
-   * (`cli/commands/interactive/afk-push.ts`), the single source of truth for
-   * which tools count as evidence — this field intentionally does NOT bake that
-   * allowlist in.
+   * The daemon, which keeps the final Message rather than the live tool stream,
+   * uses this list with `DONE_EVIDENCE_TOOLS` to compute its Done signal. That
+   * evidence allowlist remains the consumer's decision. The full per-turn tool
+   * event history separately retains previews and failed invocations.
    */
   successfulToolNames?: string[];
 }
