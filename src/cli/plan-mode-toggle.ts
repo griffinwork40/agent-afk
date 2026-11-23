@@ -33,7 +33,7 @@ let hasShownFirstUseTip = false;
 function describeRestoredMode(mode: PermissionMode): string {
   switch (mode) {
     case 'bypassPermissions':
-      return 'bypass restored — no prompts, read/write any path';
+      return 'unrestricted restored — no prompts, read/write any path';
     case 'acceptEdits':
       return 'accept-edits restored — edits auto-approved';
     case 'dontAsk':

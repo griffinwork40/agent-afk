@@ -79,7 +79,7 @@ describe('cyclePermissionMode', () => {
     expect(lines.join('\n').toLowerCase()).toContain('plan mode on');
   });
 
-  it('plan → bypassPermissions and emits bypass copy', async () => {
+  it('plan → bypassPermissions and emits unrestricted copy', async () => {
     const stats = makeStats({ permissionMode: 'plan' });
     const { ctx, sess, lines } = makeCtx({ stats });
 
@@ -88,7 +88,7 @@ describe('cyclePermissionMode', () => {
     expect(sess.setPermissionMode).toHaveBeenCalledWith('bypassPermissions');
     expect(stats.permissionMode).toBe('bypassPermissions');
     expect(ctx.ui.repaintStatusLine).toHaveBeenCalled();
-    expect(lines.join('\n').toLowerCase()).toContain('bypass on');
+    expect(lines.join('\n').toLowerCase()).toContain('unrestricted');
   });
 
   it('out-of-ring mode (e.g. acceptEdits) falls back to plan (index 0)', async () => {
@@ -138,7 +138,7 @@ describe('cyclePermissionMode', () => {
 
       expect(setModeNotice).toHaveBeenCalledTimes(2);
       expect(String(setModeNotice.mock.calls[0]).toLowerCase()).toContain('plan mode on');
-      expect(String(setModeNotice.mock.calls[1]).toLowerCase()).toContain('bypass on');
+      expect(String(setModeNotice.mock.calls[1]).toLowerCase()).toContain('unrestricted');
       expect(lines).toEqual([]);
     });
 
@@ -161,7 +161,7 @@ describe('cyclePermissionMode', () => {
       await cyclePermissionMode(ctx);
 
       expect(lines).toHaveLength(1);
-      expect(lines[0]!.toLowerCase()).toContain('bypass on');
+      expect(lines[0]!.toLowerCase()).toContain('unrestricted');
     });
   });
 });

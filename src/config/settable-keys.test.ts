@@ -147,10 +147,11 @@ describe('coerceConfigValue', () => {
     expect(coerceConfigValue(spec, 'auto')).toEqual({ ok: true, value: 'auto' });
     expect(coerceConfigValue(spec, 'sometimes').ok).toBe(false);
   });
-  it('permissionMode enum accepts three modes (default removed) and rejects others', () => {
+  it('permissionMode enum accepts plan, bypassPermissions, and unrestricted; rejects others', () => {
     const spec = getConfigKeySpec('permissionMode')!;
     expect(spec.tier).toBe('human');
     expect(coerceConfigValue(spec, 'bypassPermissions')).toEqual({ ok: true, value: 'bypassPermissions' });
+    expect(coerceConfigValue(spec, 'unrestricted')).toEqual({ ok: true, value: 'unrestricted' });
     expect(coerceConfigValue(spec, 'default').ok).toBe(false); // removed from enumValues
     expect(coerceConfigValue(spec, 'plan')).toEqual({ ok: true, value: 'plan' });
     expect(coerceConfigValue(spec, 'autonomous').ok).toBe(false);

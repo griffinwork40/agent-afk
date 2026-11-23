@@ -10,7 +10,7 @@
  * BEFORE the handler's keyword matcher, because a custom answer carries
  * `value: null`, which the matcher would read as `''` and fall through to the
  * approve branch (queueing an implementation turn the user never chose). Text
- * containing words like "bypass" or "Keep" must not be keyword-matched either.
+ * containing words like "unrestricted" or "Keep" must not be keyword-matched either.
  *
  * @module agent/tools/handlers/exit-plan-mode.feedback
  */

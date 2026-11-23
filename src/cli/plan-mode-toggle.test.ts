@@ -108,7 +108,7 @@ describe('togglePlanMode', () => {
     expect(stats.permissionMode).toBe('bypassPermissions');
     const joined = lines.join('\n').toLowerCase();
     expect(joined).toContain('plan mode off');
-    expect(joined).toContain('bypass restored');
+    expect(joined).toContain('unrestricted restored');
   });
 
   it('restores the pre-plan mode (acceptEdits) on exit', async () => {

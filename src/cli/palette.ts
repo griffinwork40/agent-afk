@@ -118,8 +118,8 @@ const darkPaletteDef = {
   warning: chalk.yellow,
   /** Plan tone — magenta hex, used for PLAN card border + title chip. */
   plan: chalk.hex('#9F7CE0'),
-  /** Bypass tone — electric synthwave pink, bold, used for the `⚡ bypass` status-line chip + `/bypass` toggle (bypassPermissions mode). Deliberately reads as a "full-power / turbo unlocked" badge, NOT a caution: bypass is the default CLI mode now, so the indicator should inform at a glance without alarming. Warm-pink pairs with brand orange (sunset/synthwave) yet stays distinct from it and from plan lavender, so the chip never reads as the model name or plan mode. */
-  bypass: chalk.bold.hex('#FF6AC1'),
+  /** Unrestricted tone — electric synthwave pink, bold, used for the `⚡ unrestricted` status-line chip (bypassPermissions mode). Deliberately reads as a "full-power / turbo unlocked" badge, NOT a caution: unrestricted is the default CLI mode now, so the indicator should inform at a glance without alarming. Warm-pink pairs with brand orange (sunset/synthwave) yet stays distinct from it and from plan lavender, so the chip never reads as the model name or plan mode. */
+  unrestricted: chalk.bold.hex('#FF6AC1'),
   /** Meta tone — bright-black, used for per-turn stats, dim hints, diff hunk headers, "other"/"planning" tool fallbacks, and the neutral "interrupted" verdict. */
   meta: chalk.blackBright,
   /** Info tone — sky blue, used for ℹ-prefixed ambient notices, status cards, and daemon banners. Owns the ambient-notice channel exclusively. */
@@ -222,8 +222,8 @@ const lightPaletteDef: ThemePalette = {
   warning: chalk.hex('#B8860B'),
   /** Deeper purple — plan chrome on white. */
   plan: chalk.hex('#7048C0'),
-  /** Deeper synthwave pink, bold — bypass chip on white. */
-  bypass: chalk.bold.hex('#D6297F'),
+  /** Deeper synthwave pink, bold — unrestricted chip on white. */
+  unrestricted: chalk.bold.hex('#D6297F'),
   /** Mid grey — bright-black reads as light-grey on white; use an explicit mid-grey. */
   meta: chalk.hex('#6B7280'),
   /** Deeper sky blue — ambient-notice channel on white. */
@@ -324,8 +324,8 @@ const umberPaletteDef: ThemePalette = {
   warning: chalk.hex('#D7AA32'),
   /** Warm lavender — no Umber analogue; warm-shifted from the dark theme's `#9F7CE0`. */
   plan: chalk.hex('#AE93DE'),
-  /** ansi5 magenta, bold — Umber's measured pink reads as the synthwave bypass chip without needing the dark theme's `#FF6AC1`. */
-  bypass: chalk.bold.hex('#FFACE9'),
+  /** ansi5 magenta, bold — Umber's measured pink reads as the synthwave unrestricted chip without needing the dark theme's `#FF6AC1`. */
+  unrestricted: chalk.bold.hex('#FFACE9'),
   /** ansi8 bright black — the faithful translation of `chalk.blackBright`, and the warm counterpart to it. One tier below `chrome`. */
   meta: chalk.hex('#AAA19B'),
   /** ansi4 blue — the ambient-notice channel. */

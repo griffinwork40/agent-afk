@@ -53,7 +53,7 @@ const STATIC_TIPS: readonly LoadingTip[] = [
   },
   {
     id: 'kbd:shift-tab',
-    text: 'Shift+Tab cycles permission modes: default → plan → bypass (AFK stays on /afk).',
+    text: 'Shift+Tab cycles permission modes: plan ↔ unrestricted.',
     source: 'static',
   },
   {

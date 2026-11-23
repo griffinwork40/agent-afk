@@ -94,7 +94,7 @@ function renderConfigView(out: Writer): void {
   const permissionMode = resolveCliPermissionMode();
   out.line(
     `  perm mode   ${permissionMode === 'bypassPermissions'
-      ? palette.warning(`${permissionMode} (bypass — containment off)`)
+      ? palette.warning(`${permissionMode} (unrestricted — containment off)`)
       : palette.info(`${permissionMode} (containment on)`)}`,
   );
   const toolsOff = [...new Set(readDisabledToolsByTier().flatMap((t) => t.entries))];

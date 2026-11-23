@@ -58,7 +58,7 @@ describe('parseJsonConfigFile — permissionMode', () => {
 
     flushDeferredPermissionModeWarnings();
     expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
-      '[afk] permissionMode "default" was removed. The session will run in bypassPermissions. Set "permissionMode": "plan" for a read-only session.',
+      '[afk] permissionMode "default" was removed. The session will run in unrestricted mode. Set "permissionMode": "plan" for a read-only session.',
     );
     flushDeferredPermissionModeWarnings();
     parseJsonConfigFile(p);
@@ -69,12 +69,20 @@ describe('parseJsonConfigFile — permissionMode', () => {
     const p = writeConfig(tmpDir, { permissionMode: 'autonomous' });
     expect(parseJsonConfigFile(p)!.config.permissionMode).toBeUndefined();
     expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
-      '[afk] permissionMode "autonomous" was removed. The session will run in bypassPermissions. Set "permissionMode": "plan" for a read-only session.',
+      '[afk] permissionMode "autonomous" was removed. The session will run in unrestricted mode. Set "permissionMode": "plan" for a read-only session.',
     );
   });
 
   it('permissionMode "bypassPermissions" is accepted and emits no warning', () => {
     const p = writeConfig(tmpDir, { permissionMode: 'bypassPermissions' });
+    const result = parseJsonConfigFile(p);
+    expect(result).toBeDefined();
+    expect(result!.config.permissionMode).toBe('bypassPermissions');
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('permissionMode "unrestricted" is accepted as a synonym for bypassPermissions', () => {
+    const p = writeConfig(tmpDir, { permissionMode: 'unrestricted' });
     const result = parseJsonConfigFile(p);
     expect(result).toBeDefined();
     expect(result!.config.permissionMode).toBe('bypassPermissions');

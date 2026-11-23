@@ -289,7 +289,7 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   // bypassPermissions — path containment + the approval prompt OFF. Human-tier:
   // the agent must NOT be able to escalate its own permissions (set bypass) via
   // config_set; only the human CLI (`afk config set permissionMode <mode>`) can.
-  { path: 'permissionMode', tier: 'human', type: 'enum', enumValues: ['plan', 'bypassPermissions'], description: 'Session permission mode for afk chat/interactive (human-tier: privilege-escalation vector). Unset → bypassPermissions (new-install default).' },
+  { path: 'permissionMode', tier: 'human', type: 'enum', enumValues: ['plan', 'bypassPermissions', 'unrestricted'], description: 'Session permission mode for afk chat/interactive (human-tier: privilege-escalation vector). Unset → unrestricted (new-install default). "unrestricted" is the user-facing name for bypassPermissions.' },
   // enableShellHooks is the TRUST GATE that activates shell hooks at load time
   // (config-loader userGlobalEnabled). Even though the agent cannot define `hooks`,
   // it must not be able to flip the activation gate on its own config — human-only.

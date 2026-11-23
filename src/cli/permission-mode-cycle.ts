@@ -34,10 +34,9 @@ export function cycleCopy(mode: CycleMode): string {
       return palette.warning('● plan mode ON') +
         palette.dim(' — writes refused; read-only bash runs, mutating bash blocked.');
     case 'bypassPermissions':
-      // Since the `/bypass` slash command was retired, Shift+Tab is the only
-      // live entry into bypass, so this notice is the sole at-toggle explainer
-      // of what bypass does.
-      return palette.bypass('⚡ bypass ON') +
+      // Shift+Tab is the only live entry into unrestricted mode, so this
+      // notice is the sole at-toggle explainer of what unrestricted does.
+      return palette.unrestricted('⚡ unrestricted') +
         palette.dim(
           ' — path-approval prompts + containment OFF; read/write any path. ' +
             '(Does not affect ask_question.)',
