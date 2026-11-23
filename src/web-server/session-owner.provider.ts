@@ -37,6 +37,9 @@ export function webProviderWiring(opts: WebProviderOptions) {
     familyOf: providerForModel,
     build: (model): ModelProvider => {
       const family = providerForModel(model);
+      // primary.name is 'anthropic-direct'; providerForModel returns that same
+      // string for every Anthropic model, so Anthropic requests reuse the shared
+      // primary instance rather than constructing a second provider.
       if (family === primary.name) return primary;
       const authMode = family === 'xai' || family === 'xai-oauth'
         ? resolveXaiConstructionAuthMode(family, family === 'xai-oauth') : undefined;
