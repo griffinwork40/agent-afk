@@ -42,9 +42,8 @@ export class PlanExitBridge {
    * 'plan' (covering every entry path — `/plan`, free-text `/plan`, Shift+Tab)
    * and read by an approved plan-exit ({@link getPrePlanMode}) so the
    * implement-turn restores it instead of forcing 'default'. `undefined` until
-   * the first plan-entry, and reset to `undefined` when the prior mode was
-   * 'autonomous' (AFK is not restorable by a bare flip) so restore falls back
-   * to 'default'.
+   * the first plan-entry, and reset to `undefined` when the prior mode is not
+   * directly restorable by a bare flip, so restore falls back to 'default'.
    */
   private prePlanMode: PermissionMode | undefined;
 
@@ -74,9 +73,9 @@ export class PlanExitBridge {
    * Captures the mode being LEFT on the transition INTO plan, so an approved
    * exit can restore it. Guards on the non-plan → plan edge only: a redundant
    * plan → plan flip must not overwrite the real pre-plan mode with 'plan'.
-   * 'autonomous' (AFK) is reset to undefined — it carries dedicated enter/exit
-   * machinery and is not safe to re-enter by a bare flip — so restore falls
-   * back to 'default'.
+   * Only `plan` and `bypassPermissions` modes exist now. On any prior mode that
+   * is not directly restorable by a bare flip, reset to undefined so restore
+   * falls back to 'default'.
    */
   recordModeTransition(mode: PermissionMode, current: PermissionMode | undefined): void {
     if (mode === 'plan') {
@@ -113,8 +112,8 @@ export class PlanExitBridge {
   /**
    * The permission mode the session was in immediately before entering plan
    * mode, or `undefined` if none was captured (never entered plan, or the prior
-   * mode was 'autonomous'). An approved plan-exit restores this; callers fall
-   * back to 'default' on `undefined`.
+   * mode was not directly restorable). An approved plan-exit restores this;
+   * callers fall back to 'default' on `undefined`.
    */
   getPrePlanMode(): PermissionMode | undefined {
     return this.prePlanMode;

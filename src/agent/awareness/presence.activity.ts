@@ -75,9 +75,8 @@ export interface PresenceActivity {
  *   1. Collapse all whitespace runs (newlines, tabs, etc.) to a single space.
  *   2. Trim leading/trailing whitespace.
  *   3. Sliced to ACTIVITY_PROMPT_HEAD_MAX on the FULL collapsed string BEFORE
- *      truncating — truncating first can split a secret below the redactor's
- *      minimum match length (e.g. generic tokens need ≥32 chars, sk-ant- needs
- *      ≥20 chars after the prefix) and leave a near-complete credential.
+ *      truncating — truncating first can split a recognisable token pattern
+ *      and leave a near-complete credential in the stored head.
  *   4. Truncate to {@link ACTIVITY_PROMPT_HEAD_MAX} characters.
  *
  * Returns `undefined` when the input is empty/whitespace-only after

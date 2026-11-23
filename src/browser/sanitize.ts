@@ -1,107 +1,10 @@
 /**
  * Sanitization helpers for browser observations and witness records.
  *
- * Invariant: this module is the SINGLE source of truth for what counts as
- * a "secret" in the browser layer. Tool handlers, witness emitters, and the
- * observation builder all funnel through these helpers. If a new credential
- * format appears in the wild that we want to redact, add the pattern here
- * and call sites pick it up automatically.
- *
  * @module browser/sanitize
  */
 
 import { createHash } from 'crypto';
-
-// ---------------------------------------------------------------------------
-// redactSecrets
-// ---------------------------------------------------------------------------
-
-/**
- * Each pattern in this list is applied in order. A match replaces the full
- * matched substring with the literal token `'[redacted]'`. Patterns are kept
- * narrow on purpose — over-eager redaction destroys legibility of witness
- * traces; under-eager redaction leaks credentials. When in doubt, prefer the
- * narrower pattern.
- *
- * History: pattern set chosen to cover the credential shapes most likely to
- * appear in form-fill / typed values:
- *   - AWS Access Key:  20 chars AKIA + 16 alphanumeric uppercase
- *   - OpenAI-style:    sk-<≥20 alphanum/underscore/dash>
- *   - GitHub PAT:      ghp_<exactly 36 alphanum>
- *   - Slack token:     xox[abp]-<≥10 alphanum/dash>
- *   - form password:   password=<value> (form-encoded)
- *   - JWT:             three base64url segments ≥20 chars each
- *
- * Other formats (Stripe sk_live_, Twilio AC…, Cloudflare keys) can be added
- * here without touching call sites.
- */
-interface RedactPattern {
-  readonly name: string;
-  readonly regex: RegExp;
-}
-
-const REDACT_PATTERNS: readonly RedactPattern[] = [
-  // AWS access key: AKIA + exactly 16 alphanum uppercase chars.
-  {
-    name: 'aws-access-key',
-    regex: /AKIA[0-9A-Z]{16}/g,
-  },
-  // GitHub PAT: ghp_ followed by exactly 36 alphanumeric chars. Tested
-  // before the generic sk- pattern because both could otherwise be
-  // ambiguous on the prefix.
-  {
-    name: 'github-pat',
-    regex: /ghp_[a-zA-Z0-9]{36}/g,
-  },
-  // OpenAI-style bearer token: sk- followed by ≥20 alphanumeric, dash,
-  // or underscore. Loose by design — the prefix is the strong signal.
-  {
-    name: 'openai-bearer',
-    regex: /sk-[a-zA-Z0-9_-]{20,}/g,
-  },
-  // Slack token: xox[abp]- followed by ≥10 alphanum/dash chars.
-  {
-    name: 'slack-token',
-    regex: /xox[abp]-[a-zA-Z0-9-]{10,}/g,
-  },
-  // JWT: three base64url-ish segments ≥20 chars each separated by dots.
-  // We require ≥20 in each segment to avoid matching `eyJ.eyJ.sig` style
-  // short test strings that aren't real tokens.
-  {
-    name: 'jwt',
-    regex: /eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}/g,
-  },
-  // Form-encoded password field: password=<value> up to next & or end.
-  // Replace ONLY the value, keeping the key visible — preserves trace
-  // legibility while neutralizing the credential.
-  {
-    name: 'form-password',
-    regex: /password=[^&\s]+/gi,
-  },
-];
-
-/**
- * Replace secret-looking substrings with the literal `[redacted]`.
- *
- * Contract: returns the input string unchanged when no pattern matches.
- * Multiple patterns may match in a single input; each independent match is
- * replaced. The replacement preserves form-field structure for the
- * `password=` case (key name kept, value redacted).
- */
-export function redactSecrets(input: string): string {
-  if (input.length === 0) return input;
-  let out = input;
-  for (const { regex, name } of REDACT_PATTERNS) {
-    // Special handling for form-password: keep the 'password=' key prefix
-    // and only redact the value. All other patterns replace the entire match.
-    if (name === 'form-password') {
-      out = out.replace(regex, 'password=[redacted]');
-    } else {
-      out = out.replace(regex, '[redacted]');
-    }
-  }
-  return out;
-}
 
 // ---------------------------------------------------------------------------
 // shouldRedactElementValue

@@ -37,6 +37,7 @@
  */
 
 import { debugLog } from '../../utils/debug.js';
+import { SETTLE_DRAIN_TIMEOUT_MS, raceWithDrainTimeout } from '../timeout.js';
 import type { ProviderEvent } from '../provider.js';
 import type { OutputEvent } from '../types.js';
 import type { TransformDeps } from './stream-consumer.js';
@@ -318,11 +319,34 @@ export class ProviderTurns {
     this.recordDone(turn);
   }
 
-  /** Wait until no provider turn is in flight, reading out abandoned ones. */
+  /**
+   * Wait until no provider turn is in flight, reading out abandoned ones.
+   *
+   * Each iteration races `turn.ended` against {@link SETTLE_DRAIN_TIMEOUT_MS}
+   * so a provider that never yields a terminal after interrupt cannot block
+   * every later send forever (R1.11, Refs #5174). On timeout the stuck turn
+   * is force-ended via `endTurn`, which resolves `turn.ended` and unblocks
+   * any send waiting behind it. The settlement loop (`settle`) keeps running
+   * in the background and will eventually call `endTurn` itself — the extra
+   * call is a no-op because `endTurn` guards on `this.open === turn`.
+   */
   private async drain(): Promise<void> {
     for (let turn = this.open; turn !== null; turn = this.open) {
       if (turn.abandoned && !turn.settling) void this.settle(turn);
-      await turn.ended;
+      await raceWithDrainTimeout(turn.ended, SETTLE_DRAIN_TIMEOUT_MS);
+      // If an ABANDONED turn is still open after the timeout, record its done
+      // and force-end it so the waiting send is not blocked indefinitely (the
+      // settlement continues in the background and the second endTurn call is
+      // a no-op). Non-abandoned turns with a live reader are NOT force-ended:
+      // they are legitimately waiting and would suffer shared-iterator crossover
+      // if two readers pulled from the same iterator concurrently.
+      if (this.open === turn && turn.abandoned) {
+        debugLog(
+          `AgentSession: drain timed out after ${SETTLE_DRAIN_TIMEOUT_MS}ms waiting for an abandoned turn to end; force-ending it`,
+        );
+        this.recordDone(turn);
+        this.endTurn(turn);
+      }
     }
   }
 

@@ -116,11 +116,11 @@ function truncateBytes(text: string, maxBytes: number, jobId: string): string {
  * `/bgsub:join <jobId>` marker. Used by push surfaces (Telegram) that show
  * the result to the operator rather than the model.
  *
- * Secret redaction is applied here because this is the off-device delivery
- * boundary: the returned string is forwarded verbatim to Telegram (and any
- * future push surface). The persisted `result.json` body is intentionally
- * left unredacted — local consumers (REPL replay via `/bgsub:join`,
- * `buildBgResultInjection`) read the full text from disk without this filter.
+ * This function is the off-device delivery boundary: the returned string is
+ * forwarded verbatim to Telegram (and any future push surface). The persisted
+ * `result.json` body is intentionally left unfiltered — local consumers
+ * (REPL replay via `/bgsub:join`, `buildBgResultInjection`) read the full
+ * text from disk.
  */
 export function formatBgResultBody(job: BackgroundJob): string {
   return truncateBytes(extractOutput(job), MAX_INJECTION_BYTES, job.jobId);

@@ -12,6 +12,30 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [6.1.0] - 2026-11-22
+
+### Added
+- accept systemPrompt on session/new for editor context injection (#5219) (13d693046)
+
+### Fixed
+- systemPrompt validation ordering and test gaps (#5245) (2dd359166)
+- bound the drain wait behind a settling turn (#5209) (4476dcad6)
+- reject background subagent dispatch from fork-mode skills (#5214) (373ea5299)
+- remove readLegacyAcpCwd and shared-map cwd fallback (#5199) (f42decb8f)
+- tighten surface census runtime and test coverage (#5202) (f25458d78)
+- emit actual permission mode in plan_mode sideband event (#5203) (1d9d3f5a6)
+- tighten Pending not-stated docs and cover Interrupted in exclusion test (#5200) (8ccb1245b)
+- disable git maintenance in bare-repo copy test (#5197) (b6642e0aa)
+- resolve 2 new lint:tests:check errors from #5211 (#5218) (45eb0d85f)
+- protect pending send from onTurnStart throw (R2.1) (#5205) (6c62abc34)
+- log teardown errors and add explicit scratch opt-out test (#5207) (97644123e)
+
+### Changed
+- systemPrompt length cap and injection tracing (#5244) (2dfea3818)
+- remove dead autonomous-mode file and stale comments (#5206) (88ad17b31)
+- remove browser-local redactSecrets copy (#5210) (5ff512fe7)
+- clean up stale redactSecrets references and dead code (#5213) (cd04a910d)
+
 ## [6.0.0] - 2026-11-21
 
 ### Removed
