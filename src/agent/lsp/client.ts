@@ -69,7 +69,7 @@ export class LspClient {
   readonly diagnostics = new DiagnosticsStore();
   private dead = false;
   private readonly exitListeners = new Set<() => void>();
-  private readonly timeoutListeners = new Set<() => void>();
+  private readonly timeoutListeners = new Set<(budgetMs: number | undefined) => void>();
   private readonly deathWaiters = new Set<(err: LspClientError) => void>();
   private inFlight = 0;
   private lastActivity = Date.now();
@@ -207,7 +207,7 @@ export class LspClient {
   }
 
   /** Subscribe to requests whose deadline wins (not aborts or process death). */
-  onRequestTimeout(cb: () => void): () => void {
+  onRequestTimeout(cb: (budgetMs: number | undefined) => void): () => void {
     this.timeoutListeners.add(cb);
     return () => this.timeoutListeners.delete(cb);
   }
@@ -252,7 +252,7 @@ export class LspClient {
           // after abort/death/response must not manufacture another incident.
           if (err.kind === 'timeout') {
             for (const cb of this.timeoutListeners) {
-              try { cb(); } catch { /* observers cannot change the request outcome */ }
+              try { cb(opts.timeoutMs); } catch { /* observers cannot change the request outcome */ }
             }
           }
           throw err;

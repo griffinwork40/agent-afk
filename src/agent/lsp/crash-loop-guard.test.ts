@@ -94,6 +94,46 @@ describe('CrashLoopGuard', () => {
     t = 6_000;
     expect(g.recentCrashes).toBe(2);
   });
+
+  // -------------------------------------------------------------------------
+  // Window boundary tests (item 3 of #5132)
+  // -------------------------------------------------------------------------
+
+  it('a crash at exactly the window boundary is still inside the window (closed lower bound)', () => {
+    // windowMs = 10_000; crash 1 at t=0, crash 3 at t=10_000.
+    // cutoff for crash 3 = 10_000 - 10_000 = 0.
+    // crash 1 timestamp (0) == cutoff (0) → NOT pruned → all three are in-window → guard trips.
+    let t = 0;
+    const g = new CrashLoopGuard({ now: () => t, windowMs: 10_000 });
+    t = 0;      g.recordCrash(); // crash 1
+    t = 5_000;  g.recordCrash(); // crash 2
+    t = 10_000; // cutoff = 0; crash 1 is at exactly cutoff → still in window
+    expect(g.recordCrash()).toBe(true); // crash 3 trips the guard
+    expect(g.failed).toBe(true);
+  });
+
+  it('a crash one millisecond past the boundary has rolled out (open upper bound)', () => {
+    // windowMs = 10_000; crash 1 at t=0, crash 3 at t=10_001.
+    // cutoff = 10_001 - 10_000 = 1 → crash 1 (timestamp 0) < 1 → pruned.
+    let t = 0;
+    const g = new CrashLoopGuard({ now: () => t, windowMs: 10_000 });
+    t = 0;      g.recordCrash(); // crash 1 — will roll out
+    t = 5_000;  g.recordCrash(); // crash 2 — stays in
+    t = 10_001; // cutoff = 1; crash 1 timestamp (0) < 1 → pruned
+    expect(g.recordCrash()).toBe(false); // only 2 in window, guard does not trip
+    expect(g.failed).toBe(false);
+    expect(g.recentCrashes).toBe(2);
+  });
+
+  it('recentCrashes also treats the boundary as inside the window', () => {
+    let t = 0;
+    const g = new CrashLoopGuard({ limit: 10, windowMs: 5_000, now: () => t });
+    t = 0;     g.recordCrash(); // crash at t=0
+    t = 5_000; // cutoff = 0; crash at exactly cutoff → still in window
+    expect(g.recentCrashes).toBe(1);
+    t = 5_001; // cutoff = 1; crash timestamp (0) < 1 → pruned
+    expect(g.recentCrashes).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

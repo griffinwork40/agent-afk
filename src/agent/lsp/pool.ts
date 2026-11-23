@@ -48,6 +48,14 @@ export const ABANDONED_START_GRACE_MS = 1_000;
  */
 export const TIMEOUT_EXIT_FALLOUT_MS = 5_000;
 
+/**
+ * A request whose budget was below this threshold is not counted as a
+ * crash-loop incident when it times out immediately.  If `remainingMs()`
+ * floors at 0 and the request deadline fires before the server ever gets CPU
+ * time, blaming the server is incorrect — the caller had no budget left.
+ */
+export const MIN_COUNTABLE_TIMEOUT_MS = 50;
+
 /** Default idle shutdown: 5 minutes without a request. */
 export const DEFAULT_LSP_IDLE_SHUTDOWN_MS = 300_000;
 
@@ -171,8 +179,11 @@ export class LspServerPool {
         // fallout, not a new incident. A tripping timeout evicts the hung
         // client (evict-first, so its exit is not counted again).
         let lastTimeoutAt: number | null = null;
-        const unsubTimeout = client.onRequestTimeout(() => {
+        const unsubTimeout = client.onRequestTimeout((budgetMs) => {
           if (this.entries.get(key) !== entry) return;
+          // Do not count a timeout that fired because the caller had no budget
+          // left (zero-budget send): the server was never given time to answer.
+          if (budgetMs !== undefined && budgetMs < MIN_COUNTABLE_TIMEOUT_MS) return;
           lastTimeoutAt = Date.now();
           if (guard.recordCrash()) this.evict(entry);
         });
@@ -188,17 +199,19 @@ export class LspServerPool {
         return client;
       },
       (err: unknown) => {
-        if (this.entries.get(key) === entry) {
-          // A failed shared start counts once here, never per acquirer.
-          // RULE: only genuine start failures count — process crash/exit during
-          // start, or the client's own initialize deadline. A start abandoned by
-          // callers (grace-killed) never reaches here as an incident; by the time
-          // this rejection lands the entry is already evicted, so the guard
-          // check below is skipped. Cancellation and missing binaries excluded.
-          const lspErr = err instanceof LspClientError ? err : null;
-          if (!lspErr || (lspErr.kind !== 'spawn' && lspErr.kind !== 'aborted')) guard.recordCrash();
-          this.evict(entry);
-        }
+        // A failed shared start counts once here, never per acquirer.
+        // RULE: only genuine start failures count — process crash/exit during
+        // start, or the client's own initialize deadline. A start abandoned by
+        // callers (grace-killed) is an aborted error and is excluded below.
+        // Cancellation and missing binaries excluded.
+        //
+        // Record BEFORE the entry-map check: if the grace timer fired first and
+        // evicted the entry, the check below would be false and a genuine start
+        // failure would go unrecorded (issue #5132 item 4).
+        const lspErr = err instanceof LspClientError ? err : null;
+        const isGenuineFailure = !lspErr || (lspErr.kind !== 'spawn' && lspErr.kind !== 'aborted');
+        if (isGenuineFailure) guard.recordCrash();
+        if (this.entries.get(key) === entry) this.evict(entry);
         throw err instanceof LspClientError ? err : new LspClientError('spawn', 'Failed to spawn LSP server');
       },
     );

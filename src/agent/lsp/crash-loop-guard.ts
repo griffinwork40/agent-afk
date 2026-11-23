@@ -30,7 +30,7 @@ export interface CrashLoopGuardOptions {
   readonly limit?: number;
   /** Rolling window in ms. Default: `CRASH_WINDOW_MS`. */
   readonly windowMs?: number;
-  /** Injectable clock (tests). Default: `Date.now`. */
+  /** Injectable clock (tests). Default: `performance.now` (monotonic). */
   readonly now?: () => number;
 }
 
@@ -51,7 +51,7 @@ export class CrashLoopGuard {
   constructor(opts: CrashLoopGuardOptions = {}) {
     this.limit = opts.limit ?? CRASH_LIMIT;
     this.windowMs = opts.windowMs ?? CRASH_WINDOW_MS;
-    this.now = opts.now ?? (() => Date.now());
+    this.now = opts.now ?? (() => performance.now());
   }
 
   /**
@@ -74,7 +74,9 @@ export class CrashLoopGuard {
     const t = this.now();
     const cutoff = t - this.windowMs;
     // Prune timestamps that have rolled out of the window.
-    while (this.timestamps.length > 0 && this.timestamps[0]! <= cutoff) {
+    // The boundary is half-open: a crash at exactly `cutoff` is still inside
+    // the window (timestamp > cutoff means it has expired).
+    while (this.timestamps.length > 0 && this.timestamps[0]! < cutoff) {
       this.timestamps.shift();
     }
     this.timestamps.push(t);
@@ -90,7 +92,9 @@ export class CrashLoopGuard {
     if (this._failed) return this.timestamps.length;
     const cutoff = this.now() - this.windowMs;
     let i = 0;
-    while (i < this.timestamps.length && this.timestamps[i]! <= cutoff) i++;
+    // Same half-open boundary as recordCrash: a timestamp exactly at cutoff
+    // is still inside the window.
+    while (i < this.timestamps.length && this.timestamps[i]! < cutoff) i++;
     return this.timestamps.length - i;
   }
 }

@@ -428,4 +428,55 @@ describe('pooled request timeout incidents', () => {
     // Clean up: dispose live client before afterEach removes the root dir.
     await client.dispose();
   });
+
+  it('zero-budget timeout is not counted as a crash-loop incident (#5132 item 1)', async () => {
+    // A request sent with timeoutMs=0 fires immediately (before the server can
+    // respond), so it must not be recorded as a server crash.
+    const { pool, spec, root, guard } = setup();
+    const client = await pool.acquire(spec, root);
+    vi.useFakeTimers();
+    // Fire three zero-budget requests; none should count.
+    for (let i = 0; i < 3; i++) {
+      const result = client.request('textDocument/definition', {}, { timeoutMs: 0 }).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await result).toMatchObject({ kind: 'timeout' });
+    }
+    expect(guard.recentCrashes).toBe(0);
+    expect(guard.failed).toBe(false);
+    vi.useRealTimers();
+    await client.dispose();
+  });
+
+  it('a genuine start failure counts even when the grace timer evicts the entry first (#5132 item 4)', async () => {
+    // If a start fails genuinely (exited kind) and the grace timer fires before
+    // the rejection propagates, the entry is evicted before the handler's
+    // entries-map check. The fix records the crash before the map check.
+    const { root, spec, guard } = setup({ silent: true });
+    // Let one acquirer timeout (triggering grace), then resolve the start as a
+    // genuine failure (exited) after the grace window elapses.
+    let resolveStart!: (err: LspClientError) => void;
+    const startPromise = new Promise<LspClient>((_, reject) => { resolveStart = reject; });
+    const pool = new LspServerPool({
+      guardFor: () => guard,
+      abandonedStartGraceMs: 20,
+      startClient: () => startPromise,
+    });
+    pools.push(pool);
+    vi.useFakeTimers();
+    // Acquirer times out → last waiter gone → grace timer set.
+    const result = pool.acquire(spec, root, { timeoutMs: 50 }).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await result).toMatchObject({ kind: 'timeout' });
+    expect(pool.size).toBe(1);
+    // Fire grace timer: entry is evicted.
+    await vi.advanceTimersByTimeAsync(20);
+    expect(pool.size).toBe(0);
+    // Now the start resolves as a genuine failure (after eviction).
+    resolveStart(new LspClientError('exited', 'LSP server exited before responding'));
+    // Allow microtasks to settle.
+    await vi.advanceTimersByTimeAsync(0);
+    vi.useRealTimers();
+    // Despite the entry being gone, the genuine failure must have been counted.
+    expect(guard.recentCrashes).toBe(1);
+  });
 });
