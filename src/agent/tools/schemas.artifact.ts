@@ -49,8 +49,8 @@ export const artifactPublishTool: AnthropicToolDef = {
     properties: {
       path: { type: 'string', description: 'Absolute or session-relative path to an existing file to register. Mutually exclusive with `content`.' },
       content: { type: 'string', description: 'Inline UTF-8 string content to register (max 64 KiB). Mutually exclusive with `path`.' },
-      media_type: { type: 'string', description: 'MIME type (e.g. `text/markdown`, `application/json`). Optional: defaults to `application/octet-stream` for inline content; inferred from file extension for path inputs.' },
-      retention: { type: 'string', description: 'Retention policy: `permanent` (never swept), `session` (default, swept with originating session), or `ttl:<ms>` (evict after given milliseconds from registration).' },
+      media_type: { type: 'string', description: 'MIME type (e.g. `text/markdown`, `application/json`). Optional: defaults to `text/plain` for inline content; inferred from file extension for path inputs.' },
+      retention: { type: 'string', description: 'Retention policy: `permanent` (never swept), `session` (default, swept with originating session), or `ttl:<ms>` (evict after given milliseconds from registration; <ms> must be a finite positive integer).' },
       inputs: { type: 'array', items: { type: 'string' }, description: 'Stable IDs of input artifacts this was derived from (lineage). Each entry must match `art_<32hex>`.' },
       tags: { type: 'object', description: 'String key/value tags for filtering and discovery (max 16 tags; keys and values max 256 characters).' },
     },
