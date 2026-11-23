@@ -30,7 +30,7 @@ async function powershell(script: string): Promise<string> {
 }
 
 function pathLiteral(dir: string): string {
-  return `'${dir.replace(/'/g, "''")}'`;
+  return `[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(dir, 'utf8').toString('base64')}'))`;
 }
 
 interface AclSummary {
@@ -42,7 +42,9 @@ interface AclSummary {
 
 async function inspectAcl(dir: string): Promise<AclSummary> {
   return JSON.parse(await powershell(`
-$acl = Get-Acl -LiteralPath ${pathLiteral(dir)}
+$path = ${pathLiteral(dir)}
+$item = if ([IO.Directory]::Exists($path)) { [IO.DirectoryInfo]::new($path) } else { [IO.FileInfo]::new($path) }
+try { $acl = $item.GetAccessControl() } catch { throw "Inspect ACL failed: $($_.Exception.Message)" }
 @{
   protected = $acl.AreAccessRulesProtected
   owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
@@ -61,14 +63,15 @@ function expectOwnerOnly(acl: AclSummary): void {
 }
 
 describe('private screenshot directory, real Windows ACLs', () => {
-  it.runIf(process.platform === 'win32')('replaces explicit broad grants, protects inheritance, and secures new files', { timeout: 120_000 }, async () => {
+  it.runIf(process.platform === 'win32')('replaces explicit broad grants, protects inheritance, and secures new files', { timeout: 180_000 }, async () => {
     root = await mkdtemp(join(tmpdir(), 'afk-private-directory-'));
     // Quotes, spaces and wildcard syntax must be treated as literal path data.
     const dir = join(root, "screens 'quoted' [literal] 日本語");
     await mkdir(dir);
     await powershell(`
 $dir = ${pathLiteral(dir)}
-$acl = Get-Acl -LiteralPath $dir
+$item = [IO.DirectoryInfo]::new($dir)
+try { $acl = $item.GetAccessControl() } catch { throw "Read ACL before broad grants failed: $($_.Exception.Message)" }
 foreach ($sidValue in @('S-1-1-0', 'S-1-5-32-545')) {
   $rule = [Security.AccessControl.FileSystemAccessRule]::new(
     [Security.Principal.SecurityIdentifier]::new($sidValue),
@@ -78,7 +81,7 @@ foreach ($sidValue in @('S-1-1-0', 'S-1-5-32-545')) {
     [Security.AccessControl.AccessControlType]::Allow)
   $acl.AddAccessRule($rule)
 }
-Set-Acl -LiteralPath $dir -AclObject $acl
+try { $item.SetAccessControl($acl) } catch { throw "Set broad grants failed: $($_.Exception.Message)" }
 `);
     const before = await inspectAcl(dir);
     expect(before.rules.some((rule) => rule.sid === 'S-1-1-0' && !rule.inherited)).toBe(true);

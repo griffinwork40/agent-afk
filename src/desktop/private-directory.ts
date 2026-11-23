@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { chmod, lstat, mkdir } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open } from 'node:fs/promises';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -8,12 +9,13 @@ const execFileAsync = promisify(execFile);
 export type PrivateDirectoryExecFile = (
   file: string,
   args: string[],
-  options: { timeout: number; windowsHide: boolean },
+  options: { timeout: number; windowsHide: boolean; signal?: AbortSignal },
 ) => Promise<{ stdout: string; stderr: string }>;
 
 export interface PrivateScreenshotDirectoryOptions {
   platform?: NodeJS.Platform;
   execFile?: PrivateDirectoryExecFile;
+  signal?: AbortSignal;
 }
 
 /**
@@ -26,13 +28,23 @@ export async function ensurePrivateScreenshotDirectory(
   options: PrivateScreenshotDirectoryOptions = {},
 ): Promise<void> {
   await mkdir(dir, { recursive: true, mode: 0o700 });
+  if ((options.platform ?? process.platform) !== 'win32') {
+    const handle = await open(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try {
+      const info = await handle.stat();
+      if (!info.isDirectory() || !process.getuid || info.uid !== process.getuid()) {
+        throw new Error('Screenshot directory must be a directory owned by the current user');
+      }
+      await handle.chmod(0o700);
+    } finally {
+      await handle.close();
+    }
+    // This pins chmod to the checked inode, not the later external capture's path-based write.
+    return;
+  }
   const info = await lstat(dir);
   if (!info.isDirectory() || info.isSymbolicLink()) {
     throw new Error('Screenshot directory must be a real directory, not a link');
-  }
-  if ((options.platform ?? process.platform) !== 'win32') {
-    await chmod(dir, 0o700);
-    return;
   }
 
   // Encode data separately from code: quotes, wildcard characters and Unicode in
@@ -41,10 +53,14 @@ export async function ensurePrivateScreenshotDirectory(
   const script = `
 $ErrorActionPreference = 'Stop'
 $dir = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${pathData}'))
-$item = Get-Item -LiteralPath $dir -Force
+$step = 'inspect directory'
+try {
+$item = [IO.DirectoryInfo]::new($dir)
 if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Screenshot directory is a reparse point' }
+$step = 'get current user SID'
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
 if ($null -eq $sid) { throw 'No current Windows user SID' }
+$step = 'construct owner-only ACL'
 # Start with an EMPTY DACL: no inherited OR pre-existing explicit grants survive.
 $acl = [Security.AccessControl.DirectorySecurity]::new()
 $acl.SetAccessRuleProtection($true, $false)
@@ -55,8 +71,11 @@ $rule = [Security.AccessControl.FileSystemAccessRule]::new(
   [Security.AccessControl.PropagationFlags]::None,
   [Security.AccessControl.AccessControlType]::Allow)
 $acl.AddAccessRule($rule)
-Set-Acl -LiteralPath $dir -AclObject $acl
-$actual = Get-Acl -LiteralPath $dir
+$step = 'set directory ACL'
+$item.SetAccessControl($acl)
+$step = 'read back directory ACL'
+$actual = $item.GetAccessControl()
+$step = 'verify directory ACL'
 $rules = @($actual.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
 if (-not $actual.AreAccessRulesProtected -or $actual.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value -or $rules.Count -ne 1) {
   throw 'Screenshot directory ACL verification failed'
@@ -65,10 +84,11 @@ $r = $rules[0]
 if ($r.IdentityReference.Value -ne $sid.Value -or $r.IsInherited -or $r.AccessControlType -ne 'Allow' -or $r.FileSystemRights -ne $rule.FileSystemRights -or $r.InheritanceFlags -ne $rule.InheritanceFlags -or $r.PropagationFlags -ne 'None') {
   throw 'Screenshot directory is not owner-only and inheritable'
 }
+} catch { throw "Screenshot directory privacy step '$step' failed: $($_.Exception.Message)" }
 `.trim();
   await (options.execFile ?? execFileAsync)(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-    { timeout: 20_000, windowsHide: true },
+    { timeout: 20_000, windowsHide: true, signal: options.signal },
   );
 }

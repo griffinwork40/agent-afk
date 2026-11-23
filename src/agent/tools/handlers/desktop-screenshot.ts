@@ -146,6 +146,7 @@ function parseInput(raw: unknown): ParsedInput | { error: string } {
 
 export interface DesktopScreenshotHandlerOptions extends DesktopHandlerOptions {
   downscale?: DesktopDownscale;
+  hardenDirectory?: typeof ensurePrivateScreenshotDirectory;
 }
 
 export function createDesktopScreenshotHandler(opts: DesktopScreenshotHandlerOptions = {}): ToolHandler {
@@ -179,8 +180,11 @@ export function createDesktopScreenshotHandler(opts: DesktopScreenshotHandlerOpt
     // Invariant: harden before every capture, including pre-existing directories.
     // Do not cache this: another process may have widened the mode or ACL.
     try {
-      await ensurePrivateScreenshotDirectory(screenshotsDir);
+      await (opts.hardenDirectory ?? ensurePrivateScreenshotDirectory)(screenshotsDir, { signal });
     } catch (err) {
+      if (signal.aborted) {
+        return { content: `desktop_screenshot aborted: ${abortReason(signal.reason)}`, isError: true };
+      }
       return {
         content:
           `desktop_screenshot refused: could not make the screenshot directory private ` +
@@ -232,6 +236,7 @@ export function createDesktopScreenshotHandler(opts: DesktopScreenshotHandlerOpt
         opts.downscale,
       );
       if (signal.aborted) {
+        await unlink(sidecarPath).catch(() => undefined);
         return { content: `desktop_screenshot aborted: ${abortReason(signal.reason)}`, isError: true };
       }
 
@@ -263,6 +268,8 @@ export function createDesktopScreenshotHandler(opts: DesktopScreenshotHandlerOpt
         image: { mediaType, data: attached.dataBase64 },
       };
     } catch (err) {
+      // Clean up partial or completed output, including cancellation failures.
+      await unlink(sidecarPath).catch(() => undefined);
       if (signal.aborted) {
         return { content: `desktop_screenshot aborted: ${abortReason(signal.reason)}`, isError: true };
       }
@@ -276,9 +283,6 @@ export function createDesktopScreenshotHandler(opts: DesktopScreenshotHandlerOpt
         durationMs,
         error: { reason: msg, recoverable: false },
       });
-
-      // Clean up any partial output file on error.
-      await unlink(sidecarPath).catch(() => undefined);
 
       return { content: `desktop_screenshot failed: ${msg}`, isError: true };
     }

@@ -19,6 +19,7 @@ import { builtinToolSchemas } from '../../tools/schemas.js';
 import type { DesktopBackend, DesktopScreenshotInput } from '../../../desktop/types.js';
 import type { TraceSink } from '../../trace/index.js';
 import { chmod as fsChmod, stat as fsStat } from 'node:fs/promises';
+import { hardenScreenshotDirectoryForTest } from './__test-utils__/desktop-screenshot.js';
 
 // ---------------------------------------------------------------------------
 // Mock backend helpers
@@ -87,7 +88,7 @@ describe('createDesktopScreenshotHandler()', () => {
 
   it('returns an error immediately when signal is already aborted', async () => {
     const backend = makeBackend();
-    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend, hardenDirectory: hardenScreenshotDirectoryForTest });
     const ac = new AbortController();
     ac.abort('test-abort');
     const result = await handler({}, ac.signal);
@@ -98,7 +99,7 @@ describe('createDesktopScreenshotHandler()', () => {
   it('tightens a screenshots directory that already exists with a wider mode', async () => {
     vi.stubEnv('AFK_SESSION_ID', 'test-session-dirmode');
     const backend = makeBackend();
-    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend, hardenDirectory: hardenScreenshotDirectoryForTest });
     const signal = new AbortController().signal;
 
     // First call creates the directory; widen it, as a pre-existing one could be.
@@ -118,7 +119,7 @@ describe('createDesktopScreenshotHandler()', () => {
   it('calls the backend with display=0 when no input is supplied', async () => {
     vi.stubEnv('AFK_SESSION_ID', 'test-session-abc');
     const backend = makeBackend();
-    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend, hardenDirectory: hardenScreenshotDirectoryForTest });
     const signal = new AbortController().signal;
     const result = await handler({}, signal, { traceWriter: noopTrace, toolUseId: 'tu-1' });
     expect(backend.screenshot).toHaveBeenCalledOnce();
@@ -134,7 +135,7 @@ describe('createDesktopScreenshotHandler()', () => {
   it('passes display index to the backend', async () => {
     vi.stubEnv('AFK_SESSION_ID', 'test-session-abc');
     const backend = makeBackend();
-    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend, hardenDirectory: hardenScreenshotDirectoryForTest });
     const signal = new AbortController().signal;
     await handler({ display: 2 }, signal);
     const [input] = vi.mocked(backend.screenshot).mock.calls[0]!;
@@ -145,7 +146,7 @@ describe('createDesktopScreenshotHandler()', () => {
   it('passes region to the backend when supplied', async () => {
     vi.stubEnv('AFK_SESSION_ID', 'test-session-abc');
     const backend = makeBackend();
-    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend, hardenDirectory: hardenScreenshotDirectoryForTest });
     const signal = new AbortController().signal;
     const region = { x: 10, y: 20, width: 300, height: 200 };
     await handler({ region }, signal);
@@ -157,7 +158,7 @@ describe('createDesktopScreenshotHandler()', () => {
   it('forwards the AbortSignal to the backend', async () => {
     vi.stubEnv('AFK_SESSION_ID', 'test-session-abc');
     const backend = makeBackend();
-    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend, hardenDirectory: hardenScreenshotDirectoryForTest });
     const ac = new AbortController();
     await handler({}, ac.signal);
     const [input] = vi.mocked(backend.screenshot).mock.calls[0]!;
@@ -170,7 +171,7 @@ describe('createDesktopScreenshotHandler()', () => {
     const backend = makeBackend({
       screenshot: vi.fn().mockRejectedValue(new Error('screencapture: permission denied')),
     });
-    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend, hardenDirectory: hardenScreenshotDirectoryForTest });
     const signal = new AbortController().signal;
     const result = await handler({}, signal);
     expect(result.isError).toBe(true);
@@ -183,7 +184,7 @@ describe('createDesktopScreenshotHandler()', () => {
     const backend = makeBackend({
       screenshot: vi.fn().mockResolvedValue({ aborted: true, reason: 'cancelled' }),
     });
-    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend, hardenDirectory: hardenScreenshotDirectoryForTest });
     const signal = new AbortController().signal;
     const result = await handler({}, signal);
     expect(result.isError).toBe(true);
@@ -206,7 +207,7 @@ describe('createDesktopScreenshotHandler()', () => {
         mediaType: 'image/png' as const,
       })),
     });
-    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend, hardenDirectory: hardenScreenshotDirectoryForTest });
     const signal = new AbortController().signal;
     const result = await handler({}, signal);
     // Either downscaled image is attached OR text-only imageOmitted is returned.
@@ -222,7 +223,7 @@ describe('createDesktopScreenshotHandler()', () => {
   it('returns error when region has non-positive dimensions', async () => {
     vi.stubEnv('AFK_SESSION_ID', 'test-session-abc');
     const backend = makeBackend();
-    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend, hardenDirectory: hardenScreenshotDirectoryForTest });
     const signal = new AbortController().signal;
     const result = await handler({ region: { x: 0, y: 0, width: 0, height: 100 } }, signal);
     expect(result.isError).toBe(true);
@@ -233,7 +234,7 @@ describe('createDesktopScreenshotHandler()', () => {
   it('returns error when region has negative x or y', async () => {
     vi.stubEnv('AFK_SESSION_ID', 'test-session-abc');
     const backend = makeBackend();
-    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend, hardenDirectory: hardenScreenshotDirectoryForTest });
     const signal = new AbortController().signal;
     const result = await handler({ region: { x: -1, y: 0, width: 100, height: 100 } }, signal);
     expect(result.isError).toBe(true);
@@ -244,7 +245,7 @@ describe('createDesktopScreenshotHandler()', () => {
   it('returns error when display is a non-integer', async () => {
     vi.stubEnv('AFK_SESSION_ID', 'test-session-abc');
     const backend = makeBackend();
-    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend, hardenDirectory: hardenScreenshotDirectoryForTest });
     const signal = new AbortController().signal;
     const result = await handler({ display: 1.5 }, signal);
     expect(result.isError).toBe(true);
@@ -255,7 +256,7 @@ describe('createDesktopScreenshotHandler()', () => {
   it('returns error when display is a negative number', async () => {
     vi.stubEnv('AFK_SESSION_ID', 'test-session-abc');
     const backend = makeBackend();
-    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend, hardenDirectory: hardenScreenshotDirectoryForTest });
     const signal = new AbortController().signal;
     const result = await handler({ display: -1 }, signal);
     expect(result.isError).toBe(true);
@@ -265,7 +266,7 @@ describe('createDesktopScreenshotHandler()', () => {
   it('returns error when display exceeds 255', async () => {
     vi.stubEnv('AFK_SESSION_ID', 'test-session-abc');
     const backend = makeBackend();
-    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend, hardenDirectory: hardenScreenshotDirectoryForTest });
     const signal = new AbortController().signal;
     const result = await handler({ display: 300 }, signal);
     expect(result.isError).toBe(true);
@@ -275,7 +276,7 @@ describe('createDesktopScreenshotHandler()', () => {
   it('returns error when region values exceed MAX_COORD_VALUE', async () => {
     vi.stubEnv('AFK_SESSION_ID', 'test-session-abc');
     const backend = makeBackend();
-    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => backend, hardenDirectory: hardenScreenshotDirectoryForTest });
     const signal = new AbortController().signal;
     const result = await handler({ region: { x: 0, y: 0, width: 99999, height: 100 } }, signal);
     expect(result.isError).toBe(true);
