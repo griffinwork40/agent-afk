@@ -803,20 +803,7 @@ export { getWavesDir, getWaveManifestPath } from './paths.wave.js';
 // Effect ledger path
 // ---------------------------------------------------------------------------
 
-/**
- * Path to the durable external-effect ledger.
- *
- * NDJSON file at `$AFK_STATE_DIR/effect-ledger.jsonl`. Each line is an
- * {@link EffectRecord} (see `src/agent/effect-ledger/types.ts`). Append-only
- * for new records; status updates append a new line (last-write-wins on query).
- *
- * Lives at the state-dir root alongside `session-grants.jsonl` — it is
- * process-global state (not per-session) because the same effect may originate
- * from multiple sessions that need to share the dedup record.
- */
-export function getEffectLedgerPath(): string {
-  return join(getAfkStateDir(), 'effect-ledger.jsonl');
-}
+export { getEffectLedgerPath } from './paths.effect-ledger.js';
 
 /** Last-seen `anthropic-ratelimit-unified-*` header snapshot (#5012). Mode 0600, atomic write. */
 export const getUsageHeadersPath = (): string => join(getAfkStateDir(), 'usage-headers.json');
