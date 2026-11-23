@@ -207,8 +207,11 @@ export function createDesktopScreenshotHandler(opts: DesktopScreenshotHandlerOpt
       const result = await backend.screenshot(backendInput, sidecarPath);
       const durationMs = Date.now() - t0;
 
-      // Handle abort result from the backend.
+      // Handle abort result from the backend. A backend removes its own partial
+      // output, but it ignores a failed delete and a killed capture process can
+      // still write afterwards, so remove the sidecar here as well.
       if ('aborted' in result) {
+        await unlink(sidecarPath).catch(() => undefined);
         return { content: `desktop_screenshot aborted: ${result.reason}`, isError: true };
       }
 

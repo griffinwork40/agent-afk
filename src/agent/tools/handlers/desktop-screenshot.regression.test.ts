@@ -90,6 +90,23 @@ describe('desktop screenshot review regressions', () => {
     await expect(stat(sidecar)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('removes a sidecar left behind when the backend reports an aborted capture', async () => {
+    // Models a backend whose own cleanup did not take effect: the file exists
+    // when the aborted result arrives.
+    const capture: DesktopBackend = {
+      screenshot: vi.fn<DesktopBackend['screenshot']>().mockImplementation(async (_input, sidecar) => {
+        await writeFile(sidecar, png(100, 100));
+        return { aborted: true, reason: 'cancelled mid-capture' };
+      }),
+    };
+    const handler = createDesktopScreenshotHandler({ getBackend: async () => capture, hardenDirectory: hardenScreenshotDirectoryForTest });
+    const result = await handler({}, new AbortController().signal);
+    expect(result.isError).toBe(true);
+    expect(result.content).toBe('desktop_screenshot aborted: cancelled mid-capture');
+    const sidecar = vi.mocked(capture.screenshot).mock.calls[0]![1];
+    await expect(stat(sidecar)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('allocates distinct sidecar and attachment paths for concurrent calls at the same millisecond', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(123456);
     expect(desktopScreenshotTool.concurrencySafe).toBe(true);
