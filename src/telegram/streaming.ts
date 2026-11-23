@@ -24,6 +24,7 @@ import { sendOrEdit } from './streaming.sender.js';
 import {
   type StreamState, type HandlerParams,
 } from './streaming.handlers.js';
+import { makeDraftState, sendOrEditDraft } from './streaming.draft.js';
 import {
   makeNextWithTimeout, PROGRESS_START_DELAY_MS, type WatchdogState,
 } from './streaming.watchdog.js';
@@ -149,6 +150,10 @@ export async function streamResponse(
   // The live preview interleaves those entries chronologically (computeLivePreview);
   // `finalBody` deliberately keeps the legacy trailing footer, because it IS
   // delivered on a progress-only or non-terminal-exit turn and is held byte-stable.
+  // Private chats get the draft streaming path; groups fall back to sendOrEdit.
+  const isPrivateChat = ctx.chat?.type === 'private';
+  const draftState = isPrivateChat ? makeDraftState() : undefined;
+
   const state: StreamState = {
     accumulated: '', answerText: '',
     sentMessage: null as Message.TextMessage | null,
@@ -156,6 +161,7 @@ export async function streamResponse(
     editInFlight: false, lastCountdownBucket: -1, sawTerminalEvent: false,
     progressEntries: [] as ProgressEntry[], progressRounds: 0,
     turnEnded: false, progressTimer: null, turnStartedAt: Date.now(),
+    draftState,
   };
 
   // stream_retry rollback: snapshot accumulator lengths at the start of the
@@ -193,11 +199,27 @@ export async function streamResponse(
     renderActivityReceipt, onComplete: options.onComplete, logger,
   };
 
+  // Build the sendUpdate override for draft mode: wraps sendOrEditDraft so it
+  // matches the (state, ctx, chatId, text, force?) signature of SendUpdateFn.
+  const sendUpdate = isPrivateChat
+    ? async (
+        _state: StreamState,
+        c: typeof ctx,
+        id: number,
+        text: string,
+        force = false,
+      ) => sendOrEditDraft(draftState!, c, id, text, force)
+    : undefined;
+
   try {
     const stream = buildStream(session, content);
 
-    // Send placeholder immediately so user sees activity; avoids "silent hang" if SDK is slow
-    await sendOrEdit(state, ctx, chatId, 'Thinking…');
+    // For group chats: send placeholder immediately so user sees activity.
+    // For private chats: draft handles the in-place preview natively — no
+    // separate placeholder message needed.
+    if (!isPrivateChat) {
+      await sendOrEdit(state, ctx, chatId, 'Thinking…');
+    }
 
     const iter = stream[Symbol.asyncIterator]();
     const nextWithTimeout = makeNextWithTimeout(iter, watchdog);
@@ -221,6 +243,7 @@ export async function streamResponse(
           clearProgressTimer,
           handlerParams,
           logger,
+          sendUpdate,
         });
       });
     } finally {

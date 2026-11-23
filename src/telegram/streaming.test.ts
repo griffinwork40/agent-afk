@@ -51,10 +51,12 @@ function makeCtx(): { ctx: Context; replies: string[]; edits: string[]; deletes:
   const replies: string[] = [];
   const deletes: number[] = [];
   const ctx = {
-    chat: { id: 12345, type: 'private' as const },
+    // Use 'group' so these tests exercise the unchanged sendOrEdit/deliverClean
+    // path. Draft mode (sendMessageDraft) is covered by streaming.draft.test.ts.
+    chat: { id: 12345, type: 'group' as const },
     reply: vi.fn(async (text: string) => {
       replies.push(text);
-      return { message_id: replies.length, text, chat: { id: 12345, type: 'private' as const }, date: 0 };
+      return { message_id: replies.length, text, chat: { id: 12345, type: 'group' as const }, date: 0 };
     }),
     telegram: {
       editMessageText: vi.fn(async (_c: unknown, _m: unknown, _i: unknown, text: string) => {

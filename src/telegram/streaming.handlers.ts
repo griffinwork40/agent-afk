@@ -21,6 +21,8 @@ import type { ResponseMetadata } from '../agent/types.js';
 import type { UsageLimitProvider } from '../utils/errors.js';
 import { pausedMessage } from './streaming.paused-copy.js';
 import { normalizeUsageLimitError } from '../agent/usage/usage-limit-info.js';
+import { finalizeDraft } from './streaming.draft.js';
+import type { DraftState } from './streaming.draft.js';
 
 /** Countdown update granularity during a usage-limit pause: every 5 minutes. */
 export const PAUSE_COUNTDOWN_INTERVAL_MS = 5 * 60 * 1_000;
@@ -43,6 +45,8 @@ export interface StreamState extends SenderState {
   turnEnded: boolean;
   progressTimer: ReturnType<typeof setTimeout> | null;
   turnStartedAt: number;
+  /** Present when the turn is using the draft streaming path (private chat). */
+  draftState?: DraftState;
 }
 
 /** Parameters shared across all event handlers. */
@@ -158,7 +162,16 @@ export async function handleDone(
     clearInterval(state.countdownInterval);
     state.countdownInterval = null;
   }
-  if (cleanFinal && state.answerText.trim()) {
+  // Draft mode: replace the draft with a plain sendMessage (Bot API replaces
+  // in-flight drafts when a real message arrives in the same chat).
+  if (state.draftState?.isDraftMode) {
+    const finalText = state.answerText.trim()
+      ? state.answerText + renderActivityReceipt(state.progressRounds, Date.now() - state.turnStartedAt)
+      : finalBody();
+    if (finalText.trim()) {
+      await finalizeDraft(state.draftState, ctx, chatId, finalText);
+    }
+  } else if (cleanFinal && state.answerText.trim()) {
     // Deliver the answer as a fresh, noise-free message, then remove the
     // live preview so the conversation ends on a single clean reply. Only
     // delete the preview if something actually landed — if the very first
