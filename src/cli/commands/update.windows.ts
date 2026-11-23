@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { readLivePresenceFiles } from '../../agent/awareness/presence.js';
+import { readPresenceFiles } from '../../agent/awareness/presence.js';
 import { getDaemonLockPath } from '../../agent/daemon-instance.lock.js';
 import { isProcessAlive } from '../../agent/process-liveness.js';
 import { serviceManagerFor, SERVICE_NAMES } from '../../service/index.js';
@@ -12,8 +12,8 @@ export async function findWindowsUpdateBlockers(
 ): Promise<string[]> {
   if (platform !== 'win32') return [];
   const blockers = new Set<string>();
-  for (const record of await readLivePresenceFiles()) {
-    if (record.pid !== ownPid && record.liveness === 'alive') {
+  for (const record of await readPresenceFiles()) {
+    if (record.liveness !== 'dead' && record.pid !== ownPid) {
       blockers.add(`afk session (PID ${record.pid}) — close its terminal/session`);
     }
   }
@@ -21,7 +21,7 @@ export async function findWindowsUpdateBlockers(
   for (const name of SERVICE_NAMES) {
     try {
       const status = manager?.status(name);
-      if (status?.running === true && status.pid !== ownPid) {
+      if (status?.running === true && (status.pid === undefined || status.pid !== ownPid)) {
         blockers.add(`${name} service — stop AFK-${name} in Windows Task Scheduler`);
       }
     } catch {

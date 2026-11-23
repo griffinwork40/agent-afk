@@ -3,7 +3,7 @@ import { PassThrough } from 'node:stream';
 import { Command } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../agent/awareness/presence.js', () => ({ readLivePresenceFiles: vi.fn(async () => []) }));
+vi.mock('../../agent/awareness/presence.js', () => ({ readPresenceFiles: vi.fn(async () => []) }));
 vi.mock('../../agent/daemon-instance.lock.js', () => ({ getDaemonLockPath: () => 'daemon-marker' }));
 vi.mock('../../agent/process-liveness.js', () => ({ isProcessAlive: vi.fn(() => true) }));
 vi.mock('../../telegram/manager.js', () => ({ getManagerPaths: () => ({ pidFile: 'bot-marker' }) }));
@@ -22,7 +22,7 @@ vi.mock('../update-checker.js', () => ({
 
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'child_process';
-import { readLivePresenceFiles, type PresenceRecord } from '../../agent/awareness/presence.js';
+import { readPresenceFiles, type PresenceRecord } from '../../agent/awareness/presence.js';
 import { isProcessAlive } from '../../agent/process-liveness.js';
 import { serviceManagerFor, type ServiceManager } from '../../service/index.js';
 import { writePendingUpdateMarker } from '../update-checker.js';
@@ -43,7 +43,7 @@ async function update(...args: string[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(readLivePresenceFiles).mockResolvedValue([]);
+  vi.mocked(readPresenceFiles).mockResolvedValue([]);
   vi.mocked(readFile).mockRejectedValue(new Error('ENOENT'));
   vi.mocked(isProcessAlive).mockReturnValue(true);
   vi.mocked(serviceManagerFor).mockReturnValue({ status: vi.fn(() => ({ running: false })) } as unknown as ServiceManager);
@@ -63,8 +63,8 @@ afterEach(() => {
 
 describe('Windows update preflight', () => {
   it('excludes the updater, dead and unknown records; deduplicates live PIDs', async () => {
-    vi.mocked(readLivePresenceFiles).mockResolvedValue([
-      presence(process.pid), presence(123), presence(123), presence(456, 'dead'), presence(789, 'unknown'),
+    vi.mocked(readPresenceFiles).mockResolvedValue([
+      presence(process.pid), presence(123), presence(123), presence(456, 'dead'), presence(789, 'dead'),
     ]);
     expect(await findWindowsUpdateBlockers()).toEqual(['afk session (PID 123) — close its terminal/session']);
   });
@@ -106,13 +106,13 @@ describe('Windows update preflight', () => {
 
   it.each(['darwin', 'linux'] as const)('does not read registries or services on %s', async (platform) => {
     expect(await findWindowsUpdateBlockers(platform)).toEqual([]);
-    expect(readLivePresenceFiles).not.toHaveBeenCalled();
+    expect(readPresenceFiles).not.toHaveBeenCalled();
     expect(serviceManagerFor).not.toHaveBeenCalled();
     expect(readFile).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('refuses before npm (noRestart=%s)', async (noRestart) => {
-    vi.mocked(readLivePresenceFiles).mockResolvedValue([presence(123)]);
+    vi.mocked(readPresenceFiles).mockResolvedValue([presence(123)]);
     await update('--pin', '2.0.0', ...(noRestart ? ['--no-restart'] : []));
     expect(spawn).not.toHaveBeenCalled();
     expect(writePendingUpdateMarker).not.toHaveBeenCalled();
@@ -122,7 +122,7 @@ describe('Windows update preflight', () => {
 
   it('leaves --check available without inspecting blockers', async () => {
     await update('--check');
-    expect(readLivePresenceFiles).not.toHaveBeenCalled();
+    expect(readPresenceFiles).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
   });
@@ -182,7 +182,7 @@ describe('npm Windows EBUSY fallback', () => {
     npmResult(17, null, ['EBUSY']);
     await update('--pin', '2.0.0');
     expect(spawn).toHaveBeenCalledWith(process.execPath, expect.any(Array), { stdio: 'inherit' });
-    expect(readLivePresenceFiles).not.toHaveBeenCalled();
+    expect(readPresenceFiles).not.toHaveBeenCalled();
     expect(vi.mocked(console.error).mock.calls.flat().join('\n')).not.toContain('npm reported EBUSY');
     expect(process.exitCode).toBe(17);
   });
