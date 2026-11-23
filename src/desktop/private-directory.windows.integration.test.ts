@@ -56,11 +56,19 @@ try { $acl = $item.GetAccessControl() } catch { throw "Inspect ACL failed: $($_.
 `)) as AclSummary;
 }
 
-function expectOwnerOnly(acl: AclSummary): void {
-  expect(acl.owner).toBe(acl.sid);
+/** The access rules: exactly one, allowing only the current user. */
+function expectCurrentUserOnlyRules(acl: AclSummary): void {
   expect(acl.rules).toHaveLength(1);
   expect(acl.rules[0]).toMatchObject({ sid: acl.sid, type: 'Allow', rights: 'FullControl' });
 }
+
+/** A hardened directory: the helper sets the owner as well as the rules. */
+function expectOwnerOnly(acl: AclSummary): void {
+  expect(acl.owner).toBe(acl.sid);
+  expectCurrentUserOnlyRules(acl);
+}
+
+const ADMINISTRATORS_GROUP_SID = 'S-1-5-32-544';
 
 describe('private screenshot directory, real Windows ACLs', () => {
   it.runIf(process.platform === 'win32')('replaces explicit broad grants, protects inheritance, and secures new files', { timeout: 180_000 }, async () => {
@@ -98,8 +106,12 @@ try { $item.SetAccessControl($acl) } catch { throw "Set broad grants failed: $($
     const child = join(dir, 'not-a-screenshot.txt');
     await writeFile(child, 'privacy integration fixture');
     const childAcl = await inspectAcl(child);
-    expectOwnerOnly(childAcl);
+    // Privacy of a new file comes from the inherited rules. Its owner is set by
+    // Windows, not by the helper: for an elevated administrator (the CI runner
+    // account) Windows assigns the Administrators group, otherwise the user.
+    expectCurrentUserOnlyRules(childAcl);
     expect(childAcl.rules[0]?.inherited).toBe(true);
+    expect([childAcl.sid, ADMINISTRATORS_GROUP_SID]).toContain(childAcl.owner);
 
     const fresh = join(root, 'new-directory');
     await ensurePrivateScreenshotDirectory(fresh);
