@@ -27,6 +27,7 @@ const mockResolveAcpId = vi.fn((id: string): string => id);
 const mockEmitReplayUpdates = vi.fn(async () => undefined);
 const mockReadRecord = vi.fn((_id: string): { cwd: string } | undefined => undefined);
 const mockWriteRecord = vi.fn((_id: string, _r: { cwd: string }): void => undefined);
+const mockPruneRecord = vi.fn((_id: string): void => undefined);
 
 vi.mock('../../agent/journal/reader.js', () => ({
   journalExists: (id: string) => mockJournalExists(id),
@@ -44,6 +45,7 @@ vi.mock('./acp.session-map.js', () => ({
 vi.mock('./acp.session-record.js', () => ({
   readAcpSessionRecord: (id: string) => mockReadRecord(id),
   writeAcpSessionRecord: (id: string, r: { cwd: string }) => mockWriteRecord(id, r),
+  pruneAcpSessionRecord: (id: string) => mockPruneRecord(id),
 }));
 
 vi.mock('./acp.replay.js', () => ({
@@ -69,6 +71,7 @@ beforeEach(() => {
   mockResolveAcpId.mockImplementation((id) => id);
   mockReadRecord.mockReturnValue(undefined);
   mockWriteRecord.mockReturnValue(undefined);
+  mockPruneRecord.mockReturnValue(undefined);
   mockBuildAcpSession.mockResolvedValue({
     session: { close: vi.fn().mockResolvedValue(undefined) },
     memoryStore: { close: vi.fn() },
@@ -134,6 +137,17 @@ describe('loadAcpSession — unknown id', () => {
     mockJournalExists.mockReturnValue(false);
     await loadAcpSession(BASE_PARAMS, BASE_OPTS).catch(() => {});
     expect(mockJournalExists).toHaveBeenCalledWith('mapped-afk-id');
+  });
+
+  it('prunes the stale record when the journal is gone (item 3)', async () => {
+    mockJournalExists.mockReturnValue(false);
+    await loadAcpSession(BASE_PARAMS, BASE_OPTS).catch(() => {});
+    expect(mockPruneRecord).toHaveBeenCalledWith(BASE_PARAMS.sessionId);
+  });
+
+  it('does not prune when the journal exists', async () => {
+    await loadAcpSession(BASE_PARAMS, BASE_OPTS);
+    expect(mockPruneRecord).not.toHaveBeenCalled();
   });
 });
 

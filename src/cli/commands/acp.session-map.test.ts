@@ -68,6 +68,16 @@ describe('recordAcpMapping', () => {
     await recordAcpMapping('acp-2', 'afk-2');
     expect(readAcpSessionMap()).toEqual({ 'acp-1': 'afk-1', 'acp-2': 'afk-2' });
   });
+
+  it('concurrent callers do not drop each other\'s mapping (item 2)', async () => {
+    // Fire N concurrent recordAcpMapping calls; every entry must survive.
+    const pairs = Array.from({ length: 8 }, (_, i) => [`acp-c${i}`, `afk-c${i}`] as const);
+    await Promise.all(pairs.map(([a, b]) => recordAcpMapping(a, b)));
+    const map = readAcpSessionMap();
+    for (const [a, b] of pairs) {
+      expect(map[a]).toBe(b);
+    }
+  });
 });
 
 describe('resolveAcpId', () => {

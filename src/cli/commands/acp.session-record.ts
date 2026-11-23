@@ -8,16 +8,21 @@
  * Contract:
  *   - writeAcpSessionRecord is synchronous and atomic (temp file then rename,
  *     owner-only mode, parent directory created) and throws on any failure.
- *   - readAcpSessionRecord returns undefined only when the file does not exist.
- *     An unreadable or malformed record throws, so a corrupt record is never
- *     mistaken for a session without one. A record path whose parent is not a
- *     directory also throws on every platform: Windows reports that case as
- *     ENOENT where POSIX reports ENOTDIR.
+ *   - readAcpSessionRecord returns undefined only when the file does not exist
+ *     (confirmed absent: no entry for the id). An unreadable or malformed
+ *     record throws, so a corrupt record is never mistaken for "no record".
+ *     A dangling symlink at the record path throws: the link exists but its
+ *     target does not, which is structurally distinct from the file being
+ *     absent. A record path whose parent is not a directory also throws on
+ *     every platform.
+ *   - pruneAcpSessionRecord removes the record file when the caller has
+ *     already determined the journal is gone. Best-effort: ENOENT is silently
+ *     ignored. Any other error is re-thrown.
  *
  * @module cli/commands/acp.session-record
  */
 
-import { readFileSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { getAcpSessionRecordPath } from '../../paths.journal.js';
@@ -30,6 +35,19 @@ export function writeAcpSessionRecord(acpId: string, record: AcpSessionRecord): 
   atomicWriteFile(getAcpSessionRecordPath(acpId), JSON.stringify({ cwd: record.cwd }), {
     mode: 0o600, mkdirp: true, mkdirMode: 0o700,
   });
+}
+
+/**
+ * Remove the record for `acpId` when the backing journal is gone.
+ * ENOENT (already removed) is silently ignored. Other errors are re-thrown.
+ */
+export function pruneAcpSessionRecord(acpId: string): void {
+  const file = getAcpSessionRecordPath(acpId);
+  try {
+    rmSync(file);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw err;
+  }
 }
 
 /**
@@ -56,11 +74,34 @@ function parentBlocked(file: string): boolean {
 }
 
 /**
+ * True when `file` is a dangling symbolic link (the link exists but its
+ * target does not). `lstatSync` sees the link itself; `statSync` follows it.
+ * Returns false when `lstatSync` itself fails (e.g. the entry does not exist).
+ */
+function isDanglingSymlink(file: string): boolean {
+  try {
+    const lst = lstatSync(file, { throwIfNoEntry: false });
+    if (lst === undefined || !lst.isSymbolicLink()) return false;
+    // Link exists — check whether the target is reachable.
+    const st = statSync(file, { throwIfNoEntry: false });
+    return st === undefined;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Read the record for `acpId`: undefined when no record file exists; throws
  * when the file exists but cannot be read or does not hold a non-empty `cwd`.
+ * Also throws for a dangling symlink at the record path, which is structurally
+ * different from the file being absent and must not silently become "no record".
  */
 export function readAcpSessionRecord(acpId: string): AcpSessionRecord | undefined {
   const file = getAcpSessionRecordPath(acpId);
+  // Fail-closed on a dangling symlink: the entry exists but the target is gone.
+  if (isDanglingSymlink(file)) {
+    throw Object.assign(new Error(`dangling symlink at ACP session record path for ${acpId}`), { code: 'ENOENT' });
+  }
   let raw: string;
   try {
     raw = readFileSync(file, 'utf8');

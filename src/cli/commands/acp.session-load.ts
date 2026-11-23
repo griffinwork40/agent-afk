@@ -35,7 +35,7 @@ import { AcpInvalidParams, convertMcpServers } from './acp.params.js';
 import type { AcpSessionHandle, AcpSessionOptions } from './acp.session.js';
 import { buildAcpSession, closeAcpSession } from './acp.session.js';
 import { resolveAcpId } from './acp.session-map.js';
-import { readAcpSessionRecord, writeAcpSessionRecord } from './acp.session-record.js';
+import { pruneAcpSessionRecord, readAcpSessionRecord, writeAcpSessionRecord } from './acp.session-record.js';
 import { emitReplayUpdates } from './acp.replay.js';
 
 /**
@@ -58,7 +58,9 @@ export async function loadAcpSession(
   const afkId = resolveAcpId(acpId);
 
   // Fail fast: verify the journal exists before allocating anything.
+  // Prune the stale record when the journal is gone so it does not accumulate.
   if (!journalExists(afkId)) {
+    pruneAcpSessionRecord(acpId);
     throw new AcpNotFoundError(`Unknown session: ${acpId}`);
   }
   // Throws (internal) on an unreadable or malformed record: never treated as "no record".

@@ -9,7 +9,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { env } from '../../config/env.js';
 import { getAcpSessionRecordPath } from '../../paths.journal.js';
-import { readAcpSessionRecord, writeAcpSessionRecord } from './acp.session-record.js';
+import { pruneAcpSessionRecord, readAcpSessionRecord, writeAcpSessionRecord } from './acp.session-record.js';
 
 let state: string;
 
@@ -115,5 +115,37 @@ describe('writeAcpSessionRecord / readAcpSessionRecord', () => {
     writeAcpSessionRecord('a', { cwd: '/a' });
     expect(readAcpSessionRecord('a')).toEqual({ cwd: '/a' });
     expect(readAcpSessionRecord('b')).toEqual({ cwd: '/b' });
+  });
+
+  it('throws for a dangling symlink at the record path (item 5)', () => {
+    // Create the sessions directory and a symlink pointing at a non-existent target.
+    const sessionsDir = path.join(state, 'acp', 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+    const recordPath = getAcpSessionRecordPath('dangling-1');
+    const missingTarget = path.join(state, 'does-not-exist');
+    symlinkSync(missingTarget, recordPath);
+    // A dangling symlink must throw, not silently return undefined.
+    expect(() => readAcpSessionRecord('dangling-1')).toThrow();
+  });
+});
+
+describe('pruneAcpSessionRecord', () => {
+  it('removes an existing record', () => {
+    writeAcpSessionRecord('prune-1', { cwd: '/ws' });
+    expect(readAcpSessionRecord('prune-1')).toEqual({ cwd: '/ws' });
+    pruneAcpSessionRecord('prune-1');
+    expect(readAcpSessionRecord('prune-1')).toBeUndefined();
+  });
+
+  it('is a no-op when the record does not exist (ENOENT silenced)', () => {
+    expect(() => pruneAcpSessionRecord('no-such-session')).not.toThrow();
+  });
+
+  it('leaves sibling records intact', () => {
+    writeAcpSessionRecord('keep-1', { cwd: '/keep' });
+    writeAcpSessionRecord('prune-2', { cwd: '/prune' });
+    pruneAcpSessionRecord('prune-2');
+    expect(readAcpSessionRecord('keep-1')).toEqual({ cwd: '/keep' });
+    expect(readAcpSessionRecord('prune-2')).toBeUndefined();
   });
 });

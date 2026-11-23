@@ -19,12 +19,15 @@
  *   - resolveAcpId returns the afkId if mapped, otherwise the acpId itself
  *     (fast path: seeded id == journal id, no afkId needed); both shapes resolve.
  *   - recordAcpMapping is a no-op when acpId === afkId (fast path).
+ *   - recordAcpMapping serializes concurrent writers via an O_EXCL advisory
+ *     lock file (same directory as the map), retrying up to LOCK_RETRIES times
+ *     with exponential backoff before giving up with an error.
  *
  * @module cli/commands/acp.session-map
  */
 
-import { mkdirSync, readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import { getAcpSessionMapPath } from '../../paths.js';
 import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
@@ -65,15 +68,57 @@ export async function writeAcpSessionMap(map: AcpSessionMap): Promise<void> {
   await atomicWriteFileAsync(dest, JSON.stringify(map));
 }
 
+// ---------------------------------------------------------------------------
+// Advisory lock for recordAcpMapping read-modify-write
+// ---------------------------------------------------------------------------
+
+const LOCK_RETRIES = 20;
+const LOCK_BASE_MS = 10;
+
+/** Absolute path to the advisory lock file for the session map. */
+function mapLockPath(): string {
+  return join(dirname(getAcpSessionMapPath()), 'session-map.lock');
+}
+
+/**
+ * Acquire the O_EXCL advisory lock. Returns the fd on success, or throws
+ * after `LOCK_RETRIES` attempts. Each attempt waits `LOCK_BASE_MS * 2^i` ms.
+ */
+async function acquireMapLock(): Promise<number> {
+  const lock = mapLockPath();
+  mkdirSync(dirname(lock), { recursive: true });
+  for (let i = 0; i < LOCK_RETRIES; i++) {
+    try {
+      return openSync(lock, 'wx');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, LOCK_BASE_MS * Math.pow(2, i)));
+  }
+  throw new Error('acp session-map lock contested after retries');
+}
+
+function releaseMapLock(fd: number, lock: string): void {
+  try { closeSync(fd); } catch { /* best-effort */ }
+  try { unlinkSync(lock); } catch { /* best-effort */ }
+}
+
 /**
  * Persist acpId → afkId when they differ. No-op on match (fast path).
- * Reads the existing map first to avoid clobbering other entries.
+ * Serializes concurrent writers via an O_EXCL advisory lock file so two
+ * `afk acp` processes cannot drop each other's mapping.
  */
 export async function recordAcpMapping(acpId: string, afkId: string): Promise<void> {
   if (acpId === afkId) return;
-  const map = readAcpSessionMap();
-  map[acpId] = afkId;
-  await writeAcpSessionMap(map);
+  const lock = mapLockPath();
+  const fd = await acquireMapLock();
+  try {
+    const map = readAcpSessionMap();
+    map[acpId] = afkId;
+    await writeAcpSessionMap(map);
+  } finally {
+    releaseMapLock(fd, lock);
+  }
 }
 
 /**
