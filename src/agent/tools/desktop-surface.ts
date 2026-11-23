@@ -37,3 +37,8 @@ export function isDesktopEnabled(): boolean {
 export function desktopSchemas(): AnthropicToolDef[] {
   return isDesktopEnabled() ? [desktopScreenshotTool] : [];
 }
+
+/** Names for top-level allowlists, gated identically to the advertised schemas. */
+export function desktopToolNames(): string[] {
+  return desktopSchemas().map((schema) => schema.name);
+}

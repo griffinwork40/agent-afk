@@ -103,7 +103,7 @@ describe('createDesktopScreenshotHandler()', () => {
 
     // First call creates the directory; widen it, as a pre-existing one could be.
     await handler({}, signal, { traceWriter: noopTrace, toolUseId: 'tu-dir-1' });
-    const calls = (backend.screenshot as ReturnType<typeof vi.fn>).mock.calls as [DesktopScreenshotInput, string][];
+    const calls = vi.mocked(backend.screenshot).mock.calls;
     const dir = nodePath.dirname(calls[0]![1]);
     await fsChmod(dir, 0o755);
 
@@ -122,7 +122,7 @@ describe('createDesktopScreenshotHandler()', () => {
     const signal = new AbortController().signal;
     const result = await handler({}, signal, { traceWriter: noopTrace, toolUseId: 'tu-1' });
     expect(backend.screenshot).toHaveBeenCalledOnce();
-    const [input] = (backend.screenshot as ReturnType<typeof vi.fn>).mock.calls[0] as [DesktopScreenshotInput, string];
+    const [input] = vi.mocked(backend.screenshot).mock.calls[0]!;
     expect(input.displayIndex).toBe(0);
     expect(input.region).toBeUndefined();
     expect(result.isError).toBeUndefined();
@@ -137,7 +137,7 @@ describe('createDesktopScreenshotHandler()', () => {
     const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
     const signal = new AbortController().signal;
     await handler({ display: 2 }, signal);
-    const [input] = (backend.screenshot as ReturnType<typeof vi.fn>).mock.calls[0] as [DesktopScreenshotInput, string];
+    const [input] = vi.mocked(backend.screenshot).mock.calls[0]!;
     expect(input.displayIndex).toBe(2);
     vi.unstubAllEnvs();
   });
@@ -149,7 +149,7 @@ describe('createDesktopScreenshotHandler()', () => {
     const signal = new AbortController().signal;
     const region = { x: 10, y: 20, width: 300, height: 200 };
     await handler({ region }, signal);
-    const [input] = (backend.screenshot as ReturnType<typeof vi.fn>).mock.calls[0] as [DesktopScreenshotInput, string];
+    const [input] = vi.mocked(backend.screenshot).mock.calls[0]!;
     expect(input.region).toEqual(region);
     vi.unstubAllEnvs();
   });
@@ -160,7 +160,7 @@ describe('createDesktopScreenshotHandler()', () => {
     const handler = createDesktopScreenshotHandler({ getBackend: async () => backend });
     const ac = new AbortController();
     await handler({}, ac.signal);
-    const [input] = (backend.screenshot as ReturnType<typeof vi.fn>).mock.calls[0] as [DesktopScreenshotInput, string];
+    const [input] = vi.mocked(backend.screenshot).mock.calls[0]!;
     expect(input.signal).toBe(ac.signal);
     vi.unstubAllEnvs();
   });

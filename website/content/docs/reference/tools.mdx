@@ -425,7 +425,7 @@ Desktop tools are **excluded from forked child agents** (integration-risk I1). A
 
 ### `desktop_screenshot`
 
-Capture a PNG screenshot of the host desktop and return it as a viewable image. The PNG is also written as a sidecar under `~/.afk/state/witness/<sessionId>/desktop/screenshots/` with mode `0600` (owner-only).
+Capture a PNG screenshot of the host desktop and return it as a viewable image. The PNG is also written as a sidecar under `~/.afk/state/witness/<sessionId>/desktop/screenshots/`. On POSIX systems the directory is owner-only (`0700`) and the PNG uses mode `0600`; on Windows the directory has a protected, current-user-only ACL inherited by new screenshots (existing explicit grants to other users are removed). Capture is refused if directory privacy cannot be established. These permissions do not protect against administrators or other processes running as the same user.
 
 The result text is `{ path, bytes, width, height, scaleFactor, displayIndex, logicalWidth, logicalHeight }` — the scale factor (or `null` when it cannot be determined) and logical dimensions are reported for coordinate-space transparency so later tranches can map logical→physical pixels.
 

@@ -14,6 +14,7 @@
  */
 
 import { env } from '../../../config/env.js';
+import { isDesktopEnabled } from '../desktop-surface.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { resolveNativeBackend } from '../../../desktop/platform.js';
 import { DesktopBackendError } from '../../../desktop/types.js';
@@ -90,9 +91,7 @@ export async function acquireDesktopBackend(
   }
 
   // 3. Capability gate: refuse when AFK_DESKTOP_ENABLED is not set.
-  const enabled = env.AFK_DESKTOP_ENABLED;
-  const isEnabled = enabled === '1' || enabled === 'true' || enabled === 'yes' || enabled === 'on';
-  if (!isEnabled) {
+  if (!isDesktopEnabled()) {
     return { ok: false, isError: true, content: DESKTOP_SETUP_INSTRUCTIONS };
   }
 

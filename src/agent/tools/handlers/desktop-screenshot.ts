@@ -1,3 +1,4 @@
+// Contract: capture private sidecars and attach bounded images, with abort propagation.
 /**
  * Handler for the `desktop_screenshot` tool.
  *
@@ -53,10 +54,13 @@
  * @module agent/tools/handlers/desktop-screenshot
  */
 
-import { chmod, mkdir, readFile, unlink } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
+import { unlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { buildAttachedImage } from './desktop-screenshot.downscale.js';
+import type { DesktopDownscale } from './desktop-screenshot.downscale.js';
+import { ensurePrivateScreenshotDirectory } from '../../../desktop/private-directory.js';
+export { ATTACHED_LONG_SIDE } from './desktop-screenshot.downscale.js';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { DesktopHandlerOptions } from './desktop-provider.js';
 import { acquireDesktopBackend } from './desktop-provider.js';
@@ -65,27 +69,6 @@ import { abortReason, errorMessage } from '../../../utils/errors.js';
 import { getTraceDir } from '../../../paths.witness.js';
 import type { DesktopRegion, DesktopScreenshotInput } from '../../../desktop/types.js';
 import { DesktopBackendError } from '../../../desktop/types.js';
-
-const execFileAsync = promisify(execFile);
-
-// ---------------------------------------------------------------------------
-// Image guards — imported constants (see module-doc for rationale)
-// ---------------------------------------------------------------------------
-
-// Anthropic's vision API hard-rejects any image whose width OR height exceeds
-// 8000px. Same value as MAX_DIMENSION_SINGLE_IMAGE in _many-image-guard.ts
-// and MAX_IMAGE_DIMENSION in browser-screenshot.ts / view-image.ts.
-const MAX_IMAGE_DIMENSION = 8000;
-
-// Base64 byte cap — 2 MiB, same as MAX_BASE64_BYTES in view-image.ts and
-// image-generate.ts. Prevents oversized Retina captures from flooding context.
-const MAX_BASE64_BYTES = 2 * 1024 * 1024;
-
-/**
- * Default long-side pixel size for the attached (downscaled) copy.
- * See module-doc for the derivation. Full-res sidecar is always preserved.
- */
-export const ATTACHED_LONG_SIDE = 1092;
 
 // ---------------------------------------------------------------------------
 // Input parsing
@@ -158,98 +141,14 @@ function parseInput(raw: unknown): ParsedInput | { error: string } {
 }
 
 // ---------------------------------------------------------------------------
-// Downscale helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Attempt to downscale `sourcePath` to fit within `longSide` pixels on the
- * long side, writing the result to `outPath`, using `sips` (macOS).
- * Returns the buffer of the downscaled PNG on success, or null on any failure.
- * Never throws.
- */
-async function downscaleWithSips(
-  sourcePath: string,
-  outPath: string,
-  longSide: number,
-): Promise<Buffer | null> {
-  try {
-    await execFileAsync(
-      'sips',
-      ['--resampleHeightWidthMax', String(longSide), sourcePath, '--out', outPath],
-      { timeout: 15_000 },
-    );
-    const buf = await readFile(outPath);
-    return buf.length > 0 ? buf : null;
-  } catch {
-    return null;
-  } finally {
-    await unlink(outPath).catch(() => undefined);
-  }
-}
-
-interface AttachedImage {
-  dataBase64: string;
-  attachedWidth: number;
-  attachedHeight: number;
-}
-
-/**
- * Read PNG dimensions from a buffer (IHDR chunk at bytes 16-23).
- * Returns null when the buffer is too short or not a valid PNG header.
- */
-function readPngDims(buf: Buffer): { width: number; height: number } | null {
-  if (buf.length < 24) return null;
-  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
-}
-
-/**
- * Produce the image that will be attached to the model, downscaling if needed.
- *
- * Returns an AttachedImage (possibly downscaled) or null when the image cannot
- * be attached (downscale failed and the original is over-limit).
- */
-async function buildAttachedImage(
-  capturedBase64: string,
-  capturedWidth: number,
-  capturedHeight: number,
-  sidecarPath: string,
-): Promise<AttachedImage | null> {
-  const needsResize =
-    capturedWidth > MAX_IMAGE_DIMENSION ||
-    capturedHeight > MAX_IMAGE_DIMENSION ||
-    capturedBase64.length > MAX_BASE64_BYTES;
-
-  if (!needsResize) {
-    return { dataBase64: capturedBase64, attachedWidth: capturedWidth, attachedHeight: capturedHeight };
-  }
-
-  // Attempt downscale. The temporary copy is written next to the sidecar,
-  // inside the owner-only screenshots directory, never in the shared OS temp
-  // directory: it is a copy of a private screenshot. downscaleWithSips removes
-  // it after reading.
-  const tmpOut = join(dirname(sidecarPath), `attach-${Date.now()}.png`);
-
-  if (process.platform === 'darwin') {
-    const buf = await downscaleWithSips(sidecarPath, tmpOut, ATTACHED_LONG_SIDE);
-    if (buf) {
-      const dims = readPngDims(buf);
-      if (dims && buf.toString('base64').length <= MAX_BASE64_BYTES &&
-          dims.width <= MAX_IMAGE_DIMENSION && dims.height <= MAX_IMAGE_DIMENSION) {
-        return { dataBase64: buf.toString('base64'), attachedWidth: dims.width, attachedHeight: dims.height };
-      }
-    }
-  }
-
-  // Downscale unavailable or failed — return null so the handler falls back
-  // to a text-only result that names the sidecar path.
-  return null;
-}
-
-// ---------------------------------------------------------------------------
 // Handler factory
 // ---------------------------------------------------------------------------
 
-export function createDesktopScreenshotHandler(opts: DesktopHandlerOptions = {}): ToolHandler {
+export interface DesktopScreenshotHandlerOptions extends DesktopHandlerOptions {
+  downscale?: DesktopDownscale;
+}
+
+export function createDesktopScreenshotHandler(opts: DesktopScreenshotHandlerOptions = {}): ToolHandler {
   return async (input, signal, context?: ToolHandlerContext) => {
     // Pre-aborted short-circuit.
     if (signal.aborted) {
@@ -275,26 +174,22 @@ export function createDesktopScreenshotHandler(opts: DesktopHandlerOptions = {})
     // Build the sidecar path under the session trace directory.
     const screenshotsDir = join(getTraceDir(sessionId), 'desktop', 'screenshots');
     const ts = Date.now();
-    const sidecarPath = join(screenshotsDir, `desktop_screenshot_${ts}.png`);
+    const sidecarPath = join(screenshotsDir, `desktop_screenshot_${ts}-${randomUUID()}.png`);
 
-    // Invariant: the screenshots directory is owner-only before anything is
-    // written to it. `mkdir` applies `mode` only to directories it creates, so
-    // a directory that already exists with a wider mode is tightened
-    // explicitly. If that fails on POSIX the capture is refused: a full-screen
-    // image must not land in a directory other local users can read. File
-    // modes inside are a second line of defence, not the guarantee.
-    await mkdir(screenshotsDir, { recursive: true, mode: 0o700 });
-    if (process.platform !== 'win32') {
-      try {
-        await chmod(screenshotsDir, 0o700);
-      } catch (err) {
-        return {
-          content:
-            `desktop_screenshot refused: could not make the screenshot directory private ` +
-            `(${screenshotsDir}): ${errorMessage(err)}`,
-          isError: true,
-        };
-      }
+    // Invariant: harden before every capture, including pre-existing directories.
+    // Do not cache this: another process may have widened the mode or ACL.
+    try {
+      await ensurePrivateScreenshotDirectory(screenshotsDir);
+    } catch (err) {
+      return {
+        content:
+          `desktop_screenshot refused: could not make the screenshot directory private ` +
+          `(${screenshotsDir}): ${errorMessage(err)}`,
+        isError: true,
+      };
+    }
+    if (signal.aborted) {
+      return { content: `desktop_screenshot aborted: ${abortReason(signal.reason)}`, isError: true };
     }
 
     const backendInput: DesktopScreenshotInput = {
@@ -321,7 +216,7 @@ export function createDesktopScreenshotHandler(opts: DesktopHandlerOptions = {})
         displayIndex: result.displayIndex,
         captureWidth: result.width,
         captureHeight: result.height,
-        scaleFactor: result.scaleFactor ?? 0,
+        ...(result.scaleFactor === null ? {} : { scaleFactor: result.scaleFactor }),
         screenshotPath: result.path,
         status: 'ok',
         durationMs,
@@ -333,7 +228,12 @@ export function createDesktopScreenshotHandler(opts: DesktopHandlerOptions = {})
         result.width,
         result.height,
         sidecarPath,
+        signal,
+        opts.downscale,
       );
+      if (signal.aborted) {
+        return { content: `desktop_screenshot aborted: ${abortReason(signal.reason)}`, isError: true };
+      }
 
       if (!attached) {
         // Downscale failed or unavailable — text-only result.
@@ -355,7 +255,7 @@ export function createDesktopScreenshotHandler(opts: DesktopHandlerOptions = {})
       const wasDownscaled = attached.attachedWidth !== result.width || attached.attachedHeight !== result.height;
       const responseScale = wasDownscaled
         ? { attachedWidth: attached.attachedWidth, attachedHeight: attached.attachedHeight,
-            attachedToCapturRatio: attached.attachedWidth / result.width }
+            attachedToCaptureRatio: attached.attachedWidth / result.width }
         : {};
 
       return {
@@ -363,6 +263,9 @@ export function createDesktopScreenshotHandler(opts: DesktopHandlerOptions = {})
         image: { mediaType, data: attached.dataBase64 },
       };
     } catch (err) {
+      if (signal.aborted) {
+        return { content: `desktop_screenshot aborted: ${abortReason(signal.reason)}`, isError: true };
+      }
       const durationMs = Date.now() - t0;
       const msg = err instanceof DesktopBackendError ? err.message : errorMessage(err);
 
