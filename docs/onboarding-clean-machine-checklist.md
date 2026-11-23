@@ -14,9 +14,10 @@ The scripts install the public npm `latest` package, not the branch source. This
 is an intentional global install, not a dry run. They may leave the installed
 package, npm cache, a log, and an adjacent `.onboarding-home-*` directory. They do
 not remove an existing installation. Use a fresh account, not your daily account.
-They never request credentials, send a model message, enable services, update the
-package, or change system policy. They use an isolated AFK home and close stdin
-for bare launch. Each command has a timeout (15 minutes for install, one minute
+The observation scripts themselves never request credentials, send a model message,
+enable services, update the package, or change system policy. (afk, once installed,
+will prompt for credentials on first use — that prompt is part of what you are
+observing.) The scripts use an isolated AFK home and close stdin for bare launch. Each command has a timeout (15 minutes for install, one minute
 for other steps); timeout and exit status are findings and do not stop later steps.
 
 Do not put an API key in a terminal command or the log. Review logs before sending:
@@ -49,9 +50,11 @@ kit folder, run:
 
 If policy blocks this downloaded script, do not bypass it or change policy. Copy
 and retain the exact error (D11). With consent, open the reviewed script in a text
-editor and paste its contents into Windows PowerShell instead, leaving the
-`param(...)` defaults and keeping the helper beside it. If that cannot run, send
-the error and starting state; this is evidence, not participant failure. An
+editor and paste its contents — omitting the `param(...)` block at the top —
+into Windows PowerShell, keeping the helper file beside it. The script will run
+with the default log path (`onboarding-windows.log` in the current directory).
+If that cannot run, send the error and starting state; this is evidence, not
+participant failure. An
 alternative is to have the maintainer observe these commands directly and record
 each complete output and exit code:
 

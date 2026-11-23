@@ -154,11 +154,17 @@ describe('LspServerPool', () => {
   }, 10_000);
 
   it('kills a start every acquirer abandoned after the grace window', async () => {
-    const { spec } = setup({ silent: true });
+    const { logFile, spec } = setup({ silent: true });
     const pool = newPool({ abandonedStartGraceMs: 50 });
     const err = await pool.acquire(spec, tempDir, { timeoutMs: 100 }).catch((e: unknown) => e);
     expect((err as LspClientError).kind).toBe('timeout');
     await until(() => pool.size === 0);
+    // Wait for the server process itself to exit, not just pool eviction.
+    await until(() => {
+      const log = readFakeLog(logFile);
+      const pid = log.find((e) => e.spawn !== undefined)?.spawn;
+      return pid === undefined || !pidAlive(pid);
+    });
   }, 10_000);
 
   it('reads the idle window from AFK_LSP_IDLE_SHUTDOWN_MS', () => {

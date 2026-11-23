@@ -66,6 +66,19 @@ describe('checkMemoryStore', () => {
     expect(result.state).toBe('warn');
     expect(result.fix).toContain('disk I/O error');
   });
+
+  it('warns when pathExists throws EACCES (permission denied on parent dir)', async () => {
+    const result = await checkMemoryStore({
+      dbPath: '/protected/.afk/state/kv/kv.db',
+      pathExists: async () => {
+        const err = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+        throw err;
+      },
+      openAndCount: async () => 0,
+    });
+    expect(result.state).toBe('warn');
+    expect(result.fix).toContain('EACCES');
+  });
 });
 
 // ---------------------------------------------------------------------------
