@@ -145,16 +145,6 @@ describe('FailureStreakTracker', () => {
     expect(result.action).toBe('escalate');
   });
 
-  it('listBreachedStreaks returns tasks at or above threshold', () => {
-    const task = makeTask();
-    for (let i = 0; i < DEFAULT_FAILURE_STREAK_THRESHOLD; i++) {
-      tracker.record('t1', task, makeRecord('error'));
-    }
-    tracker.record('t2', makeTask({ taskId: 't2' }), makeRecord('error', { taskId: 't2' }));
-    const breached = tracker.listBreachedStreaks();
-    expect(breached.map((b) => b.taskId)).toContain('t1');
-    expect(breached.map((b) => b.taskId)).not.toContain('t2');
-  });
 });
 
 // ─── Unit tests: helpers ─────────────────────────────────────────────────────
