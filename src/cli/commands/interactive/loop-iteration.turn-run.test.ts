@@ -142,7 +142,7 @@ function makeTurnState(): TurnState {
  * mascotBar.onStage/releaseBand, healthRail?.update, bgResultNotifier.observeToolEvent.
  */
 type FooterStub = {
-  verdictLedger: Pick<FooterSubsystems['verdictLedger'], 'push' | 'render'>;
+  verdictLedger: Pick<FooterSubsystems['verdictLedger'], 'push'>;
   loopStageBar: null;
   mascotBar: Pick<FooterSubsystems['mascotBar'], 'onStage' | 'releaseBand'>;
   healthRail: null;
@@ -151,12 +151,17 @@ type FooterStub = {
 
 function makeFooter(): FooterStub {
   return {
-    verdictLedger: { push: vi.fn(), render: () => null },
+    verdictLedger: { push: vi.fn() },
     loopStageBar: null,
     mascotBar: { onStage: vi.fn(), releaseBand: vi.fn() },
     healthRail: null,
     bgResultNotifier: { observeToolEvent: vi.fn() },
   };
+}
+
+/** Cast helper — avoids repeating `as unknown as FooterSubsystems` at every call site. */
+function asFooter(stub: FooterStub): FooterSubsystems {
+  return stub as unknown as FooterSubsystems;
 }
 
 /**
@@ -221,7 +226,7 @@ describe('runOneTurn — PauseController.check() abort-signal forwarding (#4723)
       [],
       ctx,
       makeTurnState(),
-      makeFooter() as unknown as FooterSubsystems,
+      asFooter(makeFooter()),
       makeTranscript() as unknown as TranscriptHandle,
       makeSurface() as unknown as InputSurface,
       vi.fn(),       // installSoftStop
@@ -251,7 +256,7 @@ describe('runOneTurn — PauseController.check() abort-signal forwarding (#4723)
       [],
       makeCtx(signalA),
       makeTurnState(),
-      makeFooter() as unknown as FooterSubsystems,
+      asFooter(makeFooter()),
       makeTranscript() as unknown as TranscriptHandle,
       makeSurface() as unknown as InputSurface,
       vi.fn(),
@@ -269,7 +274,7 @@ describe('runOneTurn — PauseController.check() abort-signal forwarding (#4723)
       [],
       makeCtx(signalB),
       makeTurnState(),
-      makeFooter() as unknown as FooterSubsystems,
+      asFooter(makeFooter()),
       makeTranscript() as unknown as TranscriptHandle,
       makeSurface() as unknown as InputSurface,
       vi.fn(),
@@ -312,7 +317,7 @@ describe('runOneTurn — PauseController.check() fires before runTurn', () => {
       [],
       makeCtx(abortSignal),
       makeTurnState(),
-      makeFooter() as unknown as FooterSubsystems,
+      asFooter(makeFooter()),
       makeTranscript() as unknown as TranscriptHandle,
       makeSurface() as unknown as InputSurface,
       vi.fn(),
@@ -351,7 +356,7 @@ describe('runOneTurn — abort rejection propagation', () => {
         [],
         makeCtx(abortSignal),
         makeTurnState(),
-        makeFooter() as unknown as FooterSubsystems,
+        asFooter(makeFooter()),
         makeTranscript() as unknown as TranscriptHandle,
         makeSurface() as unknown as InputSurface,
         vi.fn(),
