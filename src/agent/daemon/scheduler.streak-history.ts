@@ -80,7 +80,10 @@ function windowCoversLifetime(oldestLines: string[], createdAt: unknown): boolea
     // A task created strictly after that completion cannot have run before this row.
     // All later rows are in the fully scanned window, so an absent task has exact empty history.
     // Use the oldest usable boundary within the line cap; equality remains conservative.
-    return Date.parse(createdAt) > completedAt;
+    // Guard: a future createdAt (hand-edited or imported) or a backwards clock step must not
+    // produce a false "no runs yet" for a task that may have rows older than the window.
+    const createdAtMs = Date.parse(createdAt);
+    return createdAtMs <= Date.now() && createdAtMs > completedAt;
   }
   return false;
 }
@@ -147,6 +150,121 @@ export function readStreakHistory(path: string, taskId: string, createdAt?: stri
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
+}
+
+/** Per-task mutable state accumulated during a single backward scan. */
+interface TaskScanState {
+  legacy: TelemetryRecord[];
+  base: StreakSnapshot;
+  lastStatus: TelemetryRecord['status'] | undefined;
+  done: boolean;
+  result: StreakHistory | undefined;
+  createdAt: string | undefined;
+}
+
+/**
+ * Read bounded history for a set of tasks in one pass over the telemetry tail.
+ * Equivalent to calling readStreakHistory once per task but opens the file only once.
+ * Missing files mean no runs for all tasks; unreadable files are explicitly indeterminate.
+ */
+export function readAllStreakHistories(
+  path: string,
+  tasks: ReadonlyArray<{ id: string; createdAt?: string }>,
+): Map<string, StreakHistory> {
+  if (tasks.length === 0) return new Map();
+
+  // Build per-task state; key on id.
+  const states = new Map<string, TaskScanState>();
+  for (const t of tasks) {
+    states.set(t.id, {
+      legacy: [],
+      base: emptyStreak(),
+      lastStatus: undefined,
+      done: false,
+      result: undefined,
+      createdAt: t.createdAt,
+    });
+  }
+
+  // Pre-compute JSON needles once.
+  const needles = new Map<string, string>();
+  for (const t of tasks) needles.set(t.id, JSON.stringify(t.id));
+
+  let fd: number | undefined;
+  let missing = false;
+  try {
+    fd = openSync(path, 'r');
+    let pos = fstatSync(fd).size;
+    const stopAt = Math.max(0, pos - STREAK_HISTORY_BYTE_CAP);
+    let suffix = '';
+    let oldestLines: string[] = [];
+    while (pos > stopAt) {
+      const size = Math.min(pos - stopAt, 65536);
+      pos -= size;
+      const buf = Buffer.alloc(size);
+      let read = 0;
+      while (read < size) {
+        const n = readSync(fd, buf, read, size - read, pos + read);
+        if (n === 0) throw new Error('Short telemetry read');
+        read += n;
+      }
+      const lines = (buf.toString('latin1') + suffix).split('\n');
+      suffix = pos > 0 ? (lines.shift() ?? '') : '';
+      oldestLines = lines.concat(oldestLines).slice(0, STREAK_HISTORY_BOUNDARY_LINE_CAP);
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const rawLine = lines[i] ?? '';
+        // Quick check: does this line contain any task id needle?
+        let matchedId: string | undefined;
+        for (const [id, needle] of needles) {
+          if (rawLine.includes(needle)) { matchedId = id; break; }
+        }
+        if (matchedId === undefined) continue;
+        const st = states.get(matchedId);
+        if (st === undefined || st.done) continue;
+        const line = Buffer.from(rawLine, 'latin1').toString('utf8');
+        let row: unknown;
+        try { row = JSON.parse(line); } catch { continue; }
+        if (!isRunRecord(row) || row.taskId !== matchedId) continue;
+        st.lastStatus ??= row.status;
+        if (isSnapshot(row.failureStreak)) {
+          st.result = replayLegacy(row.failureStreak, st.legacy, st.lastStatus);
+          st.done = true;
+          continue;
+        }
+        if (row.status === 'success') {
+          st.result = replayLegacy(st.base, st.legacy, st.lastStatus);
+          st.done = true;
+          continue;
+        }
+        st.legacy.push(row);
+      }
+    }
+    // Finalise tasks not resolved to a snapshot/success boundary.
+    for (const [, st] of states) {
+      if (st.done) continue;
+      const exactEmptyWindow = stopAt > 0 && st.lastStatus === undefined
+        && windowCoversLifetime(oldestLines, st.createdAt);
+      if ((stopAt > 0 && !exactEmptyWindow) || st.legacy.length > 0) {
+        st.base = { ...st.base, exact: false };
+      }
+      st.result = replayLegacy(st.base, st.legacy, st.lastStatus);
+    }
+  } catch (err) {
+    missing = (err as NodeJS.ErrnoException).code === 'ENOENT';
+    for (const [, st] of states) {
+      if (st.done) continue;
+      const base = { ...st.base, exact: missing && st.legacy.length === 0 };
+      st.result = replayLegacy(base, st.legacy, st.lastStatus);
+    }
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+
+  const out = new Map<string, StreakHistory>();
+  for (const [id, st] of states) {
+    out.set(id, st.result ?? replayLegacy({ ...emptyStreak(), exact: false }, [], undefined));
+  }
+  return out;
 }
 
 function replayLegacy(

@@ -3,7 +3,8 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  readStreakHistory, emptyStreak, STREAK_HISTORY_BYTE_CAP, STREAK_HISTORY_BOUNDARY_LINE_CAP,
+  readStreakHistory, readAllStreakHistories, emptyStreak,
+  STREAK_HISTORY_BYTE_CAP, STREAK_HISTORY_BOUNDARY_LINE_CAP,
 } from './scheduler.streak-history.js';
 import { FailureStreakTracker } from './scheduler.failure-streak.js';
 import type { TelemetryRecord } from './scheduler.js';
@@ -186,5 +187,89 @@ describe('streak hydration and legacy fallback', () => {
     write([row('success', 0), row('error', 1, { errorMessage: '🧪'.repeat(20000) }), row('error', 2)]);
     const s = readStreakHistory(path, 't').snapshot;
     expect(s.count).toBe(2); expect(s.exact).toBe(true); expect(s.lastError).toBe('🧪'.repeat(20000));
+  });
+});
+
+describe('future createdAt guard', () => {
+  it('returns inexact when createdAt is in the future, even though it is after the boundary', () => {
+    // boundary row completes at 2026-01-02T00:00:00Z; createdAt is tomorrow (future)
+    const future = new Date(Date.now() + 86400000).toISOString();
+    const padding = row('success', 0, {
+      taskId: 'other', triggeredAt: '2026-01-01T00:00:00Z', durationMs: 86400000,
+      responseExcerpt: 'x'.repeat(1024),
+    });
+    write(Array.from({ length: Math.ceil(STREAK_HISTORY_BYTE_CAP / 1024) }, () => padding));
+    expect(readStreakHistory(path, 't', future)).toMatchObject({
+      hasRuns: false, snapshot: { count: 0, exact: false },
+    });
+  });
+
+  it('returns inexact when a backwards clock step makes createdAt appear after the boundary', () => {
+    // Simulate: boundary at 2026-01-03, task createdAt at 2026-01-04 (> boundary) but we
+    // pin Date.now() to 2026-01-02 so createdAt is "in the future" relative to now.
+    const now = Date.parse('2026-01-02T00:00:00Z');
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const padding = row('success', 0, {
+      taskId: 'other', triggeredAt: '2026-01-02T12:00:00Z', durationMs: 0,
+      responseExcerpt: 'x'.repeat(1024),
+    });
+    write(Array.from({ length: Math.ceil(STREAK_HISTORY_BYTE_CAP / 1024) }, () => padding));
+    // createdAt 2026-01-04 > boundary (2026-01-02T12:00:00Z) AND > now (2026-01-02) → inexact
+    expect(readStreakHistory(path, 't', '2026-01-04T00:00:00Z')).toMatchObject({
+      hasRuns: false, snapshot: { count: 0, exact: false },
+    });
+  });
+});
+
+describe('readAllStreakHistories', () => {
+  it('returns an empty map for an empty task list', () => {
+    expect(readAllStreakHistories(path, [])).toEqual(new Map());
+  });
+
+  it('reads multiple tasks in one pass and matches per-task readStreakHistory results', () => {
+    const r2 = { ...row('error', 1), taskId: 'b' };
+    write([row('success', 0), row('error', 1), r2]);
+    const all = readAllStreakHistories(path, [{ id: 't' }, { id: 'b' }]);
+    const single_t = readStreakHistory(path, 't');
+    const single_b = readStreakHistory(path, 'b');
+    expect(all.get('t')).toMatchObject({ hasRuns: single_t.hasRuns, snapshot: { count: single_t.snapshot.count, exact: single_t.snapshot.exact } });
+    expect(all.get('b')).toMatchObject({ hasRuns: single_b.hasRuns, snapshot: { count: single_b.snapshot.count, exact: single_b.snapshot.exact } });
+  });
+
+  it('returns correct results for three tasks from a single file scan', () => {
+    // 't' has an error, 'b' has an error, 'c' is absent — all resolved in one pass
+    write([row('success', 0), row('error', 1), { ...row('error', 2), taskId: 'b' }]);
+    const all = readAllStreakHistories(path, [{ id: 't' }, { id: 'b' }, { id: 'c' }]);
+    expect(all.get('t')).toMatchObject({ hasRuns: true, snapshot: { count: 1, exact: true } });
+    expect(all.get('b')).toMatchObject({ hasRuns: true, snapshot: { count: 1, exact: false } });
+    // 'c' has no rows; file is small so stopAt===0, no cap truncation → exact empty
+    expect(all.get('c')).toMatchObject({ hasRuns: false, snapshot: { count: 0, exact: true } });
+  });
+
+  it('returns exact empty for a task absent in a window that covers its lifetime', () => {
+    const padding = row('success', 0, {
+      taskId: 'other', triggeredAt: '2026-01-01T00:00:00Z', durationMs: 0,
+      responseExcerpt: 'x'.repeat(1024),
+    });
+    write(Array.from({ length: Math.ceil(STREAK_HISTORY_BYTE_CAP / 1024) }, () => padding));
+    const all = readAllStreakHistories(path, [{ id: 't', createdAt: '2026-01-02T00:00:00Z' }]);
+    expect(all.get('t')).toMatchObject({ hasRuns: false, snapshot: { count: 0, exact: true } });
+  });
+
+  it('returns inexact for an absent task with a future createdAt even when boundary is older', () => {
+    const future = new Date(Date.now() + 86400000).toISOString();
+    const padding = row('success', 0, {
+      taskId: 'other', triggeredAt: '2026-01-01T00:00:00Z', durationMs: 0,
+      responseExcerpt: 'x'.repeat(1024),
+    });
+    write(Array.from({ length: Math.ceil(STREAK_HISTORY_BYTE_CAP / 1024) }, () => padding));
+    const all = readAllStreakHistories(path, [{ id: 't', createdAt: future }]);
+    expect(all.get('t')).toMatchObject({ hasRuns: false, snapshot: { count: 0, exact: false } });
+  });
+
+  it('returns exact empty for a missing file', () => {
+    const all = readAllStreakHistories(path, [{ id: 't' }, { id: 'b' }]);
+    expect(all.get('t')).toMatchObject({ hasRuns: false, snapshot: { exact: true } });
+    expect(all.get('b')).toMatchObject({ hasRuns: false, snapshot: { exact: true } });
   });
 });

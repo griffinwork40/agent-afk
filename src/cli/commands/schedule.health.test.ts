@@ -149,4 +149,16 @@ describe('fixture-backed schedule health and list', () => {
     await command('list'); expect(output()).toContain('skipped | 4 | original');
     await command('health'); expect(output()).toContain('4 consecutive failures since original'); expect(process.exitCode).toBe(1);
   });
+
+  it('health reports correct results for multiple tasks from a single telemetry scan', async () => {
+    // Three tasks sharing one telemetry file: verifies readAllStreakHistories is used (one pass).
+    const id1 = task(1); const id2 = task(1); const id3 = task(1);
+    fixture([record(id1, 'success', 1), record(id1, 'error', 2), record(id2, 'success', 3), record(id3, 'error', 4)]);
+    await command('health');
+    expect(process.exitCode).toBe(1);
+    const out = output();
+    expect(out).toContain(`${id1} (Fixture), threshold 1: 1 consecutive failures`);
+    expect(out).toContain(`${id2} (Fixture), threshold 1: healthy`);
+    expect(out).toContain(`${id3} (Fixture), threshold 1: at least 1 consecutive failures`);
+  });
 });
