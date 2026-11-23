@@ -92,13 +92,13 @@ function wordStartBefore(buffer: string, cursor: number): number {
   // previousGraphemeIndex(buffer, i) would return).
   let k = offsets.length - 1;
   while (k > 0 && offsets[k]! >= i) k--;
-  while (i > 0) {
+  while (i > 0 && k >= 0) {
     const prev = offsets[k]!;
     if (!/\s/.test(buffer.slice(prev, i))) break;
     i = prev;
     k--;
   }
-  while (i > 0) {
+  while (i > 0 && k >= 0) {
     const prev = offsets[k]!;
     if (/\s/.test(buffer.slice(prev, i))) break;
     i = prev;
@@ -124,13 +124,13 @@ function wordEndAfter(buffer: string, cursor: number): number {
   // nextGraphemeIndex(buffer, i) would return).
   let k = 0;
   while (k < offsets.length - 1 && offsets[k]! <= i) k++;
-  while (i < len) {
+  while (i < len && k < offsets.length) {
     const next = offsets[k]!;
     if (!/\s/.test(buffer.slice(i, next))) break;
     i = next;
     k++;
   }
-  while (i < len) {
+  while (i < len && k < offsets.length) {
     const next = offsets[k]!;
     if (/\s/.test(buffer.slice(i, next))) break;
     i = next;

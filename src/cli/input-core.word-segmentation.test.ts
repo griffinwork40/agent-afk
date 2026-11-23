@@ -96,6 +96,42 @@ function refWordEnd(buffer: string, cursor: number): number {
   return i;
 }
 
+// Regression for #5162: word-boundary loops must not walk k past the ends of
+// the offsets array. When the buffer starts with whitespace and the cursor sits
+// at the end of that grapheme, wordStartBefore decrements k to -1 without the
+// guard; when the buffer ends with whitespace and the cursor is at the start of
+// that grapheme, wordEndAfter increments k past offsets.length - 1 without the
+// guard. In both cases the coercion of undefined produces the correct answer,
+// but the reads are out-of-bounds. The guards make the intent explicit.
+describe('InputCore word ops: bounds guards on offsets array (regression #5162)', () => {
+  it('moveWordBackward with cursor at end of a leading-whitespace grapheme does not walk k past 0', () => {
+    // Buffer: single space then word. Cursor = 1 (end of the space grapheme).
+    // wordStartBefore: k starts at 0, first loop decrements to -1 — guard fires.
+    const state = { buffer: ' word', cursor: 1 };
+    expect(InputCore.moveWordBackward(state).cursor).toBe(0);
+  });
+
+  it('moveWordForward with cursor at start of a trailing-whitespace grapheme does not walk k past offsets.length', () => {
+    // Buffer: word then single space. Cursor = 4 (start of the trailing space).
+    // wordEndAfter: k starts at offsets.length - 1, second loop increments to
+    // offsets.length — guard fires.
+    const state = { buffer: 'word ', cursor: 4 };
+    expect(InputCore.moveWordForward(state).cursor).toBe(5);
+  });
+
+  it('deleteWordBackward on a buffer whose only content is whitespace clears it', () => {
+    // Exercises the k >= 0 guard: entire buffer is whitespace, cursor at end.
+    const state = { buffer: '   ', cursor: 3 };
+    expect(InputCore.deleteWordBackward(state)).toEqual({ buffer: '', cursor: 0 });
+  });
+
+  it('deleteWordForward on a buffer whose only content is whitespace clears it', () => {
+    // Exercises the k < offsets.length guard: entire buffer is whitespace, cursor at start.
+    const state = { buffer: '   ', cursor: 0 };
+    expect(InputCore.deleteWordForward(state)).toEqual({ buffer: '', cursor: 0 });
+  });
+});
+
 describe('InputCore word ops match the per-grapheme reference walk', () => {
   const BUFFERS = [
     '',
