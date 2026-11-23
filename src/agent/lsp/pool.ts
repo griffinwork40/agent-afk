@@ -160,7 +160,17 @@ export class LspServerPool {
     this.entries.set(key, entry);
     this.spawnCount++;
     const start = this.opts.startClient
-      ? this.opts.startClient(spec, root)
+      ? this.opts.startClient(spec, root).then((client) => {
+          // startClient bypasses LspClient.start's unrefSignal wiring; apply
+          // it here so custom starts are unreffed when the last timeout-waiter
+          // leaves, matching the behaviour of the default path.
+          if (entry.unrefStart.signal.aborted) {
+            client.unref();
+          } else {
+            entry.unrefStart.signal.addEventListener('abort', () => client.unref(), { once: true });
+          }
+          return client;
+        })
       : LspClient.start(spec, root, { signal: entry.abortStart.signal, unrefSignal: entry.unrefStart.signal });
     entry.starting = start.then(
       (client) => {
@@ -306,6 +316,7 @@ export class LspServerPool {
   killAll(): void {
     for (const entry of this.entries.values()) {
       entry.abortStart.abort();
+      entry.unrefStart.abort();
       const client = entry.client;
       if (client) client.killSync();
     }
