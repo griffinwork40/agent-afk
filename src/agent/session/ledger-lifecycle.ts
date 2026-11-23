@@ -49,14 +49,16 @@ export class LedgerLifecycle {
   /** The most recent seal; a later seal waits for it. */
   private sealing: Promise<void> | undefined;
   /** Last-chance writer hook; see {@link setBeforeSeal}. */
-  private beforeSeal: (() => void) | null = null;
+  private beforeSeal: ((reason: string) => void) | null = null;
 
   /**
    * Register the one hook that runs synchronously at the start of every
    * {@link seal}, while the writer is still open: the last chance to record
-   * into the ledger being sealed. Must not throw.
+   * into the ledger being sealed. Receives the seal `reason` so the hook can
+   * distinguish terminal seals (close, abort) from non-terminal ones (reset /
+   * rewind). Must not throw.
    */
-  setBeforeSeal(hook: () => void): void {
+  setBeforeSeal(hook: (reason: string) => void): void {
     this.beforeSeal = hook;
   }
 
@@ -152,7 +154,7 @@ export class LedgerLifecycle {
    * settled, so nothing writes into `sessions/<id>/` after close (#4959).
    */
   async seal(reason: string): Promise<void> {
-    this.beforeSeal?.();
+    this.beforeSeal?.(reason);
     const writer = this.writer;
     const metaWrite = this.metaWrite;
     this.metaWrite = null;

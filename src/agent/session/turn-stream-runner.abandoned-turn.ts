@@ -309,17 +309,24 @@ export class ProviderTurns {
   }
 
   /**
-   * The conversation is ending (close, reset, abort): its ledger is about to
-   * close. A send still waiting to start is cancelled, so it neither hangs on
-   * a turn that will never end nor pushes its message into a finished
-   * session. An abandoned turn that has not recorded its `done` records it
-   * now, and its remaining events are kept away from a closed session or the
-   * next conversation's ledger; it stays tracked so it is still read off the
+   * The ledger is about to close. For terminal seals (close, abort) a send
+   * still waiting to start is cancelled — it must not hang on a turn that will
+   * never end, nor push its message into a finished session. For non-terminal
+   * seals (`'rewind'` — idle surface projection replacement) the send is left
+   * alone: the conversation continues and the send should still be delivered.
+   * (`'reset'` is the terminal /clear reason; `'rewind'` is the non-terminal one.)
+   *
+   * An abandoned turn that has not recorded its `done` records it now, and its
+   * remaining events are kept away from the closing ledger or the next
+   * conversation's ledger; it stays tracked so it is still read off the
    * iterator.
    */
-  seal(): void {
-    const send = this.pending;
-    if (send && !send.cancelled) send.cancel();
+  seal(reason: string): void {
+    const terminal = reason !== 'rewind';
+    if (terminal) {
+      const send = this.pending;
+      if (send && !send.cancelled) send.cancel();
+    }
     const turn = this.open;
     if (!turn || !turn.abandoned) return;
     turn.sealed = true;
