@@ -78,6 +78,7 @@ describe('checkMemoryStore', () => {
     });
     expect(result.state).toBe('warn');
     expect(result.fix).toContain('EACCES');
+    expect(result.detail).toBe('/protected/.afk/state/kv/kv.db');
   });
 });
 
