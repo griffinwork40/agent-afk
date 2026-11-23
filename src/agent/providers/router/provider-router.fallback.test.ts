@@ -112,6 +112,7 @@ function makeRouter(o: {
   primary?: ProviderOpts;
   secondary?: ProviderOpts;
   secondaryProvider?: ModelProvider;
+  primeCredential?: (model: string | undefined) => Promise<void>;
 }) {
   const anthropic = new FakeProvider('anthropic', o.primary);
   const openai = new FakeProvider('openai', o.secondary);
@@ -121,6 +122,7 @@ function makeRouter(o: {
     providerNameForModel: family,
     resolveApiKey: () => undefined,
     ...(o.noFallbackDep ? {} : { getFallbackModel: () => fb.value }),
+    ...(o.primeCredential ? { primeCredential: o.primeCredential } : {}),
   };
   const outer = new QueryInputStream(() => 'sess');
   const config = { model: o.model ?? 'opus', ...o.config } as AgentConfig;
@@ -156,6 +158,25 @@ const SNAP: JournalMessage[] = [
 ];
 
 beforeEach(() => resetSlotBindings());
+
+describe('ProviderRouter fallback: credential prime', () => {
+  it('primes the fallback model before building its inner', async () => {
+    const order: string[] = [];
+    const primeCredential = async (m: string | undefined): Promise<void> => { order.push(`prime:${String(m)}`); };
+    const { router, outer, iter, anthropic } = makeRouter({
+      fallback: 'sonnet', primary: { ...firstTurnFails, snapshot: () => SNAP }, primeCredential,
+    });
+    const realQuery = anthropic.query.bind(anthropic);
+    anthropic.query = (args) => { order.push(`build:${String(args.config.model)}`); return realQuery(args); };
+    await pullInit(iter);
+    const ev = await driveTurn(iter, outer, 'hello');
+    expect(ev.at(-1)?.type).toBe('turn.completed');
+    const iPrime = order.indexOf('prime:sonnet');
+    expect(iPrime).toBeGreaterThanOrEqual(0);
+    expect(order.slice(iPrime + 1).some((e) => e.startsWith('build:'))).toBe(true);
+    await router.close();
+  });
+});
 
 describe('ProviderRouter fallback: swap and replay', () => {
   it('never yields the request; notice exactly once before the fallback output; replays the turn once', async () => {
