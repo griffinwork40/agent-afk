@@ -27,8 +27,9 @@ export function validateChatUrl(input: string): string {
   try {
     const url = new URL(input);
     if (url.username || url.password || url.hash) throw new Error();
+    if (url.search) throw new Error();
     if (url.protocol !== 'wss:' && !(url.protocol === 'ws:' &&
-      ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) throw new Error();
+      ['127.0.0.1', '[::1]'].includes(url.hostname))) throw new Error();
     return url.href;
   } catch { throw new Error('Chat relay URL must use wss, or ws on loopback, without credentials'); }
 }
@@ -81,8 +82,8 @@ export class ChatTransport {
     if (!this.#socket || this.#stopped) return false;
     try {
       const data = JSON.stringify(frame);
-      handedToSocket?.();
       this.#socket.send(data);
+      handedToSocket?.();
       return true;
     }
     catch { this.#lost(); return false; }

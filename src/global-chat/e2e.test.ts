@@ -44,7 +44,7 @@ async function connect(
   const end = new ClientEnd();
   const connId = relay.register(end, ipHash);
   const client = new GlobalChatClient({
-    url: 'ws://localhost/global',
+    url: 'ws://127.0.0.1/global',
     identity: store,
     WebSocket: relay.socketFactory(end),
     now: () => relay._time,
@@ -202,7 +202,7 @@ describe('GlobalChatClient <-> Room e2e', () => {
     const end2 = new ClientEnd();
     const connId2 = relay.register(end2, 'ip-v2');
     const client2 = new GlobalChatClient({
-      url: 'ws://localhost/global', identity: victim.store,
+      url: 'ws://127.0.0.1/global', identity: victim.store,
       WebSocket: relay.socketFactory(end2), now: () => relay._time,
     });
     const errP = awaitError(client2);
@@ -329,7 +329,7 @@ describe('GlobalChatClient <-> Room e2e', () => {
     expect((await s4.rename('alice3')).ok).toBe(true);
     const end3 = new ClientEnd();
     const connId3 = relay.register(end3, 'ip-a3');
-    const client3 = new GlobalChatClient({ url: 'ws://localhost/global', identity: s4,
+    const client3 = new GlobalChatClient({ url: 'ws://127.0.0.1/global', identity: s4,
       WebSocket: relay.socketFactory(end3), now: () => t0 });
     const errP = awaitError(client3);
     await client3.connect(); end3.triggerOpen(); await tick(30);

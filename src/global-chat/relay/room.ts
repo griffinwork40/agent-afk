@@ -187,9 +187,6 @@ export class Room {
     }
     await this.store.upsertKeyRecord({ ...keyRecord, lastSeenAt: now });
 
-    // Opportunistic prune (bounded -- store implementations may add LIMIT internally)
-    await this.onAlarm();
-
     const backlog = await this.store.getBacklog(BACKLOG_SIZE);
     const updatedConn: ConnRecord = { ...conn, pubkey: frame.pubkey, name: frame.name, helloOk: true };
     const prevOnline = countDistinctKeys(allConns);

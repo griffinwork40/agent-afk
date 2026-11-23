@@ -219,8 +219,6 @@ export class ChatRoom {
       }
     }
     this.broadcast(effect.toBroadcast);
-    const after = countDistinctKeys(this.buildAllConns());
-    if (after !== before) this.broadcast([{ t: 'presence', online: after }]);
   }
 }
 

@@ -24,13 +24,19 @@ describe('validateChatUrl', () => {
     expect(validateChatUrl('wss://chat.example.com/relay')).toBe('wss://chat.example.com/relay');
     expect(validateChatUrl('wss://chat.example.com')).toBe('wss://chat.example.com/');
   });
-  it('accepts ws:// on loopback hostnames', () => {
-    expect(validateChatUrl('ws://localhost/relay')).toBe('ws://localhost/relay');
+  it('accepts ws:// on numeric loopback only', () => {
     expect(validateChatUrl('ws://127.0.0.1/relay')).toBe('ws://127.0.0.1/relay');
     expect(validateChatUrl('ws://[::1]/relay')).toBe('ws://[::1]/relay');
   });
+  it('rejects ws:// on localhost (DNS-resolved, not guaranteed loopback)', () => {
+    expect(() => validateChatUrl('ws://localhost/relay')).toThrow(/wss/);
+  });
   it('rejects ws:// on non-loopback', () => {
     expect(() => validateChatUrl('ws://chat.example.com')).toThrow(/wss/);
+  });
+  it('rejects URLs with query string', () => {
+    expect(() => validateChatUrl('wss://chat.example.com/?token=secret')).toThrow();
+    expect(() => validateChatUrl('ws://127.0.0.1/relay?token=secret')).toThrow();
   });
   it('rejects credentials in URL', () => {
     expect(() => validateChatUrl('wss://user:pass@chat.example.com')).toThrow();
