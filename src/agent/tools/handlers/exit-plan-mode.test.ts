@@ -555,8 +555,8 @@ describe('exit_plan_mode free-text revision feedback (allowCustom)', () => {
     expect(res.content).not.toContain('Plan approved');
   });
 
-  it('approval trap: feedback containing "bypass" or "Keep" never approves or escalates', async () => {
-    for (const text of ['use bypass mode for this', 'Keep it, but also add tests', 'Approve — implement now']) {
+  it('approval trap: feedback containing "unrestricted" or "Keep" never approves or escalates', async () => {
+    for (const text of ['use unrestricted mode for this', 'Keep it, but also add tests', 'Approve — implement now']) {
       installCustomAnswer(text);
       const { controls, modeCalls, seeds } = makeControls('acceptEdits');
       const res = await run(controls);

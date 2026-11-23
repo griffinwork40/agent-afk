@@ -28,7 +28,7 @@ export function warnPermissionModeRemoval(mode: RemovedPermissionMode): void {
   if (warnedRemovedModes.has(mode)) return;
   warnedRemovedModes.add(mode);
   const message =
-    `[afk] permissionMode "${mode}" was removed. The session will run in bypassPermissions. Set "permissionMode": "plan" for a read-only session.`;
+    `[afk] permissionMode "${mode}" was removed. The session will run in unrestricted mode. Set "permissionMode": "plan" for a read-only session.`;
   if (deferredPermissionModeWarnings !== null) {
     deferredPermissionModeWarnings.push(message);
   } else {

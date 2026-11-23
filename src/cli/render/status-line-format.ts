@@ -230,7 +230,7 @@ export function formatStatusLine(f: StatusLineFields, maxW: number): string {
   if (f.permissionMode === 'plan') {
     parts.push({ text: palette.warning('● plan') });
   } else if (f.permissionMode === 'bypassPermissions') {
-    parts.push({ text: palette.bypass('⚡ bypass') });
+    parts.push({ text: palette.unrestricted('⚡ unrestricted') });
   }
   // 'default' is deprecated; no chip rendered — sessions now baseline at bypassPermissions.
 

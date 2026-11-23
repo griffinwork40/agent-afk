@@ -85,16 +85,16 @@ describe('formatStatusLine — basic assembly with all fields populated', () => 
     expect(out).toContain('● plan');
   });
 
-  it('renders bypass mode chip', () => {
+  it('renders unrestricted mode chip', () => {
     const out = stripAll(formatStatusLine({ model: 'sonnet', permissionMode: 'bypassPermissions' }, 200));
-    expect(out).toContain('⚡ bypass');
+    expect(out).toContain('⚡ unrestricted');
   });
 
   it('renders no chip for deprecated default mode', () => {
     // 'default' is deprecated; the status line renders no chip for it.
     const out = stripAll(formatStatusLine({ model: 'sonnet', permissionMode: 'default' }, 200));
     expect(out).not.toContain('○ default');
-    expect(out).not.toContain('bypass');
+    expect(out).not.toContain('unrestricted');
     expect(out).not.toContain('plan');
   });
 

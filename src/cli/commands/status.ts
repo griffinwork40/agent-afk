@@ -88,7 +88,7 @@ export function registerStatusCommand(program: Command): void {
           }, null, 2));
         } else {
           const bypassRow = permissionMode === 'bypassPermissions'
-            ? { label: 'Permissions', value: 'Bypass — path containment off (read/write anywhere)', kind: 'warn' as const }
+            ? { label: 'Permissions', value: 'Unrestricted — path containment off (read/write anywhere)', kind: 'warn' as const }
             : { label: 'Permissions', value: `Contained — mode: ${permissionMode}`, kind: 'info' as const };
           console.log(palette.info(
             '\n' +

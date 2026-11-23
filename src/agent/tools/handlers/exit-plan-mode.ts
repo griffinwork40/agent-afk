@@ -54,11 +54,12 @@ export const EXIT_PLAN_MODE_TOOL_NAME = 'exit_plan_mode';
 // Choice labels. Kept < 128 chars so the REPL picker's `sanitizeSchemaString`
 // is a no-op and `content.value` round-trips verbatim.
 //
-// Invariant: the result matcher keys off the substring "bypass" to map a pick to
-// `bypassPermissions`. So `restoreChoiceLabel` MUST contain "bypass" only when
-// the restored mode IS bypass, and the static escalation label below is the only
-// other "bypass"-bearing choice — any other restore label must omit the word.
-const CHOICE_BYPASS = 'Approve — implement now (bypass mode: no prompts, read/write any path)';
+// Invariant: the result matcher keys off the substring "unrestricted" to map a
+// pick to `bypassPermissions`. So `restoreChoiceLabel` MUST contain
+// "unrestricted" only when the restored mode IS bypassPermissions, and the
+// static escalation label below is the only other "unrestricted"-bearing
+// choice — any other restore label must omit the word.
+const CHOICE_UNRESTRICTED = 'Approve — implement now (unrestricted mode: no prompts, read/write any path)';
 const CHOICE_KEEP = 'Keep planning';
 
 const PICKER_MESSAGE =
@@ -87,12 +88,12 @@ export const PLAN_TEXT_REFUSAL =
  * Label for the primary "approve and implement" choice, which restores the mode
  * the user was in BEFORE plan mode. The phrasing reflects the concrete restored
  * mode so the picker is honest about where you land. See the matcher invariant
- * above: only the bypass case may contain the substring "bypass".
+ * above: only the bypassPermissions case may contain the substring "unrestricted".
  */
 function restoreChoiceLabel(mode: PermissionMode): string {
   switch (mode) {
     case 'bypassPermissions':
-      return 'Approve — implement now (restore bypass mode: no prompts, read/write any path)';
+      return 'Approve — implement now (restore unrestricted mode: no prompts, read/write any path)';
     case 'acceptEdits':
       return 'Approve — implement now (restore accept-edits mode: edits auto-approved)';
     case 'dontAsk':
@@ -171,13 +172,13 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
     const prevMode: PermissionMode = controls.getPrePlanMode() ?? 'bypassPermissions';
     const restoreChoice = restoreChoiceLabel(prevMode);
 
-    // Offer an explicit bypass ESCALATION too — unless the restore choice is
-    // already bypass (the user planned from bypass), in which case a second
-    // bypass row would be redundant.
+    // Offer an explicit unrestricted ESCALATION too — unless the restore choice
+    // is already unrestricted (the user planned from unrestricted), in which
+    // case a second unrestricted row would be redundant.
     const choices =
       prevMode === 'bypassPermissions'
         ? [restoreChoice, CHOICE_KEEP]
-        : [restoreChoice, CHOICE_BYPASS, CHOICE_KEEP];
+        : [restoreChoice, CHOICE_UNRESTRICTED, CHOICE_KEEP];
 
     const request: ElicitationRequest = {
       serverName: 'agent',
@@ -219,9 +220,9 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
       : '';
 
     // Keyword matching is robust to picker sanitization / numbered-fallback
-    // round-tripping. Order matters: detect "keep" first, then the "bypass"
-    // branch (the escalation choice, or restore-of-bypass — both land in
-    // bypass), else restore the captured pre-plan mode.
+    // round-tripping. Order matters: detect "keep" first, then the
+    // "unrestricted" branch (the escalation choice, or restore-of-unrestricted
+    // — both land in bypassPermissions), else restore the captured pre-plan mode.
     if (feedback.kind === 'empty' || picked.startsWith('Keep') || picked === CHOICE_KEEP) {
       return {
         content:
@@ -230,7 +231,7 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
       };
     }
 
-    const mode: PermissionMode = picked.includes('bypass') ? 'bypassPermissions' : prevMode;
+    const mode: PermissionMode = picked.includes('unrestricted') ? 'bypassPermissions' : prevMode;
 
     // Record the approved mode ALONGSIDE the seed. The permission flip is deferred
     // to the post-turn drain boundary (loop-iteration.ts → takePendingPlanExitSeed)

@@ -111,9 +111,9 @@ export function registerInteractiveCommand(program: Command): void {
         worktreeBaseDescriptionSuffix:
           ', or interactive.worktreeBase in afk.config.json.',
         dangerouslySkipPermissionsDescription:
-          'Force bypass mode (already the default for new installs): skip path-approval prompts; ' +
+          'Force unrestricted mode (already the default for new installs): skip path-approval prompts; ' +
           'read/write ANY path with no confirmation. Toggle live with Shift+Tab (permission-mode cycle); ' +
-          'disable persistently with `afk config set permissionMode default`. Does not affect ask_question.',
+          'disable persistently with `afk config set permissionMode plan`. Does not affect ask_question.',
       },
     ),
   ).action(async (input: string[], options: CliOptions) => {
