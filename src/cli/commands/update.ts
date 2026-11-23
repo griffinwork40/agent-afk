@@ -89,7 +89,7 @@ export function registerUpdateCommand(program: Command): void {
         // failed lifecycle restarts require an explicit new CLI invocation.
         console.log(palette.dim(opts.restart === false
           ? '  Install lifecycle scripts skipped; no forced service restarts. Idle version watchdogs remain active.'
-          : '  Telegram updates through its idle-aware watchdog. If a service remains on the old version, run `afk service restart <name>` when idle.'));
+          : '  Telegram updates through its idle-aware watchdog (exits with a restart signal so the service supervisor relaunches the new binary). If a service remains on the old version, run `afk service restart <name>` when idle.'));
       } else if (signal !== null) {
         console.error(palette.warning(`npm install was killed by signal ${signal}.`));
         process.exitCode = 1;

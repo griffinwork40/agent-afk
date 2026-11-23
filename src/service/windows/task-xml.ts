@@ -9,8 +9,12 @@
  * RunLevel LeastPrivilege) so no elevation is required.
  *
  * Crash restart is handled via `<RestartOnFailure>` (Interval PT1M,
- * Count 999) so the service behaves like launchd `KeepAlive` and systemd
- * `Restart=always` across crash, OOM, and manual kills.
+ * Count 999), which relaunches the task when it exits with a non-zero code.
+ * This covers crashes, OOM, and manual kills.  Unlike launchd `KeepAlive`
+ * and systemd `Restart=always`, Task Scheduler does NOT relaunch on a clean
+ * (exit 0) termination — the version-drift watchdog therefore exits with
+ * code 1 on win32 so this rule fires after an update (see
+ * `src/telegram/stats-ticker.ts` → `DRIFT_EXIT_CODE`).
  *
  * Environment: Task Scheduler has no native env block in the XML schema.
  * We prepend `set "K=V" && ` segments in the cmd.exe command line. Only
@@ -115,7 +119,7 @@ function buildCmdArguments(
  *
  * Invariants:
  *   - LogonTrigger (current user) ≈ launchd `RunAtLoad`.
- *   - RestartOnFailure Interval PT1M Count 999 ≈ launchd `KeepAlive`.
+ *   - RestartOnFailure Interval PT1M Count 999: relaunches on non-zero exit.
  *   - DisallowStartIfOnBatteries false + StopIfGoingOnBatteries false:
  *     keeps the service running on laptops on battery.
  *   - ExecutionTimeLimit PT0S: no timeout — the task runs indefinitely.
