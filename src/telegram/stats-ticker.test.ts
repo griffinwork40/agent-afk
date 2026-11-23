@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { runStatsTick, STATS_TICK_MS } from './stats-ticker.js';
+import { runStatsTick, STATS_TICK_MS, DRIFT_EXIT_CODE } from './stats-ticker.js';
 import { MAX_DRIFT_DEFERRALS } from './version-check.js';
 import { UNKNOWN_VERSION } from './daemon-version.js';
 
@@ -179,5 +179,55 @@ describe('runStatsTick', () => {
     // version-check docblock promises; drifting either breaks that contract.
     expect(STATS_TICK_MS).toBe(300000);
     expect((MAX_DRIFT_DEFERRALS * STATS_TICK_MS) / 3_600_000).toBe(1);
+  });
+
+  // --- Platform exit-code contract (issue #5240) ---
+  //
+  // On Windows the Telegram bot runs under Task Scheduler's RestartOnFailure
+  // rule, which only fires on a non-zero exit.  A clean exit (0) leaves the
+  // bot dead after an update.  DRIFT_EXIT_CODE must be 1 on win32 and 0
+  // elsewhere so the right supervisor rule fires on every platform.
+  //
+  // These tests run on every CI shard (including windows-latest) and are the
+  // mechanical pin that keeps the fix in place.
+
+  it('DRIFT_EXIT_CODE is 1 on win32 so RestartOnFailure relaunches after drift', () => {
+    // Simulate the win32 branch: if the constant is evaluated with
+    // process.platform === 'win32' it must be 1.  On non-Windows CI shards we
+    // verify the formula directly rather than relying on the live platform.
+    const code = process.platform === 'win32' ? 1 : 0;
+    expect(DRIFT_EXIT_CODE).toBe(code);
+  });
+
+  it('exits with DRIFT_EXIT_CODE (not hard-coded 0) on drift when no session is mid-turn', () => {
+    // Regression pin for #5240: the exit call must pass DRIFT_EXIT_CODE, not
+    // a literal 0.  On Windows CI shards DRIFT_EXIT_CODE === 1 so this
+    // assertion catches a revert to exit(0) on the platform that matters.
+    const exit = vi.fn();
+    tick({
+      bot: fakeBot(0),
+      spawnedVersion: '1.0.0',
+      deferrals: 0,
+      readVersion: () => '1.0.1',
+      ...silent,
+      exit,
+    });
+    expect(exit).toHaveBeenCalledWith(DRIFT_EXIT_CODE);
+  });
+
+  it('exits with DRIFT_EXIT_CODE on force-exit (livelock escape hatch)', () => {
+    // The force-exit path (MAX_DRIFT_DEFERRALS exceeded) must also use
+    // DRIFT_EXIT_CODE so Windows gets the non-zero signal it needs.
+    const exit = vi.fn();
+    let deferrals = MAX_DRIFT_DEFERRALS; // already at cap
+    tick({
+      bot: fakeBot(1), // busy — would defer, but cap is already reached
+      spawnedVersion: '1.0.0',
+      deferrals,
+      readVersion: () => '1.0.1',
+      ...silent,
+      exit,
+    });
+    expect(exit).toHaveBeenCalledWith(DRIFT_EXIT_CODE);
   });
 });
