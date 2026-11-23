@@ -83,6 +83,39 @@ describe('assembleChildConfig — real preamble composition (unmocked injectors)
     expect(identityIdx).toBeLessThan(budgetIdx);
   });
 
+  it('scratchDisposable:true flows through assembleChildConfig into the system prompt', () => {
+    const cfg = assembleChildConfig(makeArgs({
+      options: {
+        parent: { sessionId: 'p' },
+        // cwd must be inside .afk-worktrees/ so the preamble recognises it as
+        // a worktree child and emits the scratch-dir sentence.
+        config: { depth: 1, maxDepth: 6, cwd: '/repo/.afk-worktrees/my-slug/src' },
+        agentType: 't',
+      },
+      scratchDisposable: true,
+    }));
+
+    const sp = cfg.systemPrompt as string;
+    // injectSubagentIdentityPreamble reads config.cwd; renderWorktreeRules emits
+    // the scratch-dir sentence only when scratchDisposable===true AND cwd is
+    // under .afk-worktrees/.
+    expect(sp).toContain('.afk-scratch');
+  });
+
+  it('scratchDisposable absent/false does NOT emit scratch-dir sentence', () => {
+    const cfg = assembleChildConfig(makeArgs({
+      options: {
+        parent: { sessionId: 'p' },
+        config: { depth: 1, maxDepth: 6, cwd: '/repo/.afk-worktrees/my-slug/src' },
+        agentType: 't',
+      },
+      // scratchDisposable intentionally omitted
+    }));
+
+    const sp = cfg.systemPrompt as string;
+    expect(sp).not.toContain('.afk-scratch');
+  });
+
   it('at-cap: emits the depth-refusal line when depth equals maxDepth', () => {
     const cfg = assembleChildConfig(makeArgs({
       options: {
