@@ -6,7 +6,9 @@
  * Invariants:
  *   - Concurrent `acquire`s for the same key share ONE in-flight start.
  *   - A dead client (crash, exit, failed start) is evicted immediately; the
- *     next `acquire` spawns a fresh one. A dead handle is never returned.
+ *     next `acquire` spawns a fresh one UNLESS the crash-loop guard has
+ *     tripped, in which case `acquire` throws `LspClientError('disabled', …)`
+ *     until the guard's cooldown expires (~5 min, #5131).
  *   - A start that every acquirer has abandoned (timeout/abort) is disposed,
  *     so a server that never finishes `initialize` is not left orphaned.
  *   - Idle timers are `.unref()`ed and every live server is disposed on
@@ -29,6 +31,7 @@
 import { realpathSync } from 'node:fs';
 import { env } from '../../config/env.js';
 import { registerCleanup } from '../../utils/cleanupRegistry.js';
+import { debugLog } from '../../utils/debug.js';
 import { LspClient, LspClientError } from './client.js';
 import { CrashLoopGuard, getOrCreateGuard } from './crash-loop-guard.js';
 import type { ServerSpec } from './server-spec.js';
@@ -122,9 +125,9 @@ export class LspServerPool {
    * Rejects with `LspClientError` on spawn failure, crash during start,
    * timeout, or abort. Never returns a dead client.
    *
-   * Rejects with `LspClientError` kind `'exited'` when the crash-loop guard
+   * Rejects with `LspClientError` kind `'disabled'` when the crash-loop guard
    * has tripped for this server (3 crashes within 120 s): the caller should
-   * silently degrade rather than retry.
+   * degrade rather than retry. The guard auto-expires after a cooldown (~5 min).
    */
   async acquire(spec: ServerSpec, root: string, opts: AcquireOptions = {}): Promise<LspClient> {
     if (opts.signal?.aborted) throw new LspClientError('aborted', 'Aborted');
@@ -132,7 +135,7 @@ export class LspServerPool {
     // Check crash-loop guard before attempting any spawn.
     const guard = (this.opts.guardFor ?? getOrCreateGuard)(key);
     if (guard.failed) {
-      throw new LspClientError('exited', 'LSP server disabled: crash-loop guard tripped');
+      throw new LspClientError('disabled', 'LSP server disabled: crash-loop guard tripped');
     }
     let entry = this.entries.get(key);
     if (entry?.client && !entry.client.alive) {
@@ -174,13 +177,18 @@ export class LspServerPool {
         const unsubTimeout = client.onRequestTimeout(() => {
           if (this.entries.get(key) !== entry) return;
           lastTimeoutAt = Date.now();
-          if (guard.recordCrash()) this.evict(entry);
+          if (guard.recordCrash()) {
+            debugLog('[lsp] crash-loop guard tripped (request timeout)', { key });
+            this.evict(entry);
+          }
         });
         client.onExit(() => {
           unsubTimeout();
           if (this.entries.get(key) === entry) {
             const fallout = lastTimeoutAt !== null && Date.now() - lastTimeoutAt <= TIMEOUT_EXIT_FALLOUT_MS;
-            if (!fallout) guard.recordCrash();
+            if (!fallout && guard.recordCrash()) {
+              debugLog('[lsp] crash-loop guard tripped (server exit)', { key });
+            }
             this.evict(entry);
           }
         });
@@ -196,7 +204,11 @@ export class LspServerPool {
           // this rejection lands the entry is already evicted, so the guard
           // check below is skipped. Cancellation and missing binaries excluded.
           const lspErr = err instanceof LspClientError ? err : null;
-          if (!lspErr || (lspErr.kind !== 'spawn' && lspErr.kind !== 'aborted')) guard.recordCrash();
+          if (!lspErr || (lspErr.kind !== 'spawn' && lspErr.kind !== 'aborted')) {
+            if (guard.recordCrash()) {
+              debugLog('[lsp] crash-loop guard tripped (failed start)', { key });
+            }
+          }
           this.evict(entry);
         }
         throw err instanceof LspClientError ? err : new LspClientError('spawn', 'Failed to spawn LSP server');
