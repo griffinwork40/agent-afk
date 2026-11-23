@@ -74,4 +74,20 @@ describe('drain timer is cleared at both call sites (#5169)', () => {
     await resetSession(resetDeps(Promise.resolve()));
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('reset leaves no pending timer when init never settles', async () => {
+    const never = new Promise<void>(() => { /* never resolves */ });
+    const result = resetSession(resetDeps(never));
+    await vi.runAllTimersAsync();
+    await result;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('close leaves no pending timer when init never settles', async () => {
+    const never = new Promise<void>(() => { /* never resolves */ });
+    const result = drainAndFinalizeClose(closeDeps(never));
+    await vi.runAllTimersAsync();
+    await result;
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

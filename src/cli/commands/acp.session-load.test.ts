@@ -25,7 +25,6 @@ const mockBuildAcpSession = vi.fn(async (_opts: unknown) => ({
 const mockCloseAcpSession = vi.fn(async (_h: unknown) => undefined);
 const mockResolveAcpId = vi.fn((id: string): string => id);
 const mockEmitReplayUpdates = vi.fn(async () => undefined);
-const mockReadLegacyAcpCwd = vi.fn((_id: string): string | undefined => undefined);
 const mockReadRecord = vi.fn((_id: string): { cwd: string } | undefined => undefined);
 const mockWriteRecord = vi.fn((_id: string, _r: { cwd: string }): void => undefined);
 
@@ -40,7 +39,6 @@ vi.mock('./acp.session.js', () => ({
 
 vi.mock('./acp.session-map.js', () => ({
   resolveAcpId: (id: string) => mockResolveAcpId(id),
-  readLegacyAcpCwd: (id: string) => mockReadLegacyAcpCwd(id),
 }));
 
 vi.mock('./acp.session-record.js', () => ({
@@ -69,7 +67,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockJournalExists.mockReturnValue(true);
   mockResolveAcpId.mockImplementation((id) => id);
-  mockReadLegacyAcpCwd.mockReturnValue(undefined);
   mockReadRecord.mockReturnValue(undefined);
   mockWriteRecord.mockReturnValue(undefined);
   mockBuildAcpSession.mockResolvedValue({
@@ -239,17 +236,8 @@ describe('loadAcpSession — original cwd required', () => {
 
   it('an unreadable record fails the load (not treated as no record) before building', async () => {
     mockReadRecord.mockImplementation(() => { throw new Error('malformed'); });
-    mockReadLegacyAcpCwd.mockReturnValue(other);
     await expect(loadAcpSession({ ...BASE_PARAMS, cwd: other }, BASE_OPTS)).rejects.toThrow('malformed');
     expect(mockBuildAcpSession).not.toHaveBeenCalled();
-    expect(mockWriteRecord).not.toHaveBeenCalled();
-  });
-
-  it('a legacy cwd in the shared map stands in for a missing record', async () => {
-    mockReadLegacyAcpCwd.mockReturnValue(root);
-    await expect(loadAcpSession({ ...BASE_PARAMS, cwd: other }, BASE_OPTS)).rejects.toBeInstanceOf(AcpInvalidParams);
-    await loadAcpSession({ ...BASE_PARAMS, cwd: root }, BASE_OPTS);
-    expect(mockBuildAcpSession).toHaveBeenCalledOnce();
     expect(mockWriteRecord).not.toHaveBeenCalled();
   });
 

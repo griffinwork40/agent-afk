@@ -11,6 +11,13 @@
  *     so a server that never finishes `initialize` is not left orphaned.
  *   - Idle timers are `.unref()`ed and every live server is disposed on
  *     graceful cleanup via `registerCleanup`; client-process guards hard exit.
+ *   - Every `evict()` call records the resulting dispose promise in
+ *     `evictedDisposals`; `disposeAll()` and `killAll()` await/drain that set
+ *     so callers can remove the cwd immediately after cleanup returns.
+ *   - A guard-tripping timeout (`onRequestTimeout`) evicts the client
+ *     unconditionally, even when `pendingRequests > 0`. Those in-flight
+ *     requests will reject with `'exited'`. This is intentional: the guard
+ *     trip means the server is considered hung/broken.
  *
  * Key deviation from the #4272 contract wording: the key also includes the
  * spec's command + args, so two different binaries for the same language and
@@ -95,6 +102,7 @@ export function poolKey(spec: ServerSpec, root: string): string {
 
 export class LspServerPool {
   private readonly entries = new Map<string, Entry>();
+  private readonly evictedDisposals = new Set<Promise<void>>();
   private spawnCount = 0;
 
   constructor(private readonly opts: LspServerPoolOptions = {}) {}
@@ -163,12 +171,13 @@ export class LspServerPool {
         // fallout, not a new incident. A tripping timeout evicts the hung
         // client (evict-first, so its exit is not counted again).
         let lastTimeoutAt: number | null = null;
-        client.onRequestTimeout(() => {
+        const unsubTimeout = client.onRequestTimeout(() => {
           if (this.entries.get(key) !== entry) return;
           lastTimeoutAt = Date.now();
           if (guard.recordCrash()) this.evict(entry);
         });
         client.onExit(() => {
+          unsubTimeout();
           if (this.entries.get(key) === entry) {
             const fallout = lastTimeoutAt !== null && Date.now() - lastTimeoutAt <= TIMEOUT_EXIT_FALLOUT_MS;
             if (!fallout) guard.recordCrash();
@@ -266,7 +275,11 @@ export class LspServerPool {
     entry.abandonTimer = null;
     const client = entry.client;
     entry.client = null;
-    if (client) void client.dispose();
+    if (client) {
+      const p = client.dispose();
+      this.evictedDisposals.add(p);
+      void p.finally(() => this.evictedDisposals.delete(p));
+    }
   }
 
   /**
@@ -274,6 +287,10 @@ export class LspServerPool {
    * `process.on('exit')` handler. Complements `disposeAll()` (which is async
    * and only reachable from interactive exit paths) by covering daemon,
    * one-shot, and Telegram process exits (#4309 item 2).
+   *
+   * Also drains `evictedDisposals`: those clients were already killed as part
+   * of eviction, so their processes are gone — we just drop the pending
+   * promises so the GC can reclaim them.
    */
   killAll(): void {
     for (const entry of this.entries.values()) {
@@ -282,6 +299,7 @@ export class LspServerPool {
       if (client) client.killSync();
     }
     this.entries.clear();
+    this.evictedDisposals.clear();
   }
 
   /** Dispose every server (tests, process exit). */
@@ -291,6 +309,8 @@ export class LspServerPool {
     // A still-starting entry disposes its own client (and awaits its exit)
     // once the abort lands; wait for that too so callers can rm the cwd.
     const starting = all.map((e) => e.starting).filter((p): p is Promise<LspClient> => p !== null);
+    // Snapshot evicted disposals before evict() adds more.
+    const evicted = [...this.evictedDisposals];
     for (const e of all) {
       e.abortStart.abort();
       this.evict(e);
@@ -298,6 +318,11 @@ export class LspServerPool {
     await Promise.all([
       ...clients.map((c) => c.dispose()),
       ...starting.map((p) => p.then((c) => c.dispose(), () => undefined)),
+      // Also await any clients that were evicted before disposeAll() ran —
+      // their disposal is still in flight and may be holding the cwd open.
+      ...evicted,
+      // And pick up anything evict() just added for the entries we drained.
+      ...this.evictedDisposals,
     ]);
   }
 }

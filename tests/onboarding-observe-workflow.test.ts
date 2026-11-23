@@ -26,7 +26,7 @@ describe('advisory onboarding observation workflow', () => {
 
   it('keeps the ledger complete and its statuses honest', () => {
     const ledger = read('docs/onboarding-friction.md');
-    const counts: Record<string, number> = { A: 7, B: 4, C: 5, D: 18, E: 16, F: 14, G: 3, H: 5, I: 7, J: 11 };
+    const counts: Record<string, number> = { A: 7, B: 4, C: 5, D: 18, E: 16, F: 14, G: 3, H: 5, I: 7, J: 12 };
     const ids = [...ledger.matchAll(/^\| ([A-J]\d+) \|/gm)].map(match => match[1]);
     const expected = Object.entries(counts).flatMap(([stage, count]) =>
       Array.from({ length: count }, (_, index) => `${stage}${index + 1}`));

@@ -19,8 +19,10 @@ import type { SpineNode } from '@/lib/topology-types';
 // builder filters by kind === 'tool' | 'subagent', so notices pass through
 // harmlessly without affecting topology linking.
 const EXECUTION_KINDS = new Set(['tool', 'subagent', 'notice']);
-const isExecutionItem = (item: TranscriptItem): boolean => EXECUTION_KINDS.has(item.kind)
-  && !(item.kind === 'notice' && item.noticeKind === 'model-fallback');
+function isExecutionItem(item: TranscriptItem): boolean {
+  return EXECUTION_KINDS.has(item.kind)
+    && !(item.kind === 'notice' && item.noticeKind === 'model-fallback');
+}
 
 // Items that are prose/text (rendered individually)
 const TEXT_KINDS = new Set(['user', 'assistant', 'thinking', 'error', 'stopped', 'bg_job']);

@@ -89,6 +89,62 @@ describe('ACP bootstrap parity', () => {
     await closeAcpSession(handle);
   });
 
+  it('appends client systemPrompt after the resolved operator prompt', async () => {
+    const clientPrompt = '# Project context\nThis repo uses pnpm.';
+    const handle = await buildAcpSession({
+      model: 'gpt-4.1', maxTurns: 0, cwd: '/workspace', systemPrompt: clientPrompt,
+    });
+    const resolvedBase = assembleSystemPrompt('framework + operator', true, 'repl');
+    expect(f.config).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: `${resolvedBase}\n\n${clientPrompt}`,
+    }), f.trace);
+    await closeAcpSession(handle);
+  });
+
+  it('uses client systemPrompt alone when no operator overlay is configured', async () => {
+    const { resolveBaseSystemPrompt } = await import('../system-prompt.js');
+    vi.mocked(resolveBaseSystemPrompt).mockReturnValueOnce({ prompt: undefined, source: 'none' });
+    const clientPrompt = 'Only client context.';
+    const handle = await buildAcpSession({
+      model: 'gpt-4.1', maxTurns: 0, cwd: '/workspace', systemPrompt: clientPrompt,
+    });
+    // assembleSystemPrompt(undefined, ...) returns undefined — the client prompt stands alone
+    expect(f.config).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: clientPrompt,
+    }), f.trace);
+    await closeAcpSession(handle);
+  });
+
+  it('appends +client to systemPromptSource when a client prompt is present', async () => {
+    const clientPrompt = '# Project context\nThis repo uses pnpm.';
+    const handle = await buildAcpSession({
+      model: 'gpt-4.1', maxTurns: 0, cwd: '/workspace', systemPrompt: clientPrompt,
+    });
+    expect(f.config).toHaveBeenCalledWith(expect.objectContaining({
+      systemPromptSource: 'framework+AFK.md+client',
+    }), f.trace);
+    await closeAcpSession(handle);
+  });
+
+  it('does not append +client to systemPromptSource when no client prompt is provided', async () => {
+    const handle = await buildAcpSession({ model: 'gpt-4.1', maxTurns: 0, cwd: '/workspace' });
+    expect(f.config).toHaveBeenCalledWith(expect.objectContaining({
+      systemPromptSource: 'framework+AFK.md',
+    }), f.trace);
+    await closeAcpSession(handle);
+  });
+
+  it('ignores a whitespace-only client systemPrompt', async () => {
+    const handle = await buildAcpSession({
+      model: 'gpt-4.1', maxTurns: 0, cwd: '/workspace', systemPrompt: '   ',
+    });
+    const resolvedBase = assembleSystemPrompt('framework + operator', true, 'repl');
+    expect(f.config).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: resolvedBase,
+    }), f.trace);
+    await closeAcpSession(handle);
+  });
+
   it('merges configured and client MCP before provider construction and passes approval', async () => {
     const canUseTool = vi.fn();
     const gui = { type: 'stdio' as const, command: 'gui-server' };
