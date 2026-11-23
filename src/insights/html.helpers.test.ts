@@ -73,6 +73,20 @@ describe('safeNum', () => {
   it('formats a negative decimal', () => {
     expect(safeNum(-0.5, 1)).toBe('-0.5');
   });
+
+  it('treats NaN decimals as 0 (toFixed coerces NaN → 0)', () => {
+    // Number.prototype.toFixed(NaN) coerces NaN to 0, so result is the same
+    // as safeNum(1, 0).  Pins the current behaviour so a future change that
+    // adds an explicit NaN-decimals guard does not silently alter output.
+    expect(safeNum(1, NaN)).toBe('1');
+  });
+
+  it('throws RangeError for a negative decimals argument', () => {
+    // toFixed(-1) is outside the 0–100 range mandated by the spec.
+    // safeNum does not guard decimals, so the RangeError propagates.
+    // Pins the contract: callers must supply a non-negative integer.
+    expect(() => safeNum(1, -1)).toThrow(RangeError);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -171,5 +185,17 @@ describe('htmlEscape', () => {
 
   it('returns empty string unchanged', () => {
     expect(htmlEscape('')).toBe('');
+  });
+
+  it('double-escapes already-escaped input (&amp; → &amp;amp;)', () => {
+    // htmlEscape replaces & first, so an already-escaped entity is re-escaped.
+    // This is correct for a function callers apply once at render time.
+    // Pins the replacement order: reordering the .replace() calls would break this.
+    expect(htmlEscape('&amp;')).toBe('&amp;amp;');
+  });
+
+  it('escapes all five characters in a short combined string', () => {
+    // Easy to verify by eye: each character maps to its entity in order.
+    expect(htmlEscape('<"&\'>')).toBe('&lt;&quot;&amp;&#39;&gt;');
   });
 });
