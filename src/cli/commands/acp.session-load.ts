@@ -12,11 +12,10 @@
  * (acp.session-record.ts) before replying. Load or resume of a session that is
  * not live requires that same directory (compared on canonical paths) and
  * throws AcpInvalidParams otherwise, the same kind the live-session reopen
- * check uses. Without a record, a `cwd` an earlier build stored in the shared
- * map stands in for it. A record that exists but cannot be read fails the load
- * (internal). A session with neither predates the check: it is accepted, and
- * its record is written synchronously before the handle is returned; if that
- * write fails the session is closed and the load fails.
+ * check uses. A record that exists but cannot be read fails the load
+ * (internal). A session without a record predates the check: it is accepted,
+ * and its record is written synchronously before the handle is returned; if
+ * that write fails the session is closed and the load fails.
  *
  * MCP: the wire array is converted by acp.params convertMcpServers, the one
  * validating converter (duplicate names throw AcpInvalidParams).
@@ -35,7 +34,7 @@ import type { AcpClientPeer, LoadSessionRequest } from './acp.wire.js';
 import { AcpInvalidParams, convertMcpServers } from './acp.params.js';
 import type { AcpSessionHandle, AcpSessionOptions } from './acp.session.js';
 import { buildAcpSession, closeAcpSession } from './acp.session.js';
-import { readLegacyAcpCwd, resolveAcpId } from './acp.session-map.js';
+import { resolveAcpId } from './acp.session-map.js';
 import { readAcpSessionRecord, writeAcpSessionRecord } from './acp.session-record.js';
 import { emitReplayUpdates } from './acp.replay.js';
 
@@ -64,7 +63,7 @@ export async function loadAcpSession(
   }
   // Throws (internal) on an unreadable or malformed record: never treated as "no record".
   const record = readAcpSessionRecord(acpId);
-  const storedCwd = record?.cwd ?? readLegacyAcpCwd(acpId);
+  const storedCwd = record?.cwd;
   if (storedCwd !== undefined && canonicalDir(storedCwd) !== canonicalDir(cwd)) {
     throw new AcpInvalidParams('session restored with a different cwd');
   }
@@ -81,8 +80,8 @@ export async function loadAcpSession(
       sessionId: acpId,
       mcpServers: converted,
     });
-    // No record and no legacy cwd: the session predates the check. Write its
-    // record before returning so later loads are checked; a failed write fails the load.
+    // No record: the session predates the check. Write its record before
+    // returning so later loads are checked; a failed write fails the load.
     if (storedCwd === undefined) writeAcpSessionRecord(acpId, { cwd: canonicalDir(cwd) });
     return handle;
   } catch (err) {

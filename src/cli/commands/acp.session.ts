@@ -35,6 +35,14 @@ export interface AcpSessionOptions {
   sessionId?: string;
   /** Already converted from the wire stdio array to AFK's name-keyed config. */
   mcpServers?: AgentConfig['mcpServers'];
+  /**
+   * Client-supplied system prompt appended after the operator overlay.
+   * `buildAcpSession` accepts this field unconditionally; the session/new
+   * restriction (ACP profile §8) is enforced by `parseSessionSetup` before
+   * the options reach this function.  Direct callers (embedders, test doubles)
+   * that bypass `parseSessionSetup` are responsible for their own mode guard.
+   */
+  systemPrompt?: string;
 }
 
 export interface AcpSessionHandle {
@@ -57,7 +65,18 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
     resources.add(() => memoryStore.close());
     const stateStore = new StateStore(getStateDatabasePath());
     resources.add(() => stateStore.close());
-    const { basePrompt, operatorOverlay, systemPrompt, systemPromptSource } = resolveAcpPrompt(cwd);
+    const { basePrompt, operatorOverlay, systemPrompt: resolvedPrompt, systemPromptSource } = resolveAcpPrompt(cwd);
+    const clientPrompt = opts.systemPrompt;
+    // parseSessionSetup already rejects whitespace-only values on the ACP path.
+    // This trim guard is defence-in-depth for callers that invoke buildAcpSession
+    // directly (embedders, test doubles) without going through parseSessionSetup.
+    const hasClientPrompt = clientPrompt !== undefined && clientPrompt.trim().length > 0;
+    const systemPrompt = hasClientPrompt
+      ? (resolvedPrompt !== undefined ? `${resolvedPrompt}\n\n${clientPrompt}` : clientPrompt)
+      : resolvedPrompt;
+    const effectiveSystemPromptSource = hasClientPrompt
+      ? `${systemPromptSource}+client`
+      : systemPromptSource;
     const mcpManager = await connectAcpMcp(cwd, opts.mcpServers, traceWriter);
     if (mcpManager !== undefined) resources.add(() => mcpManager.disconnectAll());
     const { proxy: deferredParent, bind: bindParent } = makeDeferredParentProxy();
@@ -76,6 +95,9 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
       ...(operatorOverlay !== undefined ? { operatorOverlay } : {}),
       ...(traceWriter !== undefined ? { traceWriter, skillTraceWriter: traceWriter } : {}),
       ...(opts.childCanUseTool !== undefined ? { childCanUseTool: opts.childCanUseTool } : {}),
+      // No backgroundRegistry: ACP lists "No background subagents" as a surface
+      // limit (website/content/docs/surfaces/acp.mdx:264); background dispatch
+      // is omitted intentionally, not accidentally.
     });
     const shutdown = withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor), continuationRegistry);
     const drainSubagents = onceAcpShutdown(shutdown.drainSubagents);
@@ -126,7 +148,7 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
         provider,
         cwd,
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-        systemPromptSource,
+        systemPromptSource: effectiveSystemPromptSource,
         ...(traceWriter !== undefined ? { traceWriter } : {}),
         ...(opts.resume !== undefined ? { resume: opts.resume } : {}),
         ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),

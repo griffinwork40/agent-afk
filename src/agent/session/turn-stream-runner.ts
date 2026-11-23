@@ -129,7 +129,8 @@ export class TurnStreamRunner {
     this.turns = new ProviderTurns({
       consume: (event, turnDeps) => this.consumeProviderEvent(event, turnDeps),
       interruptProvider: () => this.deps.getProviderQuery().interrupt(),
-      recordSyntheticDone: (turn) => this.recordSyntheticDone(turn.turnStartMs, turn.interrupted),
+      recordSyntheticDone: (turn) =>
+        this.recordSyntheticDone(turn.turnStartMs, turn.interrupted && !turn.hadProviderError),
     });
     // Every seal path (close, reset, abort) must leave the ledger with an
     // abandoned turn's `done`, even when it has not finished stopping (#4830).
@@ -324,7 +325,15 @@ export class TurnStreamRunner {
       yield buildInterruptedDone(0);
       return;
     }
-    onTurnStart?.();
+    // R2.1: guard onTurnStart so a throw does not leave `send` registered as
+    // pending. Without this, the next interrupt() targets the dead send instead
+    // of the running provider turn. Refs #5175.
+    try {
+      onTurnStart?.();
+    } catch (err) {
+      this.turns.withdraw(send);
+      throw err;
+    }
 
     const effectiveContent = this.withPendingContext(content);
     const historySummary =
@@ -395,6 +404,7 @@ export class TurnStreamRunner {
         // the terminal yield has completed the turn, not abandoned it.
         const terminal = isTerminalProviderEvent(result.value);
         if (terminal) this.turns.markTerminal(turn);
+        if (result.value.type === 'error') turn.hadProviderError = true;
         const output = await this.consumeProviderEvent(result.value, deps);
         if (terminal) this.turns.endTurn(turn);
         if (output) {
@@ -433,7 +443,7 @@ export class TurnStreamRunner {
         // single terminal while events.jsonl readers always see a `done` with
         // stopReason / durationMs. See turn-stream-runner.fatal-done.ts for the
         // stopReason mapping.
-        if (!doneYielded) this.recordSyntheticDone(turnStartMs);
+        if (!doneYielded) this.recordSyntheticDone(turnStartMs, turn.interrupted && !turn.hadProviderError);
       }
     }
   }

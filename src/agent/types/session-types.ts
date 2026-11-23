@@ -249,7 +249,7 @@ export type OutputEvent =
   // without parsing assistant text. Wave 1 handles emission.
   | {
       type: 'plan_mode';
-      mode: 'plan' | 'implement' | 'default';
+      mode: PermissionMode;
     }
   // MCP server status change (#4064 item 3). Emitted when a configured
   // server's status changes (startup failure, mid-session disconnect, or

@@ -73,7 +73,7 @@ const census: Record<Surface, Record<string, Cell>> = {
     sessionOverlay: wired, hooksAtSessionCwd: wired,
     childCwd: wired, nestedCwd: wired,
     background: intentional('ACP lists "No background subagents" as a surface limit (website/content/docs/surfaces/acp.mdx:264); executor wiring leaves it unconfigured.',
-      ownership, 'elsewhere background dispatch reports as unconfigured'),
+      `${cli}acp.session.ts`, 'No backgroundRegistry: ACP lists "No background subagents" as a surface'),
     diskMcp: wired, userHooks: wired, modelRouting: wired,
     outerOrchestration: unchecked('Builder chain runs with explicit inputs; JSON-RPC server, client-supplied MCP list and approval bridge are not executed.'),
   },
@@ -101,7 +101,10 @@ function actual(rt: SurfaceRuntime, otherModel: SurfaceRuntime): Record<string, 
     childCwd: has('cwd'), nestedCwd: has('nestedCwd'), background: has('backgroundRegistry'),
     hooksAtSessionCwd: hookArgs?.cwd === 'session-cwd',
     diskMcp: rt.calls('loadMcpConfig').length > 0 && mcpPassed,
-    userHooks: rt.calls('loadHooksConfig').length > 0 && rt.calls('createDefaultHookRegistry').some((o) => o.args[4] === token),
+    // Match on token presence anywhere in args rather than pinning to position 4,
+    // so a reordered createDefaultHookRegistry signature doesn't silently fail
+    // the census with a misleading capability-name-only error message.
+    userHooks: rt.calls('loadHooksConfig').length > 0 && rt.calls('createDefaultHookRegistry').some((o) => o.args.includes(token)),
     modelRouting: providers[0]?.args[0] !== otherModel.calls('provider')[0]?.args[0],
   };
 }
@@ -125,10 +128,21 @@ function checkValues(surface: Surface, rt: SurfaceRuntime): void {
 
 function sourceComments(file: string): string {
   const text = readFileSync(path.join(src, file), 'utf8');
-  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text);
+  // History: the previous implementation used ts.createScanner with skipTrivia=false,
+  // but the TS lexer mis-tokenises template-middle spans that contain \n escape sequences
+  // (e.g. `${a}\n\n${b}`): after the first CloseBraceToken the backslash is emitted as
+  // FirstToken, making the scanner lose track of the template and consume the rest of the
+  // file as a single FirstTemplateToken — swallowing every comment below that point.
+  // ts.getLeadingCommentRanges works at the text level and is unaffected by template
+  // tokenisation; it reliably extracts every // and /* */ comment in the source.
+  const seen = new Set<number>();
   const comments: string[] = [];
-  for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
-    if (kind === ts.SyntaxKind.SingleLineCommentTrivia || kind === ts.SyntaxKind.MultiLineCommentTrivia) comments.push(scanner.getTokenText());
+  for (let pos = 0; pos < text.length; pos++) {
+    const ranges = ts.getLeadingCommentRanges(text, pos);
+    if (ranges === undefined) continue;
+    for (const r of ranges) {
+      if (!seen.has(r.pos)) { seen.add(r.pos); comments.push(text.slice(r.pos, r.end)); }
+    }
   }
   return comments.join('\n');
 }
@@ -156,6 +170,18 @@ describe('session surface capability census', () => {
       expect(expectedSites.some((site) => site.startsWith(`${file}:`)), reason).toBe(true);
     }
     expect(productionSites(src), 'New production bootstrap: add a surface probe/census, or a source-cited non-surface exemption in surface-census-sites.ts.').toEqual(expectedSites);
+  });
+
+  it('negative control: check() throws when a wired capability is recorded as a gap', () => {
+    // This test commits the previously-manual "bite test": if check() does not
+    // catch a wired-but-gap mismatch the census is silently broken. The
+    // assertion error message must name the surface and capability.
+    expect(() => check('REPL', 'sessionTrace', gap, /* observed = */ true)).toThrow(
+      /REPL \/ sessionTrace: census says gap, builder is wired/,
+    );
+    expect(() => check('REPL', 'sessionTrace', wired, /* observed = */ false)).toThrow(
+      /REPL \/ sessionTrace: census says wired, builder is omitted/,
+    );
   });
 
   for (const surface of surfaces) {

@@ -133,6 +133,17 @@ describe('fixture-backed schedule health and list', () => {
     await command('list');
     expect(output()).toContain('blocked | >=2 | 2026-01-03');
   });
+  it('disabled tasks are skipped by health', async () => {
+    const id = task();
+    // mark it disabled in the store
+    writeFileSync(getSchedulesPath(), JSON.stringify(loadSchedules().map((s) => ({ ...s, enabled: false }))));
+    fixture([record(id, 'error', 1), record(id, 'error', 2), record(id, 'error', 3)]);
+    await command('health');
+    expect(process.exitCode).toBeUndefined();
+    expect(output()).not.toContain(id);
+    expect(output()).toContain('All enabled tasks healthy.');
+  });
+
   it('no runs is not unhealthy; a success establishes health', async () => {
     const id = task(); await command('health');
     expect(output()).toContain('no runs yet'); expect(process.exitCode).toBeUndefined();

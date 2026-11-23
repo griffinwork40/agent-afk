@@ -254,9 +254,8 @@ function bucketPermissionMode(raw: string): 'elevated' | 'default' {
     case 'auto':
       return 'elevated';
     default:
-      // `default`, `plan`, `autonomous` (AFK), and any unrecognised value fall
-      // through here. Plan and AFK modes are RESTRICTIVE, not elevated — AFK
-      // adds a high-risk-op gate on top of default, it does not bypass
+      // `default`, `plan`, and any unrecognised value fall through here. Plan
+      // mode is RESTRICTIVE, not elevated — it gates writes but does not bypass
       // permissions. The model observes those restrictions through real-time
       // tool denials and its system-prompt posture addendum, not through this
       // coarse anti-injection field (which exists to hide bypass/auto-accept).

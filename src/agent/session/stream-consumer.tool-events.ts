@@ -9,7 +9,7 @@
  */
 
 import type { ProviderEvent } from '../provider.js';
-import type { ToolEventMin } from '../done-evidence.js';
+import { isPatchApplyDryRun, type ToolEventMin } from '../done-evidence.js';
 
 type ToolUseStartEvent = Extract<ProviderEvent, { type: 'tool.use.start' }>;
 type ToolOutputEvent = Extract<ProviderEvent, { type: 'tool.output' }>;
@@ -20,10 +20,17 @@ type ToolOutputEvent = Extract<ProviderEvent, { type: 'tool.output' }>;
  * here leaks across turns.
  */
 export interface ToolEventAccumulator {
-  /** Names of tools that succeeded this turn, in order (daemon Done probe). */
+  /** Successful tool names, excluding patch_apply dry-run previews (daemon Done probe). */
   _successfulToolNames?: string[];
   /** toolUseId -> flattened input captured at `tool.use.start`. */
   _pendingToolInputs?: Map<string, string>;
+  /**
+   * toolUseId -> raw JSON-serialized tool input (from `extractRawToolInput`).
+   * Populated only for tools that carry whitelisted raw fields (e.g. `patch_apply`
+   * with its `dry_run` boolean). Used by Done-evidence classification to detect
+   * dry-run previews that write nothing.
+   */
+  _pendingToolInputsRaw?: Map<string, string>;
   /**
    * Every tool call that reported output this turn, successful AND failed, with
    * its real input text. This is what Done-evidence classification reads:
@@ -39,22 +46,31 @@ export function recordToolUseStart(acc: ToolEventAccumulator, event: ToolUseStar
   // Pending events carry placeholder input; the settled start event follows.
   if (event.pending || !event.toolName) return;
   (acc._pendingToolInputs ??= new Map()).set(event.toolUseId, event.toolInput);
+  if (event.toolInputRaw !== undefined) {
+    (acc._pendingToolInputsRaw ??= new Map()).set(event.toolUseId, event.toolInputRaw);
+  }
 }
 
 /**
- * Record a finished tool call. Policy-free: which tools count as evidence is
- * decided by the consumer (`done-evidence.ts`), not here. A tool with no name
- * (some synthesized OpenAI Codex events omit it) is skipped.
+ * Record a finished tool call. Keep every event in the full history, but omit
+ * patch_apply dry-run previews from the successful-name summary. Consumers
+ * still decide which names count as evidence. Nameless synthesized calls are skipped.
  */
 export function recordToolOutput(acc: ToolEventAccumulator, event: ToolOutputEvent): void {
   if (!event.toolName) return;
   const isError = event.isError === true;
+  const inputRaw = acc._pendingToolInputsRaw?.get(event.toolUseId);
   (acc._turnToolEvents ??= []).push({
     toolName: event.toolName,
     // '' when the input was never captured (unknown id): classifies as a
     // non-verification call, the conservative direction.
     input: acc._pendingToolInputs?.get(event.toolUseId) ?? '',
+    ...(inputRaw !== undefined ? { inputRaw } : {}),
     isError,
   });
-  if (!isError) (acc._successfulToolNames ??= []).push(event.toolName);
+  const isDryRun = event.toolName === 'patch_apply' &&
+    isPatchApplyDryRun({ toolName: event.toolName, input: '', inputRaw });
+  if (!isError && !isDryRun) {
+    (acc._successfulToolNames ??= []).push(event.toolName);
+  }
 }

@@ -44,12 +44,12 @@ const NPM_INSTALL_TIMEOUT_MS = 180_000;
 /** Maximum length of a failure reason stored in the ledger / returned. */
 export const MAX_FAILURE_REASON_CHARS = 500;
 
-/** Redact secrets from an npm failure message and cap its length. */
+/** Cap the length of an npm failure message stored in the ledger. */
 export function sanitizeFailureReason(message: string): string {
-  const redacted = message;
-  return redacted.length > MAX_FAILURE_REASON_CHARS
-    ? `${redacted.slice(0, MAX_FAILURE_REASON_CHARS)}… [truncated]`
-    : redacted;
+  const capped = message;
+  return capped.length > MAX_FAILURE_REASON_CHARS
+    ? `${capped.slice(0, MAX_FAILURE_REASON_CHARS)}… [truncated]`
+    : capped;
 }
 
 /** Executable + leading args for running npm (never through a shell). */

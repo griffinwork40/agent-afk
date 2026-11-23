@@ -85,7 +85,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  try { rmSync(repoRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { rmSync(repoRoot, { recursive: true, force: true }); } catch (e) { console.warn('[worktree-sweep.scratch.test] afterEach rmSync failed:', e); }
   vi.restoreAllMocks();
 });
 

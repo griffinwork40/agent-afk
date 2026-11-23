@@ -232,9 +232,9 @@ export interface ToolCallCompletedPayload {
    * First ≤200 characters of the error text when `isError` is true and the
    * result carried a non-empty content string. Absent on success, absent when
    * the error content is empty. Truncated with `… (truncated)` when the raw
-   * text exceeds the cap; newlines collapsed to spaces; passed through
-   * Common token
-   * shapes are replaced with `[REDACTED]`.
+   * text exceeds the cap; newlines collapsed to spaces. Common token
+   * shapes (Bearer tokens, sk-ant-* keys, AKIA*, long opaque hex/base64)
+   * are replaced with `[REDACTED]` by inline pattern matching.
    *
    * Design tradeoff: traces are local-only files under `~/.afk/state/witness/`
    * so egress is not a concern, but tool output can contain incidental secrets

@@ -26,7 +26,11 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { classifyDoneEvidence, type ToolEventMin } from './done-evidence.js';
+import {
+  classifyDoneEvidence,
+  doneHasCorroboratingEvidence,
+  type ToolEventMin,
+} from './done-evidence.js';
 
 // ---------------------------------------------------------------------------
 // Scenario 4 – artifact modified via bash after tests passed
@@ -77,22 +81,89 @@ describe('classifyDoneEvidence – artifact modified after tests passed (Scenari
     expect(classifyDoneEvidence(events)).toBe('unverified');
   });
 
-  it.fails(
-    'returns "unverified" when patch_apply is used after a passing test',
-    // Known defect: `patch_apply` is absent from CODE_MUTATION_TOOLS in
-    // done-evidence.ts:55, so a patch applied after tests pass is not detected
-    // as a mutation — the earlier test result incorrectly certifies the artifact.
-    // Fix: add 'patch_apply' to both CODE_MUTATION_TOOLS and DONE_EVIDENCE_TOOLS.
-    // See session-end-hook.ts:89 and load-outcome-turns.test.ts:250. Tracked by #3714.
-    () => {
-      const events: ToolEventMin[] = [
-        { toolName: 'edit_file', input: 'src/qux.ts', isError: false },
-        { toolName: 'bash', input: 'pnpm test', isError: false },
-        { toolName: 'patch_apply', input: 'src/qux.ts', isError: false },
-      ];
-      expect(classifyDoneEvidence(events)).toBe('unverified');
-    },
-  );
+  it('returns "unverified" when patch_apply is used after a passing test', () => {
+    // Regression test for the defect fixed in #3714 (scenario 4):
+    // `patch_apply` was absent from CODE_MUTATION_TOOLS so a patch applied
+    // after tests passed was not detected as a mutation — the earlier test
+    // result incorrectly certified the artifact.
+    const events: ToolEventMin[] = [
+      { toolName: 'edit_file', input: 'src/qux.ts', isError: false },
+      { toolName: 'bash', input: 'pnpm test', isError: false },
+      { toolName: 'patch_apply', input: '', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('unverified');
+  });
+
+  it('returns "verified" when a test pass follows patch_apply', () => {
+    // patch_apply → pnpm test: corroboration restored by the subsequent test.
+    const events: ToolEventMin[] = [
+      { toolName: 'patch_apply', input: '', isError: false },
+      { toolName: 'bash', input: 'pnpm test', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('verified');
+  });
+
+  it('returns "no-code-changes" for patch_apply with dry_run: true (no mutation)', () => {
+    // dry_run writes nothing — must not count as a mutation or as evidence.
+    const dryRunRaw = JSON.stringify({ dry_run: true });
+    const events: ToolEventMin[] = [
+      { toolName: 'patch_apply', input: '', inputRaw: dryRunRaw, isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('no-code-changes');
+  });
+
+  it('doneHasCorroboratingEvidence returns false for dry_run patch_apply only', () => {
+    // A turn consisting solely of a dry-run patch_apply has no real evidence.
+    const dryRunRaw = JSON.stringify({ dry_run: true });
+    const events: ToolEventMin[] = [
+      { toolName: 'patch_apply', input: '', inputRaw: dryRunRaw, isError: false },
+    ];
+    expect(doneHasCorroboratingEvidence(events)).toBe(false);
+  });
+
+  it('returns "unverified" when patch_apply (real write) follows test in an edit→test→patch→retest sequence', () => {
+    // edit → test (PASS) → patch_apply → (no retest): stale certification.
+    const events: ToolEventMin[] = [
+      { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
+      { toolName: 'bash', input: 'pnpm test', isError: false },
+      { toolName: 'patch_apply', input: '', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('unverified');
+  });
+
+  it('returns "verified" for edit→test→patch_apply→retest sequence', () => {
+    // edit → test (PASS) → patch_apply → test (PASS again): correctly certified.
+    const events: ToolEventMin[] = [
+      { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
+      { toolName: 'bash', input: 'pnpm test', isError: false },
+      { toolName: 'patch_apply', input: '', isError: false },
+      { toolName: 'bash', input: 'pnpm test', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('verified');
+  });
+
+  it('returns "verified" when dry_run patch_apply follows a passing test (not a mutation)', () => {
+    // A dry-run preview after a passing test must NOT invalidate the certification.
+    const dryRunRaw = JSON.stringify({ dry_run: true });
+    const events: ToolEventMin[] = [
+      { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
+      { toolName: 'bash', input: 'pnpm test', isError: false },
+      { toolName: 'patch_apply', input: '', inputRaw: dryRunRaw, isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('verified');
+  });
+
+  it('returns "unverified" when FAILED patch_apply does not advance mutation index', () => {
+    // isError: true — the patch did not apply, so the artifact is unchanged.
+    const events: ToolEventMin[] = [
+      { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
+      { toolName: 'bash', input: 'pnpm test', isError: false },
+      { toolName: 'patch_apply', input: '', isError: true },
+    ];
+    // The failed patch_apply is skipped; last mutation was edit_file (index 0),
+    // last verification was pnpm test (index 1) — so still verified.
+    expect(classifyDoneEvidence(events)).toBe('verified');
+  });
 
   it('returns "unverified" when a bash output-redirect follows a passing test', () => {
     // `echo "new content" > src/foo.ts` must invalidate the earlier verification.
