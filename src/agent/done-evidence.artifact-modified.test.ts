@@ -121,6 +121,36 @@ describe('classifyDoneEvidence – artifact modified after tests passed (Scenari
     expect(doneHasCorroboratingEvidence(events)).toBe(false);
   });
 
+  it('returns "no-code-changes" for patch_apply with empty changes[] (no file written)', () => {
+    // changes: [] — the handler returns synthetic 'applied' success but writes
+    // nothing.  Must not count as a mutation or as done-evidence (#5257 item 2).
+    const emptyRaw = JSON.stringify({ changes: [] });
+    const events: ToolEventMin[] = [
+      { toolName: 'patch_apply', input: '', inputRaw: emptyRaw, isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('no-code-changes');
+  });
+
+  it('doneHasCorroboratingEvidence returns false for empty-changes patch_apply only', () => {
+    // A turn consisting solely of a patch_apply with no changes has no real evidence.
+    const emptyRaw = JSON.stringify({ changes: [] });
+    const events: ToolEventMin[] = [
+      { toolName: 'patch_apply', input: '', inputRaw: emptyRaw, isError: false },
+    ];
+    expect(doneHasCorroboratingEvidence(events)).toBe(false);
+  });
+
+  it('returns "verified" when dry_run:false patch_apply with real changes follows a passing test (not empty)', () => {
+    // Confirm that a non-empty, non-dry-run patch_apply still counts as a mutation
+    // and that a subsequent test restores 'verified'.
+    const realRaw = JSON.stringify({ changes: [{ path: 'src/foo.ts' }] });
+    const events: ToolEventMin[] = [
+      { toolName: 'patch_apply', input: '', inputRaw: realRaw, isError: false },
+      { toolName: 'bash', input: 'pnpm test', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('verified');
+  });
+
   it('returns "unverified" when patch_apply (real write) follows test in an edit→test→patch→retest sequence', () => {
     // edit → test (PASS) → patch_apply → (no retest): stale certification.
     const events: ToolEventMin[] = [
@@ -153,7 +183,7 @@ describe('classifyDoneEvidence – artifact modified after tests passed (Scenari
     expect(classifyDoneEvidence(events)).toBe('verified');
   });
 
-  it('returns "unverified" when FAILED patch_apply does not advance mutation index', () => {
+  it('returns "verified" when FAILED patch_apply does not advance mutation index', () => {
     // isError: true — the patch did not apply, so the artifact is unchanged.
     const events: ToolEventMin[] = [
       { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
