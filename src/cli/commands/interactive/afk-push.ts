@@ -82,7 +82,7 @@ const KIND_FIELDS: Record<TerminalKind, ReadonlyArray<readonly [string, keyof Te
 };
 
 // ---------------------------------------------------------------------------
-// "Done" verification (opt-in via telegram.verifyDone)
+// "Done" evidence helpers (re-exported for callers in daemon and turn-handler)
 // ---------------------------------------------------------------------------
 
 // Contract: tools whose SUCCESSFUL invocation is observable corroboration that
@@ -134,7 +134,7 @@ export function doneHasCorroboratingEvidence(toolEvents: readonly ToolEvent[]): 
  *
  * When `opts.unverified` is true AND the kind is `done`, the header is
  * downgraded to "⚠️ Done (unverified)" and a trailing caveat line is appended —
- * the caller sets this only when `telegram.verifyDone` is on and the turn
+ * the caller sets this only when `daemon.verifyDone` is on and the turn
  * produced no corroborating evidence ({@link doneHasCorroboratingEvidence}):
  * either no evidence tools fired at all, or code changed without a subsequent
  * verification step.

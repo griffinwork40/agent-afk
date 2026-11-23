@@ -910,7 +910,7 @@ describe('Config Loader', () => {
     });
   });
 
-  describe('telegram.verifyDone (afk.config.json parsing)', () => {
+  describe('telegram block (afk.config.json parsing)', () => {
     const mockedExistsSync = () => vi.mocked(fs.existsSync);
     const mockedReadFileSync = () => vi.mocked(fs.readFileSync);
     const cwdConfigJson = join(process.cwd(), 'afk.config.json');
@@ -936,26 +936,6 @@ describe('Config Loader', () => {
       _resetConfigCache();
       mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
       mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
-    });
-
-    it('parses telegram.verifyDone: true', () => {
-      mockConfig({ telegram: { verifyDone: true } });
-      expect(loadConfig().telegram?.verifyDone).toBe(true);
-    });
-
-    it('parses telegram.verifyDone: false', () => {
-      mockConfig({ telegram: { verifyDone: false } });
-      expect(loadConfig().telegram?.verifyDone).toBe(false);
-    });
-
-    it('defaults to undefined (off) when verifyDone is absent', () => {
-      mockConfig({ telegram: { notify: { mode: 'primary' } } });
-      expect(loadConfig().telegram?.verifyDone).toBeUndefined();
-    });
-
-    it('ignores a non-boolean verifyDone (defensive parse → undefined)', () => {
-      mockConfig({ telegram: { verifyDone: 'yes' } });
-      expect(loadConfig().telegram?.verifyDone).toBeUndefined();
     });
 
     it('parses telegram.tagOnlyChats: [-100123, 456]', () => {

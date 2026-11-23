@@ -115,9 +115,8 @@ export interface CliConfig {
      * self-certifies `Done` is relabelled "⚠️ Done (unverified)" (with a caveat
      * line) unless the tick produced corroborating evidence — a successful file
      * write/edit or executed command (see `doneHasCorroboratingEvidence` in
-     * `commands/interactive/afk-push.ts`). The daemon analog of
-     * `telegram.verifyDone` (which is REPL-only): the daemon is single-turn-per-
-     * tick, so the only honest enforcement is relabelling the outgoing push, not
+     * `commands/interactive/afk-push.ts`). The daemon is single-turn-per-tick,
+     * so the only honest enforcement is relabelling the outgoing push, not
      * bouncing a next turn. Set to `false` to suppress the downgrade.
      */
     verifyDone?: boolean;
@@ -134,15 +133,6 @@ export interface CliConfig {
       primaryChatId?: number;
       targets?: number[];
     };
-    /**
-     * "Done" verification gate for Telegram pushes (opt-in; default off when
-     * omitted). When true, a terminal-state push whose kind is `Done` is
-     * relabelled "⚠️ Done (unverified)" unless the turn produced corroborating
-     * evidence — a successful file write/edit or executed command (see
-     * `doneHasCorroboratingEvidence` in `afk-push.ts`). Keeps the "get pinged
-     * when it finishes" notification honest without blocking the turn.
-     */
-    verifyDone?: boolean;
     /**
      * Per-chat "tag-only" response policy (opt-in; default: bot answers every
      * non-command message in every allowlisted chat). For each chat ID listed
@@ -262,8 +252,7 @@ export interface CliConfig {
    * `doneHasCorroboratingEvidence` in `afk-push.ts`) — gets a framework
    * correction injected into the NEXT turn, which must substantiate or downgrade
    * the claim (issue #237). Human-tier: a self-honesty check the agent must not
-   * disable on its own config. The sibling `telegram.verifyDone` only relabels
-   * the Telegram push; this one bounces the turn.
+   * disable on its own config.
    */
   enforceDoneEvidence?: boolean;
   /**
@@ -421,8 +410,6 @@ export interface ConfigFileSchema {
       primaryChatId?: number;
       targets?: number[];
     };
-    /** Opt-in AFK "Done" verification gate; default off. See `CliConfig.telegram.verifyDone`. */
-    verifyDone?: boolean;
     /** Opt-in per-chat "tag-only" response policy. See `CliConfig.telegram.tagOnlyChats`. */
     tagOnlyChats?: number[];
     /** Named-chat aliases for outbound targeting. See `CliConfig.telegram.chatAliases`. */
