@@ -11,6 +11,7 @@ import type { ModelProvider } from '../provider.js';
 import type { WorkspaceStore } from '../workspace/workspace-store.js';
 import type { CanUseTool } from '../types.js';
 import { buildComposeNodeProvider } from './nesting.js';
+import { chainCanUseTool } from './nesting.can-use-tool.js';
 import type { AgentModelInput } from '../types/model-types.js';
 
 /** Named-agent restrictions resolved for one node (compose-agent-resolve.ts). */
@@ -25,6 +26,8 @@ export interface ComposeNodeRestrictions {
   namedAgentAllowedTools?: string[];
   /** `true` blocks mutating bash; the field is absent when not restricted. */
   readOnlyBash?: true;
+  /** Surface approval gate (nesting.can-use-tool.ts), chained AFTER `canUseTool`. */
+  surfaceGate?: CanUseTool;
 }
 
 /**
@@ -57,7 +60,8 @@ export function resolveComposeNodeProvider(
   openaiBaseUrl: string | undefined,
   restrictions: ComposeNodeRestrictions = {},
 ): { provider: ModelProvider } | Record<string, never> {
-  const { canUseTool, namedAgentAllowedTools, readOnlyBash } = restrictions;
+  const { namedAgentAllowedTools, readOnlyBash } = restrictions;
+  const canUseTool = chainCanUseTool(restrictions.canUseTool, restrictions.surfaceGate);
   const restricted = canUseTool !== undefined || readOnlyBash === true;
   if (workspaceStore === undefined && !restricted) return {};
   return {

@@ -20,7 +20,6 @@ import { StateStore } from '../state/state-store.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
 import type { TraceSink, TraceWriter } from '../trace/index.js';
-import { makeGateBlockTraceOwner, type GateBlockCounter } from './scheduler-gate-recovery.js';
 import type { AgentConfig } from '../types.js';
 
 export interface DaemonSpawnOptions {
@@ -33,14 +32,6 @@ export interface DaemonSpawnOptions {
    * (daemon-wide AFK_DAEMON_CWD). Precedence: taskCwd ?? sessionConfig.cwd ?? daemonDefaultCwd().
    */
   taskCwd?: string;
-  /**
-   * Shared mutable counter incremented each time the AFK gate emits a
-   * `hook_decision` with `approvalOutcome: 'hard-block'` during this tick
-   * (#3466). The spawn wires a counting shim around the trace writer so the
-   * caller can read the total after `sendMessage` resolves and record it on
-   * the telemetry record without polling the trace file.
-   */
-  gateBlockCounter?: GateBlockCounter;
 }
 
 /**
@@ -193,41 +184,21 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
   // Mirrors chat.ts / interactive bootstrap.ts. Returns null under
   // AFK_TRACE_DISABLED=1. The label is derived from the taskId (see
   // daemonTraceLabel) so traces are greppable by task name while each tick
-  // still gets its own trace dir. Created before the hook registry so the
-  // AFK gate's structured audit trace is wired from the start of the session.
+  // still gets its own trace dir. Created before the hook registry so hook
+  // decisions are traced from the start of the session.
   const trace = createDefaultTraceWriter({ sessionLabel: sessionId });
-  // Contract: when a gateBlockCounter is supplied, wrap the trace writer with a
-  // counting shim BEFORE wiring it into createDefaultHookRegistry so the AFK
-  // gate's emitHookDecision calls go through the shim. The shim delegates every
-  // write() to the real writer — it is purely observational — and increments
-  // the counter each time it sees a hook_decision with approvalOutcome:
-  // 'hard-block'. This lets executeAgentTask read the final count after
-  // sendMessage() returns and classify recovery without polling the trace file.
-  const hookTraceWriter = makeGateBlockTraceOwner(trace?.writer, options.gateBlockCounter);
+  const hookTraceWriter = trace?.writer;
   const { registry, memoryStore } = createDefaultHookRegistry(
     undefined,
     'daemon',
     undefined,
-    // Always pass a mode getter so createAfkModeGate registers. Daemon ticks
-    // run autonomously by definition — pass 'autonomous' unconditionally.
-    // Because no elicitation handler is installed on this surface, high-risk
-    // ops degrade to the hard-block path (the gate's "no operator reachable"
-    // degrade). promptForApproval: false enforces this; it mirrors the Telegram
-    // posture (always-on, no deliberate human arming). See afk-mode-gate.ts.
-    (): 'autonomous' => 'autonomous',
+    // Always pass a mode getter so plan-mode gate registers.
+    (): 'bypassPermissions' => 'bypassPermissions',
     loadHooksConfig({ cwd: agentCwd }),
     {
       cwd: agentCwd,
       sessionId,
       ...(hookTraceWriter !== undefined ? { traceWriter: hookTraceWriter } : {}),
-      // Hard-block posture: no operator is reachable on a daemon tick.
-      // High-risk ops are refused immediately rather than queued for approval.
-      afkPromptForApproval: false,
-      // Issue #3464: supply the running task's own id so the risk classifier
-      // can carve out self-disable (cancel_schedule / update_schedule with
-      // enabled:false) as 'medium'. This value comes from the scheduler, not
-      // from any model-supplied input — it cannot be spoofed by the agent.
-      daemonTaskId: taskId,
       // Daemon ticks use a fixed model per tick; resolve it once at dispatch
       // time so hook payloads reflect the actual wire id.
       getModel: buildDaemonGetModel(options.sessionConfig?.model),

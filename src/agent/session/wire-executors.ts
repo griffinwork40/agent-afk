@@ -45,9 +45,10 @@ import { inboundAttachmentRegistry } from '../content/attachment-registry.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
 import type { HookRegistry } from '../hooks.js';
 import { hookRegistryOpt, skillScopeOpts } from './wire-executors.scope.js';
+import type { ChildGateOptions } from '../tools/nesting.can-use-tool.js';
 
 /** Options for {@link wireExecutors}. */
-export interface WireExecutorsOptions {
+export interface WireExecutorsOptions extends ChildGateOptions {
   /**
    * User-facing surface that owns these executors. Threaded into the root
    * manager (so forked `agent`-tool children inherit `origin` instead of
@@ -393,8 +394,10 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
 
   // 2. Routes each child model to AnthropicDirect / OpenAICompatible, pointing
   //    OpenAI-routed children at the configured local shim when set.
+  const gateOpt = opts.childCanUseTool !== undefined ? { childCanUseTool: opts.childCanUseTool } : {};
   const childProviderFactory = createChildProviderFactory({
     ...openaiBaseUrlOpt,
+    ...gateOpt,
     ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
   });
 
@@ -501,6 +504,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
     agentRegistry,
     ...budgetOpt,
+    ...gateOpt, // surface approval gate for compose DAG nodes
   });
 
   return { rootManager, subagentExecutor, skillExecutor, composeExecutor, continuationRegistry };

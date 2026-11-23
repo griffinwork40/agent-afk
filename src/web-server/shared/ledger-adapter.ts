@@ -457,7 +457,7 @@ export function ledgerRecordToItem(
     }
 
     case 'plan_mode': {
-      const mode = str(record['mode']) ?? 'default';
+      const mode = str(record['mode']) ?? 'bypassPermissions';
       return { kind: 'notice', id: nextId('n'), text: `Switched to ${mode} mode` };
     }
 

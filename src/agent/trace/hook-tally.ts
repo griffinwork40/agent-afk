@@ -11,9 +11,9 @@
  * Contract (scoping): the tally is keyed by trace-writer IDENTITY. Forked
  * subagents inherit the parent's writer, so one tally (and one summary)
  * covers the root session INCLUDING all its children; it is not split by
- * subagentId. A sink that wraps another writer (e.g. the daemon's gate-block
- * counting shim) exposes `hookTallyKey` pointing at the wrapped writer so its
- * emissions land in the same tally as the session's own.
+ * subagentId. A sink that wraps another writer may expose `hookTallyKey`
+ * pointing at the wrapped writer so its emissions land in the same tally as
+ * the session's own (no production sink does this at present).
  *
  * Invariant (INV-040): tallying is pure in-memory bookkeeping; it never
  * throws into an emit site and never affects dispatch.

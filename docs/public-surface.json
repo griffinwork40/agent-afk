@@ -838,11 +838,6 @@
     },
     {
       "kind": "config",
-      "name": "telegram.verifyDone",
-      "source": "src/config/settable-keys.ts"
-    },
-    {
-      "kind": "config",
       "name": "temperature",
       "source": "src/config/settable-keys.ts"
     },
@@ -3928,16 +3923,6 @@
     },
     {
       "kind": "flag",
-      "name": "afk trace show --evasion",
-      "source": "src/cli/commands/trace.ts"
-    },
-    {
-      "kind": "flag",
-      "name": "afk trace show --evasion-window",
-      "source": "src/cli/commands/trace.ts"
-    },
-    {
-      "kind": "flag",
       "name": "afk trace show --help",
       "source": "src/cli/commands/trace.ts"
     },
@@ -4370,11 +4355,6 @@
       "kind": "hook",
       "name": "UserPromptSubmit",
       "source": "src/agent/hooks.ts"
-    },
-    {
-      "kind": "slash",
-      "name": "/afk",
-      "source": "src/cli/slash/commands/afk.ts"
     },
     {
       "kind": "slash",

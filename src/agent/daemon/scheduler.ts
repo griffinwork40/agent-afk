@@ -22,7 +22,6 @@ import { startHandoffMaintenance, type HandoffMaintenanceHandle, type HandoffMai
 import { getQueueDir, getTelemetryPath } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
 import type { TraceWriter } from '../trace/index.js';
-import type { GateRecoveryFields } from './scheduler-gate-recovery.js';
 import type { AgentSession } from '../session/agent-session.js';
 import type { AgentConfig } from '../types.js';
 import type { Telegraf } from 'telegraf';
@@ -150,9 +149,13 @@ export interface SchedulerOptions {
 }
 
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
+/**
+ * `'blocked'` is legacy: only the removed autonomous-mode gate wrote it. New
+ * runs never record it, but readers still accept it in old telemetry rows.
+ */
 type TelemetryStatus = 'success' | 'error' | 'skipped' | 'blocked';
 
-export interface TelemetryRecord extends GateRecoveryFields, ModelFallbackFields {
+export interface TelemetryRecord extends ModelFallbackFields {
   runId?: string;
   failureStreak?: StreakSnapshot;
   notificationDecision?: NotificationDecision;
@@ -246,7 +249,7 @@ export class CronScheduler {
   private readonly overlapAlerts = new OverlapAlertLatch();
   /** One Telegram alert per daemon process for a non-writable telemetry file. */
   private readonly telemetryAlerts = new TelemetryAlertLatch();
-  /** Per-task consecutive-failure streak tracker (#5146). Read by `afk schedule health`. */
+  /** Per-task consecutive-failure streak tracker (#5146). Snapshots are stamped on telemetry rows and read by `readStreakHistory`. */
   readonly failureStreaks = new FailureStreakTracker();
   /** Aborted by `stop()` so an in-progress retry backoff ends promptly (#3243). */
   private shutdownController = new AbortController();
@@ -587,7 +590,7 @@ export class CronScheduler {
         queueDir: leaseQueueDir,
         idleDetector: this.idleDetector,
         now: this.now,
-        spawnSession: (t, tr, gbc) => this.spawnSession(t, tr, gbc),
+        spawnSession: (t, tr) => this.spawnSession(t, tr),
         writeTelemetry: (r, t, d) => this.writeTelemetry(r, t, d),
         shutdownSignal: this.shutdownController.signal,
         // Unregistered/replaced mid-run → no further retry attempts. Pull
@@ -617,14 +620,12 @@ export class CronScheduler {
   private async spawnSession(
     task: ScheduledTask,
     trigger: TelemetryTrigger = 'cron',
-    gateBlockCounter?: import('./scheduler-gate-recovery.js').GateBlockCounter,
   ): ReturnType<typeof spawnDaemonSession> {
     return spawnDaemonSession(task.taskId, {
       ...this.options,
       trigger,
       // Per-task cwd takes precedence over the daemon-wide sessionConfig.cwd.
       ...(task.cwd !== undefined ? { taskCwd: task.cwd } : {}),
-      ...(gateBlockCounter !== undefined ? { gateBlockCounter } : {}),
     });
   }
 

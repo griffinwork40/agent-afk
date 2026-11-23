@@ -61,7 +61,7 @@ describe('aggregateDaemonTelemetry', () => {
     const result = aggregateDaemonTelemetry({ days: 30, afkHome: tmpRoot });
     expect(result.totalRuns).toBe(1); expect(result.errorCount).toBe(0);
   });
-  it('counts recovered success by status, independently of gateBlocks', () => {
+  it('counts legacy gate-era success rows by status, ignoring their gateBlocks fields', () => {
     writeTelemetry([makeRecord({ gateBlocks: 1, gateRecoveryNote: 'Recovered',
       gateBlockCalls: [{ blockedTool: 'bash', followingTools: ['read_file'] }] })]);
     const result = aggregateDaemonTelemetry({ days: 30, afkHome: tmpRoot });

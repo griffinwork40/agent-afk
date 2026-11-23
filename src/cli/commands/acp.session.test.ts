@@ -82,6 +82,11 @@ vi.mock('../../agent/tools/top-level-allowlist.js', () => ({
   topLevelSurfaceAllowedTools: vi.fn(() => []),
 }));
 
+vi.mock('./acp.session.provider.js', () => ({ createAcpProvider: vi.fn(() => ({})) }));
+vi.mock('./acp.session.mcp.js', () => ({ connectAcpMcp: vi.fn(async () => undefined) }));
+vi.mock('./acp.session.prompt.js', () => ({ resolveAcpPrompt: vi.fn(() => ({ systemPromptSource: 'none' })) }));
+vi.mock('../../agent/trace/factory.js', () => ({ createDefaultTraceWriter: vi.fn(() => null) }));
+
 // ---------------------------------------------------------------------------
 // Spy on injectEpisodeRecall — must be set up before importing acp.session
 // ---------------------------------------------------------------------------
@@ -106,7 +111,6 @@ vi.mock('../../agent/memory/index.js', () => {
 // ---------------------------------------------------------------------------
 
 import { buildAcpSession, closeAcpSession } from './acp.session.js';
-import { MemoryStore } from '../../agent/memory/index.js';
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -150,6 +154,64 @@ describe('buildAcpSession — injection chain', () => {
     // injectEpisodeRecall's first arg should be what injectHotMemory returned.
     const [firstArg] = mockInjectEpisodeRecall.mock.calls[0] as unknown[];
     expect(firstArg).toBe(hotResult);
+  });
+});
+
+describe('buildAcpSession — approvals (D8, D9)', () => {
+  it('always runs bypassPermissions; the skip flag only controls the bridge', async () => {
+    const { wireExecutors } = await import('../../agent/session/wire-executors.js');
+    for (const skip of [false, true, undefined]) {
+      mockInjectHotMemory.mockClear();
+      await buildAcpSession({ model: 'sonnet', maxTurns: 10, ...(skip !== undefined ? { dangerouslySkipPermissions: skip } : {}) });
+      const [config] = mockInjectHotMemory.mock.calls[0] as [{ permissionMode: string }];
+      expect(config.permissionMode).toBe('bypassPermissions');
+    }
+    expect(vi.mocked(wireExecutors).mock.calls.every(([o]) => !('childCanUseTool' in o))).toBe(true);
+  });
+
+  it('passes the child approval factory to executor wiring', async () => {
+    const { wireExecutors } = await import('../../agent/session/wire-executors.js');
+    const childCanUseTool = vi.fn();
+    await buildAcpSession({ model: 'sonnet', maxTurns: 10, childCanUseTool });
+    expect(vi.mocked(wireExecutors).mock.calls.at(-1)?.[0]).toMatchObject({ childCanUseTool });
+  });
+});
+
+describe('buildAcpSession — hook registry cwd (T1)', () => {
+  it('hands the session cwd and id, not the process directory, to the hook registry', async () => {
+    const { createDefaultHookRegistry } = await import('../../agent/default-hook-registry.js');
+    const { loadHooksConfig } = await import('../../agent/hooks/config-loader.js');
+    const sessionCwd = process.platform === 'win32' ? 'C:\\client\\project' : '/client/project';
+    expect(sessionCwd).not.toBe(process.cwd());
+    await buildAcpSession({ model: 'sonnet', maxTurns: 10, cwd: sessionCwd, sessionId: 'acp-1' });
+    const call = vi.mocked(createDefaultHookRegistry).mock.calls.at(-1);
+    expect(call?.[5]).toMatchObject({ cwd: sessionCwd, sessionId: 'acp-1' });
+    expect(vi.mocked(loadHooksConfig)).toHaveBeenLastCalledWith({ cwd: sessionCwd });
+  });
+});
+
+describe('closeAcpSession — double-drain invariant [C3]', () => {
+  it('a double close calls the underlying drain exactly once', async () => {
+    // closeAcpSession calls session.close() (which drains subagents) and then
+    // resources.release() (which calls the same drainSubagents via a disposer).
+    // onceAcpShutdown makes the drain idempotent, so the underlying function
+    // must be invoked only once regardless of how many times the wrapper is called.
+    const { onceAcpShutdown } = await import('./acp.session.resources.js');
+    const underlying = vi.fn(async (_reason: string) => {});
+    const drain = onceAcpShutdown(underlying);
+    await drain('close');
+    await drain('close');
+    expect(underlying).toHaveBeenCalledTimes(1);
+  });
+
+  it('a double release of AcpSessionResources calls each disposer exactly once', async () => {
+    const { AcpSessionResources } = await import('./acp.session.resources.js');
+    const resources = new AcpSessionResources();
+    const disposer = vi.fn();
+    resources.add(disposer);
+    await resources.release();
+    await resources.release();
+    expect(disposer).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -192,16 +192,16 @@ describe('setPermissionMode', () => {
     expect(pushSidebandEvent).toHaveBeenCalledWith({ type: 'plan_mode', mode: 'plan' });
   });
 
-  it('pushes a plan_mode sideband event with mode "default" when leaving plan', async () => {
+  it('pushes a plan_mode sideband event with the actual mode when leaving plan', async () => {
     const { deps, pushSidebandEvent } = makeMockDeps();
     await setPermissionMode('default', deps);
     expect(pushSidebandEvent).toHaveBeenCalledWith({ type: 'plan_mode', mode: 'default' });
   });
 
-  it('pushes mode "default" for any non-plan permission mode', async () => {
+  it('pushes the actual mode for any non-plan permission mode', async () => {
     const { deps, pushSidebandEvent } = makeMockDeps();
     await setPermissionMode('bypassPermissions', deps);
-    expect(pushSidebandEvent).toHaveBeenCalledWith({ type: 'plan_mode', mode: 'default' });
+    expect(pushSidebandEvent).toHaveBeenCalledWith({ type: 'plan_mode', mode: 'bypassPermissions' });
   });
 });
 
@@ -286,10 +286,10 @@ describe('takePendingPlanExitSeed', () => {
 
   it('returns the seed message and mode when a seed is pending', async () => {
     const { deps, planExit, pushSidebandEvent } = makeMockDeps();
-    planExit.requestImplementSeed('implement this', 'default');
+    planExit.requestImplementSeed('implement this', 'bypassPermissions');
     const result = await takePendingPlanExitSeed(deps);
-    expect(result).toEqual({ message: 'implement this', mode: 'default' });
-    expect(pushSidebandEvent).toHaveBeenCalledWith({ type: 'plan_mode', mode: 'default' });
+    expect(result).toEqual({ message: 'implement this', mode: 'bypassPermissions' });
+    expect(pushSidebandEvent).toHaveBeenCalledWith({ type: 'plan_mode', mode: 'bypassPermissions' });
   });
 
   it('atomically drains the seed — a second call returns undefined', async () => {
@@ -301,10 +301,10 @@ describe('takePendingPlanExitSeed', () => {
 
   it('applies the deferred permission-mode flip (updates metadata)', async () => {
     const { deps, stateManager, planExit, pushSidebandEvent } = makeMockDeps();
-    planExit.requestImplementSeed('go', 'default');
+    planExit.requestImplementSeed('go', 'bypassPermissions');
     await takePendingPlanExitSeed(deps);
-    expect(stateManager.getSessionMetadata().permissionMode).toBe('default');
-    expect(pushSidebandEvent).toHaveBeenCalledWith({ type: 'plan_mode', mode: 'default' });
+    expect(stateManager.getSessionMetadata().permissionMode).toBe('bypassPermissions');
+    expect(pushSidebandEvent).toHaveBeenCalledWith({ type: 'plan_mode', mode: 'bypassPermissions' });
   });
 
   it('returns undefined and drops the seed when the permission-mode flip rejects', async () => {

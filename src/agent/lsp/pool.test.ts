@@ -154,11 +154,17 @@ describe('LspServerPool', () => {
   }, 10_000);
 
   it('kills a start every acquirer abandoned after the grace window', async () => {
-    const { spec } = setup({ silent: true });
+    const { logFile, spec } = setup({ silent: true });
     const pool = newPool({ abandonedStartGraceMs: 50 });
     const err = await pool.acquire(spec, tempDir, { timeoutMs: 100 }).catch((e: unknown) => e);
     expect((err as LspClientError).kind).toBe('timeout');
     await until(() => pool.size === 0);
+    // Wait for the server process itself to exit, not just pool eviction.
+    await until(() => {
+      const log = readFakeLog(logFile);
+      const pid = log.find((e) => e.spawn !== undefined)?.spawn;
+      return pid === undefined || !pidAlive(pid);
+    });
   }, 10_000);
 
   it('reads the idle window from AFK_LSP_IDLE_SHUTDOWN_MS', () => {
@@ -339,7 +345,7 @@ describe('crash-loop guard', () => {
     // The 4th acquire must be rejected immediately (no new spawn).
     const err = await pool.acquire(spec, tempDir, { timeoutMs: 2_000 }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(LspClientError);
-    expect((err as LspClientError).kind).toBe('exited');
+    expect((err as LspClientError).kind).toBe('disabled');
     expect(spawnCount(logFile)).toBe(3); // no 4th spawn
   }, 30_000);
 

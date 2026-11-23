@@ -138,7 +138,7 @@ The message journal preserves conversation content and tool results; the witness
 
 ## Permissions and isolation
 
-AFK does not require approval for every ordinary tool call, but specific boundaries can prompt or block. New CLI installations default to bypass permissions unless configured otherwise. Contained modes support path approval; autonomous mode adds a high-risk action gate, including an operator approval path when available.
+AFK does not require approval for every ordinary tool call, but specific boundaries can prompt or block. New CLI installations default to bypass permissions unless configured otherwise. Plan mode adds a write-class tool gate. See [safety](/concepts/safety) and [permissions](/configuration/permissions) for the full boundary details.
 
 A worktree keeps repository changes separate from your main checkout:
 

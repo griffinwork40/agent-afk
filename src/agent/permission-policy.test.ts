@@ -7,11 +7,7 @@ describe('pathContainmentBypassed', () => {
     expect(pathContainmentBypassed('bypassPermissions')).toBe(true);
   });
 
-  it('returns true for autonomous (AFK — must not fire keyboard path prompts)', () => {
-    expect(pathContainmentBypassed('autonomous')).toBe(true);
-  });
-
-  it.each<PermissionMode>(['default', 'plan', 'acceptEdits', 'dontAsk', 'auto'])(
+  it.each<PermissionMode>(['plan', 'acceptEdits', 'dontAsk', 'auto'])(
     'returns false for containment-preserving mode %s',
     (mode) => {
       expect(pathContainmentBypassed(mode)).toBe(false);

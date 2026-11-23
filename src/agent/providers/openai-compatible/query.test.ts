@@ -32,7 +32,6 @@ import { z } from 'zod';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import type { ToolHandler } from '../../tools/types.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../anthropic-direct/plan-mode-addendum.js';
-import { AFK_MODE_ADDENDUM_TEXT } from '../anthropic-direct/afk-mode-addendum.js';
 import { computeLineDiff } from '../../../utils/diff.js';
 import type { ToolCall, ToolResult } from '../anthropic-direct/types.js';
 import { setSlotBindings, resetSlotBindings } from '../../session/model-slots.js';
@@ -1047,6 +1046,62 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
     while (!(await iter.next()).done) {
       /* drain */
     }
+  });
+});
+
+describe('OpenAICompatibleQuery — setModel dispatcher rebuild with omitted permissionMode (#5184)', () => {
+  it('passes bypassPermissions to modelDispatcherFactory when permissionMode is omitted', async () => {
+    // Regression guard for the follow-up from #5166: normalizePermissionMode falls
+    // back to 'bypassPermissions' when no permissionMode is provided, but setModel()
+    // rebuilds the dispatcher using this.currentPermissionMode — which is set by
+    // normalizePermissionMode at construction time. This test proves that the factory
+    // receives 'bypassPermissions' (not undefined or some other value) when the
+    // query is constructed without an explicit permissionMode.
+    //
+    // slotDenyKey() reads from filesystem config tier paths and returns '' for
+    // models that are not configured slots. We seed currentSlotDenyKey to a
+    // non-empty sentinel so the first setModel() call sees a different key and
+    // enters the rebuild branch — isolating the permission-mode forwarding
+    // assertion from the filesystem-dependent slot resolution.
+
+    const factoryCalls: Array<{ model: string; permissionMode: string }> = [];
+    const stubDispatcher = {
+      execute: async () => ({ content: '' }),
+      setAllowAll: () => {},
+      setResolveBase: () => {},
+    } as unknown as import('../../tools/dispatcher.js').SessionToolDispatcher;
+
+    const modelDispatcherFactory = (model: string, permissionMode: string) => {
+      factoryCalls.push({ model, permissionMode });
+      return stubDispatcher;
+    };
+
+    // Construct with no permissionMode — normalizePermissionMode must fall back to
+    // 'bypassPermissions', which setModel() must then forward to the factory.
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('x'),
+      // permissionMode deliberately omitted from config
+      config: baseConfig(),
+      modelDispatcherFactory,
+    });
+
+    // Seed currentSlotDenyKey to a non-empty sentinel so switching to any model
+    // whose slotDenyKey() returns '' triggers the rebuild branch. This avoids
+    // relying on filesystem config files to produce specific slot deny keys.
+    (q as unknown as { currentSlotDenyKey: string }).currentSlotDenyKey = 'sentinel-slot:[]';
+
+    // setModel() compares slotDenyKey(newModel) against currentSlotDenyKey.
+    // slotDenyKey('gpt-4o') returns '' (no disabledBySlot config in test env),
+    // which differs from the sentinel, so the factory must be called.
+    await q.setModel('gpt-4o');
+
+    expect(factoryCalls).toHaveLength(1);
+    expect(factoryCalls[0]!.permissionMode).toBe('bypassPermissions');
+
+    q.close();
   });
 });
 
@@ -2084,10 +2139,6 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
       config: baseConfig(),
       toolDispatcher: dispatcher,
     });
-    // AFK (autonomous) must bypass path containment like bypassPermissions so an
-    // unattended session never stalls on a keyboard path-approval prompt.
-    await q.setPermissionMode('autonomous');
-    expect(dispatcher.getGrants().allowAll).toBe(true);
     await q.setPermissionMode('bypassPermissions');
     expect(dispatcher.getGrants().allowAll).toBe(true);
     // Containment-restoring modes turn it back off.
@@ -2137,60 +2188,7 @@ describe('OpenAICompatibleQuery — plan-mode addendum (U2)', () => {
   });
 });
 
-describe('OpenAICompatibleQuery — AFK-mode addendum (U2-afk)', () => {
-  it('appends AFK_MODE_ADDENDUM_TEXT to system message when permissionMode is autonomous', async () => {
-    pendingChunks = [
-      {
-        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      },
-    ];
-    const q = buildQueryFromConfig(
-      baseConfig({ permissionMode: 'autonomous', systemPrompt: 'be helpful' }),
-      singleInput('hi'),
-    );
-    await collect(q);
-    expect(createCalls).toHaveLength(1);
-    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
-    expect(args.messages[0]?.role).toBe('system');
-    expect(args.messages[0]?.content).toContain('be helpful');
-    expect(args.messages[0]?.content).toContain(AFK_MODE_ADDENDUM_TEXT);
-  });
 
-  it('does not append AFK_MODE_ADDENDUM_TEXT when permissionMode is default', async () => {
-    pendingChunks = [
-      {
-        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      },
-    ];
-    const q = buildQueryFromConfig(
-      baseConfig({ systemPrompt: 'be helpful' }),
-      singleInput('hi'),
-    );
-    await collect(q);
-    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
-    expect(args.messages[0]?.content).toBe('be helpful');
-    expect(args.messages[0]?.content).not.toContain(AFK_MODE_ADDENDUM_TEXT);
-  });
-
-  it('does not append PLAN_MODE_ADDENDUM_TEXT when permissionMode is autonomous (modes are mutually exclusive)', async () => {
-    pendingChunks = [
-      {
-        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      },
-    ];
-    const q = buildQueryFromConfig(
-      baseConfig({ permissionMode: 'autonomous', systemPrompt: 'be helpful' }),
-      singleInput('hi'),
-    );
-    await collect(q);
-    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
-    expect(args.messages[0]?.content).not.toContain(PLAN_MODE_ADDENDUM_TEXT);
-    expect(args.messages[0]?.content).toContain(AFK_MODE_ADDENDUM_TEXT);
-  });
-});
 
 describe('OpenAICompatibleQuery — toolName on tool.output (I3)', () => {
   beforeEach(() => {

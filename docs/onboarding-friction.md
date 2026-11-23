@@ -179,6 +179,7 @@ Works well, keep: the error classifier messages for a bad key, an empty balance 
 | J9 | both | context | confirmed | Eight issues from outside authors, all developers, none about installing | `gh issue list` | Watch real installs |
 | J10 | both | confusing | reported | No glossary; REPL, daemon, MCP, skill, plugin, subagent, worktree, hook, provider, model slot appear undefined | `README.md:40,86`, `index.mdx:14,30-35` | Glossary |
 | J11 | both | papercut | reported | When the status rail overflows it drops labels for glyphs and colour only; no screen reader guidance | `verdict-ledger.ts:206` | Document `AFK_AGENT_AFK_ASCII`; review |
+| J12 | both | confusing | confirmed | On a brand-new home directory `afk doctor` warns "Unable to open memory store: Cannot open database because the directory does not exist" with no suggested action | `src/cli/commands/doctor-checks.subsystem.ts:88` | Fixed in #5148: treat missing dir as not-yet-created |
 
 ## Clean-machine experiments
 
@@ -245,7 +246,7 @@ and a real machine before proposing a runtime fix. Workflow artifacts expire aft
 
 ### 2026-11-19: supported Node on macOS 15 and Windows Server 2022 (D5, D7, D11, J1, J3, J6, new J12)
 
-Source: [observation run 44582325558](https://github.com/griffinwork40/agent-afk/actions/runs/44582325558),
+Source: same [observation run 44582325558](https://github.com/griffinwork40/agent-afk/actions/runs/44582325558) as above (both sections are from one workflow run),
 artifacts `onboarding-macos-15-node-24` (Node v24.22.2, npm 11.19.1) and
 `onboarding-windows-2022-node-22` (Node v22.23.4, npm 10.9.9, Windows PowerShell 5.1),
 published agent-afk 5.360.0, closed stdin, isolated AFK home. Hosted runners, not

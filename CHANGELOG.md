@@ -15,6 +15,262 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 ### Added
 - add `/global` opt-in terminal chat between agent turns for people, when a relay is configured; messages are signed and verified, the relay retains messages with author public keys and display names for 7 days, and identity and mute files live in the AFK config directory under `global-chat/`
 
+## [6.1.0] - 2026-11-22
+
+### Added
+- accept systemPrompt on session/new for editor context injection (#5219) (13d693046)
+
+### Fixed
+- systemPrompt validation ordering and test gaps (#5245) (2dd359166)
+- bound the drain wait behind a settling turn (#5209) (4476dcad6)
+- reject background subagent dispatch from fork-mode skills (#5214) (373ea5299)
+- remove readLegacyAcpCwd and shared-map cwd fallback (#5199) (f42decb8f)
+- tighten surface census runtime and test coverage (#5202) (f25458d78)
+- emit actual permission mode in plan_mode sideband event (#5203) (1d9d3f5a6)
+- tighten Pending not-stated docs and cover Interrupted in exclusion test (#5200) (8ccb1245b)
+- disable git maintenance in bare-repo copy test (#5197) (b6642e0aa)
+- resolve 2 new lint:tests:check errors from #5211 (#5218) (45eb0d85f)
+- protect pending send from onTurnStart throw (R2.1) (#5205) (6c62abc34)
+- log teardown errors and add explicit scratch opt-out test (#5207) (97644123e)
+
+### Changed
+- systemPrompt length cap and injection tracing (#5244) (2dfea3818)
+- remove dead autonomous-mode file and stale comments (#5206) (88ad17b31)
+- remove browser-local redactSecrets copy (#5210) (5ff512fe7)
+- clean up stale redactSecrets references and dead code (#5213) (cd04a910d)
+
+## [6.0.0] - 2026-11-21
+
+### Removed
+
+- **Breaking: `autonomous` (AFK) permission mode removed.** The `autonomous`
+  mode, the `/afk` REPL and Telegram commands, the high-risk approval gate,
+  the phone-approval flow, Telegram `/abort`, automatic Telegram watch, and
+  `afk trace show --evasion` / `--evasion-window` are all gone. Scheduled
+  daemon tasks now run in `bypassPermissions` with no risk-classifier gate;
+  the unconditional blocking hooks (safe-destruct, release-boundary, sensitive
+  paths) remain the only pre-execution refusals on a daemon tick. A config
+  file that still names `autonomous` runs in `bypassPermissions` and prints
+  one warning. Manual `/watch <session-id>` and `/unwatch` still work. (fb4932e53)
+
+- **Breaking: `default` permission mode removed; `bypassPermissions` is now
+  the baseline.** The `default` mode (path containment on, interactive
+  approval prompts on) is no longer accepted as a user-facing choice. Every
+  surface that previously fell back to `default` now resolves to
+  `bypassPermissions`: both providers, session setup, the OpenAI-compatible
+  query normalizer, plan-mode exit, CLI and Telegram AFK-off, Telegram session
+  lifecycle, the web dashboard, session stats and resume. The Shift+Tab ring
+  is now `plan <-> bypassPermissions`. A config file that still sets
+  `"permissionMode": "default"` prints one warning and runs in
+  `bypassPermissions`. (628df60f1)
+
+- **Breaking: generic pattern-based secret redaction removed.** The
+  `redactSecrets` module and all 30+ call sites are stripped. On a
+  single-user local process the pattern-matching redactor added maintenance
+  burden and false-positive friction with no security value, since the full
+  session transcript already contains raw secrets in the provider API calls.
+  What remains: Telegram bot-token URL redactors (network-facing credential
+  paths), `redactSensitiveFields` in `tool-call-trace.ts` (field-level, not
+  pattern), and the browser `sanitize.ts` copy. The `AFK_REDACT_SECRETS` env
+  var is also removed. (5675dc0a5)
+
+### Added
+
+- census surface capability wiring and document known gaps per surface in a living test (894f0673f)
+- `afk setup` alias for `afk login` with guided first-time Anthropic sign-in: explains credentials, billing, hidden paste, Claude Code detection, and validates API keys before saving (8b5c38d0c)
+- onboarding friction observation kit: hosted install workflows for Windows and macOS across Node 20/22/24/26, with ledger, contracts, and dated findings (f443aa78c)
+
+### Changed
+
+- **Breaking: `afk acp` now speaks Agent Client Protocol v1 over stdio.** The
+  previous home-grown JSON-RPC wire format is removed. Any client built against
+  the old format will stop working. Migrate by connecting with any ACP v1
+  compatible client. The normative protocol reference is
+  [agentclientprotocol.com](https://agentclientprotocol.com); the AFK-specific
+  wire contract is in `docs/acp-profile.md`. Key differences from the old
+  format: `initialize` now takes an integer `protocolVersion` (not a string);
+  `session/new` requires `cwd` and `mcpServers` (not optional); `session/prompt`
+  takes a content-block array (not a bare string); `session/cancel` is a
+  notification with no id (not a request); update notifications use
+  `sessionUpdate` as the discriminator (not `type`); the `done` response carries
+  only `stopReason` (not a `costUsd` field). Clients that embedded the old
+  format must rewrite their integration against the profile. See
+  `docs/acp.md` for the user guide and wire examples.
+- **Provider routing:** any model the CLI can route works on the ACP surface.
+  The `--model` flag uses the same provider-routing logic as the terminal; the
+  approval prompt is forwarded for every provider family.
+- **`--max-turns` default changed to `0` (no cap).** The flag counts messages
+  sent per session, not steps within a prompt.
+- **Permission approvals are on by default.** Every session sends
+  `session/request_permission` before executing any consent-requiring tool.
+  The `--dangerously-skip-permissions` flag skips the approval bridge entirely;
+  it no longer implies a different permission mode.
+- **In-process subagent tool calls are asked.** Tool calls made by children
+  forked by `agent`, `skill`, or `compose` at any depth go through the same
+  approval bridge as top-level calls. Each request is prefixed with the
+  subagent's origin so the client can identify it. `remote_agent` runs on a
+  separate machine and is not covered.
+- **Reads and writes outside the session `cwd` are asked.** Read and search
+  tools that target a path outside the session directory are asked rather than
+  auto-allowed, with the absolute path shown. Write tools continue to be asked
+  regardless of path.
+- **`allow_always` is limited to the file editing tools.** Only `write_file`,
+  `edit_file` and `patch_apply` can be always-allowed, and only for a call whose
+  every path is inside `cwd` and that carries no unrecognised argument. Every
+  other tool, including `bash`, delegation tools, `model_complete`, the image
+  tools, `worktree`, web tools and every MCP tool, is asked every time. A
+  remembered grant never covers a call targeting a path outside `cwd` or
+  carrying an unrecognised argument; that call is asked again. This closes a
+  bypass where one harmless always-allow let `model_complete`, `image_edit`,
+  `image_generate` or `worktree` read, upload or overwrite any file unasked.
+- **Subagents in a worktree are asked.** Calls with a relative path or no path
+  made by children of an `agent` or `compose` delegation with worktree
+  isolation, or of a continued `agent` chain, are asked, because their checkout
+  can lie outside the session `cwd`.
+- **Subagents whose directory is unknown are asked.** A child whose working
+  directory the server does not know, such as a `context: fork` user or project
+  skill, has its calls with a relative path or no path asked, without an
+  "always allow" option, and an earlier grant does not cover them.
+- **`git_read` of a ref that may name a file is asked.** Every subcommand that
+  can print file content (`show`, `diff`, `grep`, `blame`, `cat-file`, and
+  `log` with patches) is asked when a revision is not provably a commit,
+  whatever its options or path, because a tag can point at a file outside
+  `cwd`. This closes a bypass where `diff <tag> -- <file>` printed an outside
+  file unasked. `cat-file` is auto-allowed only for `-t`, `-s` or `-e` on one
+  object; `%(raw)` formats are asked.
+- **Writes to git internals and command-running project config are always
+  asked.** A `write_file`, `edit_file` or `patch_apply` target with a `.git`
+  path segment (including a `.git` file), a `.gitattributes` or `.gitmodules`
+  file, `.mcp.json`, `afk.config.json`, `.afk/settings.json` or
+  `.afk/worktree-setup.json` is asked every time, without an "always allow"
+  option, and is never covered by an earlier grant. Case and Windows spelling
+  variants count. The card title says why: `(git internals)` or
+  `(project config that runs commands)`. This closes a bypass where one
+  "always allow" for `write_file` let the agent plant a git filter that a
+  later auto-allowed `git_read` ran.
+- **Writes to agent instructions and definitions are always asked.** Any path
+  with an `.afk` segment (skills, agents, plugins, plans, or anything else
+  under that directory) and `AFK.md` are sensitive write targets. They are
+  asked every time, without an "always allow" option, and are never covered by
+  an earlier grant. The card title says why: `(agent instructions or
+  definitions)`. This closes a bypass where one "always allow" for
+  `write_file` let the agent rewrite its own skill files or the project
+  instruction file without a fresh question.
+- **Approval cards say what is being approved.** Titles now include the shell
+  command for `bash`, method and URL for web tools, pattern and directory for
+  `grep` and `glob`, server and tool for MCP tools, agent type or skill and the
+  first words of the task for delegation tools, and subcommand and arguments
+  for `git_read`. Titles are one line, cut with `…`; a path outside `cwd`
+  stays visible. Replayed history uses the same titles.
+- **Multi-line shell commands show a line count in the approval title.** A
+  `bash` command with more than one non-empty line now shows the count of
+  further lines before the ellipsis: `bash echo hello (+2 more lines)…`. This
+  makes truncation unambiguous: the human sees that the first line is not the
+  whole command. Client implementers should display `rawInput.command` in full
+  for `execute` tool calls.
+- **Bidi and invisible characters in approval titles are made visible.** Unicode
+  direction controls, zero-width characters, the tag block, and any remaining
+  Unicode format or control character that passed the existing control-character
+  filter are replaced with visible escapes of the form `<U+XXXX>` in every
+  string a card shows, including every `locations[].path` entry and any
+  model-supplied subagent prefix; `rawInput` holds the exact path byte-for-byte.
+- **Writes to `.claude` agent definitions are always asked.** Any path with a
+  `.claude` segment (Claude Code compatible project-scoped agent definition
+  files loaded from `<cwd>/.claude/agents/`) is a sensitive write target, asked
+  every time and never covered by a grant, titled `(agent instructions or
+  definitions)`.
+- **Empty message and thought chunks are no longer sent.**
+- **Permission callback semantics tightened.** A permission callback result is
+  treated as allow only when it is an explicit, well-formed allow object.
+  Malformed, missing, or unexpected results are treated as deny.
+- **Client-supplied MCP servers trusted on connect.** MCP servers a client
+  passes in `session/new` are started immediately, before any tool approval, and
+  are trusted the same way as servers named on the command line.
+- **Witness trace written per session.** Every `afk acp` session writes a
+  witness trace viewable with the standard `afk trace` commands.
+- **Session `cwd` is not constrained to the server launch directory.** A
+  client may name any existing absolute directory as the session working
+  directory in `session/new`, `session/load`, or `session/resume`; it no
+  longer has to be the directory `afk acp` was started in or below it.
+- **Loading or resuming an already-open session succeeds.** If a session is
+  live and idle on the connection, `session/load` replays its history and
+  returns without creating a second handle; `session/resume` returns
+  immediately. Reopening with a different `cwd` or `mcpServers` list is
+  invalid params.
+- **Resource-not-found errors for a session carry `data.sessionId`.** When
+  `session/prompt`, `session/load`, or `session/resume` names an unknown or
+  already-closed session id, the `-32002` error response includes
+  `data: { "sessionId": "<the id from the request>" }`.
+- **The process exits promptly when the client closes its end.** On EOF the
+  server cancels and releases every live session within a bounded time and
+  then exits without waiting for stray timers.
+- **`git_read` never runs a program named by repository configuration.**
+  Filter drivers (`filter.<name>.clean`, `smudge`, `process`) from any config
+  source are switched off for each call, so `blame`, `diff` and `status` show
+  the raw stored content of filtered files (Git LFS files appear as their
+  pointer text and may be reported as modified). Repository hooks are not run,
+  and dirty submodules are not entered (`status` and `diff` behave as with
+  `--ignore-submodules=dirty`). If the repository's configuration cannot be
+  read, `git_read` refuses the call instead of running unprotected.
+- **The subagent workspace checkpoint also never runs repository filter drivers.**
+  `captureWorkspaceCheckpoint` enumerates and neutralises filter drivers (via
+  the same `GIT_CONFIG_COUNT` mechanism as `git_read`) before running
+  `git status`, so a checkpoint in a repository with LFS or other filter
+  drivers cannot start an unapproved program. If enumeration fails the
+  checkpoint is marked unavailable and drift checks fail closed.
+- **`git_read` asks before returning file content from outside the session
+  directory.** Calls that can produce file content from elsewhere in the
+  repository (such as `show`, `diff` with patches, or a revision that names
+  a blob) are asked rather than auto-allowed when no pathspec constrains
+  them to the session `cwd`.
+- **A subagent's paths are checked against its own working directory.** When
+  an `agent`, `skill`, or `compose` node is given an explicit `cwd`, the
+  approval policy resolves that child's relative or absent paths against it
+  rather than the session `cwd`. Absolute paths inside the session `cwd`
+  remain auto-allowed.
+
+### Fixed
+
+- add fast-uri override drift test and guard audit floor against the 11 moderate/low CVEs in fast-uri <3.1.9 (0d709ec81)
+- gate scratch-dir system-prompt rule on `scratchDisposable` opt-in so non-worktree forks do not receive stale guidance (5444dcfc0)
+- use wrap-ansi's internal string-width version to decide full-width in the render loop, eliminating stale-cell artifacts from code-point disagreements between string-width 8 and 9 (cd7c443cc)
+- harden pre-push test harness: move `AFK_ALLOW_MAIN_PUSH` into spawnSync env map, add atomic-push shape test, add gpgsig fixture precondition assertion (70de4f406)
+- name refused main-push commits in hook output so the operator can identify the offending SHA and subject (6a14ecb3e)
+- show "Pending: not stated" in `afk-push` output when a Done report omits the Pending field (7bf12facc)
+- clear the session drain timer after close and reset to prevent a stale callback firing on the next session (675d7d23d)
+- one send owns one provider turn: fix ESC-then-send lag and stray-interrupt session death caused by overlapping turn ownership (cf5001365)
+- address advisory findings from pr-triage batch: comments, sentinel literals, and minor logic nits (c1eff1d03)
+- reword rationale comment and replace bare sentinel literals with named constants (f09e0e2aa)
+- patch path-sanitizer boundary, space-in-directory, and UNC path gaps (6bf5ad4db)
+- address 7 of 8 remaining advisory findings: comments, regex correctness, truncation, and test coverage (c3a8d6666)
+- bound artifact publish admission: enforce size, count, and metadata constraints at the admission gate (4ad7808d2)
+- rank recent commands first, group native and skill commands, cap summaries in the ⌘K palette (fc2449511)
+- fix budget-cap exit path, duplicate-alert gate, and `issues[0]` nit in the budget reporter (476495f68)
+- clarify credential-floor diagnostics and narrow policy-scope description in the doctor output (dc17e2241)
+- type `makeFooter`, `makeTranscript`, and `makeSurface` test stubs against their real interfaces (6651a6403)
+- replace parity test self-compare and wire skill executor inline sites to `resolveChildMaxDepth` (5c7422f13)
+- daemon failure-streak escalation, notification delivery telemetry, and schedule health improvements (dc29ef51a)
+- enable web dashboard model fallback when the primary model is unavailable (5e9e10b6c)
+- address advisory findings: comments, regex, truncation, and test corrections (7643dd570)
+- doctor handles fresh stores and encoded install paths without spurious errors (d8109261e)
+- enable file checkpointing by default on the web surface (a56286470)
+- align skills manifest gate across providers and cover the `'true'` branch (bcc280ab8)
+- add LSP crash-restart loop guard: suppress auto-restart after 3 crashes within 120 s (e52f9318f)
+- add scratch-dir create-time exclude write (item 3) and handler+sweep (item 4) tests (554c99fae)
+- add direct unit tests for `safeNum`, `formatPct`, and `htmlEscape` in `html.helpers.ts` (5f5fccf87)
+
+### Documentation
+
+- replace demo video in README with failure geometry hero image (4030c551f)
+- explain onboarding terms, install errors, and Telegram setup in the getting-started guide (a67b4fa55)
+- add a from-zero onboarding path covering clean-machine install through first agent session (4e849060b)
+
+### Tests
+
+- add `TurnStreamRunner` integration test for auth-retry-tier trace events (234b2864e)
+- cover CRLF excludes and tracked `.afk-scratch` teardown paths (e7d162ff4)
+- stop racing registry cleanup in the Telegram watch stream test (d6ff7a2c6)
+
 ## [5.360.0] - 2026-11-19
 
 ### Added

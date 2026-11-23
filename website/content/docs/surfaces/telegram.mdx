@@ -67,9 +67,8 @@ The following handlers are registered by the bot. Telegram's command picker and 
 | `/model`, `/model opus` | Choose a model, with buttons when no argument is given. The advertised short aliases are `opus`, `sonnet`, and `haiku`. |
 | `/cd`, `/cwd`, `/name` | Show or change the session directory, or show or set its name. |
 | `/new`, `/sessions` | Start another conversation or list saved conversations with buttons to switch back. |
-| `/afk on`, `/afk off` | Enable or disable autonomous mode for this chat session. |
 | `/usage` | Show Claude subscription usage. |
-| `/watch`, `/unwatch`, `/abort` | Follow another live session in this chat, stop following, or request an authenticated abort of the watched session. |
+| `/watch <session-id>`, `/unwatch` | Follow a live session in this chat by its session ID, or stop following. `/watch` with no argument lists watchable sessions. |
 | `/inbox`, `/inbox release all`, `/inbox drop all` | Review, accept, or discard peer messages held for this chat's session. A message ID prefix can replace `all`. |
 | `/good`, `/bad` | Record positive or negative feedback on the current session. |
 
@@ -103,15 +102,11 @@ For a quieter allowed group, set `telegram.tagOnlyChats` to its chat ID, or use 
 
 To send to one chat instead of the default, the agent's `send_telegram` tool accepts `chat: "ops"` (or an allowed numeric chat ID). A scheduled task's `notifyChat` accepts the same kind of target. Explicit chat targets must resolve to an ID in the inbound allowlist: `send_telegram` refuses an invalid target, while a daemon task warns and falls back to its default notification route. `telegram.chatAliases` lets you keep raw IDs out of routine prompts. For a supergroup with topics enabled, `send_telegram` also accepts a numeric `thread_id`, but **only** together with an explicit `chat`. Ordinary bot replies and background results follow the topic they originated in. See [Schedule unattended work](/guides/scheduling).
 
-## Autonomous runs and approvals
+## Unattended runs and approvals
 
-From a **CLI session**, `/afk on` lets the agent continue reversible work while you are away. Each turn's parsed Done, Blocked, Asking, or Interrupted state is sent to Telegram as a compact report. The report prefers structured verdict fields rather than tool output, applies secret redaction, and limits notification volume. The chat bot's own `/afk on` similarly enables autonomous mode for that chat; `/afk off` restores normal mode. Its mode is runtime only, so a bot restart requires you to reenable it.
+The Telegram bot sends a compact turn report for each Done, Blocked, Asking, or Interrupted state. The report prefers structured verdict fields rather than tool output, applies secret redaction, and limits notification volume.
 
-<Callout type="warn">
-There are two different high risk approval paths. A CLI session in autonomous mode can ask you to approve or deny a **single** high risk operation. Use `/watch` from Telegram to follow that CLI session; its approval request appears as inline Approve and Deny buttons. A refusal, timeout, or unrecognized answer denies the call. The always on **Telegram bot's own** autonomous session deliberately does **not** offer one tap approval of high risk operations: it refuses the operation and asks you to handle it deliberately. Never assume `/afk on` in the bot makes irreversible actions phone approvable.
-</Callout>
-
-The bot also renders ordinary path approval and agent questions through Telegram prompts. A scheduled daemon task can save a question as a durable handoff; you can answer it in Telegram and the daemon resumes later. These are distinct from the CLI autonomous high risk gate. See [Permissions](/configuration/permissions) and [Daemon](/surfaces/daemon).
+The bot also renders ordinary path approval and agent questions through Telegram prompts. A scheduled daemon task can save a question as a durable handoff; you can answer it in Telegram and the daemon resumes later. See [Permissions](/configuration/permissions) and [Daemon](/surfaces/daemon).
 
 ## Troubleshooting
 

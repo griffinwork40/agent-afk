@@ -20,7 +20,7 @@ beforeEach(() => {
 describe('clearConversation', () => {
   it('resets provider, stats and ledger in order, preserving user preferences', async () => {
     const stats = createSessionStats('sonnet');
-    stats.permissionMode = 'autonomous';
+    stats.permissionMode = 'bypassPermissions';
     stats.thinkingUi = 'digest';
     stats.cwd = '/project';
     recordTurn(stats, 'old', 'answer', { sessionId: 'old-session', totalCostUsd: 2 });
@@ -38,7 +38,7 @@ describe('clearConversation', () => {
     expect(events).toEqual(['reset', 'ledger']);
     expect(stats).toMatchObject({
       totalTurns: 0, totalTokens: 0, totalCostUsd: 0, unpricedTurns: 0,
-      totalDurationMs: 0, model: 'sonnet', permissionMode: 'autonomous', thinkingUi: 'digest', cwd: '/project',
+      totalDurationMs: 0, model: 'sonnet', permissionMode: 'bypassPermissions', thinkingUi: 'digest', cwd: '/project',
     });
     expect(stats.sessionId).toBeUndefined();
     expect(stats.name).toBeUndefined();

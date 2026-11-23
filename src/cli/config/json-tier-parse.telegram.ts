@@ -38,9 +38,6 @@ export function parseTelegramBlock(
     }
     telegram.notify = parsed;
   }
-  if (typeof raw.verifyDone === 'boolean') {
-    telegram.verifyDone = raw.verifyDone;
-  }
   if (Array.isArray(raw.tagOnlyChats)) {
     const tagOnly = raw.tagOnlyChats.filter(
       (t): t is number => typeof t === 'number' && Number.isFinite(t),

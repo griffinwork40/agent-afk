@@ -100,7 +100,6 @@ describe('classifyConfigKey / specs', () => {
     expect(classifyConfigKey('telegram.notify.mode')).toBe('human'); // notification-redirect vector
     expect(classifyConfigKey('telegram.notify.targets')).toBe('human');
     expect(classifyConfigKey('telegram.tagOnlyChats')).toBe('human'); // who-can-drive-the-bot / message-routing control
-    expect(classifyConfigKey('telegram.verifyDone')).toBe('human'); // self-honesty gate — agent must not disable its own verification
     expect(classifyConfigKey('enforceDoneEvidence')).toBe('human'); // self-honesty gate — agent must not disable its own enforcement
     expect(classifyConfigKey('daemon.verifyDone')).toBe('human'); // daemon self-honesty gate — agent must not disable its own push verification
     expect(classifyConfigKey('updatePolicy')).toBe('human'); // auto self-update is scope-widening
@@ -154,7 +153,7 @@ describe('coerceConfigValue', () => {
     expect(coerceConfigValue(spec, 'bypassPermissions')).toEqual({ ok: true, value: 'bypassPermissions' });
     expect(coerceConfigValue(spec, 'default').ok).toBe(false); // removed from enumValues
     expect(coerceConfigValue(spec, 'plan')).toEqual({ ok: true, value: 'plan' });
-    expect(coerceConfigValue(spec, 'autonomous')).toEqual({ ok: true, value: 'autonomous' });
+    expect(coerceConfigValue(spec, 'autonomous').ok).toBe(false);
     expect(coerceConfigValue(spec, 'yolo').ok).toBe(false);
   });
   it('number arrays accept arrays and csv strings', () => {

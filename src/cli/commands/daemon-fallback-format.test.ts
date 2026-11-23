@@ -65,17 +65,13 @@ describe('D1/D2: formatTaskCompletion — modelFallbackNote', () => {
     expect(lines).toHaveLength(3);
   });
 
-  it('D1b: modelFallbackNote appears AFTER gateRecoveryNote', () => {
+  it('D1b: a legacy gateRecoveryNote on an old record is ignored, fallback note still shown', () => {
     const recoveryNote = 'Gate recovered after 1 block.';
     const fallbackNote = 'Switched to haiku.';
-    const result = formatTaskCompletion(
-      makeRecord({ gateRecoveryNote: recoveryNote, modelFallbackNote: fallbackNote }),
-      { responseText: 'done' },
-    );
-    const idxRecovery = result.indexOf(recoveryNote);
-    const idxFallback = result.indexOf(fallbackNote);
-    expect(idxRecovery).toBeGreaterThanOrEqual(0);
-    expect(idxFallback).toBeGreaterThan(idxRecovery);
+    const legacy = { ...makeRecord({ modelFallbackNote: fallbackNote }), gateRecoveryNote: recoveryNote };
+    const result = formatTaskCompletion(legacy, { responseText: 'done' });
+    expect(result).not.toContain(recoveryNote);
+    expect(result).toContain(fallbackNote);
   });
 });
 

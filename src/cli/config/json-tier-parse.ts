@@ -92,10 +92,10 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
     // Validate against the known modes; ignore garbage so a typo can't
     // silently land the session in an unexpected (or dangerous) mode.
     const pm = json.permissionMode;
-    if (pm === 'plan' || pm === 'autonomous' || pm === 'bypassPermissions') {
+    if (pm === 'plan' || pm === 'bypassPermissions') {
       config.permissionMode = pm;
-    } else if (pm === 'default') {
-      warnPermissionModeRemoval();
+    } else if (pm === 'default' || pm === 'autonomous') {
+      warnPermissionModeRemoval(pm);
     }
   }
 

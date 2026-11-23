@@ -14,6 +14,7 @@
  * fallback after delegation failure is forbidden").
  */
 
+import { mintChildGate, mintChildGateOpt } from './child-gate.js';
 import { getSkill, type SkillExecutionContext } from '../../index.js';
 import { discoverPluginSkillBodies } from '../../../agent/tools/skill-bridge.js';
 import { SubagentManager } from '../../../agent/subagent.js';
@@ -105,6 +106,7 @@ export async function runParallelizeDispatch(
       // like the mint handler did — see SkillExecutionContext.workspaceStore.
       ...(workspaceStore !== undefined ? { workspaceStore } : {}),
       ...(delegationBudget !== undefined ? { delegationBudget } : {}),
+      ...mintChildGateOpt(parentSession.sessionId), // surface gate for the override's own forks
     };
     const waveOrchestration = await parallelize.handler(
       { plan },
@@ -168,6 +170,7 @@ export async function runParallelizeDispatch(
           // AFK_MODEL, which left the fork credential-less under a cross-provider
           // operator and silently degraded parallelize to single-lane.
           apiKey: resolveCredentialForModel(defaultSubagentModel),
+          ...mintChildGate(parentSession.sessionId, 'mint-parallelize'), // surface approval gate
         },
         idPrefix: 'mint-parallelize',
         agentType: 'mint-parallelize',

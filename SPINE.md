@@ -44,7 +44,7 @@
 - **INV-037** (2026-09-22, spine-audit): Worktree sweep commitsUnpushed fails SAFE — if no upstream is configured, ref is unreadable, or any git error occurs, it is treated as commitsUnpushed === commitsAhead (unreplaceable). Must never be derived from commitsAhead === 0 (`src/agent/worktree/worktree-sweep.ts:108-115`)
 - **INV-038** (2026-09-22, spine-audit): env.ts secret entries must be enumerable: false to prevent credential leakage via JSON.stringify(env) or Object.keys(env). Duplicate ENV_REGISTRY names throw at module load via _seenEnvNames guard (`src/config/env.ts:1960-1990`)
 - **INV-039** (2026-09-22, spine-audit): ProviderRouter is only instantiated when config.provider is unset. When a caller injects a provider, the router is never constructed — code assuming the router is always present will bypass per-turn credential resolution and model-switch-notice injection (`src/agent/providers/router/provider-router.ts:29-31`)
-- **INV-040** (2026-09-22, 8f778a31-6f10-4939-b681-24c4b5beb507): Trace writers are fire-and-forget observability; absence never affects dispatch logic or correctness (reinforced 2026-09-22 by gate_shape telemetry in `src/agent/tools/dispatcher.execute-batch.ts:226-235`, reinforced 2026-10-04)
+- **INV-040** (2026-09-22, 8f778a31-6f10-4939-b681-24c4b5beb507): Trace writers are fire-and-forget observability; absence never affects dispatch logic or correctness (reinforced 2026-09-22 by gate_shape telemetry in `src/agent/tools/dispatcher.execute-batch.ts:226-235`, reinforced 2026-10-04) (partially weakened 2026-11-20)
 - **INV-041** (2026-09-22, 8f778a31-6f10-4939-b681-24c4b5beb507): Gate-shape telemetry (safeCount, unsafeCount, parallelGatesMs) emitted exactly once per batch after Phase 1 gates settle
 - **INV-042** (2026-09-22, 8f778a31-6f10-4939-b681-24c4b5beb507): Parallel gate wall-clock must be measured from phase entry, not per-gate; captured before wave begins, read after settle
 - **INV-043** (2026-09-22, 8f778a31-6f10-4939-b681-24c4b5beb507): Goals scoped per git repository via projectKey parameter; fallback to 'current' key for backward compatibility (reinforced 2026-09-22) (`src/agent/goals/goal-store.ts:14-23`)
@@ -75,7 +75,7 @@
 
 ## Explicitly Rejected Patterns
 
-- **REJ-001** (2026-09-17, spine-init): No raw process.env reads outside src/config/env.ts
+- **REJ-001** (2026-09-17, spine-init): No raw process.env reads outside src/config/env.ts (reinforced 2026-11-20)
 - **REJ-002** (2026-09-17, spine-init): No raw chalk.<color> calls outside src/cli/palette.ts
 - **REJ-003** (2026-09-17, spine-init): No hard wrap enabled in thinking-paragraph rendering (reverted in #1454 fix attempt)
 - **REJ-004** (2026-09-17, spine-init): Do not extract sessionSummary and costTokenLine as separate render components (reverted in #1401)
@@ -107,3 +107,4 @@
 - **TST-015** (2026-10-21, cce41cc4-5ad8-4779-8576-47ec954d4480): Web command gate entries are grouped by the staged work that unblocks them (session control, interactive pickers, session lifecycle, terminal-only affordances) rather than by terminal machinery, with stage references in comments (`src/web-server/command-gate.ts:16-42`)
 - **TST-016** (2026-10-21, 10c1d01e-2460-4b60-b3d7-c6f489ee0844): Dashboard command outputs are client-local, keyed by session id, and carry afterCount so they render at the transcript position where the command ran rather than pinned to the bottom (dashboard/src/hooks/use-command-outputs.ts; dashboard/src/app.tsx)
 - **TST-017** (2026-10-21, 10c1d01e-2460-4b60-b3d7-c6f489ee0844): Slash autocomplete contract: Tab always completes the active suggestion; Enter completes only while the typed token is a partial match and falls through to submit once it equals the active suggestion (dashboard/src/components/slash-autocomplete.tsx handleAutocompleteKey)
+- **TST-018** (2026-11-20, 5675dc0a5): The generic pattern-based secret redactor (`redactSecrets`) is intentionally removed — on a single-user local process the pattern-matching adds maintenance burden and false-positive friction with no security value, since the full session transcript already contains raw secrets in the provider API calls. Network-facing credential paths (Telegram bot-token URL redactors) and field-level redaction (`redactSensitiveFields`) are retained as the sanctioned redaction surface (src/agent/redact-secrets.ts:1-15)

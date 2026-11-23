@@ -56,8 +56,8 @@ a best-effort scan *and* records the reasoning and residual limits.
    `bypassPermissions` **and** carries a non-empty effective
    `writeRoots = [worktree]`, so a refusal keyed on that condition would break
    the primary human-driven worktree workflow. Forked sub-agents run
-   `permissionMode = 'default'` (they do **not** inherit bypass), so they would
-   never be refused anyway — meaning the refusal would only ever fire on the
+   `permissionMode = 'bypassPermissions'` (the baseline since PR #5166), so
+   they would never be refused anyway — meaning the refusal would only ever fire on the
    legitimate top-level session. Warn-only preserves the workflow while making
    the risk observable in logs and telemetry.
 

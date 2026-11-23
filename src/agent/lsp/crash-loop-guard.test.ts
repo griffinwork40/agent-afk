@@ -7,6 +7,7 @@ import {
   CrashLoopGuard,
   CRASH_LIMIT,
   CRASH_WINDOW_MS,
+  GUARD_COOLDOWN_MS,
   getOrCreateGuard,
   deleteGuard,
   clearGuards,
@@ -37,9 +38,10 @@ describe('CrashLoopGuard', () => {
     expect(g.failed).toBe(true);
   });
 
-  it('uses CRASH_LIMIT = 3 and CRASH_WINDOW_MS = 120000 as defaults', () => {
+  it('uses CRASH_LIMIT = 3, CRASH_WINDOW_MS = 120000, GUARD_COOLDOWN_MS = 300000 as defaults', () => {
     expect(CRASH_LIMIT).toBe(3);
     expect(CRASH_WINDOW_MS).toBe(120_000);
+    expect(GUARD_COOLDOWN_MS).toBe(300_000);
   });
 
   it('does NOT trip when crashes are spread beyond the window', () => {
@@ -60,17 +62,56 @@ describe('CrashLoopGuard', () => {
     expect(g.recentCrashes).toBe(2); // only t=5000 and t=11000 are in-window
   });
 
-  it('stays failed forever after the guard trips', () => {
+  it('stays failed until the cooldown expires', () => {
     let t = 0;
-    const g = new CrashLoopGuard({ now: () => t, limit: 2 });
+    const cooldownMs = 10_000;
+    const g = new CrashLoopGuard({ now: () => t, limit: 2, cooldownMs });
     t = 1; g.recordCrash();
     t = 2; g.recordCrash();
     expect(g.failed).toBe(true);
-    // Advance clock far beyond the window
-    t = 1_000_000;
+    // Still within the cooldown window
+    t = 2 + cooldownMs - 1;
     expect(g.failed).toBe(true);
     // recordCrash while failed is a no-op but returns true
     expect(g.recordCrash()).toBe(true);
+    // Cooldown elapsed — guard resets
+    t = 2 + cooldownMs;
+    expect(g.failed).toBe(false);
+  });
+
+  it('allows a fresh start after cooldown and can trip again', () => {
+    let t = 0;
+    const cooldownMs = 5_000;
+    const g = new CrashLoopGuard({ now: () => t, limit: 2, cooldownMs });
+    t = 1; g.recordCrash();
+    t = 2; g.recordCrash();
+    expect(g.failed).toBe(true);
+    // Advance past cooldown — guard resets
+    t = 2 + cooldownMs;
+    expect(g.failed).toBe(false);
+    // A new crash-loop can trip the reset guard again
+    t += 1; g.recordCrash();
+    t += 1; g.recordCrash();
+    expect(g.failed).toBe(true);
+  });
+
+  it('cooldownRemainingMs returns 0 when not tripped', () => {
+    const g = new CrashLoopGuard();
+    expect(g.cooldownRemainingMs).toBe(0);
+  });
+
+  it('cooldownRemainingMs counts down to 0', () => {
+    let t = 0;
+    const cooldownMs = 10_000;
+    const g = new CrashLoopGuard({ now: () => t, limit: 2, cooldownMs });
+    t = 1000; g.recordCrash();
+    t = 2000; g.recordCrash();
+    expect(g.failed).toBe(true);
+    expect(g.cooldownRemainingMs).toBe(cooldownMs);
+    t = 2000 + 4000;
+    expect(g.cooldownRemainingMs).toBe(cooldownMs - 4000);
+    t = 2000 + cooldownMs;
+    expect(g.cooldownRemainingMs).toBe(0);
   });
 
   it('honours custom limit and windowMs', () => {

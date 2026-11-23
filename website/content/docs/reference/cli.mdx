@@ -62,7 +62,7 @@ Usage: `afk [options] [command]`
 | `captures` | List bash output captures — full output files written when a command produces more than 100 KB. Captures live under the witness directory and are evicted automatically by the 30-day / 2 GiB retention sweep. |
 | `defects` | Show top recurring pre-existing defects from the session ledger |
 | `receipt` | Manage run receipts — human- and machine-readable session summaries. |
-| `acp` | Start an Agent Client Protocol (ACP) JSON-RPC 2.0 server over stdio (compatible with Zed, JetBrains, and other ACP clients) |
+| `acp` | Start an Agent Client Protocol (ACP) JSON-RPC 2.0 server over stdio (compatible with Zed and other ACP v1 clients; Zed configuration verified against Zed docs) |
 | `pause` | Freeze all running AFK sessions in place (write pause.lock) |
 | `resume` | Unfreeze all paused AFK sessions (remove pause.lock) |
 
@@ -99,7 +99,7 @@ Guide: [chat](/surfaces/chat)
 | `--mcp-config <path>` | Path to an additional MCP config file (highest priority — merges over ~/.afk/config/mcp.json, project-local .mcp.json, and plugin-contributed configs). File format identical to mcp.json. |  |
 | `--resume <id>` | Resume a persisted session by id |  |
 | `--continue` | Continue the most recent persisted session in cwd |  |
-| `--permission-mode <mode>` | Permission mode: default\|acceptEdits\|bypassPermissions\|plan\|dontAsk\|auto\|autonomous. Overrides afk.config.json permissionMode. Does not affect ask_question. |  |
+| `--permission-mode <mode>` | Permission mode: acceptEdits\|bypassPermissions\|plan\|dontAsk\|auto. Overrides afk.config.json permissionMode. Does not affect ask_question. |  |
 | `--dangerously-skip-permissions` | Force bypass mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation (permissionMode=bypassPermissions). Disable persistently with `afk config set permissionMode default`. Does not affect ask_question. |  |
 | `-s, --stream` | [no-op] reserved; use --format stream-json for headless streaming | `false` |
 | `-f, --format <format>` | Output format (text\|json\|stream-json) | `"text"` |
@@ -511,7 +511,7 @@ Guide: [repl](/surfaces/repl)
 | `--mcp-config <path>` | Path to an additional MCP config file (highest priority — merges over ~/.afk/config/mcp.json, project-local .mcp.json, and plugin-contributed configs). File format identical to mcp.json. |  |
 | `--resume <id>` | Resume a persisted session by id |  |
 | `--continue` | Continue the most recent persisted session in cwd |  |
-| `--permission-mode <mode>` | Permission mode: default\|acceptEdits\|bypassPermissions\|plan\|dontAsk\|auto\|autonomous. Overrides afk.config.json permissionMode. Does not affect ask_question. |  |
+| `--permission-mode <mode>` | Permission mode: acceptEdits\|bypassPermissions\|plan\|dontAsk\|auto. Overrides afk.config.json permissionMode. Does not affect ask_question. |  |
 | `--dangerously-skip-permissions` | Force bypass mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation. Toggle live with Shift+Tab (permission-mode cycle); disable persistently with `afk config set permissionMode default`. Does not affect ask_question. |  |
 | `--thinking-ui <mode>` | Thinking display mode: summary\|live\|digest\|off. Default live. Also: AFK_THINKING_UI env, or interactive.thinkingUi in afk.config.json. |  |
 | `--debug` | Show SDK init metadata on startup; enables /debug command | `false` |
@@ -1652,8 +1652,6 @@ Guide: [observability](/guides/observability)
 | `-n, --limit <number>` | Show only the last N events |  |
 | `--results` | Print each tool call's full result (from the message journal) under its row | `false` |
 | `--results-lines <number>` | Max lines per result with --results (0 = no limit, default 40) |  |
-| `--evasion` | Run the block-evasion and lost-work analyzer and print its report | `false` |
-| `--evasion-window <number>` | Tool-call window size for evasion detection (default 10) |  |
 | `-h, --help` | display help for command |  |
 
 ## `afk trace list`
@@ -2671,7 +2669,7 @@ Usage: `afk receipt regenerate [options]`
 
 ## `afk acp`
 
-Start an Agent Client Protocol (ACP) JSON-RPC 2.0 server over stdio (compatible with Zed, JetBrains, and other ACP clients)
+Start an Agent Client Protocol (ACP) JSON-RPC 2.0 server over stdio (compatible with Zed and other ACP v1 clients; Zed configuration verified against Zed docs)
 
 Usage: `afk acp [options]`
 
@@ -2680,7 +2678,7 @@ Usage: `afk acp [options]`
 | Flags | Description | Default |
 | --- | --- | --- |
 | `-m, --model <model>` | model to use for sessions (default: configured default) |  |
-| `--max-turns <n>` | maximum agent turns per prompt (default: 10) | `"10"` |
+| `--max-turns <n>` | maximum messages sent per session (0 = uncapped; default: 0) | `"0"` |
 | `--dangerously-skip-permissions` | Force bypass mode: skip all permission prompts for all sessions created by this server |  |
 | `-h, --help` | display help for command |  |
 

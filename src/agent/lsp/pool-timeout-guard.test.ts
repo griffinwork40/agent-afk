@@ -69,7 +69,7 @@ describe('pooled request timeout incidents', () => {
     expect(pool.size).toBe(0);
     await client.dispose();
     await expect(pool.acquire(spec, root)).rejects.toMatchObject({
-      kind: 'exited', message: 'LSP server disabled: crash-loop guard tripped',
+      kind: 'disabled', message: 'LSP server disabled: crash-loop guard tripped',
     });
     expect(pool.spawned).toBe(1);
   });

@@ -336,6 +336,7 @@ export {
   getSessionJournalPath,
   getSubagentJournalPath,
   getSubagentJournalsDir,
+  getAcpSessionMapPath,
 } from './paths.journal.js';
 
 // Plugin-scope paths — whole concern extracted at the 350-code-line ceiling

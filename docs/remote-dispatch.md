@@ -20,7 +20,7 @@ repos, accounts, and model subscriptions. Nothing is copied: move code with git.
 ```json
 {
   "studio": { "ssh": "you@studio.local", "cwd": "~/Projects/my-repo", "unlockKeychain": true },
-  "build":  { "ssh": "you@build-box", "permissionMode": "default" },
+  "build":  { "ssh": "you@build-box", "permissionMode": "plan" },
   "mini":   { "ssh": "mini", "afkPath": "/opt/homebrew/bin/afk" }
 }
 ```
@@ -36,7 +36,7 @@ aliases work with no setup. `afkPath` is only needed when auto-discovery fails.
 | `cwd` | string? | Working directory on the remote (absolute or `~/…`). |
 | `afkPath` | string? | Absolute path to the `afk` binary on the remote. Only needed when auto-discovery fails. |
 | `unlockKeychain` | bool? | Unlock the remote's macOS login keychain before each run (see [Keychain unlock](#keychain-unlock)). |
-| `permissionMode` | string? | Permission mode pinned on every `afk chat` run for this host (any `afk chat --permission-mode` value, e.g. `default`, `plan`, `bypassPermissions`, `autonomous`). When absent the remote resolves its own configured default. |
+| `permissionMode` | string? | Permission mode pinned on every `afk chat` run for this host (any `afk chat --permission-mode` value, e.g. `plan`, `bypassPermissions`). When absent the remote resolves its own configured default. |
 
 ## Keychain unlock
 

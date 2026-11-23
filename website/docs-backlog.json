@@ -3,12 +3,6 @@
   "entries": [
     {
       "kind": "command",
-      "name": "afk acp",
-      "reason": "Listed only in the generated CLI reference; no hand-written guide covers the Agent Client Protocol (ACP) JSON-RPC server over stdio yet.",
-      "added": "2026-11-12"
-    },
-    {
-      "kind": "command",
       "name": "afk episode",
       "reason": "Listed only in the generated CLI reference; no hand-written guide covers the episodic-narrative command group yet.",
       "added": "2026-11-12"

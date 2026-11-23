@@ -65,6 +65,14 @@ describe('parseJsonConfigFile — permissionMode', () => {
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('permissionMode "autonomous" is dropped with a warning that names autonomous, not default', () => {
+    const p = writeConfig(tmpDir, { permissionMode: 'autonomous' });
+    expect(parseJsonConfigFile(p)!.config.permissionMode).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      '[afk] permissionMode "autonomous" was removed. The session will run in bypassPermissions. Set "permissionMode": "plan" for a read-only session.',
+    );
+  });
+
   it('permissionMode "bypassPermissions" is accepted and emits no warning', () => {
     const p = writeConfig(tmpDir, { permissionMode: 'bypassPermissions' });
     const result = parseJsonConfigFile(p);

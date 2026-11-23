@@ -95,12 +95,14 @@ export function formatTaskCompletion(
     header,
     `trigger=${record.trigger} duration=${durationSec}s`,
   ];
-  if (record.gateRecoveryNote) lines.push(record.gateRecoveryNote);
   if (record.modelFallbackNote) lines.push(record.modelFallbackNote);
   if (record.skipReason) lines.push(`skipReason=${record.skipReason}`);
   if (record.errorMessage) {
     const msg = record.errorMessage;
-    lines.push(`error: ${msg.length > 400 ? `${msg.slice(0, 400)}… [truncated]` : msg}`);
+    // Use spread to count Unicode code points so the slice boundary never
+    // falls inside a surrogate pair (e.g. emoji represented as two UTF-16 units).
+    const chars = [...msg];
+    lines.push(`error: ${chars.length > 400 ? `${chars.slice(0, 400).join('')}… [truncated]` : msg}`);
   }
   if (hasOutput) {
     lines.push('', responseText as string);

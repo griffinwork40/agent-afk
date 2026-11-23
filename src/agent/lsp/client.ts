@@ -33,7 +33,7 @@ import { DiagnosticsStore } from './diagnostics-store.js';
 import { exitPromise, forceKillRoot, killServerTree, killServerTreeAndWait, killServerTreeSync, spawnServer, waitForExit } from './client-process.js';
 
 /** Failure kinds surfaced to handlers so they can map to their error strings. */
-export type LspFailureKind = 'timeout' | 'aborted' | 'exited' | 'spawn' | 'response';
+export type LspFailureKind = 'timeout' | 'aborted' | 'exited' | 'spawn' | 'response' | 'disabled';
 
 /** Error thrown by `LspClient` operations. `kind` drives handler messages. */
 export class LspClientError extends Error {
@@ -408,6 +408,7 @@ export class LspClient {
       try { cb(); } catch { /* listener errors never propagate */ }
     }
     this.exitListeners.clear();
+    this.timeoutListeners.clear();
     try { this.conn.dispose(); } catch { /* ignore */ }
     if (reason !== 'disposed') killServerTree(this.proc);
   }
