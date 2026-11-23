@@ -55,7 +55,7 @@ describe('runStatsTick', () => {
     expect(out).toBe(0);
   });
 
-  it('exits cleanly on drift when no session is mid-turn', () => {
+  it('exits on drift when no session is mid-turn', () => {
     const exit = vi.fn();
     tick({
       bot: fakeBot(0),
@@ -65,7 +65,8 @@ describe('runStatsTick', () => {
       ...silent,
       exit,
     });
-    expect(exit).toHaveBeenCalledWith(0);
+    // Platform-dependent since #5240: 1 on win32, 0 elsewhere.
+    expect(exit).toHaveBeenCalledWith(DRIFT_EXIT_CODE);
   });
 
   it('defers instead of exiting while a session is mid-turn', () => {
@@ -108,7 +109,7 @@ describe('runStatsTick', () => {
       ...silent,
       exit,
     });
-    expect(exit).toHaveBeenCalledWith(0);
+    expect(exit).toHaveBeenCalledWith(DRIFT_EXIT_CODE);
   });
 
   it('resets the deferral count when drift clears', () => {
