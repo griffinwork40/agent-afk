@@ -150,7 +150,7 @@ export class SessionShutdown {
     // every later event and leave the next conversation untraced. One trace
     // spans the process lifetime: each cycle's `closure` above delimits it
     // (cost.ts sums closures per cycle), and only the final close/error seals.
-    const seals = ownsTraceSeal && reason !== 'reset';
+    const seals = ownsTraceSeal && reason !== 'reset' && reason !== 'rewind';
     if (seals) {
       const sealInput: SealTraceInput = {
         ...signals,

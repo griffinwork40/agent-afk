@@ -21,6 +21,7 @@
 // src/__test-utils__/redirect-paths-env.ts (per-file AFK_HOME sentinel).
 import { describe, it, expect } from 'vitest';
 import { AgentSession } from './agent-session.js';
+import { ProviderTurns, type ProviderTurnHooks } from './turn-stream-runner.abandoned-turn.js';
 import { createHookRegistry } from '../hooks.js';
 import { AbortCoordinator } from '../providers/shared/abort-coordinator.js';
 import { readLedger, type LedgerRecord } from '../session-ledger.js';
@@ -434,6 +435,30 @@ describe('abandoned turn: ledger is sealed before settlement finishes', () => {
     expect(messageTexts(events)).toEqual(['Echo: after reset']);
     expect(stopReasonOf(events)).toBe('end_turn');
     expect(donesOfFirstTurn(await ledgerOf(sessionId))).toHaveLength(1);
+  });
+});
+
+describe('ProviderTurns.seal() send-cancellation by reason', () => {
+  function makeHooks(): ProviderTurnHooks {
+    return {
+      async consume() { return null; },
+      async interruptProvider() {},
+      recordSyntheticDone() {},
+    };
+  }
+
+  it("seal('rewind') does NOT cancel a pending send", () => {
+    const turns = new ProviderTurns(makeHooks());
+    const send = turns.beginSend();
+    turns.seal('rewind');
+    expect(send.cancelled).toBe(false);
+  });
+
+  it("seal('reset') DOES cancel a pending send", () => {
+    const turns = new ProviderTurns(makeHooks());
+    const send = turns.beginSend();
+    turns.seal('reset');
+    expect(send.cancelled).toBe(true);
   });
 });
 
