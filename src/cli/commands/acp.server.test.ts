@@ -481,6 +481,37 @@ describe('ACP server — shutdown bound (D17)', () => {
     await exitAfterServer(output, exit);
     expect(exit).toHaveBeenCalledWith(0);
   });
+  it('SIGINT routes into the bounded teardown: sessions are released and handlers are removed', async () => {
+    script = async function* () { await waitInterrupt(); };
+    const h = startServer({ shutdownDeadlineMs: 200 });
+    h.send(init); h.send(newSession());
+    await h.waitFor(2);
+    h.send(req(3, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] }));
+    await new Promise((r) => setTimeout(r, 10));
+    // Emit SIGINT — should trigger the same bounded teardown as EOF.
+    process.emit('SIGINT', 'SIGINT');
+    // runAcpServer should resolve (not hang) and close the session.
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('timed out waiting for server to shut down after SIGINT')), 1_000);
+      h.end().then(() => { clearTimeout(t); resolve(); }, reject);
+    });
+    expect(mClose).toHaveBeenCalledTimes(1);
+    expect(h.logs.join('\n')).toMatch(/signal received/);
+    // Listener must be removed after teardown — a second emit must not trigger another destroy.
+    expect(process.listenerCount('SIGINT')).toBe(0);
+  });
+  it('SIGTERM routes into the bounded teardown and removes its listener', async () => {
+    const h = startServer({ shutdownDeadlineMs: 200 });
+    h.send(init); h.send(newSession());
+    await h.waitFor(2);
+    process.emit('SIGTERM', 'SIGTERM');
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('timed out waiting for server to shut down after SIGTERM')), 1_000);
+      h.end().then(() => { clearTimeout(t); resolve(); }, reject);
+    });
+    expect(mClose).toHaveBeenCalledTimes(1);
+    expect(process.listenerCount('SIGTERM')).toBe(0);
+  });
 });
 
 describe('ACP server — load and resume', () => {
