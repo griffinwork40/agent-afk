@@ -92,12 +92,16 @@ export function dispatchCompletion(
     console.error(`[daemon] onTaskComplete callback failed: ${redactInlineSecrets(errorMessage(err))}`);
     persist({ target: effectiveDetails?.notifyChat ?? null, outcome: 'failed' });
   };
+  const settled = (outcome: NotificationOutcome | void): void => {
+    const o = outcome ?? { target: effectiveDetails?.notifyChat ?? null, outcome: 'unknown' as const };
+    if (o.outcome === 'failed' || o.outcome === 'unconfigured') {
+      console.error(`[daemon] notification delivery ${o.outcome} for task "${record.taskId}" (kind: ${decision.kind})`);
+    }
+    persist(o);
+  };
   try {
     const result = callback(record, effectiveDetails);
-    void Promise.resolve(result).then(
-      (outcome) => persist(outcome ?? { target: effectiveDetails?.notifyChat ?? null, outcome: 'unknown' }),
-      failed,
-    );
+    void Promise.resolve(result).then(settled, failed);
   } catch (err) {
     failed(err);
   }
