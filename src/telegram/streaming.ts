@@ -152,7 +152,7 @@ export async function streamResponse(
   const state: StreamState = {
     accumulated: '', answerText: '',
     sentMessage: null as Message.TextMessage | null,
-    lastEditAt: 0, pausedUntil: null, countdownInterval: null,
+    lastEditAt: 0, lastRenderedText: '', lastRenderedHtml: '', pausedUntil: null, countdownInterval: null,
     editInFlight: false, lastCountdownBucket: -1, sawTerminalEvent: false,
     progressEntries: [] as ProgressEntry[], progressRounds: 0,
     turnEnded: false, progressTimer: null, turnStartedAt: Date.now(),
