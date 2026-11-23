@@ -81,13 +81,39 @@ describe('parseJsonConfigFile — permissionMode', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it('unknown permissionMode is dropped with a warning naming the value and valid modes', () => {
+  it('permissionMode "plan" is accepted and emits no warning', () => {
+    const p = writeConfig(tmpDir, { permissionMode: 'plan' });
+    const result = parseJsonConfigFile(p);
+    expect(result).toBeDefined();
+    expect(result!.config.permissionMode).toBe('plan');
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('valid-SDK-but-not-config permissionMode is dropped with a "not accepted in afk.config.json" warning', () => {
     const p = writeConfig(tmpDir, { permissionMode: 'acceptEdits' });
     const result = parseJsonConfigFile(p);
     expect(result).toBeDefined();
     expect(result!.config.permissionMode).toBeUndefined();
     expect(warnSpy).toHaveBeenCalledOnce();
     expect(warnSpy.mock.calls[0]![0]).toContain('"acceptEdits"');
+    expect(warnSpy.mock.calls[0]![0]).toContain('not accepted in afk.config.json');
+    expect(warnSpy.mock.calls[0]![0]).toContain('Valid config modes: plan, bypassPermissions');
+  });
+
+  it('valid-SDK-but-not-config warning fires only once per value', () => {
+    const p = writeConfig(tmpDir, { permissionMode: 'acceptEdits' });
+    parseJsonConfigFile(p);
+    parseJsonConfigFile(p);
+    expect(warnSpy).toHaveBeenCalledOnce();
+  });
+
+  it('unknown permissionMode is dropped with a warning naming the value and valid modes', () => {
+    const p = writeConfig(tmpDir, { permissionMode: 'typo' });
+    const result = parseJsonConfigFile(p);
+    expect(result).toBeDefined();
+    expect(result!.config.permissionMode).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy.mock.calls[0]![0]).toContain('"typo"');
     expect(warnSpy.mock.calls[0]![0]).toContain('Valid modes:');
   });
 

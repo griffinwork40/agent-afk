@@ -18,7 +18,13 @@
 
 import { readFileSync, existsSync } from 'fs';
 import { parseToolsConfig } from './json-tier-parse.tools.js';
-import { warnPermissionModeRemoval, warnPermissionModeUnknown } from './permission-mode-warning.js';
+import {
+  warnPermissionModeRemoval,
+  warnPermissionModeUnknown,
+  warnPermissionModeNotConfigurable,
+  type RemovedPermissionMode,
+} from './permission-mode-warning.js';
+import { classifyPermissionMode, isConfigPermissionMode } from '../../utils/permission-mode.js';
 import { parseDaemonBlock } from './json-tier-parse.daemon.js';
 import { parseTelegramBlock } from './json-tier-parse.telegram.js';
 import { parseInteractiveBlock } from './json-tier-parse.interactive.js';
@@ -91,11 +97,18 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
   if (typeof json.permissionMode === 'string') {
     // Validate against the known modes; ignore garbage so a typo can't
     // silently land the session in an unexpected (or dangerous) mode.
+    // Config files accept only plan and bypassPermissions — the same set
+    // enforced by settable-keys.ts. The wider SDK set (acceptEdits, dontAsk,
+    // auto) is available only via the --permission-mode CLI flag.
     const pm = json.permissionMode;
-    if (pm === 'plan' || pm === 'bypassPermissions') {
+    const kind = classifyPermissionMode(pm);
+    if (kind === 'valid' && isConfigPermissionMode(pm)) {
       config.permissionMode = pm;
-    } else if (pm === 'default' || pm === 'autonomous') {
-      warnPermissionModeRemoval(pm);
+    } else if (kind === 'removed') {
+      warnPermissionModeRemoval(pm as RemovedPermissionMode);
+    } else if (kind === 'valid') {
+      // Valid SDK mode but not accepted in config files
+      warnPermissionModeNotConfigurable(pm);
     } else {
       warnPermissionModeUnknown(pm);
     }

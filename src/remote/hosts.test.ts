@@ -47,6 +47,16 @@ describe('loadHosts — permissionMode validation', () => {
     expect(warnSpy.mock.calls[0]![0]).toContain('Valid modes:');
   });
 
+  it('drops a valid-SDK-but-not-config permissionMode with a "not accepted in hosts.json" warning', async () => {
+    const p = await writeHosts({ myhost: { ssh: 'user@host', permissionMode: 'acceptEdits' } });
+    const hosts = await loadHosts(p);
+    expect(hosts['myhost']!.permissionMode).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy.mock.calls[0]![0]).toContain('"acceptEdits"');
+    expect(warnSpy.mock.calls[0]![0]).toContain('not accepted in hosts.json');
+    expect(warnSpy.mock.calls[0]![0]).toContain('Valid modes: plan, bypassPermissions');
+  });
+
   it('drops removed permissionMode "autonomous" with a removal warning', async () => {
     const p = await writeHosts({ myhost: { ssh: 'user@host', permissionMode: 'autonomous' } });
     const hosts = await loadHosts(p);

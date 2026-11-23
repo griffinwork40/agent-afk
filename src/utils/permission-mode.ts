@@ -36,6 +36,22 @@ export const REMOVED_PERMISSION_MODES: ReadonlySet<string> = new Set<RemovedPerm
 ]);
 
 /**
+ * Permission modes accepted in config files (`afk.config.json`) and host
+ * entries (`hosts.json`). Intentionally narrower than the full SDK set:
+ * `acceptEdits`, `dontAsk`, and `auto` are available only via the
+ * `--permission-mode` CLI flag. This matches the `settable-keys.ts` enum
+ * for the `permissionMode` config key (human-tier privilege-escalation gate).
+ */
+export type ConfigPermissionMode = 'plan' | 'bypassPermissions';
+export const CONFIG_PERMISSION_MODES: ReadonlySet<ConfigPermissionMode> = new Set<ConfigPermissionMode>([
+  'plan', 'bypassPermissions',
+]);
+
+export function isConfigPermissionMode(value: string): value is ConfigPermissionMode {
+  return (CONFIG_PERMISSION_MODES as ReadonlySet<string>).has(value);
+}
+
+/**
  * Classify a raw permissionMode string from any config source.
  *
  * - `'valid'`   — accepted; callers should apply the value.
