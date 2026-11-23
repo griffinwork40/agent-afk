@@ -15,7 +15,7 @@ import { EventEmitter, Readable } from 'node:stream';
 import { createHash } from 'node:crypto';
 
 import { runArm, parseTraceIdentity } from '../scripts/workspace-ab/run-arm.js';
-import type { ArmOptions, SpawnFn, FsWriteFn, ClockFn } from '../scripts/workspace-ab/run-arm.js';
+import type { ArmOptions, ArmResult, SpawnFn, FsWriteFn, ClockFn } from '../scripts/workspace-ab/run-arm.js';
 import { compareTrialPair, aggregateTrials } from '../scripts/workspace-ab/compare.js';
 import type { ParseTraceFn, TrialResult } from '../scripts/workspace-ab/compare.js';
 import { buildManifest } from '../scripts/workspace-ab/manifest.js';
@@ -224,7 +224,7 @@ describe('runArm', () => {
       const err = new Readable({ read() {} });
       (emitter as unknown as { stdout: NodeJS.ReadableStream }).stdout = out;
       (emitter as unknown as { stderr: NodeJS.ReadableStream }).stderr = err;
-      setImmediate(() => { out.push(null); err.push(null); emitter.emit('close', 0); });
+      setImmediate(() => { out.push(null); err.push(null); (emitter as unknown as EventEmitter).emit('close', 0); });
       return emitter as unknown as ReturnType<SpawnFn>;
     };
 
@@ -249,7 +249,7 @@ describe('runArm', () => {
 // ─── compareTrialPair ─────────────────────────────────────────────────────
 
 /** Build a minimal ArmResult. */
-function makeArmResult(overrides: Partial<ReturnType<typeof makeArmResult>> = {}) {
+function makeArmResult(overrides: Partial<ArmResult> = {}) {
   return {
     arm: 'control' as const,
     trialIndex: 0,
