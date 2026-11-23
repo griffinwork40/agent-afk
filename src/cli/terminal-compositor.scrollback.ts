@@ -72,6 +72,26 @@ export function eraseAndPaintRow(row: number, line?: string): string {
 }
 
 /**
+ * Absolute-position paint of one terminal row, writing text BEFORE erasing
+ * the trailing content (#4908 change 2).
+ *
+ * Emits CUP (`\x1b[{row};1H`), then `line`, then EL (`\x1b[K` — erase from
+ * cursor to end of line). Compared to {@link eraseAndPaintRow} (`CUP+EL+text`),
+ * the erase step follows the text, so the intermediate state seen by tmux 3.6a
+ * between a CUP and an EL never shows a blank row — the old content is
+ * overwritten by the new text first, then only the trailing chars are cleared.
+ *
+ * Used exclusively in Phase 3 band-paint loops, which paint non-empty committed
+ * rows above the live frame. Bare-erase sites (no content) continue to use
+ * {@link eraseAndPaintRow} because there is no text to write before the erase.
+ *
+ * Invariant: emits NO `\n`, same as {@link eraseAndPaintRow}.
+ */
+export function paintRowText(row: number, line: string): string {
+  return `\x1b[${row};1H${line}\x1b[K`;
+}
+
+/**
  * Build the {@link BandRowMeta} array for a list of LOGICAL lines hard-wrapped
  * at `width` — the inverse-recording of the same
  * `logicalLines.flatMap((l) => hardWrapToWidth(l, width).split('\n'))` that

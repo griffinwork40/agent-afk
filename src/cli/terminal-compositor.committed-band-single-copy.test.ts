@@ -104,12 +104,14 @@ function collectWrites(stream: MockStdout): { all: () => string } {
  */
 function lastWritePerRow(segment: string, echoMarker: string): Map<number, 'echo' | 'blank'> {
   const result = new Map<number, 'echo' | 'blank'>();
-  // Match: ESC [ <row> ; 1 H ESC [ 2 K <content>
-  const re = /\x1b\[(\d+);1H\x1b\[2K([^\x1b]*)/g;
+  // Match both CUP-positioned write shapes (in source order):
+  //   Alt 1: CUP + EL(2K) + content  (eraseAndPaintRow — bare-erase / repin)
+  //   Alt 2: CUP + content + EL(K)   (paintRowText — phase 3, #4908 change 2)
+  const re = /\x1b\[(\d+);1H(?:\x1b\[2K([^\x1b]*)|([^\x1b]+)\x1b\[K)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(segment)) !== null) {
     const row = parseInt(m[1]!);
-    const content = (m[2] ?? '').trim();
+    const content = ((m[2] ?? m[3]) ?? '').trim();
     result.set(row, content.includes(echoMarker) ? 'echo' : 'blank');
   }
   return result;
@@ -282,12 +284,14 @@ describe('triplicate-echo: committed-band single-copy invariant (GREEN regressio
     // For each repin write, verify: within that write, if there's an erase
     // of an old row AND a paint of a new row, the erase comes first.
     for (const seg of repinSegments) {
-      // Find all CUP+EL operations and their byte offsets.
+      // Find all CUP-positioned write operations and their byte offsets.
+      // Handles both shapes: eraseAndPaintRow (CUP+2K+content) and
+      // paintRowText (CUP+content+EL(K), #4908 change 2).
       const ops: Array<{offset: number; row: number; content: string}> = [];
-      const re = /\x1b\[(\d+);1H\x1b\[2K([^\x1b]*)/g;
+      const re = /\x1b\[(\d+);1H(?:\x1b\[2K([^\x1b]*)|([^\x1b]+)\x1b\[K)/g;
       let m: RegExpExecArray | null;
       while ((m = re.exec(seg)) !== null) {
-        ops.push({ offset: m.index, row: parseInt(m[1]!), content: (m[2] ?? '').trim() });
+        ops.push({ offset: m.index, row: parseInt(m[1]!), content: ((m[2] ?? m[3]) ?? '').trim() });
       }
       // Find the echo-content write.
       const echoOp = ops.find(o => o.content.includes('ECHO') || o.content.includes('msg one'));

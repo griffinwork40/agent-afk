@@ -106,13 +106,22 @@ interface Internals {
   logUpdate: { topRow?: number } | null;
 }
 
-/** Parse every `CUP row;1H` + `EL` + content write (eraseAndPaintRow's shape). */
+/**
+ * Parse every CUP-positioned row write in document order, handling both shapes:
+ *   - eraseAndPaintRow: CUP + \x1b[2K + content  (bare-erase / repin)
+ *   - paintRowText:     CUP + content + \x1b[K    (phase 3, #4908 change 2)
+ */
 function parseErasePaintWrites(out: string): { row: number; content: string }[] {
-  const re = /\x1b\[(\d+);1H\x1b\[2K([^\x1b]*)/g;
+  // Single unified regex with two alternatives — matches are returned in source
+  // order because exec() advances lastIndex through the string.
+  //   Alt 1: CUP + EL(2K) + content
+  //   Alt 2: CUP + content + EL(K)
+  const re = /\x1b\[(\d+);1H(?:\x1b\[2K([^\x1b]*)|([^\x1b]+)\x1b\[K)/g;
   const writes: { row: number; content: string }[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(out)) !== null) {
-    writes.push({ row: Number(m[1]), content: m[2] ?? '' });
+    // m[2] is set for alt-1 (erase-then-text); m[3] for alt-2 (text-then-erase).
+    writes.push({ row: Number(m[1]), content: (m[2] ?? m[3]) ?? '' });
   }
   return writes;
 }

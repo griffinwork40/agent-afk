@@ -2,8 +2,7 @@ import { hiddenArchivedRows } from './terminal-compositor.archived-reveal.js';
 import type { CommittedBandHost } from './terminal-compositor.committed-band-commit.js';
 import type { CommitGeometry } from './terminal-compositor.commit-geometry.js';
 import type { CommitRoute } from './terminal-compositor.commit-route.js';
-import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
-import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
+import { paintRowText } from './terminal-compositor.scrollback.js';
 import { compositorBand } from './terminal-compositor.content-band.js';
 import { retainedArchivedPrefix } from './terminal-compositor.band-archived-prefix.js';
 import { stripAnsi } from './display.js';
@@ -92,14 +91,16 @@ export function commitPhase3Hold(
   for (let i = 0; i < paintedCount; i++) {
     const row = bandTop + i;
     if (row >= newTopRow) break; // Never overwrite the live frame.
-    const raw = model[model.length - paintedCount + i];
+    const raw = model[model.length - paintedCount + i] ?? '';
     const line = pad && raw !== '' ? pad + raw : raw;
-    out += eraseAndPaintRow(row, line);
+    // Change 2 (#4908): paint text before erasing trailing content.
+    out += paintRowText(row, line);
   }
   if (out.length > 0) {
-    writeWithScrollGuard(self, () => {
-      self.stdout.write(out);
-    });
+    // Phase 3 paints exclusively via CUP+EL — no \n — so it never triggers
+    // the DECSTBM scroll region. Write directly (same rationale as
+    // commit-phase3-band.ts; see #4908).
+    self.stdout.write(out);
   }
   self.committedBandArchivedPrefix = retainedArchivedPrefix(self, route.overflowPriorContiguous, archiveCount);
   self.committedBand = model;

@@ -108,7 +108,7 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       expect(out).toContain('COMMITTED_BLOCK');
       // Phase 3 positions the text immediately above the live frame.
       // With a 1-line idle frame and rows=24, newTopRow=23, so text lands at row 22.
-      expect(out).toMatch(/\x1b\[22;1H\x1b\[2KCOMMITTED_BLOCK/);
+      expect(out).toMatch(/\x1b\[22;1HCOMMITTED_BLOCK\x1b\[K/);
       // Phase 1 emits bottom-margin scrolls only when existing band content
       // would overflow above-frame room (bandOverflow > 0). On the first
       // commit with an empty band the above-frame room (22 rows) is larger
@@ -185,7 +185,7 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       // Band has 1 line, room is 22 → bandOverflow=0, no LF.
       expect(out1.match(/\x1b\[24;1H\n/g)?.length ?? 0).toBe(0);
       // Phase 3 places 'A' above the frame (row 22).
-      expect(out1).toMatch(/\x1b\[22;1H\x1b\[2KA/);
+      expect(out1).toMatch(/\x1b\[22;1HA\x1b\[K/);
 
       writes.clear();
       c.commitAbove('A\nB\nC');
@@ -193,8 +193,8 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       // Band has 4 lines after merge, room is 22 → still no overflow.
       expect(out3.match(/\x1b\[24;1H\n/g)?.length ?? 0).toBe(0);
       // Phase 3 places lines above the frame at rows 19-22.
-      expect(out3).toMatch(/\x1b\[20;1H\x1b\[2KA/);
-      expect(out3).toMatch(/\x1b\[22;1H\x1b\[2KC/);
+      expect(out3).toMatch(/\x1b\[20;1HA\x1b\[K/);
+      expect(out3).toMatch(/\x1b\[22;1HC\x1b\[K/);
     });
 
     it('writes committed text immediately above the new live frame (gap-free above-frame placement)', async () => {
@@ -220,7 +220,7 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       // The text appears positioned via a CUP escape at row `newTopRow - 1`.
       // With a 1-line idle frame (just input prompt), newTopRow = 23, so
       // the text lands at row 22.
-      expect(out).toMatch(/\x1b\[22;1H\x1b\[2KABOVE_FRAME/);
+      expect(out).toMatch(/\x1b\[22;1HABOVE_FRAME\x1b\[K/);
 
       // Phase 3 CUP write at row 22 appears in the output.
       // Phase 1 emits no LF (empty band, bandOverflow=0), so no
@@ -241,9 +241,9 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       const out = writes.all();
 
       // Each line CUP-positioned at its own row.
-      expect(out).toMatch(/\x1b\[20;1H\x1b\[2KLINE_ONE/);
-      expect(out).toMatch(/\x1b\[21;1H\x1b\[2KLINE_TWO/);
-      expect(out).toMatch(/\x1b\[22;1H\x1b\[2KLINE_THREE/);
+      expect(out).toMatch(/\x1b\[20;1HLINE_ONE\x1b\[K/);
+      expect(out).toMatch(/\x1b\[21;1HLINE_TWO\x1b\[K/);
+      expect(out).toMatch(/\x1b\[22;1HLINE_THREE\x1b\[K/);
       // Phase 1 emits no LFs on first commit (empty band, bandOverflow=0).
       // The 3 lines are placed via Phase 3 CUP writes above the frame.
       expect(out).not.toMatch(/\x1b\[24;1H\n/);
@@ -272,10 +272,10 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       // After first commit ('A\nB'): band = ["A","B"] at rows 21..22.
       // After second commit ('A\nB\n'): same lineCount=2 → band = same positions.
       // Both Phase 3 writes land at rows 21..22.
-      expect(outWithout).toMatch(/\x1b\[21;1H\x1b\[2KA/);
-      expect(outWithout).toMatch(/\x1b\[22;1H\x1b\[2KB/);
-      expect(outWith).toMatch(/\x1b\[21;1H\x1b\[2KA/);
-      expect(outWith).toMatch(/\x1b\[22;1H\x1b\[2KB/);
+      expect(outWithout).toMatch(/\x1b\[21;1HA\x1b\[K/);
+      expect(outWithout).toMatch(/\x1b\[22;1HB\x1b\[K/);
+      expect(outWith).toMatch(/\x1b\[21;1HA\x1b\[K/);
+      expect(outWith).toMatch(/\x1b\[22;1HB\x1b\[K/);
     });
 
     it('double-newline-terminated commit preserves ALL rows with no content loss (top row archives to scrollback)', async () => {
@@ -312,9 +312,9 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       // LINE_21 (last row) must be CUP-painted immediately above the frame (row 21
       // in the 22-row model — the model is [LINE_01..LINE_21, ''], so LINE_21 is at
       // model index 20, painted at row 21).
-      expect(out).toMatch(/\x1b\[21;1H\x1b\[2KLINE_21/);
+      expect(out).toMatch(/\x1b\[21;1HLINE_21\x1b\[K/);
       // LINE_01 (first retained viewport row) must be at row 1 (top of viewport).
-      expect(out).toMatch(/\x1b\[1;1H\x1b\[2KLINE_01/);
+      expect(out).toMatch(/\x1b\[1;1HLINE_01\x1b\[K/);
       // LINE_00 (archived to scrollback via Phase 1) must appear in the output
       // as a CUP-write at anchorFloor=1 before the scroll.
       expect(out).toMatch(/\x1b\[1;1H\x1b\[2KLINE_00/);
@@ -333,8 +333,9 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       const out = writes.all();
 
       // Phase 3 CUP-writes a blank (empty) row at row 22 (newTopRow-1 for
-      // a 1-line idle frame with rows=24).
-      expect(out).toMatch(/\x1b\[22;1H\x1b\[2K/);
+      // a 1-line idle frame with rows=24). paintRowText emits CUP+text+EL(K);
+      // for an empty row that is CUP + \x1b[K (erase from column 1 to end).
+      expect(out).toMatch(/\x1b\[22;1H\x1b\[K/);
       // No bottom-margin LF on first commit (empty band, bandOverflow=0).
       expect(out).not.toMatch(/\x1b\[24;1H\n/);
     });
@@ -359,13 +360,14 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       const out = writes.all();
       // Block A sits two rows above block B — a blank separator occupies the row
       // between them (the buggy code butt-joined them at A@21, B@22).
-      expect(out).toMatch(/\x1b\[19;1H\x1b\[2KA/);
-      expect(out).toMatch(/\x1b\[21;1H\x1b\[2KB/);
+      expect(out).toMatch(/\x1b\[19;1HA\x1b\[K/);
+      expect(out).toMatch(/\x1b\[21;1HB\x1b\[K/);
       // The separator row (20) is CUP-painted blank: erase row 20 with empty
       // content, immediately followed by the CUP for row 21 (block B).
-      expect(out).toContain('\x1b[20;1H\x1b[2K\x1b[21;1H');
+      // The separator row (20) is CUP-painted blank via paintRowText: CUP + \x1b[K.
+      expect(out).toContain('\x1b[20;1H\x1b[K');
       // Block B must NOT land immediately below A (row 20) — the butt-join.
-      expect(out).not.toMatch(/\x1b\[20;1H\x1b\[2KB/);
+      expect(out).not.toMatch(/\x1b\[20;1HB\x1b\[K/);
     });
 
     it('single-block "\\n\\n"-terminated commit paints content + one trailing blank separator (armed, with room)', async () => {
@@ -379,10 +381,11 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       c.commitAbove('PARA\n\n');
       const out = writes.all();
       // Content at row 21, separator blank painted at row 22 (against the frame).
-      expect(out).toMatch(/\x1b\[21;1H\x1b\[2KPARA/);
+      expect(out).toMatch(/\x1b\[21;1HPARA\x1b\[K/);
       // Row 22 is CUP-erased with NO content (the blank separator), not PARA.
-      expect(out).not.toMatch(/\x1b\[22;1H\x1b\[2KPARA/);
-      expect(out).toMatch(/\x1b\[22;1H\x1b\[2K(\x1b|$)/);
+      expect(out).not.toMatch(/\x1b\[22;1HPARA\x1b\[K/);
+      // Row 22 blank separator: CUP + \x1b[K (paintRowText with empty string).
+      expect(out).toContain('\x1b[22;1H\x1b[K');
     });
 
     it('text persists in scrollback even if a subsequent grow repaint overwrites the visible above-frame copy', async () => {
@@ -411,7 +414,7 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       expect(out).not.toMatch(/\x1b\[24;1H\n/);
       // Phase 3: text written above the live frame. With a 1-line idle frame,
       // newTopRow=23, so the text lands at row 22.
-      expect(out).toMatch(/\x1b\[22;1H\x1b\[2KPERSISTED/);
+      expect(out).toMatch(/\x1b\[22;1HPERSISTED\x1b\[K/);
       // Single-copy: the text appears exactly once (Phase 3 only, no Phase 1 text).
       expect(out.match(/PERSISTED/g)?.length).toBe(1);
     });
@@ -717,7 +720,7 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       expect(out).not.toContain(`\x1b[10;1H\x1b[2K${paddedEcho}`);
       expect(out).not.toContain(`\x1b[1;1H${paddedEcho}`);
       // Phase 3 writes the single copy above the live frame (row 22).
-      expect(out).toContain(`\x1b[22;1H\x1b[2K${paddedEcho}`);
+      expect(out).toContain(`\x1b[22;1H${paddedEcho}\x1b[K`);
       // The pre-commit banner scroll emits newlines at row 24 to push the
       // banner into scrollback (anchorRow-1 = 9 newlines). This is expected:
       // the banner is being cleared, not content being scrolled spuriously.
@@ -739,9 +742,9 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       c.commitAbove('LEGACY_NO_ANCHOR');
       const out = writes.all();
       // Phase 3 writes at row 22 (newTopRow-1 for a 1-line idle frame).
-      expect(out).toContain('\x1b[22;1H\x1b[2KLEGACY_NO_ANCHOR');
+      expect(out).toContain('\x1b[22;1HLEGACY_NO_ANCHOR\x1b[K');
       // Phase 1 is scroll-only — text must NOT appear at row 1.
-      expect(out).not.toContain('\x1b[1;1H\x1b[2KLEGACY_NO_ANCHOR');
+      expect(out).not.toContain('\x1b[1;1HLEGACY_NO_ANCHOR\x1b[K');
       // No LF on first commit (no anchorRow → canUseMergePath=true, empty band
       // → bandOverflow=0). The content enters scrollback via evict-on-growth.
     });
@@ -778,7 +781,7 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       // block starting at row 20 (newTopRow - lineCount = 23 - 3 = 20).
       // This is correct: the banner is in scrollback, rows 20-22 are
       // available viewport space.
-      expect(out).toMatch(/\x1b\[20;1H\x1b\[2KL1/);
+      expect(out).toMatch(/\x1b\[20;1HL1\x1b\[K/);
     });
   });
 

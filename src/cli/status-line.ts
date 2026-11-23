@@ -225,8 +225,11 @@ export class StatusLine {
         this.stream.write('\x1b[s');
         this.writeScrollRegion(rows);
         this.stream.write('\x1b[u');
-        this.eraseReservedBand(rows);
+        // Change 3 (#4908): repaint before erasing (same rationale as
+        // withFullScrollRegion above) — flush() paints the status row over
+        // any ghost copy, then eraseReservedBand clears uncovered rows.
         this.flush();
+        this.eraseReservedBand(rows);
       } finally {
         tx.end();
       }
@@ -335,8 +338,16 @@ export class StatusLine {
       this.stream.write('\x1b[s');
       this.writeScrollRegion(rows);
       this.stream.write('\x1b[u');
-      this.eraseReservedBand(rows);
+      // Change 3 (#4908): paint the status row BEFORE erasing the reserved band,
+      // so the status row is never blank in an intermediate state. The old order
+      // (erase → flush → afterScrollRestore) left the status row blank between
+      // the erase and flush(), visible at every tmux 3.6a read boundary.
+      // New order: flush() paints the status row first; eraseReservedBand then
+      // clears the remaining reserved-band rows (which the bars' ghost copies
+      // occupied); afterScrollRestore redraws the footer bars over the now-clear
+      // rows. The status row is never blank; the band is never painted-then-erased.
       this.flush();
+      this.eraseReservedBand(rows);
       // Re-assert the footer bars (loop-stage rail, background-task bar) that
       // the full-screen scroll dragged upward. Without this their scrolled-up
       // copies orphan above the status row — see setAfterScrollRestore().
