@@ -376,7 +376,20 @@ export type SessionPhaseName =
   // `metadata.outcome`: 'refresh-null' | 'replay-failed' | 'replayed'.
   // `metadata.status`: HTTP status (401 or 403).
   // `metadata.authMode`: 'oauth' | 'api-key'. PURE OBSERVABILITY.
-  | 'auth_retry_outcome';
+  | 'auth_retry_outcome'
+  // Closed-router credential rotation attempt (#5048). Single event emitted
+  // fire-and-forget by `tryClosedRouterRotate` on every failure path so that
+  // `afk trace show` can confirm rotation was attempted and why it did not
+  // succeed — previously these failures were only written to stderr and were
+  // invisible in the trace. Only emitted on failure; a successful rotation is
+  // visible via the subsequent `usage_limit_resume` event.
+  // `metadata.kind`: always 'error'.
+  // `metadata.reason`: 'binary-not-found' | 'non-json-output' |
+  //   'unexpected-kind' | 'subprocess-failed'.
+  // `metadata.exitCode`: child process exit/error code (subprocess-failed only).
+  // `metadata.receivedKind`: serialised kind value (unexpected-kind only).
+  // PURE OBSERVABILITY — the rotation result already determined control flow.
+  | 'closed_router_rotate';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */
