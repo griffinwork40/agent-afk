@@ -408,6 +408,9 @@ export class LspClient {
       try { cb(); } catch { /* listener errors never propagate */ }
     }
     this.exitListeners.clear();
+    // timeoutListeners are silently dropped on death: there is no guarantee
+    // they will fire (a request timeout racing a process exit may lose the
+    // race). Callers that need death notification should use onExit instead.
     this.timeoutListeners.clear();
     try { this.conn.dispose(); } catch { /* ignore */ }
     if (reason !== 'disposed') killServerTree(this.proc);
