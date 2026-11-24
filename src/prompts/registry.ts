@@ -56,6 +56,16 @@ export function resetPromptRegistryCache(): void {
   cache = null;
 }
 
+/**
+ * Signal that a loader has loaded or reloaded prompts.
+ * Invalidates the discovery cache so the next access re-walks the filesystem.
+ * Called by individual loaders (prompt-loader, spine-classifier, etc.) via
+ * fire-and-forget dynamic imports to avoid circular dependencies at startup.
+ */
+export function notifyPromptLoaded(): void {
+  cache = null;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
