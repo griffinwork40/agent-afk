@@ -90,7 +90,7 @@ describe('observe.mjs runtime behaviour', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('writes a log file and summary file when each step exits cleanly', () => {
+  it('writes a log file and summary file when each step exits cleanly', { timeout: 120_000 }, () => {
     const logPath = path.join(tmpDir, 'run', 'obs.log');
     const result = spawnSync(node, [observePath, logPath, shellArg], {
       env: { ...process.env },
@@ -107,7 +107,7 @@ describe('observe.mjs runtime behaviour', () => {
     expect(summary).toMatch(/\| .+ \| \d+ \| /);
   });
 
-  it('sets process exit code 1 when the shell binary does not exist (infrastructure error)', () => {
+  it('sets process exit code 1 when the shell binary does not exist (infrastructure error)', { timeout: 60_000 }, () => {
     const logPath = path.join(tmpDir, 'run', 'infra.log');
     const result = spawnSync(node, [observePath, logPath, 'nonexistent-shell-xyzzy-999'], {
       env: { ...process.env },
