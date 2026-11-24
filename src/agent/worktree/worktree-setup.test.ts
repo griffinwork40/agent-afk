@@ -95,7 +95,8 @@ describe('runWorktreeSetup', () => {
     const failed = await defaultSetupCommandRunner('echo boom >&2; exit 3', { cwd: dir, timeoutMs: 5_000 });
     expect(failed.kind).toBe('failed');
     expect(failed.kind === 'failed' ? failed.detail : '').toContain('exit 3');
-  });
+  // Windows CI runners can be slow to spawn shells; give them extra headroom.
+  }, process.platform === 'win32' ? 30_000 : 10_000);
 });
 
 /** Mock git whose `worktree add` materializes the tree (optionally with a declaration). */
@@ -156,7 +157,7 @@ describe('createManagedWorktree + setup', () => {
 });
 
 describe('worktree tool create surfaces setup outcome', () => {
-  it('names the failed command in the create note', async () => {
+  it('names the failed command in the create note', async () => { // timeout below: Windows CI runners are slow to spawn shells
     const { createWorktreeHandler } = await import('../tools/handlers/worktree.js');
     const wt = join(dir, '.afk-worktrees', 'tool');
     const { fn } = gitMock(wt, { declaration: { commands: ['exit 7'] } });
@@ -171,5 +172,6 @@ describe('worktree tool create surfaces setup outcome', () => {
     const body = JSON.parse(result.content) as { path: string; note: string };
     expect(body.path).toBe(wt);
     expect(body.note).toContain('`exit 7` failed');
-  });
+  // Windows CI runners can be slow to spawn shells; give them extra headroom.
+  }, process.platform === 'win32' ? 30_000 : 10_000);
 });

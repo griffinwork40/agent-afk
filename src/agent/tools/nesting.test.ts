@@ -53,6 +53,16 @@ describe('CHILD_ALLOWED_TOOLS', () => {
     expect(CHILD_ALLOWED_TOOLS).not.toContain('state_cas');
     expect(CHILD_ALLOWED_TOOLS).not.toContain('state_delete');
   });
+
+  it('contains no duplicate tool names', () => {
+    const seen = new Set<string>();
+    const duplicates: string[] = [];
+    for (const name of CHILD_ALLOWED_TOOLS) {
+      if (seen.has(name)) duplicates.push(name);
+      seen.add(name);
+    }
+    expect(duplicates).toEqual([]);
+  });
 });
 
 describe('buildSkillRestrictedProvider', () => {
