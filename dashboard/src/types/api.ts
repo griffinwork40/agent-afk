@@ -181,6 +181,27 @@ export interface HandoffsResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Prompts
+// ---------------------------------------------------------------------------
+
+export interface PromptEntryWire {
+  id: string;
+  kind: string; // 'framework' | 'spine' | 'skill-phase' | 'vendored-agent' | 'bundled-skill' | 'user-skill'
+  name: string;
+  skill?: string;
+  phase?: string;
+  relativePath: string;
+  editable: boolean;
+  pinned: boolean;
+  tokenEstimate: number;
+  injectionContext: string;
+}
+
+export interface PromptDetailWire extends PromptEntryWire {
+  content: string;
+}
+
+// ---------------------------------------------------------------------------
 // Tool results (message journal)
 // ---------------------------------------------------------------------------
 

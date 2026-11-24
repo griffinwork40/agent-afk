@@ -1,4 +1,4 @@
-import { Bell, Brain, Briefcase, Calendar, MessageSquare, Settings, type LucideIcon } from 'lucide-react';
+import { Bell, BookOpen, Brain, Briefcase, Calendar, MessageSquare, Settings, type LucideIcon } from 'lucide-react';
 
 /** Navigation metadata, independent of the sidebar's presentation. */
 export interface NavItem {
@@ -29,5 +29,6 @@ export function listNavItems(): Readonly<NavItem>[] {
   { id: 'schedules', label: 'Schedules', title: 'Schedules', icon: Calendar },
   { id: 'jobs', label: 'Jobs', title: 'Background Jobs', icon: Briefcase },
   { id: 'handoffs', label: 'Handoffs', title: 'Pending Handoffs', icon: Bell },
+  { id: 'prompts',  label: 'Prompts',  title: 'Prompt Explorer',  icon: BookOpen },
   { id: 'settings', label: 'Settings', title: 'Settings', icon: Settings },
 ].forEach(registerNavItem);

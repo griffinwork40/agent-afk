@@ -10,6 +10,7 @@ import { SchedulesView } from './components/schedules-view';
 import { BgJobsView } from './components/bg-jobs-view';
 import { HandoffsView } from './components/handoffs-view';
 import { SettingsView } from './components/settings-view';
+import { PromptsView } from './components/prompts-view';
 import { Composer } from './components/composer';
 import { ApprovalCards } from './components/approval-cards';
 import { MobileSidebar, HamburgerButton } from './components/mobile-sidebar';
@@ -376,6 +377,7 @@ function Dashboard() {
               {activeNav === 'jobs' && <BgJobsView />}
               {activeNav === 'handoffs' && <HandoffsView />}
               {activeNav === 'settings' && <SettingsView />}
+              {activeNav === 'prompts' && <PromptsView />}
             </div>
 
           </div>

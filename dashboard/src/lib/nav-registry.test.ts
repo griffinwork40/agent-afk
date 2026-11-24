@@ -3,10 +3,10 @@ import { Brain } from 'lucide-react';
 import { getNavItem, listNavItems, registerNavItem } from './nav-registry';
 
 describe('navigation registry', () => {
-  it('preserves the six built-in entries, labels and order', () => {
+  it('preserves the seven built-in entries, labels and order', () => {
     expect(listNavItems().map(({ id, label }) => [id, label])).toEqual([
       ['sessions', 'Sessions'], ['memory', 'Memory'], ['schedules', 'Schedules'],
-      ['jobs', 'Jobs'], ['handoffs', 'Handoffs'], ['settings', 'Settings'],
+      ['jobs', 'Jobs'], ['handoffs', 'Handoffs'], ['prompts', 'Prompts'], ['settings', 'Settings'],
     ]);
     expect(getNavItem('jobs')?.title).toBe('Background Jobs');
     expect(getNavItem('handoffs')?.title).toBe('Pending Handoffs');
