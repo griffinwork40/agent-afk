@@ -1,0 +1,118 @@
+---
+title: "Chat with other AFK users"
+description: "An opt-in public chat room inside the terminal REPL, between agent turns. For people only."
+---
+
+`/global` opens a shared public chat room inside the AFK terminal REPL. It is for humans to talk between agent turns. AFK never puts chat text into your agent's context, transcript, or logs, and gives the agent no chat tool.
+
+<Callout type="warn">
+No public relay is running yet. `/global` works only when `AFK_GLOBAL_CHAT_URL` points at a relay someone runs. A full URL looks like `wss://&lt;host&gt;/v1/room/global`. With the env var unset, the command explains the situation and exits cleanly.
+</Callout>
+
+## What the relay sees and stores
+
+The relay stores each message for 7 days with the author's public key and display name, then deletes it. New joiners can receive the newest 50 stored messages. It records when it first saw a key and the last accepted display-name change.
+
+The relay never stores or logs a raw IP address. While you are connected, it keeps a salted hash of the address for rate limiting and connection limits. It keeps that hash longer only if you are banned.
+
+If you report a message, the relay stores that report with your public key until the message is deleted. The relay never receives your private key.
+
+Every message is signed by its author's key and your client verifies it. The relay cannot forge a message. The maintainer badge is assigned by the relay and is not signed.
+
+The relay is run by whoever operates the instance in `AFK_GLOBAL_CHAT_URL`. Read their privacy policy, if any, before connecting.
+
+## Opt in and set up
+
+<Steps>
+<Step>
+
+Point `AFK_GLOBAL_CHAT_URL` at a relay:
+
+```bash
+export AFK_GLOBAL_CHAT_URL=wss://relay.example.com/v1/room/global
+```
+
+Add it to `afk.env` to make it persistent.
+
+</Step>
+<Step>
+
+Run `/global` in the REPL. The first time, the command shows an opt-in notice and asks you to choose a display name. Names must be 2 to 16 characters: lowercase letters, digits, hyphens, or underscores. Your client allows one change a day. The relay also refuses a second change within 10 minutes and says how long to wait.
+
+</Step>
+<Step>
+
+Type a message and press Enter to post. Press Esc or Ctrl+C to leave.
+
+</Step>
+</Steps>
+
+## Commands
+
+### `/global` subcommands
+
+| Command | What it does |
+|---|---|
+| `/global` | Open the room. A relay must be configured. |
+| `/global name <name>` | Save a display name for the next time you join. |
+| `/global status` | Show local state without connecting. |
+| `/global off` | Clear consent. Your identity is kept. |
+
+### Inside the view
+
+{/* docs-refs-ignore-start */}
+
+| Input | What it does |
+|---|---|
+| Enter | Post the message you typed. |
+| Backspace | Delete the last character. |
+| Ctrl+U | Clear the input line. |
+| Esc or Ctrl+C | Leave the room. |
+| `/help` | Show the in-view commands. |
+| `/rules` | Show the room rules. |
+| `/mute <n or name#tag>` | Hide another user's messages locally. |
+| `/unmute <name#tag>` | Stop hiding a muted user. |
+| `/mutes` | List muted users. |
+| `/report <n>` | Report a message to the relay. |
+
+{/* docs-refs-ignore-end */}
+
+`<n>` is the small number beside a message. Commands entered inside the view start with `/` and are never posted publicly.
+
+### Maintainer commands inside the view
+
+Maintainers are public keys listed in the relay config. These commands are accepted only from maintainer keys.
+
+{/* docs-refs-ignore-start */}
+
+| Input | What it does |
+|---|---|
+| `/ban <n or name#tag>` | Ban a key and disconnect it. |
+| `/unban <64-character hex public key>` | Remove a ban. |
+| `/delete <n>` | Delete a message by number. |
+| `/mode <mode>` | Set the room mode: `open`, `readonly`, or `closed`. |
+
+{/* docs-refs-ignore-end */}
+
+## Local moderation
+
+Muted messages are hidden locally only. They still reach everyone else. You cannot mute yourself. Mutes are stored in the AFK config directory under `global-chat/`, in `mutes.json` by default.
+
+## Privacy and isolation
+
+The chat view does not write chat text to the transcript, session ledger, witness trace, peer inbox, or TTY recording. The TTY recorder (`AFK_TTY_TRACE`) is paused while the view is open.
+
+The command requires a real interactive TTY REPL with a live compositor. It refuses when run from a context without a terminal. Your identity and mute files live in the AFK config directory under `global-chat/`. AFK denies agent file tools access to that directory, and the agent has no chat tool.
+
+This is not a sandbox: an agent with shell access can do anything you can.
+
+## Turn off or reset
+
+Run `/global off` to clear your opt-in. Your identity and private key are kept so you can opt back in without generating a new key. To remove your identity entirely, move aside or delete the identity file in the AFK config directory under `global-chat/`.
+
+## Related
+
+<Cards>
+<Card title="Use the interactive REPL" href="/surfaces/repl" description="Terminal controls and REPL session commands." />
+<Card title="Peer messaging" href="/guides/peer-messaging" description="Send messages between AFK sessions on the same machine." />
+</Cards>
