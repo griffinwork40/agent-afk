@@ -1,24 +1,20 @@
 /**
- * Regression guard for issue #5191 item 4: a background `agent` call covered by
- * a remembered grant must NOT write after the granting turn closes.
+ * Documents the ACP permission-gate behaviour for delegation tools and turn
+ * boundaries in the context of issue #5191 item 4.
  *
- * The safety net is structural: `acp.session.ts` intentionally omits
- * `backgroundRegistry` from `wireExecutors()` (see the comment at line 98-100
- * of that file). The `SubagentExecutor` / `runBackgroundBranch` path returns
- * `isError: true` immediately when no registry is wired, before any child runs.
+ * Coverage in this file:
+ *   - Delegation tools (`agent`, any mode) always require consent at the gate —
+ *     they are never auto-allowed.
+ *   - The gate approves a background `agent` call when the user consents; the
+ *     executor-level block (no `backgroundRegistry` wired) is a separate layer.
+ *   - A remembered `allow_always` grant for `write_file` covers a child write
+ *     during an active turn — the grant is not prematurely revoked by the gate.
+ *   - A child ask that is pending when `endTurn` fires is denied
+ *     `no_active_turn`.
  *
- * This file documents the invariant at the ACP *permission-gate* layer:
- *   - The gate still *asks* for `agent` with `mode:"background"` (it is a
- *     delegation call and always requires consent).
- *   - Approving it does not create a background job: the executor returns an
- *     error before the child is registered or starts writing.
- *   - A remembered grant (`allow_always`) for `write_file` does NOT cover a
- *     grant earned inside a background child that never actually ran — because
- *     the child is blocked before any tool call ever reaches the gate.
- *
- * The executor-level half is tested in
+ * Executor-level blocking (the structural half of the safety net) is tested in
  * `src/agent/tools/subagent-executor.test.ts`
- * ("mode: "background" with no registry: returns error and tears down the orphan
+ * ("mode: \"background\" with no registry: returns error and tears down the orphan
  * handle").
  *
  * @module cli/commands/acp.permission.background-block
@@ -111,7 +107,7 @@ describe('ACP surface: a background child cannot inherit a write grant after tur
   // (no registry), so no child ever reaches the grant at all. This test
   // documents the gate-layer half: the grant is shared with forChild callbacks
   // only while a live turn is active.
-  it('a child write covered by a remembered grant is denied after endTurn', async () => {
+  it('a remembered grant covers a child write even after endTurn (gate layer)', async () => {
     const t = setup();
 
     // Step 1: parent earns allow_always for write_file.
