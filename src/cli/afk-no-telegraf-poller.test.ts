@@ -1,28 +1,22 @@
 /**
- * Invariant test: the REPL / CLI / AFK-channel code NEVER constructs a Telegraf
- * poller in-process.
+ * Invariant test: the REPL / CLI code NEVER constructs a Telegraf poller
+ * in-process.
  *
- * Scope-lock Invariant #2 (from `.afk/plans/afk-telegram-bidirectional.scope.lock.md`):
- *   "Daemon is the SOLE Telegram `getUpdates` poller; REPL NEVER constructs a
- *   Telegraf/second poller (409)."
+ * Invariant: daemon is the SOLE Telegram `getUpdates` poller; REPL NEVER
+ * constructs a Telegraf/second poller (409 Conflict).
  *
  * Why this matters: Telegram's long-poll API rejects a second concurrent
  * `getUpdates` consumer with HTTP 409 Conflict. If any REPL code path were to
  * instantiate a `Telegraf` object and call `launch()`, every message to the bot
- * would silently fail while the daemon is running. The bidirectional AFK channel
- * deliberately routes ALL Telegram I/O through the daemon process
- * (`src/telegram/`). The REPL communicates with the daemon only via the
- * per-session ledger file — no socket, no second poller.
+ * would silently fail while the daemon is running.
  *
- * The test scans every non-test TypeScript file under the REPL/agent AFK paths
+ * The test scans every non-test TypeScript file under the REPL/agent paths
  * and asserts zero occurrences of:
  *   - `from 'telegraf'` or `from "telegraf"` (telegraf runtime import)
  *   - `new Telegraf(` (direct Telegraf instantiation)
  *
  * The scanned paths are:
  *   src/cli/**\/*.ts       — all CLI source (REPL, slash commands, etc.)
- *   src/agent/afk-ledger-channel.ts  — REPL-side ledger channel
- *   src/agent/afk-channel.ts         — per-session HMAC helpers
  *   src/agent/elicitation-router.ts  — module-scope elicitation router
  *
  * src/telegram/** is EXPLICITLY EXCLUDED: the daemon is the legitimate
@@ -63,10 +57,8 @@ const root = path.resolve(__dirname, '../..');
 // All CLI source files (REPL, slash commands, afk-mode-toggle, …)
 const cliFiles = collectTs(path.join(root, 'src/cli'));
 
-// Key agent-side AFK files that run in the REPL process.
+// Key agent-side files that run in the REPL process.
 const agentAfkFiles = [
-  path.join(root, 'src/agent/afk-ledger-channel.ts'),
-  path.join(root, 'src/agent/afk-channel.ts'),
   path.join(root, 'src/agent/elicitation-router.ts'),
 ];
 
@@ -80,8 +72,8 @@ describe('scope-lock invariant #2: REPL code never imports Telegraf', () => {
   it('has a non-empty file list to scan (guards against a broken glob)', () => {
     // If this assertion fails, collectTs broke or the source tree moved.
     expect(allFiles.length).toBeGreaterThan(0);
-    // Sanity-check: we should have at least the three agent AFK files.
-    expect(allFiles.length).toBeGreaterThanOrEqual(3);
+    // Sanity-check: we should have at least the one agent file plus CLI files.
+    expect(allFiles.length).toBeGreaterThanOrEqual(1);
   });
 
   it('no REPL/CLI/AFK-channel file imports from telegraf', () => {

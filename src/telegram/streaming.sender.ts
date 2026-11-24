@@ -20,7 +20,7 @@ import {
 } from './streaming.retry.js';
 
 /** Minimum interval (ms) between Telegram edit requests to avoid rate limits */
-export const EDIT_THROTTLE_MS = 300;
+export const EDIT_THROTTLE_MS = 500;
 
 /**
  * Shown as a fresh message when Telegram refuses part of a multi-message reply
@@ -33,10 +33,16 @@ export const DELIVERY_TRUNCATED_NOTICE =
 /**
  * Mutable state slice consumed by `sendOrEdit`. Extracted so the sender can
  * update `sentMessage` and `lastEditAt` without closing over outer variables.
+ *
+ * `lastRenderedText` / `lastRenderedHtml` cache the most recent
+ * `markdownToTelegramHtml` result so the 10-pass regex pipeline is skipped
+ * when the accumulated text has not changed since the previous edit.
  */
 export interface SenderState {
   sentMessage: Message.TextMessage | null;
   lastEditAt: number;
+  lastRenderedText: string;
+  lastRenderedHtml: string;
 }
 
 /**
@@ -75,11 +81,19 @@ export async function sendOrEdit(
     }
     return;
   }
-  if (!force && now - state.lastEditAt < EDIT_THROTTLE_MS && text.length < 100) {
+  if (!force && now - state.lastEditAt < EDIT_THROTTLE_MS) {
     return;
   }
   state.lastEditAt = now;
-  const html = markdownToTelegramHtml(text || '…');
+  const input = text || '…';
+  let html: string;
+  if (input === state.lastRenderedText) {
+    html = state.lastRenderedHtml;
+  } else {
+    html = markdownToTelegramHtml(input);
+    state.lastRenderedText = input;
+    state.lastRenderedHtml = html;
+  }
   const chunks = splitLongMessage(html);
   try {
     await ctx.telegram.editMessageText(

@@ -167,6 +167,15 @@ export class SessionOwner {
 
     // Hook registry with the shared memory store so session-end writes land in
     // the same instance the provider's memory tools read from.
+    // No hooksAtSessionCwd / userHooks: loadHooksConfig is not called here.
+    // The web surface runs inside a long-lived server process that may serve
+    // sessions for many different cwds; loading project-scoped hook files at
+    // session-create time would run untrusted code from an arbitrary directory
+    // chosen by the browser. User-scope hooks (~/.afk/hooks/) are similarly
+    // omitted: the web server has no concept of "the current user's config dir"
+    // relative to a browser-supplied session cwd. Both gaps are recorded in the
+    // surface capability census (surface-capability-census.test.ts) under the
+    // 'web' surface as intentional omissions.
     const getPermissionMode = () => session?.getSessionMetadata().permissionMode ?? (this.options.permissionMode ?? 'bypassPermissions');
     const { registry } = createDefaultHookRegistry(
       undefined, 'web', wiring.memoryStore, getPermissionMode, undefined,

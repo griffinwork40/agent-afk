@@ -1,0 +1,6 @@
+# Stand-alone package; not part of the root workspace.
+# pnpm 11 reads allowBuilds from this file.
+allowBuilds:
+  esbuild: true
+  sharp: true
+  workerd: true
