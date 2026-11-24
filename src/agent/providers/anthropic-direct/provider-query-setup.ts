@@ -28,6 +28,20 @@ import { grantsWorkspacePrompt, grantsToolStrict, skillManifestGranted } from '.
 import { isSkillManifestAlways } from '../../../config/env.js';
 import { deriveCredentialFromStore } from './provider-query-setup.credential.js';
 import { loadClaudeCodeOauthToken } from '../../auth/keychain.js';
+import { describeClaudeLoginStatus, lastClaudeLoginStatus } from '../../auth/claude-login-status.js';
+
+/**
+ * The "no credential" error. Names every tier, including the stored Claude
+ * Code login, and appends why that login yielded nothing when this process
+ * has observed it. Never includes token material.
+ */
+export function missingCredentialError(providerName: string): Error {
+  const base =
+    `${providerName} provider requires config.apiKey (resolved from ANTHROPIC_API_KEY, ` +
+    'CLAUDE_CODE_OAUTH_TOKEN, or the stored Claude Code login)';
+  const detail = describeClaudeLoginStatus(lastClaudeLoginStatus());
+  return new Error(detail !== undefined ? `${base}. ${detail}` : base);
+}
 
 /** Everything the second half of `query()` needs from this one. */
 export interface QuerySetupResult {
@@ -88,11 +102,7 @@ export function setUpQuerySession(
 ): QuerySetupResult {
   const config = args.config;
   const { localMode, token } = resolveQueryToken(config);
-  if (!token || token.length === 0) {
-    throw new Error(
-      `${providerName} provider requires config.apiKey (resolved from ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN)`,
-    );
-  }
+  if (!token || token.length === 0) throw missingCredentialError(providerName);
   const authMode = detectAuthMode(token);
 
   // Client + observability wiring (throttle mailbox, quota capture, tracing
