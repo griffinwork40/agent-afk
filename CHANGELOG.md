@@ -12,6 +12,28 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [6.2.0] - 2026-11-24
+
+### Added
+- improve Telegram streaming performance with draft API and throttle fixes (#5288) (b41b127df)
+- add `/global` opt-in terminal chat between agent turns for people, when a relay is configured; messages are signed and verified, the relay retains messages with author public keys and display names for 7 days, and identity and mute files live in the AFK config directory under `global-chat/` (7a318f026)
+
+### Fixed
+- prime the stored Claude Code login for SDK sessions (#5217) (afb59b513)
+- use readPresenceFiles + explicit undefined pid guard (95a67641c)
+- fix surrogate-safe summary cap, exhaustive kind partition, and unique item values (#5230) (aedd27bd8)
+- reconcile ask_question decline guidance in routing directive (#5231) (634818619)
+- assert kind is 'disabled' not 'exited' on crash-loop guard trip (9fc3a2e9f)
+- guard live-path synthetic done against provider error race (3a46ad231)
+- pass interrupted flag to synthetic done in live-reader and settle paths (b84480c03)
+- guard Windows updates against running afk processes (3efc32855)
+- exit with code 1 on win32 so RestartOnFailure relaunches the bot after drift (71de5cfd7)
+- address advisory findings from pr-triage batch (#5238) (a6d1ef5d7)
+- track evicted client disposal, unsubscribe timeout listener, and await exit in test (4a70009b0)
+- label crash-loop guard refusal, log trip, add cool-down expiry (fb03231ba)
+- exclude patch previews from daemon Done evidence (0549a6b82)
+- add patch_apply to done-evidence mutation sets (scenario 4) (c6e640112)
+
 ## [6.1.0] - 2026-11-22
 
 ### Added

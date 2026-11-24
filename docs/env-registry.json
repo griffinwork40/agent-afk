@@ -503,6 +503,14 @@
       "category": "misc"
     },
     {
+      "name": "AFK_GLOBAL_CHAT_URL",
+      "description": "WebSocket URL of the global-chat relay server. Required to use the /global command. When unset the /global command explains that no relay is configured and exits cleanly -- no connection is attempted. Example: wss://relay.example.com/global",
+      "type": "string",
+      "required": false,
+      "example": "wss://relay.example.com/global",
+      "category": "misc"
+    },
+    {
       "name": "AFK_GOBLIN_MASCOT",
       "description": "Reacting goblin mini-sprite in the reserved footer band while the agent runs tools (3 rows, animated). 1 = on, unset/0 = off (default). Claims terminal rows, so it is opt-in.",
       "type": "boolean",

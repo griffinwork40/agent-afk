@@ -72,6 +72,7 @@ import { PROMPT_EXPERIMENT_ENV_REGISTRY } from './env.prompt-experiment.js';
 import { SANDBOX_ENV_REGISTRY } from './env.sandbox.js';
 import { EPISODE_ENV_REGISTRY } from './env.episode.js';
 import { TTY_TRACE_ENV_REGISTRY } from './env.tty-trace.js';
+import { GLOBAL_CHAT_ENV_REGISTRY } from './env.global-chat.js';
 
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
 
@@ -205,6 +206,9 @@ export const ENV_REGISTRY = [
 
   // ── TTY trace recorder (env.tty-trace.ts) ───────────────────────────────
   ...TTY_TRACE_ENV_REGISTRY,
+
+  // ── Global chat relay URL (env.global-chat.ts) ───────────────────────────
+  ...GLOBAL_CHAT_ENV_REGISTRY,
 ] as const satisfies readonly EnvVarMeta[];
 
 /**
