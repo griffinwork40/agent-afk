@@ -30,6 +30,7 @@
  */
 
 import { forkConfigGate } from '../agent/tools/nesting.can-use-tool.js';
+import { notifyUserSkillsLoaded } from './user-skills.registry-bridge.js';
 import { readdirSync, readFileSync } from 'fs';
 import { errorMessage, isEnoent } from '../utils/errors.js';
 import { join } from 'path';
@@ -394,6 +395,9 @@ export function scanSkillsFromDir(
     registerSkill(meta);
     count++;
   }
+
+  // Notify the PromptRegistry so its cache is invalidated after a scan.
+  notifyUserSkillsLoaded();
 
   return count;
 }
