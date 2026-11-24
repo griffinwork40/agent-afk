@@ -32,7 +32,7 @@ import type { SlashCommand } from '../types.js';
 
 function buildDeps(): GlobalCommandDeps {
   return {
-    relayUrl: env.AFK_GLOBAL_CHAT_URL ?? undefined,
+    get relayUrl() { return env.AFK_GLOBAL_CHAT_URL ?? undefined; },
     createIdentityStore: () => new FileIdentityStore(),
     createMuteStore: () => new FileMuteStore(),
     createClient: ({ url, identityStore }) =>
