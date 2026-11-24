@@ -33,10 +33,10 @@ function makeArgs(overrides: {
 describe('createReplSurface — initialPermissionMode precedence', () => {
   it('uses --permission-mode flag over config', () => {
     const result = createReplSurface(makeArgs({
-      optionPermissionMode: 'default',
+      optionPermissionMode: 'acceptEdits',
       configPermissionMode: 'bypassPermissions',
     }));
-    expect(result.initialPermissionMode).toBe('default');
+    expect(result.initialPermissionMode).toBe('acceptEdits');
   });
 
   it('falls back to config when --permission-mode is absent', () => {
