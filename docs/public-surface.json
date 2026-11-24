@@ -1158,6 +1158,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_GLOBAL_CHAT_URL",
+      "source": "src/config/env.global-chat.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_GOBLIN_MASCOT",
       "source": "src/config/env.ui.ts"
     },
@@ -4485,6 +4490,11 @@
       "kind": "slash",
       "name": "/ghost",
       "source": "src/cli/slash/commands/ghost.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/global",
+      "source": "src/cli/slash/commands/global.ts"
     },
     {
       "kind": "slash",
