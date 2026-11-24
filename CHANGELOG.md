@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [6.2.0] - 2026-11-24
+
 ### Added
 - improve Telegram streaming performance with draft API and throttle fixes (#5288) (b41b127df)
 - add `/global` opt-in terminal chat between agent turns for people, when a relay is configured; messages are signed and verified, the relay retains messages with author public keys and display names for 7 days, and identity and mute files live in the AFK config directory under `global-chat/` (7a318f026)
