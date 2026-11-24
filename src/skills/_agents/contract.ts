@@ -10,3 +10,9 @@ export const contract = {
   systemPrompt: readFileSync(join(__dirname, 'prompts/contract.md'), 'utf8'),
   sourcePath: 'vendored/contract.md',
 };
+
+// Notify prompt registry of loaded content
+import('../../prompts/registry.js').then(
+  (m) => m.notifyPromptLoaded(),
+  () => { /* registry not available — ok during build */ },
+).catch(() => {});
