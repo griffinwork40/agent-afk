@@ -303,6 +303,11 @@ export function extractPluginSkills(
 
   walkDirectory(pluginPath);
   skillCache.set(cacheKey, skills);
+  // Notify prompt registry that plugin skill content has been loaded
+  import('../../prompts/registry.js').then(
+    (m) => m.notifyPromptLoaded(),
+    () => { /* registry not available — ok during build */ },
+  ).catch(() => {});
   return skills;
 }
 
