@@ -198,15 +198,8 @@ export interface CliOptions {
   continue?: boolean;
   debug?: boolean;
   /**
-   * `--dangerously-skip-permissions` — start the session in `'bypassPermissions'`
-   * (skip path-approval prompts; read/write anywhere). Toggle live with Shift+Tab
-   * (the permission-mode cycle: default → plan → bypass).
-   */
-  dangerouslySkipPermissions?: boolean;
-  /**
    * `--permission-mode <mode>` — explicit permission mode from the CLI flag.
-   * Takes precedence over `afk.config.json` `permissionMode` but is overridden
-   * by `--dangerously-skip-permissions` (which always forces `bypassPermissions`).
+   * Takes precedence over `afk.config.json` `permissionMode`.
    */
   permissionMode?: PermissionMode;
   /**
