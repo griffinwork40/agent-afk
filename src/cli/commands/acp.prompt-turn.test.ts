@@ -72,7 +72,7 @@ describe('runPromptTurn', () => {
     expect(log).toHaveBeenCalled();
   });
 
-  it('cancellation returns cancelled, interrupts, denies pending asks, drains queued updates', async () => {
+  it('cancellation returns cancelled, interrupts, drains queued updates', async () => {
     let release!: () => void;
     const { live, interrupt } = makeLive(async function* () {
       yield { type: 'chunk', chunk: { type: 'content', content: 'a' } } as OutputEvent;
@@ -80,14 +80,11 @@ describe('runPromptTurn', () => {
       yield { type: 'chunk', chunk: { type: 'content', content: 'late' } } as OutputEvent;
       throw new Error('interrupted');
     });
-    const cancelAll = vi.fn();
-    live.gate = { canUseTool: vi.fn(), cancelAll } as unknown as LiveSession['gate'];
     const { peer, sent } = makePeer();
     const p = runPromptTurn(live, 'x', { peer, log: () => {} });
     await vi.waitFor(() => expect(sent).toHaveLength(1));
     cancelTurn(live, () => {});
     expect(live.translator.cancelled).toBe(true);
-    expect(cancelAll).toHaveBeenCalledTimes(1);
     expect(interrupt).toHaveBeenCalledTimes(1);
     release();
     await expect(p).resolves.toBe('cancelled');
@@ -147,20 +144,7 @@ describe('makeEmitToolCall', () => {
   });
 });
 
-describe('runPromptTurn child card closing (D9)', () => {
-  it('awaits gate.endTurn after the stream and before the final updates', async () => {
-    const order: string[] = [];
-    const { live } = makeLive(async function* () { yield { type: 'done', metadata: {} } as OutputEvent; });
-    live.gate = { canUseTool: vi.fn() as never, cancelAll: vi.fn(), endTurn: vi.fn(async () => {
-      expect(live.active?.ending).toBe(true);
-      order.push('endTurn');
-    }) };
-    mFinish.mockImplementationOnce(() => { order.push('finish'); return { updates: [], stopReason: 'end_turn' }; });
-    const { peer } = makePeer();
-    expect(await runPromptTurn(live, 'x', { peer, log: () => {} })).toBe('end_turn');
-    expect(order).toEqual(['endTurn', 'finish']);
-  });
-});
+
 
 describe('runPromptTurn closes announced tool calls on every exit path', () => {
   const announce = (live: LiveSession, id: string, status: 'pending' | 'in_progress' | 'completed' | 'failed'): void => {
@@ -196,19 +180,13 @@ describe('runPromptTurn closes announced tool calls on every exit path', () => {
     expect(failedFor(sent, 't2')).toHaveLength(1);
   });
 
-  it('a stream error denies pending permission requests before failing open cards', async () => {
-    const order: string[] = [];
+  it('a stream error fails open cards before throwing', async () => {
     const { live } = makeLive(async function* () {
       announce(live, 'child-1-t5', 'pending');
       yield { type: 'error', error: new Error('boom') } as OutputEvent;
     });
-    const cancelAll = vi.fn(() => { order.push('cancelAll'); });
-    live.gate = { canUseTool: vi.fn() as never, cancelAll };
     const { peer, sent } = makePeer();
-    peer.notify.mockImplementation(async (_m: string, p: unknown) => { sent.push(p); order.push('update'); });
     await expect(runPromptTurn(live, 'x', { peer, log: () => {} })).rejects.toBeInstanceOf(AcpTurnFailed);
-    expect(cancelAll).toHaveBeenCalledTimes(1);
-    expect(order).toEqual(['cancelAll', 'update']);
     expect(failedFor(sent, 'child-1-t5')).toHaveLength(1);
   });
 

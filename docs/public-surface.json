@@ -2273,11 +2273,6 @@
     },
     {
       "kind": "flag",
-      "name": "afk acp --dangerously-skip-permissions",
-      "source": "src/cli/commands/acp.ts"
-    },
-    {
-      "kind": "flag",
       "name": "afk acp --help",
       "source": "src/cli/commands/acp.ts"
     },

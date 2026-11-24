@@ -158,22 +158,19 @@ describe('buildAcpSession — injection chain', () => {
 });
 
 describe('buildAcpSession — approvals (D8, D9)', () => {
-  it('always runs bypassPermissions; the skip flag only controls the bridge', async () => {
-    const { wireExecutors } = await import('../../agent/session/wire-executors.js');
-    for (const skip of [false, true, undefined]) {
-      mockInjectHotMemory.mockClear();
-      await buildAcpSession({ model: 'sonnet', maxTurns: 10, ...(skip !== undefined ? { dangerouslySkipPermissions: skip } : {}) });
-      const [config] = mockInjectHotMemory.mock.calls[0] as [{ permissionMode: string }];
-      expect(config.permissionMode).toBe('bypassPermissions');
-    }
-    expect(vi.mocked(wireExecutors).mock.calls.every(([o]) => !('childCanUseTool' in o))).toBe(true);
+  it('always runs bypassPermissions', async () => {
+    mockInjectHotMemory.mockClear();
+    await buildAcpSession({ model: 'sonnet', maxTurns: 10 });
+    const [config] = mockInjectHotMemory.mock.calls[0] as [{ permissionMode: string }];
+    expect(config.permissionMode).toBe('bypassPermissions');
   });
 
   it('passes the child approval factory to executor wiring', async () => {
     const { wireExecutors } = await import('../../agent/session/wire-executors.js');
     const childCanUseTool = vi.fn();
     await buildAcpSession({ model: 'sonnet', maxTurns: 10, childCanUseTool });
-    expect(vi.mocked(wireExecutors).mock.calls.at(-1)?.[0]).toMatchObject({ childCanUseTool });
+    const calls = vi.mocked(wireExecutors).mock.calls;
+    expect(calls[calls.length - 1]?.[0]).toMatchObject({ childCanUseTool });
   });
 });
 
@@ -184,7 +181,8 @@ describe('buildAcpSession — hook registry cwd (T1)', () => {
     const sessionCwd = process.platform === 'win32' ? 'C:\\client\\project' : '/client/project';
     expect(sessionCwd).not.toBe(process.cwd());
     await buildAcpSession({ model: 'sonnet', maxTurns: 10, cwd: sessionCwd, sessionId: 'acp-1' });
-    const call = vi.mocked(createDefaultHookRegistry).mock.calls.at(-1);
+    const mockCalls = vi.mocked(createDefaultHookRegistry).mock.calls;
+    const call = mockCalls[mockCalls.length - 1];
     expect(call?.[5]).toMatchObject({ cwd: sessionCwd, sessionId: 'acp-1' });
     expect(vi.mocked(loadHooksConfig)).toHaveBeenLastCalledWith({ cwd: sessionCwd });
   });
