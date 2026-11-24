@@ -34,6 +34,7 @@ import { handleListModels } from './routes.models.js';
 import { handleSearchMemory, handleGetHotMemory } from './routes.memory.js';
 import { handleListBgJobs, handleGetBgJob } from './routes.bg-jobs.js';
 import { handleGetConfig } from './routes.config.js';
+import { handleListPrompts, handleSearchPrompts, handleGetPrompt } from './routes.prompts.js';
 import { handleListHandoffs, handleAnswerHandoff } from './routes.handoffs.js';
 import { handleCommand } from './routes.commands.js';
 import { ChoiceBroker } from './choice-broker.js';
@@ -417,6 +418,23 @@ async function dispatch(
   }
   if (path === '/api/memory/hot' && method === 'GET') {
     await handleGetHotMemory(res);
+    return;
+  }
+
+  // ---- prompt registry routes ------------------------------------------------
+  if (path === '/api/prompts/search' && method === 'GET') {
+    const qs = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?') + 1) : '';
+    await handleSearchPrompts(res, new URLSearchParams(qs));
+    return;
+  }
+  if (path === '/api/prompts' && method === 'GET') {
+    const qs = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?') + 1) : '';
+    await handleListPrompts(res, new URLSearchParams(qs));
+    return;
+  }
+  const promptIdMatch = /^\/api\/prompts\/([^/]+)$/.exec(path);
+  if (promptIdMatch?.[1] && method === 'GET') {
+    await handleGetPrompt(res, decodeURIComponent(promptIdMatch[1]));
     return;
   }
 

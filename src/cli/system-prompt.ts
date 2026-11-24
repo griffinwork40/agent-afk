@@ -69,13 +69,7 @@ export function loadBundledSystemPrompt(): string | undefined {
   const promptPath = resolve(here, '..', '..', 'system-prompt.md');
   if (!existsSync(promptPath)) return undefined;
   try {
-    const content = readFileSync(promptPath, 'utf-8');
-    // Notify the PromptRegistry that the framework prompt has been loaded.
-    // Dynamic import keeps this function synchronous and avoids circular deps.
-    import('../prompts/registry.js')
-      .then(({ notifyPromptLoaded }) => { notifyPromptLoaded(); })
-      .catch(() => undefined);
-    return content;
+    return readFileSync(promptPath, 'utf-8');
   } catch {
     return undefined;
   }

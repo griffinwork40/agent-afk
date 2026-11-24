@@ -85,12 +85,5 @@ export function loadSkillPrompts(name: string, baseDir?: string): Record<string,
     prompts[filename] = readFileSync(filePath, 'utf-8');
   }
 
-  // Notify the PromptRegistry that new prompts have been loaded so its cache
-  // is invalidated and the next getPromptRegistry() call re-discovers files.
-  // Dynamic import avoids a circular dependency (registry → paths → …).
-  import('../../prompts/registry.js')
-    .then(({ notifyPromptLoaded }) => { notifyPromptLoaded(); })
-    .catch(() => undefined);
-
   return prompts;
 }

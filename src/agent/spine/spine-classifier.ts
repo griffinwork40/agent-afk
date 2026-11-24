@@ -73,12 +73,6 @@ export interface ClassifierResult {
 const CLASSIFIER_PROMPT = readFileSync(join(__dirname, 'prompts/classifier.md'), 'utf-8');
 const INIT_CLASSIFIER_PROMPT = readFileSync(join(__dirname, 'prompts/init-classifier.md'), 'utf-8');
 
-// Notify the PromptRegistry that SPINE prompts have been loaded.
-// Dynamic import avoids circular deps and keeps the module-load path sync.
-import('../../prompts/registry.js')
-  .then(({ notifyPromptLoaded }) => { notifyPromptLoaded(); })
-  .catch(() => undefined);
-
 // ---------------------------------------------------------------------------
 // Classification
 // ---------------------------------------------------------------------------

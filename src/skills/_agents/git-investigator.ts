@@ -16,9 +16,3 @@ export const gitInvestigator = {
   // policy in resolveChildModel, so pinning one here would override
   // AFK_DEFAULT_SUBAGENT_MODEL. Omitted on purpose; see registry.test.ts.
 };
-
-// Notify prompt registry of loaded content
-import('../../prompts/registry.js').then(
-  (m) => m.notifyPromptLoaded(),
-  () => { /* registry not available — ok during build */ },
-).catch(() => {});

@@ -70,28 +70,28 @@ afterEach(() => {
 
 describe('getPromptRegistry', () => {
   it('returns an array', () => {
-    const entries = getPromptRegistry({ root });
+    const entries = getPromptRegistry({ repoRoot: root });
     expect(Array.isArray(entries)).toBe(true);
   });
 
   it('discovers the framework system-prompt.md', () => {
-    const entries = getPromptRegistry({ root });
+    const entries = getPromptRegistry({ repoRoot: root });
     const fw = entries.find((e) => e.kind === 'framework');
     expect(fw).toBeDefined();
     expect(fw?.id).toBe('framework:system-prompt.md');
   });
 
   it('discovers both SPINE prompts', () => {
-    const entries = getPromptRegistry({ root });
+    const entries = getPromptRegistry({ repoRoot: root });
     const spine = entries.filter((e) => e.kind === 'spine');
     expect(spine.length).toBe(2);
     const ids = spine.map((e) => e.id).sort();
-    expect(ids).toContain('spine:agent/spine/prompts/classifier.md');
-    expect(ids).toContain('spine:agent/spine/prompts/init-classifier.md');
+    expect(ids).toContain('spine:src/agent/spine/prompts/classifier.md');
+    expect(ids).toContain('spine:src/agent/spine/prompts/init-classifier.md');
   });
 
   it('discovers skill-phase prompts for mint', () => {
-    const entries = getPromptRegistry({ root });
+    const entries = getPromptRegistry({ repoRoot: root });
     const mintPhases = entries.filter(
       (e) => e.kind === 'skill-phase' && e.skill === 'mint',
     );
@@ -99,7 +99,7 @@ describe('getPromptRegistry', () => {
   });
 
   it('discovers skill-phase prompts for gather', () => {
-    const entries = getPromptRegistry({ root });
+    const entries = getPromptRegistry({ repoRoot: root });
     const gather = entries.filter(
       (e) => e.kind === 'skill-phase' && e.skill === 'gather',
     );
@@ -107,22 +107,23 @@ describe('getPromptRegistry', () => {
   });
 
   it('discovers vendored-agent prompts', () => {
-    const entries = getPromptRegistry({ root });
+    const entries = getPromptRegistry({ repoRoot: root });
     const vendored = entries.filter((e) => e.kind === 'vendored-agent');
     expect(vendored.length).toBe(1);
-    expect(vendored[0]?.id).toBe('vendored-agent:skills/_agents/prompts/research.md');
+    expect(vendored[0]?.id).toBe(
+      'vendored-agent:src/skills/_agents/prompts/research.md',
+    );
   });
 
   it('does not emit entries for skill dirs with no prompts/', () => {
-    const entries = getPromptRegistry({ root });
+    const entries = getPromptRegistry({ repoRoot: root });
     const noprompts = entries.filter((e) => e.skill === 'noprompts');
     expect(noprompts.length).toBe(0);
   });
 
   it('caches results across repeated calls (same object reference)', () => {
-    const a = getPromptRegistry({ root });
-    const b = getPromptRegistry({ root });
-    // With opts.root set, caching is per-call (no module cache); content equality suffices.
+    const a = getPromptRegistry({ repoRoot: root });
+    const b = getPromptRegistry({ repoRoot: root });
     expect(a.length).toBe(b.length);
   });
 });
@@ -133,43 +134,51 @@ describe('getPromptRegistry', () => {
 
 describe('PromptEntry shape', () => {
   it('framework entry has correct fields', () => {
-    const entry = getPromptRegistry({ root }).find((e) => e.kind === 'framework');
+    const entry = getPromptRegistry({ repoRoot: root }).find(
+      (e) => e.kind === 'framework',
+    );
     expect(entry).toBeDefined();
     if (!entry) return;
     expect(entry.id).toMatch(/^framework:/);
     expect(entry.editable).toBe(false);
     expect(entry.name).toBe('system-prompt');
-    expect(entry.injectionContext).toBe('framework base system prompt');
   });
 
   it('load() returns the file content', () => {
-    const entry = getPromptRegistry({ root }).find((e) => e.kind === 'framework');
+    const entry = getPromptRegistry({ repoRoot: root }).find(
+      (e) => e.kind === 'framework',
+    );
     expect(entry?.load()).toBe('framework prompt body');
   });
 
   it('tokenEstimate is a positive number', () => {
-    const entry = getPromptRegistry({ root }).find((e) => e.kind === 'framework');
+    const entry = getPromptRegistry({ repoRoot: root }).find(
+      (e) => e.kind === 'framework',
+    );
     expect(typeof entry?.tokenEstimate).toBe('number');
-    expect((entry?.tokenEstimate ?? 0)).toBeGreaterThan(0);
+    expect(entry?.tokenEstimate ?? 0).toBeGreaterThan(0);
   });
 
-  it('spine entry carries correct phase derived from filename', () => {
-    const entry = getPromptRegistry({ root }).find(
-      (e) => e.id === 'spine:agent/spine/prompts/classifier.md',
+  it('spine entry has correct name derived from filename', () => {
+    const entry = getPromptRegistry({ repoRoot: root }).find(
+      (e) => e.id === 'spine:src/agent/spine/prompts/classifier.md',
     );
-    expect(entry?.phase).toBe('classifier');
+    expect(entry).toBeDefined();
+    expect(entry?.name).toBe('classifier');
   });
 
   it('skill-phase entry carries skill and phase fields', () => {
-    const entry = getPromptRegistry({ root }).find(
-      (e) => e.kind === 'skill-phase' && e.skill === 'mint' && e.phase === 'system',
+    const entry = getPromptRegistry({ repoRoot: root }).find(
+      (e) => e.kind === 'skill-phase' && e.skill === 'mint',
     );
     expect(entry).toBeDefined();
     expect(entry?.load()).toBe('mint system prompt');
   });
 
   it('vendored-agent entry has pinned: true', () => {
-    const entry = getPromptRegistry({ root }).find((e) => e.kind === 'vendored-agent');
+    const entry = getPromptRegistry({ repoRoot: root }).find(
+      (e) => e.kind === 'vendored-agent',
+    );
     expect(entry?.pinned).toBe(true);
   });
 });
@@ -180,13 +189,17 @@ describe('PromptEntry shape', () => {
 
 describe('getPromptById', () => {
   it('finds an entry by exact id', () => {
-    const entry = getPromptById('framework:system-prompt.md', { root });
+    const entry = getPromptById('framework:system-prompt.md', {
+      repoRoot: root,
+    });
     expect(entry).toBeDefined();
     expect(entry?.kind).toBe('framework');
   });
 
   it('returns undefined for an unknown id', () => {
-    const entry = getPromptById('framework:does-not-exist.md', { root });
+    const entry = getPromptById('framework:does-not-exist.md', {
+      repoRoot: root,
+    });
     expect(entry).toBeUndefined();
   });
 });
@@ -197,18 +210,18 @@ describe('getPromptById', () => {
 
 describe('searchPrompts', () => {
   it('matches by name substring (case-insensitive)', () => {
-    const results = searchPrompts('classifier', { root });
+    const results = searchPrompts('classifier', { repoRoot: root });
     expect(results.length).toBeGreaterThanOrEqual(1);
     expect(results.every((e) => e.kind === 'spine')).toBe(true);
   });
 
-  it('matches by skill name', () => {
-    const results = searchPrompts('mint', { root });
+  it('matches by relativePath', () => {
+    const results = searchPrompts('mint', { repoRoot: root });
     expect(results.length).toBe(2);
   });
 
   it('returns empty array for a query that matches nothing', () => {
-    const results = searchPrompts('zzz-no-match-zzz', { root });
+    const results = searchPrompts('zzz-no-match-zzz', { repoRoot: root });
     expect(results).toHaveLength(0);
   });
 });
@@ -219,13 +232,13 @@ describe('searchPrompts', () => {
 
 describe('getPromptsByKind', () => {
   it('returns only entries of the requested kind', () => {
-    const spine = getPromptsByKind('spine', { root });
+    const spine = getPromptsByKind('spine', { repoRoot: root });
     expect(spine.length).toBe(2);
     expect(spine.every((e) => e.kind === 'spine')).toBe(true);
   });
 
   it('returns empty array for a kind with no entries', () => {
-    const bundled = getPromptsByKind('bundled-skill', { root });
+    const bundled = getPromptsByKind('bundled-skill', { repoRoot: root });
     expect(bundled).toHaveLength(0);
   });
 });
@@ -236,11 +249,8 @@ describe('getPromptsByKind', () => {
 
 describe('notifyPromptLoaded', () => {
   it('invalidates the module-level cache', () => {
-    // Prime the module cache with a fresh registry call (no opts.root = uses module cache)
-    // We test via resetPromptRegistryCache which is the same underlying reset.
     notifyPromptLoaded();
-    // After notify, a call with opts.root should still work (not throw).
-    const entries = getPromptRegistry({ root });
+    const entries = getPromptRegistry({ repoRoot: root });
     expect(entries.length).toBeGreaterThan(0);
   });
 });
@@ -251,9 +261,9 @@ describe('resetPromptRegistryCache', () => {
   });
 
   it('allows re-discovery after reset', () => {
-    const before = getPromptRegistry({ root }).length;
+    const before = getPromptRegistry({ repoRoot: root }).length;
     resetPromptRegistryCache();
-    const after = getPromptRegistry({ root }).length;
+    const after = getPromptRegistry({ repoRoot: root }).length;
     expect(after).toBe(before);
   });
 });

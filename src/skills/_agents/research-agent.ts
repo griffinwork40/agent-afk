@@ -23,9 +23,3 @@ export const researchAgent = {
     'Mechanically locked to Read, Grep, Glob, WebFetch, WebSearch — cannot Bash, commit, or push. ' +
     'Delegates git queries to `git-investigator`. Use for findings-only tasks.',
 };
-
-// Notify prompt registry of loaded content
-import('../../prompts/registry.js').then(
-  (m) => m.notifyPromptLoaded(),
-  () => { /* registry not available — ok during build */ },
-).catch(() => {});
