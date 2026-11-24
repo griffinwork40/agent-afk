@@ -20,6 +20,7 @@ import {
   handlePaused, handleResumed, handleDone, handleError, deliverOverflow,
   type HandlerParams,
 } from './streaming.handlers.js';
+import { finalizeDraft } from './streaming.draft.js';
 import { handleProgressEvent } from './streaming.progress.js';
 import { routeFromCtx, sendOptions } from './route.js';
 import type { WatchdogState } from './streaming.watchdog.js';
@@ -86,12 +87,21 @@ export function updateWatchdogForChunk(
 ): void {
   if (event.chunk.type === 'tool_use_detail') {
     if (watchdog.inFlightTools.size === 0) watchdog.toolInFlightSince = Date.now();
-    watchdog.inFlightTools.add(event.chunk.toolUseId);
+    watchdog.inFlightTools.add(event.chunk['toolUseId']);
   } else if (event.chunk.type === 'tool_result') {
-    watchdog.inFlightTools.delete(event.chunk.toolUseId);
+    watchdog.inFlightTools.delete(event.chunk['toolUseId']);
     if (watchdog.inFlightTools.size === 0) watchdog.toolInFlightSince = null;
   }
 }
+
+/** Unified send/update callback: either `sendOrEdit` or the draft variant. */
+export type SendUpdateFn = (
+  state: StreamState,
+  ctx: Context,
+  chatId: number,
+  text: string,
+  force?: boolean,
+) => Promise<void>;
 
 /**
  * Process a `content` chunk: accumulate text and re-render the live preview.
@@ -107,6 +117,7 @@ export async function processChunkContent(
   ctx: Context,
   chatId: number,
   livePreview: () => string,
+  sendUpdate: SendUpdateFn = sendOrEdit,
 ): Promise<void> {
   if (!run.inContentRun) {
     run.contentRunStartAccumulated = state.accumulated.length;
@@ -115,7 +126,7 @@ export async function processChunkContent(
   }
   state.accumulated += event.chunk.content;
   state.answerText += event.chunk.content;
-  await sendOrEdit(state, ctx, chatId, livePreview());
+  await sendUpdate(state, ctx, chatId, livePreview());
 }
 
 /**
@@ -138,13 +149,14 @@ export async function processInlineEvent(
   ctx: Context,
   chatId: number,
   livePreview: () => string,
+  sendUpdate: SendUpdateFn = sendOrEdit,
 ): Promise<boolean> {
   if (event.type === 'stream_retry') {
     // Mid-stream overload re-drive: discard partial text from this round.
     state.accumulated = state.accumulated.slice(0, run.contentRunStartAccumulated);
     state.answerText = state.answerText.slice(0, run.contentRunStartAnswer);
     run.inContentRun = false;
-    await sendOrEdit(state, ctx, chatId, livePreview(), true);
+    await sendUpdate(state, ctx, chatId, livePreview(), true);
     return false;
   }
 
@@ -169,7 +181,7 @@ export async function processInlineEvent(
       secs !== null
         ? `⏸ Rate limited · retrying in ~${secs}s…`
         : '⏸ Rate limited · retrying…';
-    await sendOrEdit(state, ctx, chatId, livePreview() + `\n\n${statusLine}`, true);
+    await sendUpdate(state, ctx, chatId, livePreview() + `\n\n${statusLine}`, true);
     return true; // caller should `continue`
   }
 
@@ -187,7 +199,7 @@ export async function processInlineEvent(
       ...e,
       at: state.accumulated.length,
     }));
-    await sendOrEdit(state, ctx, chatId, livePreview());
+    await sendUpdate(state, ctx, chatId, livePreview());
     return false;
   }
 
@@ -200,7 +212,7 @@ export async function processInlineEvent(
   ) {
     state.accumulated += `\n\n💡 ${event.suggestion}`;
     state.answerText += `\n\n💡 ${event.suggestion}`;
-    await sendOrEdit(state, ctx, chatId, livePreview());
+    await sendUpdate(state, ctx, chatId, livePreview());
     return false;
   }
 
@@ -230,7 +242,7 @@ export async function processInlineEvent(
   if (event.type === 'notice') {
     const noticeText = `\n\n_ℹ ${event.text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&')}_`;
     state.accumulated += noticeText;
-    await sendOrEdit(state, ctx, chatId, livePreview());
+    await sendUpdate(state, ctx, chatId, livePreview());
     return false;
   }
 
@@ -262,6 +274,8 @@ export async function runStreamLoop(params: {
   clearProgressTimer: () => void;
   handlerParams: HandlerParams;
   logger?: (...args: unknown[]) => void;
+  /** Override the default sendOrEdit — used by draft mode in private chats. */
+  sendUpdate?: SendUpdateFn;
 }): Promise<void> {
   const {
     nextWithTimeout, state, watchdog, run,
@@ -269,6 +283,7 @@ export async function runStreamLoop(params: {
     progressDelayMs, setProgressGateOpen, clearProgressTimer,
     handlerParams, logger,
   } = params;
+  const sendUpdate: SendUpdateFn = params.sendUpdate ?? sendOrEdit;
   let { progressGateOpen } = params;
 
   const traceEnabled = !!env.AFK_TELEGRAM_TRACE;
@@ -307,7 +322,7 @@ export async function runStreamLoop(params: {
     if (event.type === 'chunk' && event.chunk.type === 'content') {
       await processChunkContent(
         event as OutputEvent & { type: 'chunk'; chunk: { type: 'content'; content: string } },
-        state, run, ctx, chatId, livePreview,
+        state, run, ctx, chatId, livePreview, sendUpdate,
       );
       continue;
     }
@@ -342,7 +357,7 @@ export async function runStreamLoop(params: {
     if (event.type === 'error') { handleError(event.error, handlerParams); }
 
     // Remaining inline events: stream_retry, rate_limit, message, suggestion, notice
-    const shouldContinue = await processInlineEvent(event, state, run, ctx, chatId, livePreview);
+    const shouldContinue = await processInlineEvent(event, state, run, ctx, chatId, livePreview, sendUpdate);
     if (shouldContinue) continue;
   }
 
@@ -352,6 +367,18 @@ export async function runStreamLoop(params: {
   // event handled delivery above; any other exit (no terminal event, early break)
   // re-delivers everything as fresh messages so nothing is lost to a stale preview.
   // iter.return() is called by the outer finally in streaming.ts AFTER this block.
+
+  // Draft-mode non-terminal exit: state.sentMessage is null for private chats
+  // (no placeholder was sent), so the preview guard below is skipped. Finalize
+  // the draft directly so the user receives the partial answer.
+  if (!state.sawTerminalEvent && state.draftState?.isDraftMode) {
+    const text = state.answerText.trim() || finalBody();
+    if (text.trim()) {
+      await finalizeDraft(state.draftState, ctx, chatId, text);
+    }
+    return;
+  }
+
   const preview = state.sentMessage as Message.TextMessage | null;
   if (preview && !state.sawTerminalEvent) {
     const full =

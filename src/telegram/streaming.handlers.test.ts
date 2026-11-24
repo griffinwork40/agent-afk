@@ -66,7 +66,8 @@ function makeCtx(): Context {
 
 function makeState(overrides: Partial<StreamState> = {}): StreamState {
   return {
-    sentMessage: null, lastEditAt: 0, accumulated: '', answerText: '',
+    sentMessage: null, lastEditAt: 0, lastRenderedText: '', lastRenderedHtml: '',
+    accumulated: '', answerText: '',
     pausedUntil: null, countdownInterval: null, editInFlight: false,
     lastCountdownBucket: -1, sawTerminalEvent: false, progressEntries: [],
     progressRounds: 0, turnEnded: false, progressTimer: null,

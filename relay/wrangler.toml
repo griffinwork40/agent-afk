@@ -1,0 +1,22 @@
+name = "afk-global-chat-relay"
+main = "src/worker.ts"
+compatibility_date = "2026-11-20"
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "ChatRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChatRoom"]
+
+[vars]
+# Comma-separated hex public keys of maintainers.
+# Set via: wrangler secret put ADMIN_PUBKEYS (or plain var for non-secret)
+ADMIN_PUBKEYS = ""
+# Optional notice shown to all connecting clients.
+ROOM_NOTICE = ""
+# Operator kill switch: set to "open", "readonly", or "closed" to override
+# the stored room mode via a binding/config update. Empty means use stored mode.
+# IP_SALT is a required secret (at least 16 characters), never a public var.
+ROOM_MODE = ""
