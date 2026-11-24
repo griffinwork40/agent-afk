@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { streamResponse, StreamTimeoutError, renderSubagentFooter, renderProgressRegion, renderInterleavedPreview, renderActivityReceipt, formatTelegramActivity, formatTelegramAgentLabel, replyWithFloodRetry } from './streaming.js';
+import { EDIT_THROTTLE_MS } from './streaming.sender.js';
 import { TelegramError } from 'telegraf';
 import type { Context } from 'telegraf';
 import type { IAgentSession, OutputEvent } from '../agent/types.js';
@@ -50,10 +51,12 @@ function makeCtx(): { ctx: Context; replies: string[]; edits: string[]; deletes:
   const replies: string[] = [];
   const deletes: number[] = [];
   const ctx = {
-    chat: { id: 12345, type: 'private' as const },
+    // Use 'group' so these tests exercise the unchanged sendOrEdit/deliverClean
+    // path. Draft mode (sendMessageDraft) is covered by streaming.draft.test.ts.
+    chat: { id: 12345, type: 'group' as const },
     reply: vi.fn(async (text: string) => {
       replies.push(text);
-      return { message_id: replies.length, text, chat: { id: 12345, type: 'private' as const }, date: 0 };
+      return { message_id: replies.length, text, chat: { id: 12345, type: 'group' as const }, date: 0 };
     }),
     telegram: {
       editMessageText: vi.fn(async (_c: unknown, _m: unknown, _i: unknown, text: string) => {
@@ -1315,6 +1318,7 @@ describe('◦ progress region — PR #702 review follow-ups', () => {
 });
 
 describe('chronological interleave of the ◦ progress region (live preview)', () => {
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
   function progressEvent(description: string): OutputEvent {
     return {
       type: 'progress',
@@ -1324,8 +1328,8 @@ describe('chronological interleave of the ◦ progress region (live preview)', (
   const content = (c: string): OutputEvent =>
     ({ type: 'chunk', chunk: { type: 'content', content: c } }) as OutputEvent;
 
-  // Sentences are >100 chars combined with a label so no live edit is dropped by
-  // EDIT_THROTTLE_MS (which only throttles payloads under 100 chars).
+  // Sentences are >100 chars combined with a label. Each test below uses a
+  // fresh state (lastEditAt=0) so the EDIT_THROTTLE_MS gate never fires.
   const A = 'First I check the schedule and confirm that the cron expression is actually right. ';
   const B = 'Now I run the rehearsal to see whether the 9am fire really works end to end. ';
 
@@ -1333,9 +1337,13 @@ describe('chronological interleave of the ◦ progress region (live preview)', (
     // The reported bug: every round's preamble was concatenated into one wall
     // ("…your session.Diagnosis is clear.") with all ◦ lines collected at the
     // bottom, so no line sat next to the tool round it described.
+    //
+    // sleep(EDIT_THROTTLE_MS + 50) between content(A) and the progress event
+    // ensures the intermediate interleaved edit is not suppressed by the throttle.
     const { ctx, edits } = makeCtx();
     const session = makeSession(async function* () {
       yield content(A);
+      await sleep(EDIT_THROTTLE_MS + 50);
       yield progressEvent('Using list schedules');
       yield content(B);
       yield { type: 'done', metadata: undefined } as OutputEvent;
@@ -1343,11 +1351,16 @@ describe('chronological interleave of the ◦ progress region (live preview)', (
 
     await streamResponse(ctx, session, 'go', undefined, { progressDelayMs: 0 });
 
-    // The label sits between the runs — this is the whole point of the change.
-    // The trailing break after the label is load-bearing: without it the next
-    // round's narration absorbs into the label (`◦ Using list schedulesNow I…`).
-    expect(edits).toContain(`${A}\n◦ Using list schedules\n${B}`);
-    // No LIVE preview glues the two runs into the reported wall of text. The final
+    // The label appears directly after A in a live-preview edit (not buried at
+    // the footer of the full accumulated text). With the edit throttle, B has not
+    // yet arrived when the intermediate edit fires, so the intermediate preview is
+    // `A + "\n◦ label"` — the label sits immediately after A's narration run.
+    // This is the fix for the original bug where all labels were collected at the
+    // bottom and no label sat next to the tool round it described.
+    expect(edits.some((e) => e === `${A}\n◦ Using list schedules`)).toBe(true);
+    // The label must not absorb B's narration (no "◦ Using list schedulesNow I…").
+    expect(edits.some((e) => e.includes('◦ Using list schedulesNow'))).toBe(false);
+    // No LIVE preview glues A directly to B without a separator. The final
     // edit is excluded deliberately: that one is finalBody(), whose trailing-footer
     // shape (and therefore its concatenation) is held byte-stable because it is a
     // DELIVERED payload on progress-only / non-terminal-exit turns.

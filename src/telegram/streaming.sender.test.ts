@@ -70,7 +70,7 @@ function makeCtx(): {
 
 /** Build a fresh SenderState with sentMessage=null and lastEditAt=0. */
 function makeSenderState(overrides: Partial<SenderState> = {}): SenderState {
-  return { sentMessage: null, lastEditAt: 0, ...overrides };
+  return { sentMessage: null, lastEditAt: 0, lastRenderedText: '', lastRenderedHtml: '', ...overrides };
 }
 
 /** A TelegramError simulating Telegram's entity-parse failure (400). */
@@ -179,18 +179,20 @@ describe('sendOrEdit — throttle gate (edit path)', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('skips an edit when within EDIT_THROTTLE_MS and text is short', async () => {
+  it('skips an edit when within EDIT_THROTTLE_MS regardless of text length', async () => {
     const { ctx, replies, edits } = makeCtx();
     // Establish sentMessage via the first send.
     const state = makeSenderState();
     await sendOrEdit(state, ctx, 42, 'initial text');
     const beforeEdits = edits.length;
 
-    // Set lastEditAt to "now" (fake time = 0), then try to edit with short text.
+    // Set lastEditAt to "now" (fake time = 0), then try to edit.
     state.lastEditAt = Date.now();
-    await sendOrEdit(state, ctx, 42, 'x', false); // short text (<100 chars), not forced
+    await sendOrEdit(state, ctx, 42, 'x', false); // short text — throttle still fires
+    expect(edits.length).toBe(beforeEdits);
 
-    // The throttle must have suppressed the edit.
+    // Also throttled for long text within the window.
+    await sendOrEdit(state, ctx, 42, 'a'.repeat(200), false);
     expect(edits.length).toBe(beforeEdits);
     expect(replies.length).toBe(1); // no second reply either
   });
@@ -201,11 +203,15 @@ describe('sendOrEdit — throttle gate (edit path)', () => {
     await sendOrEdit(state, ctx, 42, 'initial');
     state.lastEditAt = Date.now();
 
-    // Advance past the throttle window.
+    // Advance past the throttle window (now 500ms).
     await vi.advanceTimersByTimeAsync(EDIT_THROTTLE_MS + 1);
 
     await sendOrEdit(state, ctx, 42, 'updated text');
     expect(edits.length).toBe(1);
+  });
+
+  it('EDIT_THROTTLE_MS is 500', () => {
+    expect(EDIT_THROTTLE_MS).toBe(500);
   });
 
   it('allows an edit regardless of throttle when force=true', async () => {
@@ -218,16 +224,51 @@ describe('sendOrEdit — throttle gate (edit path)', () => {
     await sendOrEdit(state, ctx, 42, 'forced update', true);
     expect(edits.length).toBe(1);
   });
+});
 
-  it('allows an edit when text is long (≥100 chars) even within throttle window', async () => {
-    const { ctx, edits } = makeCtx();
+// ---------------------------------------------------------------------------
+// sendOrEdit — HTML render cache
+// ---------------------------------------------------------------------------
+
+describe('sendOrEdit — HTML render cache', () => {
+  it('cache hit: same text reuses lastRenderedHtml without re-rendering', async () => {
+    const { ctx } = makeCtx();
+    const state = makeSenderState();
+    // Establish sentMessage.
+    await sendOrEdit(state, ctx, 42, 'initial');
+
+    // Prime the cache with a forced edit.
+    state.lastEditAt = 0;
+    await sendOrEdit(state, ctx, 42, 'cached text', true);
+    const cachedHtml = state.lastRenderedHtml;
+    expect(state.lastRenderedText).toBe('cached text');
+    expect(cachedHtml.length).toBeGreaterThan(0);
+
+    // A second forced edit with the same text must reuse the cached HTML.
+    // Inject a sentinel into lastRenderedHtml to prove it is not re-rendered.
+    state.lastRenderedHtml = 'SENTINEL';
+    state.lastEditAt = 0;
+    await sendOrEdit(state, ctx, 42, 'cached text', true);
+    // If the cache was used, lastRenderedHtml stays 'SENTINEL' (no re-render).
+    expect(state.lastRenderedHtml).toBe('SENTINEL');
+  });
+
+  it('cache miss: changed text re-renders and updates the cache', async () => {
+    const { ctx } = makeCtx();
     const state = makeSenderState();
     await sendOrEdit(state, ctx, 42, 'initial');
-    state.lastEditAt = Date.now();
 
-    const longText = 'a'.repeat(100);
-    await sendOrEdit(state, ctx, 42, longText, false);
-    expect(edits.length).toBe(1);
+    state.lastEditAt = 0;
+    await sendOrEdit(state, ctx, 42, 'first text', true);
+    expect(state.lastRenderedText).toBe('first text');
+    const firstHtml = state.lastRenderedHtml;
+
+    state.lastEditAt = 0;
+    await sendOrEdit(state, ctx, 42, 'different text', true);
+    // Cache must have been updated with the new input and output.
+    expect(state.lastRenderedText).toBe('different text');
+    expect(state.lastRenderedHtml).not.toBe(firstHtml);
+    expect(state.lastRenderedHtml.length).toBeGreaterThan(0);
   });
 });
 

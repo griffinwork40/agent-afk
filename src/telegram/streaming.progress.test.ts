@@ -21,6 +21,7 @@ import type { OutputEvent, SubagentProgressMeta } from '../agent/types.js';
 // ---------------------------------------------------------------------------
 
 vi.mock('./streaming.sender.js', () => ({
+  EDIT_THROTTLE_MS: 300,
   sendOrEdit: vi.fn(async () => {}),
   deliverClean: vi.fn(async () => true),
   replyWithFloodRetryImpl: vi.fn(async () => {}),
@@ -39,7 +40,7 @@ vi.mock('./streaming.activity.js', () => ({
   MAX_SUBAGENT_PREVIEW_LINES: 4,
 }));
 
-import { sendOrEdit } from './streaming.sender.js';
+import { EDIT_THROTTLE_MS, sendOrEdit } from './streaming.sender.js';
 import { armProgressGateTimer } from './streaming.watchdog.js';
 
 // ---------------------------------------------------------------------------
@@ -60,6 +61,8 @@ function makeProgressState(overrides: Partial<ProgressState> = {}): ProgressStat
   return {
     sentMessage: null,
     lastEditAt: 0,
+    lastRenderedText: '',
+    lastRenderedHtml: '',
     accumulated: '',
     progressEntries: [],
     progressRounds: 0,
@@ -294,6 +297,51 @@ describe('makeSubagentSink', () => {
     expect(subagentState.subagentSteps).toBe(0);
     return Promise.resolve().then(() => {
       expect(sendOrEdit).toHaveBeenCalled();
+    });
+  });
+
+  describe('edit throttle', () => {
+    const toolEvent: OutputEvent = {
+      type: 'chunk',
+      chunk: { type: 'tool_use_detail', toolUseId: 'u1', toolName: 'bash', toolInput: '{}' },
+    };
+
+    beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-01-01T00:00:00Z')); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('throttles rapid tool events inside EDIT_THROTTLE_MS', () => {
+      const { sink, subagentState } = makeSinkArgs();
+      for (let i = 0; i < 5; i++) sink(toolEvent, meta);
+      // Bookkeeping still counts every step; only the Telegram edit is skipped.
+      expect(subagentState.subagentSteps).toBe(5);
+      expect(sendOrEdit).toHaveBeenCalledTimes(1);
+    });
+
+    it('lets events through once the throttle window has elapsed', () => {
+      const { sink } = makeSinkArgs();
+      sink(toolEvent, meta);
+      vi.advanceTimersByTime(EDIT_THROTTLE_MS - 1);
+      sink(toolEvent, meta);
+      expect(sendOrEdit).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1);
+      sink(toolEvent, meta);
+      expect(sendOrEdit).toHaveBeenCalledTimes(2);
+    });
+
+    it('bypasses the throttle for done events and forces the edit', () => {
+      const { sink } = makeSinkArgs();
+      sink(toolEvent, meta);
+      sink(toolEvent, meta);
+      expect(sendOrEdit).toHaveBeenCalledTimes(1);
+      sink({ type: 'done' }, meta);
+      expect(sendOrEdit).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(sendOrEdit).mock.calls[1]?.[4]).toBe(true);
+    });
+
+    it('does not force tool edits that pass the throttle', () => {
+      const { sink } = makeSinkArgs();
+      sink(toolEvent, meta);
+      expect(vi.mocked(sendOrEdit).mock.calls[0]?.[4]).toBe(false);
     });
   });
 
