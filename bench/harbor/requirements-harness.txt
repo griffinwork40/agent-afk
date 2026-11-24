@@ -1,0 +1,12 @@
+# Hash-pinned harness dependency for the nightly Harbor eval.
+# harbor==0.23.0 wheel sha256 (py3-none-any):
+#   8747400dbb2a5e2298e1338e17e88eba38433c0433fd700f34d1a9021bba5c37
+# Regenerate when bumping harbor_version in nightly.json:
+#   pip download 'harbor==<ver>' --no-deps --dest /tmp/d && pip hash /tmp/d/*.whl
+#
+# pip's --require-hashes mode forces ALL transitive deps to carry hashes too.
+# Instead we verify the harbor wheel explicitly before pip resolves deps:
+#   pip download --no-deps harbor==0.23.0 -d /tmp/d
+#   pip hash /tmp/d/harbor-*.whl  (must match the sha256 above)
+# This file pins the version; the nightly and CI workflows run that check.
+harbor==0.23.0
