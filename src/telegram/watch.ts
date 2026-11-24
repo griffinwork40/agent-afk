@@ -20,10 +20,9 @@
  * @module telegram/watch
  */
 
-import { tailLedger, ledgerExists, SessionLedgerWriter, type LedgerRecord } from '../agent/session-ledger.js';
+import { tailLedger, ledgerExists, type LedgerRecord } from '../agent/session-ledger.js';
 import { findSession, listSessions } from '../cli/session-store.js';
 import { readLivePresenceFiles } from '../agent/awareness/presence.js';
-import { readSessionKey, signElicitationResponse } from '../agent/afk-channel.js';
 import { makeTelegramElicitationHandler } from './elicitation-handler.js';
 import { createTelegramElicitationHandler, composeTelegramElicitation } from './elicitation-telegram.js';
 import type { MessageHandler } from './handlers/message.js';
@@ -341,23 +340,14 @@ export class SessionWatchManager {
             }
           })();
 
-          // Invariant: write-back MUST be HMAC-signed (invariant #4). If the
-          // key is absent (REPL has not enabled AFK mode), skip silently — an
-          // unsigned elicitation_response would be ignored by the REPL anyway.
-          const key = readSessionKey(sessionId);
-          if (key !== null) {
-            const hmac = signElicitationResponse(key, sessionId, rec.reqId, result);
-            // A single-record writer is sufficient; we do not own the session
-            // lifecycle. The writer opens, appends, and can be GC'd.
-            new SessionLedgerWriter(sessionId).record({
-              kind: 'elicitation_response',
-              reqId: rec.reqId,
-              result,
-              hmac,
-            });
-          } else {
-            this.log('[watch] no session key for', sessionId, '— skipping elicitation write-back');
-          }
+          // TODO(#5189): elicitation write-back (HMAC-signed response over the
+          // ledger) was removed with the /afk toggle in #5165. The elicitation
+          // handler still renders the question to the operator's phone and awaits
+          // a reply, but the result is not written back to the REPL's ledger —
+          // the REPL never receives a phone answer. Re-arming this path requires
+          // restoring the per-session key write (ensureSessionKey) and the REPL
+          // ledger-channel handler (makeLedgerChannelHandler); see issue #5189.
+          void result; // acknowledge the settled result without acting on it
           // Do not add a push line for elicitation records.
           continue;
         }

@@ -209,6 +209,33 @@ describe('config_get / config_set handlers', () => {
     });
   });
 
+  describe('config_set — AFK_GLOBAL_CHAT_URL is PROTECTED (agent cannot redirect relay)', () => {
+    it('refuses to set AFK_GLOBAL_CHAT_URL and writes nothing', async () => {
+      const r = await configSetHandler(
+        { target: 'env', key: 'AFK_GLOBAL_CHAT_URL', value: 'wss://evil.example/global' },
+        signal,
+      );
+      expect(r.isError).toBe(true);
+      expect(r.content).toMatch(/human|afk config/i);
+      expect(existsSync(envFile)).toBe(false);
+    });
+
+    it('refuses to unset AFK_GLOBAL_CHAT_URL and writes nothing', async () => {
+      const r = await configSetHandler(
+        { target: 'env', key: 'AFK_GLOBAL_CHAT_URL', action: 'unset' },
+        signal,
+      );
+      expect(r.isError).toBe(true);
+      expect(r.content).toMatch(/human|afk config/i);
+      expect(existsSync(envFile)).toBe(false);
+    });
+
+    it('classifies AFK_GLOBAL_CHAT_URL as protected (not settable or unknown)', async () => {
+      const { classifyEnvKey } = await import('../../../config/settable-keys.js');
+      expect(classifyEnvKey('AFK_GLOBAL_CHAT_URL')).toBe('protected');
+    });
+  });
+
   describe('categorization + registration wiring', () => {
     it('config_set is WRITE-classed (plan-mode blocked, sequential)', () => {
       expect(categorizeTool('config_set')).toBe('write');

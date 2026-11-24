@@ -21,6 +21,17 @@ pnpm add agent-afk zod
 ### Configure your provider credential
 
 Use your existing `ANTHROPIC_API_KEY` environment variable or pass `apiKey` from your application's secret store. Do not hardcode a credential in source.
+
+With neither set, an Anthropic session uses the Claude Code login stored on the machine (from `claude login`). Before its first request the session refreshes an expired stored access token with the stored refresh token and writes it back, the same way the `afk` CLI does at startup. A long-running server can check that credential without starting a session:
+
+```ts
+import { checkAnthropicCredential } from 'agent-afk';
+
+const status = await checkAnthropicCredential();
+if (!status.ok) console.error(status.detail); // for example: the stored login has no usable token
+```
+
+`checkAnthropicCredential()` returns `{ ok, source?, detail? }`, never token material. When no credential is available, session initialization fails with a message that says whether no login was stored, the stored login was empty, or an expired token could not be refreshed.
 </Step>
 </Steps>
 

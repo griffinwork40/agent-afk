@@ -85,13 +85,10 @@ export interface PresenceFileInfo {
    */
   pidStartTicks?: number;
   /**
-   * AFK remote-control marker (bidirectional Telegram). Set `true` by the REPL
-   * `/afk on` toggle and cleared on `/afk off` via {@link setPresenceAfk}. A
-   * watching Telegram daemon filters `readPresenceFiles()` on
-   * `surface === 'cli' && afk === true` to auto-discover sessions whose
-   * questions it should render to the operator's phone. Optional/additive:
-   * absent (treated as `false`) on sessions that never entered AFK mode and on
-   * every non-REPL surface.
+   * AFK remote-control marker (bidirectional Telegram). Reserved for future
+   * re-arming of the remote-control channel (see issue #5189). Currently
+   * unused — the `/afk` toggle and the auto-subscribe loop that read this field
+   * were removed in #5165. Optional/additive: absent on all current sessions.
    */
   afk?: boolean;
   /**
@@ -350,11 +347,11 @@ function serializePresenceRecord(info: PresenceFileInfo): string {
  * Two concrete failures followed from that. (1) A host that points `AFK_HOME` at
  * a scratch dir and removes it right after a turn races the in-flight write and
  * gets `ENOTEMPTY` on teardown, because the write recreates `presence/` while
- * the tree is being walked. (2) `setPresenceAfk` is a read-modify-write that
- * swallows `ENOENT`, so an `/afk on` issued immediately after session start
- * could land BEFORE the initial file existed and silently no-op, leaving the
- * operator's posture unset. Writing synchronously removes both: the file exists
- * before `query()` proceeds, and every queued mutator necessarily runs after it.
+ * the tree is being walked. (2) Any read-modify-write mutator that swallows
+ * `ENOENT` issued immediately after session start could land BEFORE the initial
+ * file existed and silently no-op. Writing synchronously removes both: the file
+ * exists before `query()` proceeds, and every queued mutator necessarily runs
+ * after it.
  *
  * Deliberately NOT enrolled in the `presenceWriteTails` queue — it is the first
  * operation for this session id, and completing inline means later async
@@ -445,33 +442,12 @@ export async function patchPresenceFile(
       // Non-atomic writeFile is deliberate here. The PR that introduced this
       // function (#2869) intentionally limited atomic writes to updatePresenceCwd,
       // where the worktree-sweep guard requires crash-safety. All patchPresenceFile
-      // callers — setPresenceAfk, setPresenceBlocked (presence.ts),
-      // setPresenceName, setPresenceNameIfUnset, setPresenceTurnState,
-      // setPresencePeerInbox (presence.peer.ts), setPresenceActivityPromptHead,
+      // callers — setPresenceBlocked (presence.ts), setPresenceName,
+      // setPresenceNameIfUnset, setPresenceTurnState, setPresencePeerInbox
+      // (presence.peer.ts), setPresenceActivityPromptHead,
       // setPresenceActivityTurnEnd (presence.activity.ts) — are best-effort
       // markers where a partial write is equally harmless — if the process dies
       // mid-write the presence file is removed at cleanup anyway.
-      await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
-    } catch {
-      // Best-effort — presence is non-critical.
-    }
-  });
-}
-
-/**
- * Update the `afk` marker on an existing presence file (best-effort,
- * read-modify-write). Used by the REPL `/afk` toggle so a watching Telegram
- * daemon can discover AFK sessions via `readPresenceFiles()`. No-op when the
- * presence file is absent or unreadable (presence is non-critical — the
- * keyboard elicitation path works regardless). Preserves every other field.
- */
-export async function setPresenceAfk(sessionId: string, afk: boolean): Promise<void> {
-  return enqueuePresenceWrite(sessionId, async () => {
-    try {
-      const filePath = presenceFilePath(sessionId);
-      const raw = await readFile(filePath, 'utf8');
-      const parsed = JSON.parse(raw) as PresenceFileInfo;
-      parsed.afk = afk;
       await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
     } catch {
       // Best-effort — presence is non-critical.
