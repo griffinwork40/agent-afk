@@ -26,7 +26,7 @@
  * @module cli/commands/acp.session-map
  */
 
-import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { getAcpSessionMapPath } from '../../paths.js';
@@ -74,6 +74,7 @@ export async function writeAcpSessionMap(map: AcpSessionMap): Promise<void> {
 
 const LOCK_RETRIES = 20;
 const LOCK_BASE_MS = 10;
+const LOCK_MAX_MS = 500;
 
 /** Absolute path to the advisory lock file for the session map. */
 function mapLockPath(): string {
@@ -89,11 +90,34 @@ async function acquireMapLock(): Promise<number> {
   mkdirSync(dirname(lock), { recursive: true });
   for (let i = 0; i < LOCK_RETRIES; i++) {
     try {
-      return openSync(lock, 'wx');
+      const fd = openSync(lock, 'wx');
+      writeSync(fd, String(process.pid));
+      return fd;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      // Check for dead holder — stale lock from a killed process.
+      try {
+        const pidStr = readFileSync(lock, 'utf8').trim();
+        const pid = parseInt(pidStr, 10);
+        if (!isNaN(pid)) {
+          try {
+            process.kill(pid, 0);
+            // Process is alive — normal contention, fall through to sleep.
+          } catch (killErr) {
+            if ((killErr as NodeJS.ErrnoException).code === 'ESRCH') {
+              // Holder is dead — remove stale lock and retry immediately.
+              try { unlinkSync(lock); } catch { /* ignore */ }
+              i--; // retry this iteration without consuming a retry count
+              continue;
+            }
+            // EPERM: process exists but we can't signal it — treat as alive.
+          }
+        }
+      } catch { /* can't read PID — treat lock as live */ }
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, LOCK_BASE_MS * Math.pow(2, i)));
+    if (i < LOCK_RETRIES - 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(LOCK_BASE_MS * Math.pow(2, i), LOCK_MAX_MS)));
+    }
   }
   throw new Error('acp session-map lock contested after retries');
 }

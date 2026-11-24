@@ -66,6 +66,26 @@ export function journalExists(sessionId: string, loc: JournalLocator = {}): bool
   }
 }
 
+/**
+ * Check whether the journal exists, distinguishing a true ENOENT from transient
+ * errors (EACCES, EIO, …).
+ *
+ * Returns:
+ *   'exists' — journal file is present and accessible.
+ *   'enoent' — journal definitively does not exist (ENOENT / unsafe id / path error).
+ *   'error'  — journal may exist but is currently inaccessible (EACCES, EIO, …).
+ */
+export function checkJournalExists(sessionId: string, loc: JournalLocator = {}): 'exists' | 'enoent' | 'error' {
+  const p = locate(sessionId, loc);
+  if (!p) return 'enoent';
+  try {
+    return fs.statSync(p).isFile() ? 'exists' : 'enoent';
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 'enoent';
+    return 'error';
+  }
+}
+
 /** Parse every record; malformed lines are skipped (reported via fold anomalies). */
 export function readJournalRecords(sessionId: string, loc: JournalLocator = {}): JournalRecord[] {
   return readFile(sessionId, loc)?.records ?? [];

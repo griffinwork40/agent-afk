@@ -29,7 +29,7 @@
 
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
-import { journalExists } from '../../agent/journal/reader.js';
+import { checkJournalExists } from '../../agent/journal/reader.js';
 import type { AcpClientPeer, LoadSessionRequest } from './acp.wire.js';
 import { AcpInvalidParams, convertMcpServers } from './acp.params.js';
 import type { AcpSessionHandle, AcpSessionOptions } from './acp.session.js';
@@ -58,9 +58,11 @@ export async function loadAcpSession(
   const afkId = resolveAcpId(acpId);
 
   // Fail fast: verify the journal exists before allocating anything.
-  // Prune the stale record when the journal is gone so it does not accumulate.
-  if (!journalExists(afkId)) {
-    pruneAcpSessionRecord(acpId);
+  // Prune the stale record only on a true ENOENT; transient errors (EACCES,
+  // EIO, …) must not permanently delete the record of a live session.
+  const journalState = checkJournalExists(afkId);
+  if (journalState !== 'exists') {
+    if (journalState === 'enoent') pruneAcpSessionRecord(acpId);
     throw new AcpNotFoundError(`Unknown session: ${acpId}`);
   }
   // Throws (internal) on an unreadable or malformed record: never treated as "no record".

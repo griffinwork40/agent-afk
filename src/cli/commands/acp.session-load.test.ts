@@ -17,6 +17,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 // ---------------------------------------------------------------------------
 
 const mockJournalExists = vi.fn((_id: string): boolean => true);
+const mockCheckJournalExists = vi.fn((_id: string): 'exists' | 'enoent' | 'error' => 'exists');
 const mockBuildAcpSession = vi.fn(async (_opts: unknown) => ({
   session: { close: vi.fn().mockResolvedValue(undefined) },
   memoryStore: { close: vi.fn() },
@@ -31,6 +32,7 @@ const mockPruneRecord = vi.fn((_id: string): void => undefined);
 
 vi.mock('../../agent/journal/reader.js', () => ({
   journalExists: (id: string) => mockJournalExists(id),
+  checkJournalExists: (id: string) => mockCheckJournalExists(id),
 }));
 
 vi.mock('./acp.session.js', () => ({
@@ -68,6 +70,7 @@ const BASE_PARAMS = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockJournalExists.mockReturnValue(true);
+  mockCheckJournalExists.mockReturnValue('exists');
   mockResolveAcpId.mockImplementation((id) => id);
   mockReadRecord.mockReturnValue(undefined);
   mockWriteRecord.mockReturnValue(undefined);
@@ -122,31 +125,37 @@ describe('convertMcpServers', () => {
 
 describe('loadAcpSession — unknown id', () => {
   it('throws AcpNotFoundError when journal does not exist', async () => {
-    mockJournalExists.mockReturnValue(false);
+    mockCheckJournalExists.mockReturnValue('enoent');
     await expect(loadAcpSession(BASE_PARAMS, BASE_OPTS)).rejects.toBeInstanceOf(AcpNotFoundError);
   });
 
   it('does not call buildAcpSession when journal missing', async () => {
-    mockJournalExists.mockReturnValue(false);
+    mockCheckJournalExists.mockReturnValue('enoent');
     await loadAcpSession(BASE_PARAMS, BASE_OPTS).catch(() => {});
     expect(mockBuildAcpSession).not.toHaveBeenCalled();
   });
 
   it('resolves via session map before checking journal', async () => {
     mockResolveAcpId.mockReturnValue('mapped-afk-id');
-    mockJournalExists.mockReturnValue(false);
+    mockCheckJournalExists.mockReturnValue('enoent');
     await loadAcpSession(BASE_PARAMS, BASE_OPTS).catch(() => {});
-    expect(mockJournalExists).toHaveBeenCalledWith('mapped-afk-id');
+    expect(mockCheckJournalExists).toHaveBeenCalledWith('mapped-afk-id');
   });
 
   it('prunes the stale record when the journal is gone (item 3)', async () => {
-    mockJournalExists.mockReturnValue(false);
+    mockCheckJournalExists.mockReturnValue('enoent');
     await loadAcpSession(BASE_PARAMS, BASE_OPTS).catch(() => {});
     expect(mockPruneRecord).toHaveBeenCalledWith(BASE_PARAMS.sessionId);
   });
 
   it('does not prune when the journal exists', async () => {
     await loadAcpSession(BASE_PARAMS, BASE_OPTS);
+    expect(mockPruneRecord).not.toHaveBeenCalled();
+  });
+
+  it('does not prune on transient error (EACCES/EIO)', async () => {
+    mockCheckJournalExists.mockReturnValue('error');
+    await loadAcpSession(BASE_PARAMS, BASE_OPTS).catch(() => {});
     expect(mockPruneRecord).not.toHaveBeenCalled();
   });
 });
