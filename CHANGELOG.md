@@ -12,6 +12,9 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- add `/global` opt-in terminal chat between agent turns for people, when a relay is configured; messages are signed and verified, the relay retains messages with author public keys and display names for 7 days, and identity and mute files live in the AFK config directory under `global-chat/`
+
 ## [6.1.0] - 2026-11-22
 
 ### Added
