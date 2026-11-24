@@ -15,6 +15,7 @@ import type { Message } from 'telegraf/types';
 import { splitLongMessage, markdownToTelegramHtml } from './formatter.js';
 import { sendOrEdit, deliverClean, DELIVERY_TRUNCATED_NOTICE } from './streaming.sender.js';
 import type { SenderState } from './streaming.sender.js';
+import type { SendUpdateFn } from './streaming.loop.js';
 import type { ProgressEntry } from './streaming.preview.js';
 import { replyWithFloodRetry as replyWithFloodRetryImpl } from './streaming.retry.js';
 import type { ResponseMetadata } from '../agent/types.js';
@@ -61,6 +62,8 @@ export interface HandlerParams {
   renderActivityReceipt: (toolRounds: number, elapsedMs: number) => string;
   onComplete?: (assistantText: string, metadata?: ResponseMetadata) => void | Promise<void>;
   logger?: (...args: unknown[]) => void;
+  /** Override the default sendOrEdit — used by draft mode in private chats. */
+  sendUpdate?: SendUpdateFn;
 }
 
 /**
@@ -81,6 +84,7 @@ export async function handlePaused(
   params: HandlerParams,
 ): Promise<void> {
   const { state, ctx, chatId } = params;
+  const sendUpdate = params.sendUpdate ?? sendOrEdit;
   state.pausedUntil = event.resetsAt ?? null;
   const autoResume = event.autoResume ?? true;
   const minutesRemaining = state.pausedUntil !== null
@@ -95,7 +99,7 @@ export async function handlePaused(
     ...(event.provider !== undefined ? { provider: event.provider } : {}),
     ...(event.plan !== undefined ? { plan: event.plan } : {}),
   });
-  await sendOrEdit(state, ctx, chatId, pauseMsg, true);
+  await sendUpdate(state, ctx, chatId, pauseMsg, true);
 
   if (state.pausedUntil !== null && autoResume) {
     state.lastCountdownBucket = minutesRemaining !== null ? Math.floor(minutesRemaining / 5) : -1;
@@ -115,7 +119,7 @@ export async function handlePaused(
           ...(event.plan !== undefined ? { plan: event.plan } : {}),
         });
         state.editInFlight = true;
-        void sendOrEdit(state, ctx, chatId, msg, true).finally(() => { state.editInFlight = false; });
+        void sendUpdate(state, ctx, chatId, msg, true).finally(() => { state.editInFlight = false; });
       }
     }, PAUSE_COUNTDOWN_INTERVAL_MS);
   }
@@ -130,6 +134,7 @@ export async function handleResumed(
   params: HandlerParams,
 ): Promise<void> {
   const { state, ctx, chatId } = params;
+  const sendUpdate = params.sendUpdate ?? sendOrEdit;
   if (state.countdownInterval !== null) {
     clearInterval(state.countdownInterval);
     state.countdownInterval = null;
@@ -138,7 +143,7 @@ export async function handleResumed(
   const resumeMsg = event.hotSwapped && event.accountId
     ? `▶ **Resumed on ${event.accountId}**`
     : '▶ **Resumed**';
-  await sendOrEdit(state, ctx, chatId, resumeMsg, true);
+  await sendUpdate(state, ctx, chatId, resumeMsg, true);
 }
 
 /**
@@ -170,6 +175,12 @@ export async function handleDone(
       : finalBody();
     if (finalText.trim()) {
       await finalizeDraft(state.draftState, ctx, chatId, finalText);
+      // If a stale sendOrEdit progress preview exists (created before draft mode
+      // activated), delete it so the conversation ends on the clean draft message.
+      if (state.sentMessage) {
+        await ctx.telegram.deleteMessage(chatId, state.sentMessage.message_id).catch(() => {});
+        state.sentMessage = null;
+      }
     }
   } else if (cleanFinal && state.answerText.trim()) {
     // Deliver the answer as a fresh, noise-free message, then remove the

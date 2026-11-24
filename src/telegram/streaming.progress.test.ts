@@ -61,6 +61,8 @@ function makeProgressState(overrides: Partial<ProgressState> = {}): ProgressStat
   return {
     sentMessage: null,
     lastEditAt: 0,
+    lastRenderedText: '',
+    lastRenderedHtml: '',
     accumulated: '',
     progressEntries: [],
     progressRounds: 0,

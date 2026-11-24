@@ -2,7 +2,7 @@
  * Tests for streaming.draft — sendOrEditDraft, finalizeDraft, DraftState lifecycle.
  *
  * Covers:
- * - Draft lifecycle: create (first call generates UUID) → update → finalize
+ * - Draft lifecycle: create (first call generates integer draft_id) → update → finalize
  * - Throttle gate: calls within DRAFT_THROTTLE_MS are skipped
  * - force=true bypasses the throttle
  * - 429 retry: honors retry_after, retries once, then silently gives up
@@ -74,13 +74,13 @@ describe('makeDraftState', () => {
 // ---------------------------------------------------------------------------
 
 describe('sendOrEditDraft — first call', () => {
-  it('generates a UUID draftId and sets isDraftMode on the first call', async () => {
+  it('generates an integer draftId and sets isDraftMode on the first call', async () => {
     const { ctx } = makeCtx();
     const state: DraftState = makeDraftState();
     await sendOrEditDraft(state, ctx, 100, 'Hello');
     expect(state.draftId).not.toBeNull();
-    expect(typeof state.draftId).toBe('string');
-    expect(state.draftId!.length).toBeGreaterThan(0);
+    expect(typeof state.draftId).toBe('number');
+    expect(state.draftId!).toBeGreaterThan(0);
     expect(state.isDraftMode).toBe(true);
   });
 
@@ -233,7 +233,7 @@ describe('sendOrEditDraft — 429 retry', () => {
 describe('finalizeDraft', () => {
   it('sends a sendMessage with HTML parse_mode to replace the draft', async () => {
     const { ctx, sendMessage } = makeCtx();
-    const state: DraftState = { draftId: 'uuid-1', lastDraftAt: Date.now(), isDraftMode: true };
+    const state: DraftState = { draftId: 42, lastDraftAt: Date.now(), isDraftMode: true };
     await finalizeDraft(state, ctx, 100, 'Final answer');
     expect(sendMessage).toHaveBeenCalledOnce();
     const [chatId, _text, extra] = sendMessage.mock.calls[0] as [number, string, { parse_mode?: string }];
@@ -243,7 +243,7 @@ describe('finalizeDraft', () => {
 
   it('clears isDraftMode and draftId after finalizing', async () => {
     const { ctx } = makeCtx();
-    const state: DraftState = { draftId: 'uuid-1', lastDraftAt: Date.now(), isDraftMode: true };
+    const state: DraftState = { draftId: 42, lastDraftAt: Date.now(), isDraftMode: true };
     await finalizeDraft(state, ctx, 100, 'Final answer');
     expect(state.isDraftMode).toBe(false);
     expect(state.draftId).toBeNull();
@@ -258,7 +258,7 @@ describe('finalizeDraft', () => {
 
   it('falls back to plain text on a 400 entity-parse error', async () => {
     const { ctx, sendMessage } = makeCtx();
-    const state: DraftState = { draftId: 'uuid-1', lastDraftAt: Date.now(), isDraftMode: true };
+    const state: DraftState = { draftId: 42, lastDraftAt: Date.now(), isDraftMode: true };
     let attempt = 0;
     sendMessage.mockImplementation(async (_cid: number, _text: string, extra?: { parse_mode?: string }) => {
       attempt++;
@@ -274,7 +274,7 @@ describe('finalizeDraft', () => {
 
   it('rethrows non-parse Telegram errors from finalizeDraft', async () => {
     const { ctx, sendMessage } = makeCtx();
-    const state: DraftState = { draftId: 'uuid-1', lastDraftAt: Date.now(), isDraftMode: true };
+    const state: DraftState = { draftId: 42, lastDraftAt: Date.now(), isDraftMode: true };
     const err = new TelegramError({ error_code: 403, description: 'Forbidden: bot was blocked by the user' });
     sendMessage.mockRejectedValue(err);
     await expect(finalizeDraft(state, ctx, 100, 'text')).rejects.toBe(err);

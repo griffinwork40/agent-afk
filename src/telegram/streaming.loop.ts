@@ -20,6 +20,7 @@ import {
   handlePaused, handleResumed, handleDone, handleError, deliverOverflow,
   type HandlerParams,
 } from './streaming.handlers.js';
+import { finalizeDraft } from './streaming.draft.js';
 import { handleProgressEvent } from './streaming.progress.js';
 import { routeFromCtx, sendOptions } from './route.js';
 import type { WatchdogState } from './streaming.watchdog.js';
@@ -86,9 +87,9 @@ export function updateWatchdogForChunk(
 ): void {
   if (event.chunk.type === 'tool_use_detail') {
     if (watchdog.inFlightTools.size === 0) watchdog.toolInFlightSince = Date.now();
-    watchdog.inFlightTools.add(event.chunk.toolUseId);
+    watchdog.inFlightTools.add(event.chunk['toolUseId']);
   } else if (event.chunk.type === 'tool_result') {
-    watchdog.inFlightTools.delete(event.chunk.toolUseId);
+    watchdog.inFlightTools.delete(event.chunk['toolUseId']);
     if (watchdog.inFlightTools.size === 0) watchdog.toolInFlightSince = null;
   }
 }
@@ -366,6 +367,18 @@ export async function runStreamLoop(params: {
   // event handled delivery above; any other exit (no terminal event, early break)
   // re-delivers everything as fresh messages so nothing is lost to a stale preview.
   // iter.return() is called by the outer finally in streaming.ts AFTER this block.
+
+  // Draft-mode non-terminal exit: state.sentMessage is null for private chats
+  // (no placeholder was sent), so the preview guard below is skipped. Finalize
+  // the draft directly so the user receives the partial answer.
+  if (!state.sawTerminalEvent && state.draftState?.isDraftMode) {
+    const text = state.answerText.trim() || finalBody();
+    if (text.trim()) {
+      await finalizeDraft(state.draftState, ctx, chatId, text);
+    }
+    return;
+  }
+
   const preview = state.sentMessage as Message.TextMessage | null;
   if (preview && !state.sawTerminalEvent) {
     const full =

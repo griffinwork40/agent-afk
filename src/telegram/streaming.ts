@@ -194,11 +194,6 @@ export async function streamResponse(
   });
   const finalBody = (): string => computeFinalBody({ accumulated: state.accumulated, progressEntries: state.progressEntries });
 
-  const handlerParams: HandlerParams = {
-    state, ctx, chatId, cleanFinal, livePreview, finalBody, clearProgressTimer,
-    renderActivityReceipt, onComplete: options.onComplete, logger,
-  };
-
   // Build the sendUpdate override for draft mode: wraps sendOrEditDraft so it
   // matches the (state, ctx, chatId, text, force?) signature of SendUpdateFn.
   const sendUpdate = isPrivateChat
@@ -210,6 +205,12 @@ export async function streamResponse(
         force = false,
       ) => sendOrEditDraft(draftState!, c, id, text, force)
     : undefined;
+
+  const handlerParams: HandlerParams = {
+    state, ctx, chatId, cleanFinal, livePreview, finalBody, clearProgressTimer,
+    renderActivityReceipt, onComplete: options.onComplete, logger,
+    sendUpdate,
+  };
 
   try {
     const stream = buildStream(session, content);
