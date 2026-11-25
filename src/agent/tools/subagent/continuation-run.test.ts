@@ -140,40 +140,43 @@ describe('D8 continuation through the agent executor', () => {
     const seen: Seen[] = [];
     installTransport(seen);
     const { registry, run, session } = await setup();
-    const first = await run({ prompt: 'initial task', max_tool_use_iterations: 5 });
-    const chainId = first.continuation!.chainId;
-    expect(first.content).toContain(`[continuation: chain_id=${chainId}`);
-    await registry.get(chainId)!.settling; // the link advances in post-delivery settling
-    expect(registry.get(chainId)!.latestChildId).toBeDefined();
+    try {
+      const first = await run({ prompt: 'initial task', max_tool_use_iterations: 5 });
+      const chainId = first.continuation!.chainId;
+      expect(first.content).toContain(`[continuation: chain_id=${chainId}`);
+      await registry.get(chainId)!.settling; // the link advances in post-delivery settling
+      expect(registry.get(chainId)!.latestChildId).toBeDefined();
 
-    const second = await run({ prompt: 'keep going', continuation_chain_id: chainId, max_tool_use_iterations: 7 });
-    expect(second.isError, second.content).not.toBe(true);
-    const s1 = seen[1]!;
-    expect(s1.resumeMessages?.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
-    expect(JSON.stringify(s1.resumeMessages)).toContain('"toolUseId":"tu-0"');
-    expect(s1.turn).toMatch(/^\[Continuation 1 of chain chain_[0-9a-f]+: your previous run ended \(tool_use_loop_capped\)\. You have 7 tool-use rounds for this run\.\]\n\nkeep going$/);
-    expect(s1.config.autoCompact).toBe(true);
-    expect(s1.config.maxToolUseIterations).toBe(7);
-    expect(seen[0]!.config.autoCompact).toBeUndefined();
-    expect(second.content).toContain(`[continuation: chain_id=${chainId}, rounds 12/150 used, continuations 1/2 used`);
-    expect(second.continuation!.chainId).toBe(chainId); // same chain, not a new mint
+      const second = await run({ prompt: 'keep going', continuation_chain_id: chainId, max_tool_use_iterations: 7 });
+      expect(second.isError, second.content).not.toBe(true);
+      const s1 = seen[1]!;
+      expect(s1.resumeMessages?.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+      expect(JSON.stringify(s1.resumeMessages)).toContain('"toolUseId":"tu-0"');
+      expect(s1.turn).toMatch(/^\[Continuation 1 of chain chain_[0-9a-f]+: your previous run ended \(tool_use_loop_capped\)\. You have 7 tool-use rounds for this run\.\]\n\nkeep going$/);
+      expect(s1.config.autoCompact).toBe(true);
+      expect(s1.config.maxToolUseIterations).toBe(7);
+      expect(seen[0]!.config.autoCompact).toBeUndefined();
+      expect(second.content).toContain(`[continuation: chain_id=${chainId}, rounds 12/150 used, continuations 1/2 used`);
+      expect(second.continuation!.chainId).toBe(chainId); // same chain, not a new mint
 
-    await run({ prompt: 'and more', continuation_chain_id: chainId, max_tool_use_iterations: 3 });
-    const s2 = seen[2]!;
-    const twoLink = JSON.stringify(s2.resumeMessages);
-    expect(twoLink).toContain('"toolUseId":"tu-0"'); // history from run 1
-    expect(twoLink).toContain('"toolUseId":"tu-1"'); // and run 2
-    expect(s2.resumeMessages).toHaveLength(8);
-    // No seed session is written: nothing chain-named appears where sessions are listed.
-    const sessions = existsSync(getSessionsDir()) ? readdirSync(getSessionsDir()) : [];
-    expect(sessions.filter((d) => d.startsWith('chain_'))).toEqual([]);
+      await run({ prompt: 'and more', continuation_chain_id: chainId, max_tool_use_iterations: 3 });
+      const s2 = seen[2]!;
+      const twoLink = JSON.stringify(s2.resumeMessages);
+      expect(twoLink).toContain('"toolUseId":"tu-0"'); // history from run 1
+      expect(twoLink).toContain('"toolUseId":"tu-1"'); // and run 2
+      expect(s2.resumeMessages).toHaveLength(8);
+      // No seed session is written: nothing chain-named appears where sessions are listed.
+      const sessions = existsSync(getSessionsDir()) ? readdirSync(getSessionsDir()) : [];
+      expect(sessions.filter((d) => d.startsWith('chain_'))).toEqual([]);
 
-    const refused = await run({ prompt: 'again', continuation_chain_id: chainId });
-    expect(refused.isError).toBe(true);
-    expect(refused.content).toContain('continuation limit reached (2/2)');
-    expect(seen).toHaveLength(3);
-    expect(registry.get(chainId)!.inFlight).toBe(false);
-    await session.close();
+      const refused = await run({ prompt: 'again', continuation_chain_id: chainId });
+      expect(refused.isError).toBe(true);
+      expect(refused.content).toContain('continuation limit reached (2/2)');
+      expect(seen).toHaveLength(3);
+      expect(registry.get(chainId)!.inFlight).toBe(false);
+    } finally {
+      await session.close();
+    }
   }, 20000);
 
   it('round limit: allowance clipped to the remainder, then refused', async () => {
@@ -181,27 +184,33 @@ describe('D8 continuation through the agent executor', () => {
     const seen: Seen[] = [];
     installTransport(seen);
     const { run, session } = await setup();
-    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
-    const chainId = first.continuation!.chainId;
-    await run({ prompt: 'more', continuation_chain_id: chainId, max_tool_use_iterations: 50 });
-    expect(seen[1]!.config.maxToolUseIterations).toBe(3);
-    const refused = await run({ prompt: 'more', continuation_chain_id: chainId });
-    expect(refused.content).toContain('aggregate round limit reached (8/8)');
-    await session.close();
+    try {
+      const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+      const chainId = first.continuation!.chainId;
+      await run({ prompt: 'more', continuation_chain_id: chainId, max_tool_use_iterations: 50 });
+      expect(seen[1]!.config.maxToolUseIterations).toBe(3);
+      const refused = await run({ prompt: 'more', continuation_chain_id: chainId });
+      expect(refused.content).toContain('aggregate round limit reached (8/8)');
+    } finally {
+      await session.close();
+    }
   }, 20000);
 
   it('override conflict and model-invented ids are refused before any fork', async () => {
     const seen: Seen[] = [];
     installTransport(seen);
     const { run, session } = await setup();
-    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
-    const chainId = first.continuation!.chainId;
-    const conflict = await run({ prompt: 'x', continuation_chain_id: chainId, model: 'haiku' });
-    expect(conflict.content).toContain('continuation inherits model from the chain');
-    const invented = await run({ prompt: 'x', continuation_chain_id: 'chain_deadbeef' });
-    expect(invented.content).toContain('unknown continuation chain');
-    expect(seen).toHaveLength(1);
-    await session.close();
+    try {
+      const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+      const chainId = first.continuation!.chainId;
+      const conflict = await run({ prompt: 'x', continuation_chain_id: chainId, model: 'haiku' });
+      expect(conflict.content).toContain('continuation inherits model from the chain');
+      const invented = await run({ prompt: 'x', continuation_chain_id: 'chain_deadbeef' });
+      expect(invented.content).toContain('unknown continuation chain');
+      expect(seen).toHaveLength(1);
+    } finally {
+      await session.close();
+    }
   }, 20000);
 
   it('drift: refused for a write-capable chain, allowed once the chain is read-only', async () => {
@@ -211,34 +220,40 @@ describe('D8 continuation through the agent executor', () => {
     const seen: Seen[] = [];
     installTransport(seen);
     const { run, registry, session } = await setup();
-    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5, cwd: repo });
-    const chainId = first.continuation!.chainId;
-    await registry.get(chainId)!.settling;
-    expect(registry.get(chainId)!.checkpoint?.git).toBe(true);
-    writeFileSync(join(repo, 'new.txt'), 'drift');
-    const refused = await run({ prompt: 'go', continuation_chain_id: chainId });
-    expect(refused.content).toContain('workspace drifted');
-    expect(refused.content).toContain('uncommitted changes');
-    registry.get(chainId)!.inputs.writeCapable = false; // read-only chains skip the check
-    const ok = await run({ prompt: 'go', continuation_chain_id: chainId });
-    expect(ok.isError, ok.content).not.toBe(true);
-    await session.close();
+    try {
+      const first = await run({ prompt: 'initial', max_tool_use_iterations: 5, cwd: repo });
+      const chainId = first.continuation!.chainId;
+      await registry.get(chainId)!.settling;
+      expect(registry.get(chainId)!.checkpoint?.git).toBe(true);
+      writeFileSync(join(repo, 'new.txt'), 'drift');
+      const refused = await run({ prompt: 'go', continuation_chain_id: chainId });
+      expect(refused.content).toContain('workspace drifted');
+      expect(refused.content).toContain('uncommitted changes');
+      registry.get(chainId)!.inputs.writeCapable = false; // read-only chains skip the check
+      const ok = await run({ prompt: 'go', continuation_chain_id: chainId });
+      expect(ok.isError, ok.content).not.toBe(true);
+    } finally {
+      await session.close();
+    }
   }, 20000);
 
   it('concurrent continuation: exactly one is admitted', async () => {
     const seen: Seen[] = [];
     installTransport(seen);
     const { run, session } = await setup();
-    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
-    const chainId = first.continuation!.chainId;
-    const [a, b] = await Promise.all([
-      run({ prompt: 'a', continuation_chain_id: chainId }),
-      run({ prompt: 'b', continuation_chain_id: chainId }),
-    ]);
-    const errors = [a, b].filter((r) => r.isError === true);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]!.content).toContain('still in flight');
-    await session.close();
+    try {
+      const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+      const chainId = first.continuation!.chainId;
+      const [a, b] = await Promise.all([
+        run({ prompt: 'a', continuation_chain_id: chainId }),
+        run({ prompt: 'b', continuation_chain_id: chainId }),
+      ]);
+      const errors = [a, b].filter((r) => r.isError === true);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]!.content).toContain('still in flight');
+    } finally {
+      await session.close();
+    }
   }, 20000);
 
   it('settling: a continuation issued right after the result waits for the slow journal flush, then succeeds with the full history', async () => {
@@ -284,17 +299,20 @@ describe('D8 continuation through the agent executor', () => {
     const seen: Seen[] = [];
     installTransport(seen);
     const { run, registry, session, wired } = await setup();
-    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
-    const chainId = first.continuation!.chainId;
-    vi.spyOn(wired.rootManager, 'forkSubagent').mockRejectedValueOnce(new Error('construction boom'));
-    const r = await run({ prompt: 'go', continuation_chain_id: chainId, max_tool_use_iterations: 4 });
-    expect(r.isError).toBe(true);
-    expect(r.content).toContain('construction boom');
-    const chain = registry.get(chainId)!;
-    expect(chain.inFlight).toBe(false);
-    expect(chain.continuations).toBe(0);
-    expect(chain.roundsCharged).toBe(5);
-    await session.close();
+    try {
+      const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+      const chainId = first.continuation!.chainId;
+      vi.spyOn(wired.rootManager, 'forkSubagent').mockRejectedValueOnce(new Error('construction boom'));
+      const r = await run({ prompt: 'go', continuation_chain_id: chainId, max_tool_use_iterations: 4 });
+      expect(r.isError).toBe(true);
+      expect(r.content).toContain('construction boom');
+      const chain = registry.get(chainId)!;
+      expect(chain.inFlight).toBe(false);
+      expect(chain.continuations).toBe(0);
+      expect(chain.roundsCharged).toBe(5);
+    } finally {
+      await session.close();
+    }
   }, 20000);
 
   it('abort mid-continuation clears in-flight and keeps the charge', async () => {
@@ -303,36 +321,42 @@ describe('D8 continuation through the agent executor', () => {
     const hold = new Promise<void>((r) => { release = r; });
     installTransport(seen);
     const { run, registry, session } = await setup();
-    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
-    const chainId = first.continuation!.chainId;
-    installTransport(seen, { hold });
-    const ac = new AbortController();
-    const pending = run({ prompt: 'go', continuation_chain_id: chainId, max_tool_use_iterations: 4 }, ac.signal);
-    await vi.waitFor(() => expect(registry.get(chainId)!.continuations).toBe(1));
-    ac.abort();
-    release();
-    await pending;
-    const chain = registry.get(chainId)!;
-    await chain.settling;
-    expect(chain.inFlight).toBe(false);
-    expect(chain.roundsCharged).toBe(9);
-    expect(chain.continuations).toBe(1);
-    await session.close();
+    try {
+      const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+      const chainId = first.continuation!.chainId;
+      installTransport(seen, { hold });
+      const ac = new AbortController();
+      const pending = run({ prompt: 'go', continuation_chain_id: chainId, max_tool_use_iterations: 4 }, ac.signal);
+      await vi.waitFor(() => expect(registry.get(chainId)!.continuations).toBe(1));
+      ac.abort();
+      release();
+      await pending;
+      const chain = registry.get(chainId)!;
+      await chain.settling;
+      expect(chain.inFlight).toBe(false);
+      expect(chain.roundsCharged).toBe(9);
+      expect(chain.continuations).toBe(1);
+    } finally {
+      await session.close();
+    }
   }, 20000);
 
   it('D4: an uncapped initial run (no max_tool_use_iterations) is charged its runtime-counted rounds', async () => {
     const seen: Seen[] = [];
     installTransport(seen, { progressRounds: 4 });
     const { registry, run, session } = await setup();
-    const first = await run({ prompt: 'uncapped work' });
-    expect(first.isError, first.content).not.toBe(true);
-    expect(seen[0]!.config.maxToolUseIterations ?? 0).toBe(0); // genuinely uncapped
-    const chain = registry.get(first.continuation!.chainId)!;
-    expect(chain.initialUncharged).toBe(false);
-    expect(chain.roundsCharged).toBe(4);
-    // Charge-before-delivery end to end: the DELIVERED result already carries the runtime count.
-    expect(first.continuation!.roundsCharged).toBe(4);
-    await session.close();
+    try {
+      const first = await run({ prompt: 'uncapped work' });
+      expect(first.isError, first.content).not.toBe(true);
+      expect(seen[0]!.config.maxToolUseIterations ?? 0).toBe(0); // genuinely uncapped
+      const chain = registry.get(first.continuation!.chainId)!;
+      expect(chain.initialUncharged).toBe(false);
+      expect(chain.roundsCharged).toBe(4);
+      // Charge-before-delivery end to end: the DELIVERED result already carries the runtime count.
+      expect(first.continuation!.roundsCharged).toBe(4);
+    } finally {
+      await session.close();
+    }
   }, 20000);
 
   it('background dispatch with a continuation registry still pipes progress into the BackgroundAgentRegistry', async () => {
@@ -340,15 +364,18 @@ describe('D8 continuation through the agent executor', () => {
     installTransport(seen);
     const bg = new BackgroundAgentRegistry();
     const { run, session } = await setup({ backgroundRegistry: bg });
-    const write = vi.spyOn(BgJobLogWriter.prototype, 'write');
-    const r = await run({ prompt: 'bg ordinary', mode: 'background' });
-    expect(r.isError, r.content).not.toBe(true);
-    const job = bg.list()[0]!;
-    await vi.waitFor(() => expect(bg.get(job.jobId)!.status).not.toBe('running'), { timeout: 5000 });
-    // The instrumented runToResult must forward runInBackground's sink override:
-    // every progress event reaches the registry's onProgress -> job log writer.
-    expect(write).toHaveBeenCalled();
-    await session.close();
+    try {
+      const write = vi.spyOn(BgJobLogWriter.prototype, 'write');
+      const r = await run({ prompt: 'bg ordinary', mode: 'background' });
+      expect(r.isError, r.content).not.toBe(true);
+      const job = bg.list()[0]!;
+      await vi.waitFor(() => expect(bg.get(job.jobId)!.status).not.toBe('running'), { timeout: 5000 });
+      // The instrumented runToResult must forward runInBackground's sink override:
+      // every progress event reaches the registry's onProgress -> job log writer.
+      expect(write).toHaveBeenCalled();
+    } finally {
+      await session.close();
+    }
   }, 20000);
 
   it('background continuation updates the same chain on terminal', async () => {
@@ -356,63 +383,75 @@ describe('D8 continuation through the agent executor', () => {
     installTransport(seen);
     const bg = new BackgroundAgentRegistry();
     const { run, registry, session } = await setup({ backgroundRegistry: bg });
-    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
-    const chainId = first.continuation!.chainId;
-    await registry.get(chainId)!.settling;
-    const before = registry.get(chainId)!.latestChildId;
-    expect(before).toBeDefined();
-    const r = await run({ prompt: 'bg go', continuation_chain_id: chainId, mode: 'background' });
-    expect(r.isError, r.content).not.toBe(true);
-    await vi.waitFor(() => expect(registry.get(chainId)!.inFlight).toBe(false), { timeout: 5000 });
-    const chain = registry.get(chainId)!;
-    expect(chain.latestChildId).not.toBe(before);
-    expect(chain.continuations).toBe(1);
-    await session.close();
+    try {
+      const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+      const chainId = first.continuation!.chainId;
+      await registry.get(chainId)!.settling;
+      const before = registry.get(chainId)!.latestChildId;
+      expect(before).toBeDefined();
+      const r = await run({ prompt: 'bg go', continuation_chain_id: chainId, mode: 'background' });
+      expect(r.isError, r.content).not.toBe(true);
+      await vi.waitFor(() => expect(registry.get(chainId)!.inFlight).toBe(false), { timeout: 5000 });
+      const chain = registry.get(chainId)!;
+      expect(chain.latestChildId).not.toBe(before);
+      expect(chain.continuations).toBe(1);
+    } finally {
+      await session.close();
+    }
   }, 20000);
 
   it('stuck-chain: an attachment error after the fork clears in-flight', async () => {
     const seen: Seen[] = [];
     installTransport(seen);
     const { run, registry, session } = await setup();
-    const r = await run({ prompt: 'initial', attachments: [join(tmpdir(), 'afk-missing-attachment.png')] });
-    expect(r.isError).toBe(true);
-    const chains = [...(registry as unknown as { chains: Map<string, { inFlight: boolean }> }).chains.values()];
-    expect(chains.length).toBe(1);
-    expect(chains[0]!.inFlight).toBe(false);
-    await session.close();
+    try {
+      const r = await run({ prompt: 'initial', attachments: [join(tmpdir(), 'afk-missing-attachment.png')] });
+      expect(r.isError).toBe(true);
+      const chains = [...(registry as unknown as { chains: Map<string, { inFlight: boolean }> }).chains.values()];
+      expect(chains.length).toBe(1);
+      expect(chains[0]!.inFlight).toBe(false);
+    } finally {
+      await session.close();
+    }
   }, 20000);
 
   it('stuck-chain: background dispatch with no registry clears in-flight', async () => {
     const seen: Seen[] = [];
     installTransport(seen);
     const { run, registry, session } = await setup();
-    const r = await run({ prompt: 'initial', mode: 'background' });
-    expect(r.isError).toBe(true);
-    const chains = [...(registry as unknown as { chains: Map<string, { inFlight: boolean }> }).chains.values()];
-    expect(chains.every((c) => !c.inFlight)).toBe(true);
-    await session.close();
+    try {
+      const r = await run({ prompt: 'initial', mode: 'background' });
+      expect(r.isError).toBe(true);
+      const chains = [...(registry as unknown as { chains: Map<string, { inFlight: boolean }> }).chains.values()];
+      expect(chains.every((c) => !c.inFlight)).toBe(true);
+    } finally {
+      await session.close();
+    }
   }, 20000);
 
   it('non-owner chain is refused before any fork; worktree-isolated chains are now admitted (#4266)', async () => {
     const seen: Seen[] = [];
     installTransport(seen);
     const { run, registry, session } = await setup();
-    const foreign = registry.createChain({ owner: 'someone-else', rootSessionId: 'x', roundCap: 5, inputs: { writeCapable: false } });
-    registry.recordTerminal(foreign.chainId, { childId: 'c', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: 'capped' });
-    expect((await run({ prompt: 'x', continuation_chain_id: foreign.chainId })).content).toContain('owned by another actor');
-    // Worktree-isolated chains are no longer refused at the override check — they
-    // are admitted and proceed to the journal-seed step (which fails here because
-    // there is no real journal for childId 'c', so it safely refuses at seeding).
-    const owner = registry.rootActor;
-    const iso = registry.createChain({ owner, rootSessionId: 'x', roundCap: 5, inputs: { writeCapable: true, isolation: 'worktree' } });
-    registry.recordTerminal(iso.chainId, { childId: 'c', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: 'capped' });
-    const isoResult = await run({ prompt: 'x', continuation_chain_id: iso.chainId });
-    // Must not be refused with the old v1 message.
-    expect(isoResult.content).not.toContain('`isolation: "worktree"` chain is not supported');
-    // Seeding fails because the mock child wrote no real journal.
-    expect(isoResult.content).toContain('Nothing was forked');
-    expect(seen).toHaveLength(0);
-    await session.close();
+    try {
+      const foreign = registry.createChain({ owner: 'someone-else', rootSessionId: 'x', roundCap: 5, inputs: { writeCapable: false } });
+      registry.recordTerminal(foreign.chainId, { childId: 'c', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: 'capped' });
+      expect((await run({ prompt: 'x', continuation_chain_id: foreign.chainId })).content).toContain('owned by another actor');
+      // Worktree-isolated chains are no longer refused at the override check — they
+      // are admitted and proceed to the journal-seed step (which fails here because
+      // there is no real journal for childId 'c', so it safely refuses at seeding).
+      const owner = registry.rootActor;
+      const iso = registry.createChain({ owner, rootSessionId: 'x', roundCap: 5, inputs: { writeCapable: true, isolation: 'worktree' } });
+      registry.recordTerminal(iso.chainId, { childId: 'c', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: 'capped' });
+      const isoResult = await run({ prompt: 'x', continuation_chain_id: iso.chainId });
+      // Must not be refused with the old v1 message.
+      expect(isoResult.content).not.toContain('`isolation: "worktree"` chain is not supported');
+      // Seeding fails because the mock child wrote no real journal.
+      expect(isoResult.content).toContain('Nothing was forked');
+      expect(seen).toHaveLength(0);
+    } finally {
+      await session.close();
+    }
   }, 20000);
 
   it('stream-cut retry: a continuation is never re-dispatched (no second charge, count, or fork)', async () => {
@@ -421,23 +460,26 @@ describe('D8 continuation through the agent executor', () => {
     const control = { n: 0 };
     installTransport(seen, { cutFrom: 0, builds: control });
     const { run, registry, session } = await setup();
-    const cut = await run({ prompt: 'initial', agent_type: 'Explore', max_tool_use_iterations: 5 });
-    expect(cut.isError).toBe(true);
-    expect(control.n).toBe(2);
+    try {
+      const cut = await run({ prompt: 'initial', agent_type: 'Explore', max_tool_use_iterations: 5 });
+      expect(cut.isError).toBe(true);
+      expect(control.n).toBe(2);
 
-    const builds = { n: 0 };
-    installTransport(seen, { cutFrom: 1, builds });
-    const first = await run({ prompt: 'initial', agent_type: 'Explore', max_tool_use_iterations: 5 });
-    const chainId = first.continuation!.chainId;
-    const r = await run({ prompt: 'go', continuation_chain_id: chainId, max_tool_use_iterations: 4 });
-    expect(r.isError).toBe(true);
-    expect(r.incompleteReason).toBe('stream_incomplete');
-    expect(builds.n).toBe(2); // initial + ONE continuation fork, no re-dispatch
-    const chain = registry.get(chainId)!;
-    expect(chain.continuations).toBe(1);
-    expect(chain.roundsCharged).toBe(9);
-    expect(chain.inFlight).toBe(false);
-    await session.close();
+      const builds = { n: 0 };
+      installTransport(seen, { cutFrom: 1, builds });
+      const first = await run({ prompt: 'initial', agent_type: 'Explore', max_tool_use_iterations: 5 });
+      const chainId = first.continuation!.chainId;
+      const r = await run({ prompt: 'go', continuation_chain_id: chainId, max_tool_use_iterations: 4 });
+      expect(r.isError).toBe(true);
+      expect(r.incompleteReason).toBe('stream_incomplete');
+      expect(builds.n).toBe(2); // initial + ONE continuation fork, no re-dispatch
+      const chain = registry.get(chainId)!;
+      expect(chain.continuations).toBe(1);
+      expect(chain.roundsCharged).toBe(9);
+      expect(chain.inFlight).toBe(false);
+    } finally {
+      await session.close();
+    }
   }, 20000);
 
   it('openai-compatible continuation: resumeMessages honored, dangling tool call answered', async () => {
@@ -479,29 +521,32 @@ describe('D8 continuation through the agent executor', () => {
       } };
     };
     const { run, session } = await setup();
-    const first = await run({ prompt: 'initial', model: 'gpt-4o-mini', max_tool_use_iterations: 5 });
-    const chainId = first.continuation!.chainId;
-    const r = await run({ prompt: 'keep going', continuation_chain_id: chainId });
-    expect(r.isError, r.content).not.toBe(true);
-    expect(r.content).toContain('resumed ok');
-    expect(requests).toHaveLength(1);
-    const msgs = requests[0]!;
-    // resumeMessages honored: the prior link's turn precedes the new prompt.
-    const flat = JSON.stringify(msgs);
-    expect(flat).toContain('initial');
-    expect(flat).toContain('keep going');
-    const calls = msgs.flatMap((m) => (m.role === 'assistant' ? (m.tool_calls ?? []).map((c) => c.id) : []));
-    expect(calls).toContain('call_dangling');
-    for (const id of calls) {
-      const answer = msgs.find((m) => m.role === 'tool' && m.tool_call_id === id);
-      expect(answer, `tool_call ${id} has no role:'tool' answer`).toBeDefined();
+    try {
+      const first = await run({ prompt: 'initial', model: 'gpt-4o-mini', max_tool_use_iterations: 5 });
+      const chainId = first.continuation!.chainId;
+      const r = await run({ prompt: 'keep going', continuation_chain_id: chainId });
+      expect(r.isError, r.content).not.toBe(true);
+      expect(r.content).toContain('resumed ok');
+      expect(requests).toHaveLength(1);
+      const msgs = requests[0]!;
+      // resumeMessages honored: the prior link's turn precedes the new prompt.
+      const flat = JSON.stringify(msgs);
+      expect(flat).toContain('initial');
+      expect(flat).toContain('keep going');
+      const calls = msgs.flatMap((m) => (m.role === 'assistant' ? (m.tool_calls ?? []).map((c) => c.id) : []));
+      expect(calls).toContain('call_dangling');
+      for (const id of calls) {
+        const answer = msgs.find((m) => m.role === 'tool' && m.tool_call_id === id);
+        expect(answer, `tool_call ${id} has no role:'tool' answer`).toBeDefined();
+      }
+      const dangling = msgs.find((m) => m.role === 'tool' && m.tool_call_id === 'call_dangling')!;
+      expect(dangling.content).toBe(INTERRUPTED_TOOL_RESULT);
+      // Ordering: the synthetic answer sits right after its assistant message.
+      const ai = msgs.findIndex((m) => m.role === 'assistant' && (m.tool_calls ?? []).some((c) => c.id === 'call_dangling'));
+      expect(msgs[ai + 1]).toBe(dangling);
+    } finally {
+      await session.close();
     }
-    const dangling = msgs.find((m) => m.role === 'tool' && m.tool_call_id === 'call_dangling')!;
-    expect(dangling.content).toBe(INTERRUPTED_TOOL_RESULT);
-    // Ordering: the synthetic answer sits right after its assistant message.
-    const ai = msgs.findIndex((m) => m.role === 'assistant' && (m.tool_calls ?? []).some((c) => c.id === 'call_dangling'));
-    expect(msgs[ai + 1]).toBe(dangling);
-    await session.close();
   }, 20000);
 
   it('D10: the continuation started event carries chainId / continuationOf / continuationIndex', async () => {
@@ -509,18 +554,21 @@ describe('D8 continuation through the agent executor', () => {
     installTransport(seen);
     const writer = new InMemoryTraceWriter();
     const { run, registry, session } = await setup({ traceWriter: writer });
-    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
-    const chainId = first.continuation!.chainId;
-    await registry.get(chainId)!.settling;
-    const prev = registry.get(chainId)!.latestChildId;
-    expect(prev).toBeDefined();
-    await run({ prompt: 'go', continuation_chain_id: chainId });
-    const started = writer.events.filter((e) => e.kind === 'subagent_lifecycle' && (e.payload as { transition: string }).transition === 'started')
-      .map((e) => e.payload as { chainId?: string; continuationOf?: string; continuationIndex?: number });
-    expect(started).toHaveLength(2);
-    expect(started[0]!.chainId).toBeUndefined();
-    expect(started[1]).toMatchObject({ chainId, continuationOf: prev, continuationIndex: 1 });
-    await session.close();
+    try {
+      const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+      const chainId = first.continuation!.chainId;
+      await registry.get(chainId)!.settling;
+      const prev = registry.get(chainId)!.latestChildId;
+      expect(prev).toBeDefined();
+      await run({ prompt: 'go', continuation_chain_id: chainId });
+      const started = writer.events.filter((e) => e.kind === 'subagent_lifecycle' && (e.payload as { transition: string }).transition === 'started')
+        .map((e) => e.payload as { chainId?: string; continuationOf?: string; continuationIndex?: number });
+      expect(started).toHaveLength(2);
+      expect(started[0]!.chainId).toBeUndefined();
+      expect(started[1]).toMatchObject({ chainId, continuationOf: prev, continuationIndex: 1 });
+    } finally {
+      await session.close();
+    }
   }, 20000);
 });
 
@@ -548,34 +596,40 @@ describe('surface child gate on continuation links', () => {
     const seen: Seen[] = [];
     const real = gatedBuilds(seen);
     const { run, session } = await setup({ childCanUseTool });
-    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5, id_prefix: 'chain-root' });
-    const chainId = first.continuation!.chainId;
-    const second = await run({ prompt: 'keep going', continuation_chain_id: chainId, max_tool_use_iterations: 5, id_prefix: 'link-2' });
-    expect(second.isError, second.content).not.toBe(true);
-    expect(real).toHaveLength(2);
-    expect(origins.map((o) => o.label)).toEqual(['chain-root', 'link-2']);
-    expect(origins[1]).toMatchObject({ route: 'agent', depth: 1 });
-    const dir = mkdtempSync(join(tmpdir(), 'afk-cont-gate-'));
-    const denied = await writeVia(real[1]!, dir);
-    expect(denied.failureClass).toBe('permission-denied');
-    expect(existsSync(join(dir, 'f.txt'))).toBe(false);
-    for (const p of real) p.close?.();
-    await session.close();
+    try {
+      const first = await run({ prompt: 'initial', max_tool_use_iterations: 5, id_prefix: 'chain-root' });
+      const chainId = first.continuation!.chainId;
+      const second = await run({ prompt: 'keep going', continuation_chain_id: chainId, max_tool_use_iterations: 5, id_prefix: 'link-2' });
+      expect(second.isError, second.content).not.toBe(true);
+      expect(real).toHaveLength(2);
+      expect(origins.map((o) => o.label)).toEqual(['chain-root', 'link-2']);
+      expect(origins[1]).toMatchObject({ route: 'agent', depth: 1 });
+      const dir = mkdtempSync(join(tmpdir(), 'afk-cont-gate-'));
+      const denied = await writeVia(real[1]!, dir);
+      expect(denied.failureClass).toBe('permission-denied');
+      expect(existsSync(join(dir, 'f.txt'))).toBe(false);
+      for (const p of real) p.close?.();
+    } finally {
+      await session.close();
+    }
   }, 20000);
 
   it('absent: continuation children carry no gate and write normally', async () => {
     const seen: Seen[] = [];
     const real = gatedBuilds(seen);
     const { run, session } = await setup();
-    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
-    await run({ prompt: 'keep going', continuation_chain_id: first.continuation!.chainId, max_tool_use_iterations: 5 });
-    expect(real).toHaveLength(2);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((real[1] as any).canUseTool).toBeUndefined();
-    const dir = mkdtempSync(join(tmpdir(), 'afk-cont-nogate-'));
-    expect((await writeVia(real[1]!, dir)).isError).toBeFalsy();
-    expect(existsSync(join(dir, 'f.txt'))).toBe(true);
-    for (const p of real) p.close?.();
-    await session.close();
+    try {
+      const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+      await run({ prompt: 'keep going', continuation_chain_id: first.continuation!.chainId, max_tool_use_iterations: 5 });
+      expect(real).toHaveLength(2);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((real[1] as any).canUseTool).toBeUndefined();
+      const dir = mkdtempSync(join(tmpdir(), 'afk-cont-nogate-'));
+      expect((await writeVia(real[1]!, dir)).isError).toBeFalsy();
+      expect(existsSync(join(dir, 'f.txt'))).toBe(true);
+      for (const p of real) p.close?.();
+    } finally {
+      await session.close();
+    }
   }, 20000);
 });
