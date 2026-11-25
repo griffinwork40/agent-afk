@@ -84,6 +84,12 @@ export interface ProviderRouterDeps {
   resolveApiKey: (model: string | undefined) => string | undefined;
   /** Raw configured main-session fallback model (`models.fallback`), unresolved; omit to disable. */
   getFallbackModel?: () => string | undefined;
+  /**
+   * Awaited before an inner provider is built for `model`, so a credential
+   * tier that needs async work (the stored Claude Code login refresh) is ready
+   * before the synchronous `resolveApiKey` read. Must never throw.
+   */
+  primeCredential?: (model: string | undefined) => Promise<void>;
 }
 
 export interface ProviderRouterArgs {
@@ -331,6 +337,7 @@ export class ProviderRouter implements ProviderQuery {
   private async *lane(): AsyncGenerator<ProviderEvent, void, unknown> {
     try {
       // Construct the first inner and surface its session.init to the session.
+      await this.deps.primeCredential?.(this.currentModel);
       this.active = this.buildInner(this.currentModel, /* seed */ false);
       this.activeModel = this.currentModel;
       yield* this.driveUntilInit(/* swallow */ false);
@@ -362,6 +369,7 @@ export class ProviderRouter implements ProviderQuery {
         if (needSwap) {
           const live = this.active?.query.journalSnapshot?.(); // before close: the live conversation
           await this.closeActive();
+          await this.deps.primeCredential?.(this.currentModel);
           this.active = this.buildInner(this.currentModel, /* seed */ true, live);
           debugLog(`🔀 ProviderRouter: switched inner provider → ${this.active.family} (model=${this.currentModel})`);
           // A rebuild is otherwise invisible to the model (init swallowed, history

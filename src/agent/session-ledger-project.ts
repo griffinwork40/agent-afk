@@ -101,18 +101,17 @@ export type LedgerPayload =
    * Other notice kinds (truncation, refusal, fast-tier) remain skipped.
    */
   | { kind: 'model_fallback'; from: string; to: string; reason: string; text: string }
-  // Invariant: the three AFK remote-control records below carry the
-  // cross-process elicitation/abort protocol (REPL session <-> Telegram daemon)
-  // over the same ledger file. `elicitation` is written by the REPL when the
-  // agent asks a question while AFK; `elicitation_response` and `abort_request`
-  // are written BACK by the daemon and MUST carry a per-session HMAC (see
-  // afk-channel.ts) — the REPL refuses any whose signature does not verify, so a
-  // stray or cross-session write can never resolve a question or abort a turn.
-  /** AFK: the agent asked a question; `reqId` correlates the response. */
+  // The three AFK remote-control record kinds below defined the
+  // cross-process elicitation/abort protocol (REPL session <-> Telegram daemon).
+  // The REPL-side channel (afk-ledger-channel.ts) and the /afk toggle that armed
+  // it were removed in #5165/#5189; these record kinds remain in the union so
+  // existing ledger files can still be parsed without error. Re-arming the
+  // channel would restore the write-back path in src/telegram/watch.ts.
+  /** AFK (reserved): the agent asked a question; `reqId` correlates the response. */
   | { kind: 'elicitation'; reqId: string; request: ElicitationRequest }
-  /** AFK: an answer to a prior `elicitation`, signed by the daemon. */
+  /** AFK (reserved): an answer to a prior `elicitation`, signed by the daemon. */
   | { kind: 'elicitation_response'; reqId: string; result: ElicitationResult; hmac: string }
-  /** AFK: a signed request to abort the running turn. */
+  /** AFK (reserved): a signed request to abort the running turn. */
   | { kind: 'abort_request'; nonce: string; hmac: string }
   /** Terminal record: the hosting process closed the session. */
   | { kind: 'closed'; reason?: string };

@@ -10,7 +10,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { FsOps } from '../tty-trace.js';
-import { installTtyTrace, uninstallTtyTrace } from '../tty-trace.js';
+import { installTtyTrace, uninstallTtyTrace, pauseTtyTrace, resumeTtyTrace } from '../tty-trace.js';
 
 // ── Fake FsOps ────────────────────────────────────────────────────────────────
 
@@ -459,5 +459,93 @@ describe('tty-trace', () => {
     expect(openedPath).not.toContain('//');
     expect(openedPath).toMatch(/afk-tty\.cast$/);
     expect(openedPath).not.toMatch(/^~\//);
+  });
+});
+
+// ── pause / resume ────────────────────────────────────────────────────────────
+
+describe('tty-trace pause/resume', () => {
+  it('is a no-op (never throws) when no recorder is installed', () => {
+    expect(() => pauseTtyTrace()).not.toThrow();
+    expect(() => resumeTtyTrace()).not.toThrow();
+  });
+
+  it('still passes output through to the terminal while paused', () => {
+    const fs = makeFakeFsOps();
+    const terminal = vi.fn().mockReturnValue(true);
+    process.stdout.write = terminal as unknown as typeof process.stdout.write;
+    installTtyTrace(fs);
+    pauseTtyTrace();
+    process.stdout.write('live output');
+    expect(terminal).toHaveBeenCalledTimes(1);
+    expect(terminal.mock.calls[0]?.[0]).toBe('live output');
+    resumeTtyTrace();
+  });
+
+  it('omits paused output from the cast and records it again after resume', () => {
+    const fs = makeFakeFsOps();
+    installTtyTrace(fs);
+    pauseTtyTrace();
+    process.stdout.write('secret-from-others');
+    resumeTtyTrace();
+    process.stdout.write('after-resume');
+    const all = fs.lines.join('');
+    expect(all).not.toContain('secret-from-others');
+    expect(all).toContain('after-resume');
+  });
+
+  it('writes a visible marker only on the first pause per install', () => {
+    const fs = makeFakeFsOps();
+    installTtyTrace(fs);
+    pauseTtyTrace();
+    resumeTtyTrace();
+    pauseTtyTrace();
+    resumeTtyTrace();
+    const markers = fs.lines.filter((l) => l.includes('output omitted for a private view'));
+    expect(markers.length).toBe(1);
+  });
+
+  it('keeps recording paused until the outermost resume (nesting-safe)', () => {
+    const fs = makeFakeFsOps();
+    installTtyTrace(fs);
+    pauseTtyTrace();
+    pauseTtyTrace();
+    resumeTtyTrace();
+    process.stdout.write('still-paused');
+    expect(fs.lines.join('')).not.toContain('still-paused');
+    resumeTtyTrace();
+    process.stdout.write('now-recording');
+    expect(fs.lines.join('')).toContain('now-recording');
+  });
+
+  it('ignores extra resume calls without going negative', () => {
+    const fs = makeFakeFsOps();
+    installTtyTrace(fs);
+    resumeTtyTrace();
+    resumeTtyTrace();
+    pauseTtyTrace();
+    process.stdout.write('paused-once');
+    expect(fs.lines.join('')).not.toContain('paused-once');
+    resumeTtyTrace();
+  });
+
+  it('clears pause state on uninstall so a reinstall starts recording', () => {
+    const fs = makeFakeFsOps();
+    installTtyTrace(fs);
+    pauseTtyTrace();
+    uninstallTtyTrace();
+    const fs2 = makeFakeFsOps();
+    installTtyTrace(fs2);
+    process.stdout.write('fresh');
+    expect(fs2.lines.join('')).toContain('fresh');
+    expect(fs2.lines.join('')).not.toContain('output omitted for a private view');
+  });
+
+  it('never throws when the recorder is disabled by a write error', () => {
+    const fs = makeFakeFsOps();
+    installTtyTrace(fs);
+    fs.throwOnWrite = true;
+    expect(() => pauseTtyTrace()).not.toThrow();
+    expect(() => resumeTtyTrace()).not.toThrow();
   });
 });

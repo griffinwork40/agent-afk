@@ -40,6 +40,7 @@ jobs:
       - docs
       - test-dashboard
       - publish-bundle
+      - bench-harbor
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -838,3 +839,33 @@ jobs:
             exit 1
           fi
           echo "Smoke test passed."
+
+  bench-harbor:
+    name: Harbor bench pytest suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Install pinned harness
+        run: |
+          HARBOR_HASH=$(python -m pip download --no-deps 'harbor==0.23.0' \
+            -d "$RUNNER_TEMP/harbor-dl" -q \
+            && python -m pip hash "$RUNNER_TEMP/harbor-dl"/harbor-*.whl \
+            | grep sha256 | awk '{print $1}')
+          EXPECTED="--hash=sha256:8747400dbb2a5e2298e1338e17e88eba38433c0433fd700f34d1a9021bba5c37"
+          if [ "$HARBOR_HASH" != "$EXPECTED" ]; then
+            echo "::error::harbor==0.23.0 wheel hash mismatch: got $HARBOR_HASH" >&2
+            exit 1
+          fi
+          python -m pip install -r bench/harbor/requirements-harness.txt
+          python -m pip install pytest
+
+      - name: Run bench/harbor pytest suite
+        run: python -m pytest bench/harbor/ -q

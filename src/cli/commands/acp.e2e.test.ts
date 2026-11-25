@@ -64,7 +64,7 @@ function rowsFor(file: string): Row[] {
 
 describe('ACP golden transcripts against the real server (A1/A2/A3/A4 integration)', () => {
   it('has exactly one independent internal script for every frozen transcript', () => {
-    expect(files).toHaveLength(20);
+    expect(files).toHaveLength(12);
     for (const file of files) expect(scriptFor(file.replace('.ndjson', ''), root)).toBeDefined();
   });
   for (const file of files) {
@@ -83,11 +83,7 @@ describe('ACP golden transcripts against the real server (A1/A2/A3/A4 integratio
       if (stem === 'session-cwd-outside-launch') vi.mocked(process.cwd).mockReturnValue(launchElsewhere());
       await replayGolden(connect(), rowsFor(file), root, stem);
       expect(script.executed, `${stem}: only approved tools execute`).toEqual(
-        stem === 'child-approval-allow' ? ['tool-1', 'child:tool-c1'] :
-        stem === 'child-approval-reject' || stem === 'read-outside-cwd-asked' ? ['tool-1'] :
-        stem === 'permission-reject' || stem === 'cancel-during-permission' ? [] :
-          stem === 'permission-allow-always-then-skip' || stem === 'grant-git-internals-asked' ? ['tool-1', 'tool-2'] :
-            stem.startsWith('tool-') || stem === 'permission-allow-once' ? ['tool-1'] : [],
+        stem.startsWith('tool-') ? ['tool-1'] : [],
       );
       // Replay may construct a provider but must never execute historical calls.
       if (stem === 'load-replay' || stem === 'load-live-session') expect(script.asked).toEqual([]);
@@ -122,17 +118,5 @@ describe('A6 harness self-checks (independent of migration implementation)', () 
     expect(messages?.[2]?.content[0]).toMatchObject({ type: 'tool_result', toolUseId: 'tool-1' });
   });
 
-  it('fake tools consult canUseTool and cannot run or emit diffs after denial', async () => {
-    const script = scriptFor('tool-edit-diff', root);
-    const canUseTool = vi.fn(async () => ({ behavior: 'deny' as const, message: 'Permission denied: rejected' }));
-    const session = new ScriptedSession({ model: 'sonnet', maxTurns: 10, cwd: root, canUseTool }, script);
-    const events = [];
-    for await (const event of session.sendMessageStream('Replace old with new in a.txt')) events.push(event);
-    expect(canUseTool).toHaveBeenCalledWith('edit_file', expect.objectContaining({ old_string: 'old' }),
-      expect.objectContaining({ toolUseID: 'tool-1', signal: expect.any(AbortSignal) }));
-    expect(script.executed).toEqual([]);
-    expect(events).toContainEqual({ type: 'chunk', chunk: { type: 'tool_result', toolUseId: 'tool-1',
-      content: 'Permission denied: rejected', isError: true } });
-    expect(events.some(event => event.type === 'chunk' && event.chunk.type === 'tool_diff')).toBe(false);
-  });
+  // Permission bridge removed: canUseTool self-check no longer applies.
 });

@@ -155,6 +155,12 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
   // is already in the Phase-1 provider, so Phase 2 must not rebuild for it:
   // doing so ran `provider.query()` twice per session (land round 3, #4069).
   const phase1Manager = opts.getConfig().mcpManager;
+  // A failed start reaches output-stream subscribers as an `error` event (send
+  // paths report it via SessionStateManager.getInitializationError), so a host
+  // that never calls waitForInitialization() still learns why. No-op once closed.
+  opts.stateManager.waitForInitialization().catch((err: unknown) => {
+    opts.pushSidebandEvent({ type: 'error', error: ensureError(err) });
+  });
   return opts.mcpInitPromise.then(
     async () => {
       // Item 3: skip Phase-2 provider rebuild if session was closed while MCP
