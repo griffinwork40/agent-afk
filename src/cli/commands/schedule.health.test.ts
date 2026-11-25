@@ -143,6 +143,23 @@ describe('fixture-backed schedule health and list', () => {
     expect(output()).not.toContain(id);
     expect(output()).toContain('All enabled tasks healthy.');
   });
+  it('disabled tasks are filtered out when a healthy enabled task is also present', async () => {
+    const enabledId = task();
+    const disabledId = task();
+    // mark only the second task disabled; it has failures that must not trigger unhealthy
+    writeFileSync(getSchedulesPath(), JSON.stringify(loadSchedules().map((s) =>
+      s.id === disabledId ? { ...s, enabled: false } : s)));
+    fixture([
+      record(enabledId, 'success', 1),
+      record(disabledId, 'error', 2),
+      record(disabledId, 'error', 3),
+      record(disabledId, 'error', 4),
+    ]);
+    await command('health');
+    expect(process.exitCode).toBeUndefined();
+    expect(output()).not.toContain(disabledId);
+    expect(output()).toContain('All enabled tasks healthy.');
+  });
 
   it('no runs is not unhealthy; a success establishes health', async () => {
     const id = task(); await command('health');
