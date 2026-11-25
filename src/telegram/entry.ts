@@ -36,7 +36,7 @@ import { planTelegramCredential, applyTelegramCredentialPlan } from './credentia
 import { preloadClaudeKeychainOAuth, loadAnthropicCredential } from '../agent/auth/credential-resolver.js';
 import { readDiskVersion, UNKNOWN_VERSION } from './daemon-version.js';
 import { createTelegramSessionFactory } from './create-session.js';
-import { writeServiceStartupSidecar } from '../service/version-skew.js';
+import { announceTelegramStartup } from './entry.startup.js';
 import { startStatsTicker } from './stats-ticker.js';
 import { pushIfConfigured } from './push.js';
 import { installCrashNotifier } from '../utils/crash-notifier.js';
@@ -71,20 +71,6 @@ export function _resetCrashHandlersForTest(): void {
 export function installCrashHandlers(): void {
   if (_crashHandle !== undefined) return;
   _crashHandle = installCrashNotifier('telegram', pushIfConfigured);
-}
-
-/**
- * Write the telegram startup sidecar; warn on failure. Best-effort — never throws.
- *
- * Uses daemonVersion (from disk via readDiskVersion) rather than getVersion()
- * so the recorded value is consistent with the drift watchdog. Both resolve to
- * the same file today, but the intent is "version this binary was installed as",
- * not "version resolved at import time".
- */
-function recordTelegramStartup(daemonVersion: string): void {
-  if (!writeServiceStartupSidecar('telegram', daemonVersion)) {
-    console.warn('warn: failed to write service startup sidecar — `afk service status` may not show the running version'); // console-ok
-  }
 }
 
 /**
@@ -248,50 +234,46 @@ export async function main(): Promise<void> {
   // .install` (PR #477 review B1/B2). See `TelegramBot.start()`.
   const statsInterval = startStatsTicker({ bot, spawnedVersion: daemonVersion });
 
-  const shutdown = async () => {
+  let stopping = false;
+  const shutdown = async (exitCode: number) => {
+    if (stopping) return;
+    stopping = true;
     console.log(palette.dim('\n\n🛑 Shutting down bot...'));
     clearInterval(statsInterval);
-    await bot.stop();
-    sharedMemoryStore.close();
-    sharedStateStore.close();
-    console.log(palette.success('✅ Bot stopped.'));
-    process.exit(0);
+    try {
+      await bot.stop();
+      sharedMemoryStore.close();
+      sharedStateStore.close();
+      console.log(palette.success('✅ Bot stopped.'));
+    } finally {
+      process.exit(exitCode);
+    }
   };
+  const onSignal = () => { void shutdown(0); };
 
   installCrashHandlers();
 
   // Invariant: signal handlers are registered BEFORE bot.start() so a
   // SIGTERM arriving during async startup still runs a clean shutdown.
-  // Use `once` — shutdown calls process.exit, so a second invocation
-  // is impossible and `on` would only risk stacking handlers.
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  // `shutdown` is shared by both signals and unexpected polling termination.
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
 
+  let started = false;
   try {
-    await bot.start();
-
-    // Write the startup sidecar so `afk service status` can surface the
-    // running version and warn on version skew. Skip when the version is
-    // unknown — a sidecar with UNKNOWN_VERSION would produce a spurious
-    // "version skew" warning rather than the intended "version unknown" path.
-    // See recordTelegramStartup() above for the daemonVersion rationale.
-    if (daemonVersion !== UNKNOWN_VERSION) recordTelegramStartup(daemonVersion);
-
-    console.log(palette.success('✅ Bot started successfully!'));
-    console.log(palette.heading('\n📝 Slash commands (Agent SDK):'));
-    console.log(palette.dim('  /start   - Welcome and command list'));
-    console.log(palette.dim('  /help    - Show command list'));
-    console.log(palette.dim('  /clear   - Clear conversation history'));
-    console.log(palette.dim('  /compact - Compact history (summarize older messages)'));
-    console.log(palette.dim('  /model   - Switch model (opus/sonnet/haiku/gpt-5.6-sol/...)'));
-    console.log(palette.dim('\n💬 Send any message to chat with the agent.'));
-    console.log(palette.dim('\n⏹️  Press Ctrl+C to stop the bot.'));
-
+    const { polling } = await bot.start();
+    if (stopping) return;
+    started = true;
+    announceTelegramStartup(daemonVersion);
+    await polling;
+    if (!stopping) throw new Error('Telegram polling stopped unexpectedly');
   } catch (error) {
-    clearInterval(statsInterval);
-    process.removeListener('SIGINT', shutdown);
-    process.removeListener('SIGTERM', shutdown);
-    console.error(palette.error('❌ Failed to start bot: ' + String(error)));
-    process.exit(1);
+    if (stopping) return;
+    const message = started ? 'Telegram polling failed: ' : 'Failed to start bot: ';
+    console.error(palette.error('❌ ' + message + String(error)));
+    await shutdown(1);
+  } finally {
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
   }
 }

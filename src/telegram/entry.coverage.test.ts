@@ -19,7 +19,7 @@ import { describe, test, expect, vi, beforeEach, afterEach, type MockInstance } 
 
 const { mockBotCtor, mockBotStart, mockBotStop, mockGetStats } = vi.hoisted(() => {
   const mockBotStop = vi.fn(async () => {});
-  const mockBotStart = vi.fn(async () => {});
+  const mockBotStart = vi.fn<() => Promise<{ polling: Promise<void> }>>();
   const mockGetStats = vi.fn(() => ({ running: false, activeSessions: 0, totalChats: 0 }));
   const mockBotCtor = vi.fn(function (this: Record<string, unknown>) {
     this.start = mockBotStart;
@@ -91,6 +91,8 @@ vi.mock('../config/env.js', () => ({ env: new Proxy({}, { get: (_t, k) => mockEn
 // process.exit stub — captured per-test
 // ---------------------------------------------------------------------------
 let exitSpy: MockInstance;
+let finishPolling: () => void;
+let failPolling: (error: Error) => void;
 let signalListeners: Map<'SIGINT' | 'SIGTERM', ReturnType<typeof process.listeners>>;
 
 beforeEach(() => {
@@ -102,8 +104,12 @@ beforeEach(() => {
   // Reset env to working defaults before each test.
   mockEnv.TELEGRAM_BOT_TOKEN = 'test-token:abc';
   mockEnv.AFK_TELEGRAM_ALLOWED_CHAT_IDS = '111';
-  mockBotStart.mockReset().mockResolvedValue(undefined);
-  mockBotStop.mockReset().mockResolvedValue(undefined);
+  const polling = new Promise<void>((resolve, reject) => {
+    finishPolling = resolve;
+    failPolling = reject;
+  });
+  mockBotStart.mockReset().mockResolvedValue({ polling });
+  mockBotStop.mockReset().mockImplementation(async () => { finishPolling(); });
 });
 
 afterEach(async () => {
@@ -207,16 +213,33 @@ describe('entry.ts — main() early-exit branches', () => {
   });
 });
 
+function stopDuringStartup(signal: 'SIGINT' | 'SIGTERM') {
+  return async () => {
+    process.emit(signal);
+    return { polling: Promise.resolve() };
+  };
+}
+
 describe('entry.ts — main() happy path', () => {
   test('constructs TelegramBot and calls bot.start()', async () => {
     mockBotCtor.mockClear();
     mockBotStart.mockClear();
     const { main } = await import('./entry.js');
-    // Immediately trigger SIGINT to stop the infinite run after start.
-    mockBotStart.mockImplementationOnce(async () => {
+    const { writeServiceStartupSidecar } = await import('../service/version-skew.js');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const running = main();
+      await vi.waitFor(() => expect(writeServiceStartupSidecar).toHaveBeenCalledWith('telegram', '1.0.0'));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('Bot started successfully!'));
+      expect(mockBotStop).not.toHaveBeenCalled();
       process.emit('SIGINT');
-    });
-    await main();
+      process.emit('SIGTERM');
+      await running;
+      expect(mockBotStop).toHaveBeenCalledOnce();
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    } finally {
+      log.mockRestore();
+    }
     expect(mockBotCtor).toHaveBeenCalled();
     expect(mockBotStart).toHaveBeenCalledTimes(1);
     expect(exitSpy).not.toHaveBeenCalledWith(1);
@@ -229,11 +252,30 @@ describe('entry.ts — main() happy path', () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
+  test.each(['rejects', 'resolves'] as const)('exits 1 when polling unexpectedly %s after startup', async (outcome) => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { writeServiceStartupSidecar } = await import('../service/version-skew.js');
+    const { main } = await import('./entry.js');
+    try {
+      const running = main();
+      await vi.waitFor(() => expect(writeServiceStartupSidecar).toHaveBeenCalledOnce());
+      if (outcome === 'rejects') failPolling(new Error('409 Conflict'));
+      else finishPolling();
+      await running;
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('Telegram polling failed:'));
+      expect(error).toHaveBeenCalledWith(expect.stringContaining(outcome === 'rejects' ? '409 Conflict' : 'stopped unexpectedly'));
+      expect(mockBotStop).toHaveBeenCalledOnce();
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   test('warns but continues when daemonVersion is UNKNOWN_VERSION', async () => {
     const daemonVersion = await import('./daemon-version.js');
     vi.mocked(daemonVersion.readDiskVersion).mockReturnValueOnce('__unknown__');
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    mockBotStart.mockImplementationOnce(async () => { process.emit('SIGINT'); });
+    mockBotStart.mockImplementationOnce(stopDuringStartup('SIGINT'));
     const { main } = await import('./entry.js');
     await main();
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('version drift'));
@@ -244,7 +286,7 @@ describe('entry.ts — main() happy path', () => {
     const wizard = await import('./setup-wizard.js');
     vi.mocked(wizard.validateBotToken).mockResolvedValueOnce({ id: 99, username: 'mybot', firstName: 'My' });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    mockBotStart.mockImplementationOnce(async () => { process.emit('SIGINT'); });
+    mockBotStart.mockImplementationOnce(stopDuringStartup('SIGINT'));
     const { main } = await import('./entry.js');
     await main();
     const joined = logSpy.mock.calls.flat().join(' ');
@@ -256,7 +298,7 @@ describe('entry.ts — main() happy path', () => {
     const wizard = await import('./setup-wizard.js');
     vi.mocked(wizard.validateBotToken).mockResolvedValueOnce({ id: 99, firstName: 'NoUsername' });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    mockBotStart.mockImplementationOnce(async () => { process.emit('SIGINT'); });
+    mockBotStart.mockImplementationOnce(stopDuringStartup('SIGINT'));
     const { main } = await import('./entry.js');
     await main();
     const joined = logSpy.mock.calls.flat().join(' ');
@@ -271,7 +313,7 @@ describe('entry.ts — main() happy path', () => {
       .mockReturnValueOnce(new Set([111]))
       .mockReturnValueOnce(new Set([999]));
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    mockBotStart.mockImplementationOnce(async () => { process.emit('SIGINT'); });
+    mockBotStart.mockImplementationOnce(stopDuringStartup('SIGINT'));
     const { main } = await import('./entry.js');
     await main();
     const joined = logSpy.mock.calls.flat().join(' ');
@@ -280,7 +322,7 @@ describe('entry.ts — main() happy path', () => {
   });
 
   test('SIGTERM triggers shutdown (process.exit(0))', async () => {
-    mockBotStart.mockImplementationOnce(async () => { process.emit('SIGTERM'); });
+    mockBotStart.mockImplementationOnce(stopDuringStartup('SIGTERM'));
     const { main } = await import('./entry.js');
     await main();
     expect(exitSpy).toHaveBeenCalledWith(0);
@@ -293,7 +335,7 @@ describe('entry.ts — main() happy path', () => {
     vi.mocked(helpers.getEffort).mockReturnValueOnce('high');
 
     mockBotCtor.mockClear();
-    mockBotStart.mockImplementationOnce(async () => { process.emit('SIGINT'); });
+    mockBotStart.mockImplementationOnce(stopDuringStartup('SIGINT'));
 
     const { main } = await import('./entry.js');
     await main();
@@ -308,7 +350,7 @@ describe('entry.ts — main() happy path', () => {
     const config = await import('../cli/config.js');
     vi.mocked(config.getOperatorPermissionMode).mockReturnValueOnce('default');
     mockBotCtor.mockClear();
-    mockBotStart.mockImplementationOnce(async () => { process.emit('SIGINT'); });
+    mockBotStart.mockImplementationOnce(stopDuringStartup('SIGINT'));
     const { main } = await import('./entry.js');
     await main();
     expect(mockBotCtor).toHaveBeenCalledTimes(1);
@@ -320,7 +362,7 @@ describe('entry.ts — main() happy path', () => {
     const config = await import('../cli/config.js');
     vi.mocked(config.getOperatorPermissionMode).mockReturnValueOnce(undefined);
     mockBotCtor.mockClear();
-    mockBotStart.mockImplementationOnce(async () => { process.emit('SIGINT'); });
+    mockBotStart.mockImplementationOnce(stopDuringStartup('SIGINT'));
     const { main } = await import('./entry.js');
     await main();
     expect(mockBotCtor).toHaveBeenCalledTimes(1);
