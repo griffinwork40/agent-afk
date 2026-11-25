@@ -58,6 +58,12 @@ export interface TerminalState {
   notChecked?: string;
   /** Done: "Undo"; present only for changes outside the conversation. */
   undoSteps?: string;
+  /**
+   * Done: "Assumptions"; any assumption the agent proceeded on after a
+   * declined or cancelled ask_question, with rationale. Omitted when no
+   * assumptions were made.
+   */
+  assumptions?: string;
   /** Blocked: "What blocks". */
   whatBlocks?: string;
   /** Blocked: "What must change to unblock". */
@@ -400,6 +406,13 @@ function mapBulletsToFields(
       if (deferred !== undefined) out.deferred = deferred;
       const worthDoing = find('worth doing');
       if (worthDoing !== undefined) out.worthDoing = worthDoing;
+      // `'assumption'` also appears as a needle in the `'asking'` branch
+      // (line ~447) where it matches the "Assumption it resolves" bullet.
+      // The two branches are mutually exclusive (switch/case), so there is no
+      // collision risk; the needle is safe to reuse here for the Done-state
+      // `Assumptions:` directive bullet.
+      const assumptions = find('assumption');
+      if (assumptions !== undefined) out.assumptions = assumptions;
       const notChecked = find('not checked');
       if (notChecked !== undefined) out.notChecked = notChecked;
       // The canonical directive bullet is the bare `Undo:` label (routing-
