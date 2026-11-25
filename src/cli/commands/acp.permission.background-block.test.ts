@@ -94,9 +94,10 @@ describe('ACP surface: background agent is asked and approve-able at the gate', 
 
 // ── Grant isolation ───────────────────────────────────────────────────────────
 
-describe('ACP surface: a background child cannot inherit a write grant after turn close', () => {
-  // Contract: a background child cannot exploit a remembered grant after the
-  // granting turn closes.
+describe('ACP surface: grant isolation at the gate layer (endTurn + child write)', () => {
+  // Contract: at the gate layer, a remembered grant survives endTurn when
+  // turnActive is not wired; the ACP executor prevents background children
+  // from reaching this path.
   //
   // Scenario: the parent earns an allow_always grant for write_file in turn N.
   // A background `agent` call is dispatched (and approved) in the same turn.
@@ -105,8 +106,9 @@ describe('ACP surface: a background child cannot inherit a write grant after tur
   //
   // On the ACP surface the background executor itself blocks before running
   // (no registry), so no child ever reaches the grant at all. This test
-  // documents the gate-layer half: the grant is shared with forChild callbacks
-  // only while a live turn is active.
+  // documents the gate-layer half: the grant IS shared with forChild callbacks
+  // when turnActive is not wired (defaults to live), confirming it is not
+  // prematurely revoked at the gate.
   it('a remembered grant covers a child write even after endTurn (gate layer)', async () => {
     const t = setup();
 
@@ -123,10 +125,10 @@ describe('ACP surface: a background child cannot inherit a write grant after tur
     // Step 2: end the turn, draining in-flight child asks.
     await t.gate.endTurn?.();
 
-    // Step 3: a child that arrives after endTurn is denied even for a granted tool.
-    // (turnActive is undefined → turnLive() defaults to true; the deny here comes
-    // from no_active_turn via the pending-ask drain above, or the fact that the
-    // child call after endTurn hits no live turn.)
+    // Step 3: a child that arrives after endTurn is still allowed for a granted tool
+    // when turnActive is not wired. turnLive() defaults to true, so the remembered
+    // grant covers the child write. The executor (not the gate) is what blocks
+    // background children in production.
     //
     // We verify the existing structural guard: the gate's forChild path checks
     // turnLive() before queuing any ask. After endTurn the pending set is drained;
