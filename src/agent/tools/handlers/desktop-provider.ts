@@ -76,7 +76,7 @@ export async function acquireDesktopBackend(
     return {
       ok: false,
       isError: true,
-      content: `${toolName}: invalid AFK_SESSION_ID: must match /^[a-zA-Z0-9_-]+$/, got: ${JSON.stringify(sessionId)}`,
+      content: `${toolName}: invalid AFK_SESSION_ID: must match /^[a-zA-Z0-9_-]+$/, got: (invalid value)`,
     };
   }
 

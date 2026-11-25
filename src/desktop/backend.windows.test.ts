@@ -30,6 +30,15 @@ import { readFile, unlink } from 'node:fs/promises';
 
 const SIDECAR = nodePath.join(os.tmpdir(), 'test-sidecar-win.png');
 
+/**
+ * The backend now passes `-EncodedCommand <base64>` to PowerShell.
+ * Decode the UTF-16LE base64 argument back to plaintext so test assertions
+ * can inspect the script content rather than the opaque encoded form.
+ */
+function decodeEncodedCommand(encoded: string): string {
+  return Buffer.from(encoded, 'base64').toString('utf16le');
+}
+
 function makePng(width: number, height: number): Buffer {
   const buf = Buffer.alloc(33);
   buf.write('\x89PNG\r\n\x1a\n', 0, 'binary');
@@ -67,7 +76,7 @@ describe('Windows backend — script building', () => {
     await backend.screenshot({ displayIndex: 2 }, SIDECAR);
 
     const calls = vi.mocked(execFile).mock.calls;
-    const script = (calls[0]![1] as string[])[3]!;
+    const script = decodeEncodedCommand((calls[0]![1] as string[])[3]!);
     expect(script).toContain('$idx = 2');
   });
 
@@ -80,7 +89,7 @@ describe('Windows backend — script building', () => {
     const backend = createWindowsBackend();
     await backend.screenshot({ displayIndex: 0, region: { x: 10, y: 20, width: 400, height: 300 } }, SIDECAR);
 
-    const script = (vi.mocked(execFile).mock.calls[0]![1] as string[])[3]!;
+    const script = decodeEncodedCommand((vi.mocked(execFile).mock.calls[0]![1] as string[])[3]!);
     expect(script).toContain('$useRegion = $true');
     expect(script).toContain('$rx = 10');
     expect(script).toContain('$ry = 20');
@@ -97,7 +106,7 @@ describe('Windows backend — script building', () => {
     const backend = createWindowsBackend();
     await backend.screenshot({ displayIndex: 0 }, SIDECAR);
 
-    const script = (vi.mocked(execFile).mock.calls[0]![1] as string[])[3]!;
+    const script = decodeEncodedCommand((vi.mocked(execFile).mock.calls[0]![1] as string[])[3]!);
     expect(script).toContain('$useRegion = $false');
   });
 
@@ -110,7 +119,7 @@ describe('Windows backend — script building', () => {
     const backend = createWindowsBackend();
     await backend.screenshot({ displayIndex: 1, region: { x: 50, y: 60, width: 400, height: 300 } }, SIDECAR);
 
-    const script = (vi.mocked(execFile).mock.calls[0]![1] as string[])[3]!;
+    const script = decodeEncodedCommand((vi.mocked(execFile).mock.calls[0]![1] as string[])[3]!);
     // The script adds screen.Bounds.X to rx — verify the formula is present
     expect(script).toContain('$absX = $screen.Bounds.X + $rx');
     expect(script).toContain('$absY = $screen.Bounds.Y + $ry');

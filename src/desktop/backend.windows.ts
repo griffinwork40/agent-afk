@@ -42,12 +42,11 @@ const execFileAsync = promisify(execFile);
 /**
  * PowerShell script that captures the requested display / region to a PNG.
  *
- * Contract: `__SIDECAR_PATH__`, `__DISPLAY_INDEX__`, `__USE_REGION__`,
- * `__X__`, `__Y__`, `__W__`, `__H__` are replaced with sanitized values
- * before the script is passed to PowerShell. All substituted values are
- * either numeric literals or a path validated by the caller — no shell
- * metacharacter injection is possible through template replacement on
- * those types.
+ * Contract: `__PATH_DATA__` is replaced with the UTF-8 base64 encoding of the
+ * sidecar path (see `buildEncodedScript`). `__DISPLAY_INDEX__`, `__USE_REGION__`,
+ * `__X__`, `__Y__`, `__W__`, `__H__` are replaced with numeric literals.
+ * No shell metacharacter injection is possible through template replacement on
+ * those types, and the path is never interpolated as PowerShell syntax.
  *
  * The script rejects an out-of-range display index with a structured error
  * line (`ERROR:DISPLAY_NOT_FOUND`) so the backend can surface a clear message.
@@ -59,9 +58,21 @@ const execFileAsync = promisify(execFile);
  *   OK:<displayIndex>:<displayX>,<displayY>,<displayW>,<displayH>:<captureW>x<captureH>
  * so the backend can verify which display and bounds were actually used.
  */
+/**
+ * Contract: `__PATH_DATA__` is replaced with the UTF-8 base64 encoding of the
+ * sidecar path before the script is encoded for `-EncodedCommand`. All other
+ * substituted values (`__DISPLAY_INDEX__`, `__USE_REGION__`, `__X__`, etc.)
+ * are numeric literals — no shell metacharacter injection is possible through
+ * template replacement on those types.
+ *
+ * Encoding data separately from code (mirroring `private-directory.ts:52-55`)
+ * means that quotes, wildcard characters and Unicode in the sidecar path cannot
+ * become PowerShell syntax or expand to other paths.
+ */
 const CAPTURE_SCRIPT_TEMPLATE = `
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+$sidecarPath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PATH_DATA__'))
 $screens = [System.Windows.Forms.Screen]::AllScreens
 $idx = __DISPLAY_INDEX__
 if ($idx -lt 0 -or $idx -ge $screens.Length) {
@@ -82,20 +93,30 @@ $bmp = [System.Drawing.Bitmap]::new($bounds.Width, $bounds.Height)
 $g = [System.Drawing.Graphics]::FromImage($bmp)
 $g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
 $g.Dispose()
-$bmp.Save('__SIDECAR_PATH__', [System.Drawing.Imaging.ImageFormat]::Png)
+$bmp.Save($sidecarPath, [System.Drawing.Imaging.ImageFormat]::Png)
 $bmp.Dispose()
 Write-Output "OK:$($idx):$($screen.Bounds.X),$($screen.Bounds.Y),$($screen.Bounds.Width),$($screen.Bounds.Height):$($bounds.Width)x$($bounds.Height)"
 `.trim();
 
-/** Build the PowerShell capture script with concrete values substituted. */
-function buildScript(input: DesktopScreenshotInput, sidecarPath: string): string {
+/**
+ * Build the PowerShell capture script with concrete values substituted, then
+ * encode it as a UTF-16LE base64 string for use with `-EncodedCommand`.
+ *
+ * Encoding data separately from code (mirroring `private-directory.ts`) means
+ * that quotes, wildcard characters and Unicode in the sidecar path cannot
+ * become PowerShell syntax or expand to other paths — the path value is
+ * embedded via a base64 round-trip inside the script, never interpolated
+ * directly into a `-Command` string.
+ */
+function buildEncodedScript(input: DesktopScreenshotInput, sidecarPath: string): string {
   const displayIndex = input.displayIndex ?? 0;
-  // Escape single quotes in the path by doubling them (PowerShell string rule).
-  const escapedPath = sidecarPath.replace(/'/g, "''");
+  // Encode the sidecar path as base64 so it cannot contain PowerShell
+  // metacharacters regardless of what characters the path contains.
+  const pathData = Buffer.from(sidecarPath, 'utf8').toString('base64');
   const hasRegion = input.region !== undefined;
 
   let script = CAPTURE_SCRIPT_TEMPLATE
-    .replace(/__SIDECAR_PATH__/g, escapedPath)
+    .replace(/__PATH_DATA__/g, pathData)
     .replace(/__DISPLAY_INDEX__/g, String(displayIndex))
     .replace(/__USE_REGION__/g, hasRegion ? '$true' : '$false');
 
@@ -113,7 +134,9 @@ function buildScript(input: DesktopScreenshotInput, sidecarPath: string): string
       .replace(/__X__|__Y__|__W__|__H__/g, '0');
   }
 
-  return script;
+  // Encode as UTF-16LE base64 for -EncodedCommand (PowerShell's required
+  // encoding for that flag), matching the approach in private-directory.ts.
+  return Buffer.from(script, 'utf16le').toString('base64');
 }
 
 /** Width of PNG in pixels, read from the IHDR chunk (bytes 16-23). */
@@ -132,14 +155,14 @@ class WindowsDesktopBackend implements DesktopBackend {
       return { aborted: true, reason: String(input.signal.reason ?? 'aborted') };
     }
 
-    const script = buildScript(input, sidecarPath);
+    const encodedScript = buildEncodedScript(input, sidecarPath);
     const displayIndex = input.displayIndex ?? 0;
 
     let stdout = '';
     try {
       const result = await execFileAsync(
         'powershell',
-        ['-NonInteractive', '-NoProfile', '-Command', script],
+        ['-NonInteractive', '-NoProfile', '-EncodedCommand', encodedScript],
         { timeout: 20_000, signal: input.signal },
       );
       stdout = result.stdout.trim();
