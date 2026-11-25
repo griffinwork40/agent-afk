@@ -81,8 +81,7 @@ One line per document, grouped by concern.
 
 ## Remote Control & Telegram
 
-- [afk-remote-control.md](afk-remote-control.md) — Bidirectional Telegram handoff: implemented design record for iterations 1–4 of the remote-control feature.
-- [afk-telegram-native-host.md](afk-telegram-native-host.md) — Architecture "D" feasibility + risk brief: running AFK natively inside the Telegram bot; v1 implemented, v2 deferred.
+See `src/telegram/README.md` for the current Telegram integration design.
 
 ---
 
