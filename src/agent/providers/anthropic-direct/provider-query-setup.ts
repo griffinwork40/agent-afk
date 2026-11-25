@@ -28,6 +28,20 @@ import { grantsWorkspacePrompt, grantsToolStrict, skillManifestGranted } from '.
 import { isSkillManifestAlways } from '../../../config/env.js';
 import { deriveCredentialFromStore } from './provider-query-setup.credential.js';
 import { loadClaudeCodeOauthToken } from '../../auth/keychain.js';
+import { describeClaudeLoginStatus, lastClaudeLoginStatus } from '../../auth/claude-login-status.js';
+
+/**
+ * The "no credential" error. Names every tier, including the stored Claude
+ * Code login, and appends why that login yielded nothing when this process
+ * has observed it. Never includes token material.
+ */
+export function missingCredentialError(providerName: string): Error {
+  const base =
+    `${providerName} provider requires config.apiKey (resolved from ANTHROPIC_API_KEY, ` +
+    'CLAUDE_CODE_OAUTH_TOKEN, or the stored Claude Code login)';
+  const detail = describeClaudeLoginStatus(lastClaudeLoginStatus());
+  return new Error(detail !== undefined ? `${base}. ${detail}` : base);
+}
 
 /** Everything the second half of `query()` needs from this one. */
 export interface QuerySetupResult {
@@ -70,8 +84,18 @@ export function resolveUserSystem(sp: AgentConfig['systemPrompt']): string | nul
   return normalizeSystemPromptOverlay(sp);
 }
 
-/** Compute the includeSkillManifest flag for assembleQueryPrompt. */
-function resolveIncludeSkillManifest(ctx: ProviderQueryContext): boolean {
+/**
+ * Compute the includeSkillManifest flag for assembleQueryPrompt.
+ *
+ * Unnamed workers (`isUnnamedWorker=true`) must NOT receive the skill manifest:
+ * they cannot invoke skills directly (they are bare `agent` tool dispatches with
+ * no skill executor of their own), and the manifest is the largest single
+ * fragment (~78 k chars). The existing `skillManifestGranted` gate does not
+ * exclude them because their `grantsTool('skill')` check is true (inherit-all).
+ * The `isUnnamedWorker` short-circuit closes that gap (#5311).
+ */
+function resolveIncludeSkillManifest(ctx: ProviderQueryContext, isUnnamedWorker: boolean | undefined): boolean {
+  if (isUnnamedWorker) return false;
   return skillManifestGranted(
     ctx.skillExecutor !== undefined && ctx.skillExecutor !== null,
     ctx.grantsTool,
@@ -88,11 +112,7 @@ export function setUpQuerySession(
 ): QuerySetupResult {
   const config = args.config;
   const { localMode, token } = resolveQueryToken(config);
-  if (!token || token.length === 0) {
-    throw new Error(
-      `${providerName} provider requires config.apiKey (resolved from ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN)`,
-    );
-  }
+  if (!token || token.length === 0) throw missingCredentialError(providerName);
   const authMode = detectAuthMode(token);
 
   // Client + observability wiring (throttle mailbox, quota capture, tracing
@@ -211,7 +231,7 @@ export function setUpQuerySession(
     // Gate: include iff executor present AND `skill` is not explicitly denied.
     // Uses fail-open fallback for absent callbacks (pre-gate compat). See
     // `skillManifestGranted` in tool-grant.ts for the full rule.
-    includeSkillManifest: resolveIncludeSkillManifest(ctx),
+    includeSkillManifest: resolveIncludeSkillManifest(ctx, config.isUnnamedWorker),
     runtimeStateSource,
     userSystem,
     // Dynamic agent-type listing injected into the volatile system-prompt tail

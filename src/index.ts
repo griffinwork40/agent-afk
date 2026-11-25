@@ -132,6 +132,10 @@ export {
 } from './agent/journal/index.js';
 export type { JournalMessage, JournalLocator, FoldResult } from './agent/journal/index.js';
 
+// Health check for the Anthropic credential an SDK session would use; primes
+// (refreshes) the stored Claude Code login the same way a session does.
+export { checkAnthropicCredential } from './agent/auth/anthropic-credential-check.js';
+export type { AnthropicCredentialStatus } from './agent/auth/anthropic-credential-check.js';
 export { env } from './config/env.js';
 export { getSessionsDir, getSkillsDir, getAgentFrameworkDir } from './paths.js';
 

@@ -73,6 +73,7 @@ import { SANDBOX_ENV_REGISTRY } from './env.sandbox.js';
 import { EPISODE_ENV_REGISTRY } from './env.episode.js';
 import { TTY_TRACE_ENV_REGISTRY } from './env.tty-trace.js';
 import { DESKTOP_ENV_REGISTRY } from './env.desktop.js';
+import { GLOBAL_CHAT_ENV_REGISTRY } from './env.global-chat.js';
 
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
 
@@ -209,6 +210,9 @@ export const ENV_REGISTRY = [
 
   // ── Desktop computer-use tools (env.desktop.ts) ───────────────────────────
   ...DESKTOP_ENV_REGISTRY,
+
+  // ── Global chat relay URL (env.global-chat.ts) ───────────────────────────
+  ...GLOBAL_CHAT_ENV_REGISTRY,
 ] as const satisfies readonly EnvVarMeta[];
 
 /**

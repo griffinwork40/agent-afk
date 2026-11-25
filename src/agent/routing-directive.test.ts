@@ -260,6 +260,21 @@ describe('assembleSystemPrompt', () => {
       expect(END_OF_TURN_DIRECTIVE).toMatch(/git commit/);
       expect(END_OF_TURN_DIRECTIVE).toMatch(/uncommitted/i);
     });
+
+    it('carries an Assumptions bullet in the Done block for declined ask_question proceeds', () => {
+      // Regression guard for issue #5107: when the agent proceeds on a stated
+      // assumption after a cancelled/declined ask_question, the Done block must
+      // have a named slot for it. Without this bullet the guidance in the
+      // Answerability section ("record the assumption in your Done terminal
+      // state") has nowhere to land and operators cannot inspect what assumption
+      // was made during async review.
+      //
+      // The bullet is optional (omit when no assumptions were made) so it must
+      // carry explicit omit semantics, not "always include" semantics.
+      expect(END_OF_TURN_DIRECTIVE).toContain('- Assumptions:');
+      expect(END_OF_TURN_DIRECTIVE).toMatch(/declined or cancelled ask_question/);
+      expect(END_OF_TURN_DIRECTIVE).toMatch(/omit this bullet when no assumptions were made/);
+    });
   });
 
   describe('end-to-end contract with parseTerminalState', () => {

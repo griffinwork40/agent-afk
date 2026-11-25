@@ -361,7 +361,7 @@ function restrictedPathBlock(sub: string, headless: boolean): HookDecision {
   const sanctionedHint = sanctionedAlternativeHint(sub);
   // Preserve the lexical root; canonical / broader operator matches are context,
   // not a replacement for what the bash scanner matched.
-  const floorHint = credFloor.kind === 'deny' && credFloor.reason === 'credential'
+  const floorHint = credFloor.kind === 'deny' && 'matched' in credFloor
     ? ` (credential floor: ${credFloor.matched})` : '';
   if (!headless) {
     return {

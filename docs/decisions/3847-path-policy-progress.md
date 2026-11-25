@@ -31,7 +31,8 @@ recreating it. It is a **partial proposal**, not closure of #3847.
 Base: `aec7a556c0ab9a234f0256020abaa4c2ef060b7a`.
 
 - **Bash hard restriction hook check 2 consults `decidePathAccess` for the
-  message only** (#3847 step B, partial). The lexical scan
+  message only, reading the returned `matched` value to annotate the block
+  reason** (#3847 step B, partial). The lexical scan
   (`mentionsRestrictedRoot`) identifies the matched root and blocks unconditionally.
   The policy result does not yet control the block decision.
 - Extracted `restrictedPathBlock(sub, headless)` helper from

@@ -12,7 +12,7 @@
 import type { Context } from 'telegraf';
 import type { OutputEvent, SubagentProgressMeta } from '../agent/types.js';
 import { formatTelegramActivity, formatTelegramAgentLabel, humanizeToolActivity, MAX_SUBAGENT_PREVIEW_LINES } from './streaming.activity.js';
-import { sendOrEdit } from './streaming.sender.js';
+import { EDIT_THROTTLE_MS, sendOrEdit } from './streaming.sender.js';
 import type { SenderState } from './streaming.sender.js';
 import { MAX_PROGRESS_ENTRIES } from './streaming.preview.js';
 import type { ProgressEntry } from './streaming.preview.js';
@@ -141,6 +141,18 @@ export function makeSubagentSink(
     recentSubagentSteps: string[];
   },
 ): (event: OutputEvent, meta: SubagentProgressMeta) => void {
+  // Invariant: subagent edits share the parent's EDIT_THROTTLE_MS cadence so a
+  // deep fan-out cannot burst Telegram's edit API (429). A skipped edit loses
+  // nothing: livePreview() recomputes from the full state on the next edit.
+  // Terminal `done` events bypass the throttle so a child's completion is
+  // always rendered.
+  let lastSubagentEditAt = 0;
+  const sendSubagentPreview = (force: boolean): void => {
+    const now = Date.now();
+    if (!force && now - lastSubagentEditAt < EDIT_THROTTLE_MS) return;
+    lastSubagentEditAt = now;
+    void sendOrEdit(state, ctx, chatId, livePreview(), force);
+  };
   return (event: OutputEvent, meta: SubagentProgressMeta): void => {
     const label = formatTelegramAgentLabel(meta.agentType ?? meta.subagentId);
     // Sub-agent activity keeps the turn alive: bump the watchdog so deep
@@ -156,10 +168,10 @@ export function makeSubagentSink(
       if (subagentState.recentSubagentSteps.length > MAX_SUBAGENT_PREVIEW_LINES) {
         subagentState.recentSubagentSteps.shift();
       }
-      void sendOrEdit(state, ctx, chatId, livePreview());
+      sendSubagentPreview(false);
     } else if (event.type === 'done') {
       // A child finishing refreshes the footer but must not grow the buffer.
-      void sendOrEdit(state, ctx, chatId, livePreview());
+      sendSubagentPreview(true);
     }
   };
 }

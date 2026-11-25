@@ -31,6 +31,7 @@ import {
   doneHasCorroboratingEvidence,
   type ToolEventMin,
 } from './done-evidence.js';
+import { extractRawToolInput } from './facets/raw-input.js';
 
 // ---------------------------------------------------------------------------
 // Scenario 4 – artifact modified via bash after tests passed
@@ -121,6 +122,39 @@ describe('classifyDoneEvidence – artifact modified after tests passed (Scenari
     expect(doneHasCorroboratingEvidence(events)).toBe(false);
   });
 
+  it('returns "no-code-changes" for patch_apply with empty changes[] (no file written)', () => {
+    // changes: [] — the handler returns synthetic 'applied' success but writes
+    // nothing.  Must not count as a mutation or as done-evidence (#5257 item 2).
+    // inputRaw is produced by extractRawToolInput, which emits changes_empty:true
+    // for an empty changes array — never a raw `changes` field.
+    const emptyRaw = JSON.stringify({ changes_empty: true });
+    const events: ToolEventMin[] = [
+      { toolName: 'patch_apply', input: '', inputRaw: emptyRaw, isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('no-code-changes');
+  });
+
+  it('doneHasCorroboratingEvidence returns false for empty-changes patch_apply only', () => {
+    // A turn consisting solely of a patch_apply with no changes has no real evidence.
+    // inputRaw uses the changes_empty marker emitted by extractRawToolInput.
+    const emptyRaw = JSON.stringify({ changes_empty: true });
+    const events: ToolEventMin[] = [
+      { toolName: 'patch_apply', input: '', inputRaw: emptyRaw, isError: false },
+    ];
+    expect(doneHasCorroboratingEvidence(events)).toBe(false);
+  });
+
+  it('returns "verified" when dry_run:false patch_apply with real changes follows a passing test (not empty)', () => {
+    // Confirm that a non-empty, non-dry-run patch_apply still counts as a mutation
+    // and that a subsequent test restores 'verified'.
+    const realRaw = JSON.stringify({ changes: [{ path: 'src/foo.ts' }] });
+    const events: ToolEventMin[] = [
+      { toolName: 'patch_apply', input: '', inputRaw: realRaw, isError: false },
+      { toolName: 'bash', input: 'pnpm test', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('verified');
+  });
+
   it('returns "unverified" when patch_apply (real write) follows test in an edit→test→patch→retest sequence', () => {
     // edit → test (PASS) → patch_apply → (no retest): stale certification.
     const events: ToolEventMin[] = [
@@ -153,7 +187,7 @@ describe('classifyDoneEvidence – artifact modified after tests passed (Scenari
     expect(classifyDoneEvidence(events)).toBe('verified');
   });
 
-  it('returns "unverified" when FAILED patch_apply does not advance mutation index', () => {
+  it('returns "verified" when FAILED patch_apply does not advance mutation index', () => {
     // isError: true — the patch did not apply, so the artifact is unchanged.
     const events: ToolEventMin[] = [
       { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
@@ -248,5 +282,18 @@ describe('classifyDoneEvidence – artifact modified after tests passed (Scenari
       { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
     ];
     expect(classifyDoneEvidence(events)).toBe('unverified');
+  });
+
+  it('returns "no-code-changes" for patch_apply with empty changes[] via real extractRawToolInput round-trip (#5257)', () => {
+    // Production path: tool input goes through extractRawToolInput before being
+    // stored as inputRaw. Verify the full pipeline: empty changes[] → marker →
+    // isPatchApplyDryRun returns true → no mutation counted.
+    const inputRaw = extractRawToolInput({ changes: [] });
+    expect(inputRaw).toBeDefined(); // marker must be emitted, not undefined
+    const events: ToolEventMin[] = [
+      { toolName: 'patch_apply', input: '', inputRaw, isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('no-code-changes');
+    expect(doneHasCorroboratingEvidence(events)).toBe(false);
   });
 });

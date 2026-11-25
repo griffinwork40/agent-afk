@@ -7,13 +7,11 @@ import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
 /** Minimal stubs for the args createReplSurface needs. */
 function makeArgs(overrides: {
   optionPermissionMode?: CliOptions['permissionMode'];
-  optionDSP?: boolean;
   configPermissionMode?: CliConfig['permissionMode'];
 } = {}) {
   const options: CliOptions = {
     model: 'sonnet',
     maxTurns: '100',
-    dangerouslySkipPermissions: overrides.optionDSP,
     permissionMode: overrides.optionPermissionMode,
   };
   const cliConfig = {
@@ -35,10 +33,10 @@ function makeArgs(overrides: {
 describe('createReplSurface — initialPermissionMode precedence', () => {
   it('uses --permission-mode flag over config', () => {
     const result = createReplSurface(makeArgs({
-      optionPermissionMode: 'default',
+      optionPermissionMode: 'acceptEdits',
       configPermissionMode: 'bypassPermissions',
     }));
-    expect(result.initialPermissionMode).toBe('default');
+    expect(result.initialPermissionMode).toBe('acceptEdits');
   });
 
   it('falls back to config when --permission-mode is absent', () => {
@@ -46,15 +44,6 @@ describe('createReplSurface — initialPermissionMode precedence', () => {
       configPermissionMode: 'plan',
     }));
     expect(result.initialPermissionMode).toBe('plan');
-  });
-
-  it('--dangerously-skip-permissions overrides --permission-mode', () => {
-    const result = createReplSurface(makeArgs({
-      optionDSP: true,
-      optionPermissionMode: 'default',
-      configPermissionMode: 'plan',
-    }));
-    expect(result.initialPermissionMode).toBe('bypassPermissions');
   });
 
   it('leaves initialPermissionMode undefined when neither flag nor config is set', () => {

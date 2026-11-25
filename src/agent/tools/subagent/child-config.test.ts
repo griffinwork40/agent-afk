@@ -438,6 +438,86 @@ describe('buildChildConfig', () => {
       // appended here (general-purpose bakes it into its prompt directly).
       expect(childConfig.systemPrompt).toBe('You are the research agent.');
     });
+
+    // ── #5309: named-agent tier flag ──────────────────────────────────────────
+
+    it('sets isNamedAgent=true for named dispatches (#5309)', () => {
+      // Providers use this flag to omit interactive-only fragments (slash
+      // routing, bash-passthrough, bg-subagent, peer-message) from the
+      // assembled system prompt.
+      const { childConfig } = buildChildConfig(
+        baseArgs({ namedAgent: namedAgent({ prompt: 'You are the research agent.' }) }),
+      );
+      expect(childConfig.isNamedAgent).toBe(true);
+    });
+
+    it('does NOT set isNamedAgent for unnamed dispatches (#5309)', () => {
+      const { childConfig } = buildChildConfig(baseArgs({ namedAgent: undefined }));
+      expect(childConfig.isNamedAgent).toBeUndefined();
+    });
+
+    // ── #5312: read-only agent flag ───────────────────────────────────────────
+
+    it('sets isReadOnlyAgent=true when the named agent has no write/bash tools (#5312)', () => {
+      const { childConfig } = buildChildConfig(
+        baseArgs({
+          namedAgent: namedAgent({ tools: ['read_file', 'grep', 'glob', 'memory_search'] }),
+        }),
+      );
+      expect(childConfig.isNamedAgent).toBe(true);
+      expect(childConfig.isReadOnlyAgent).toBe(true);
+    });
+
+    it('does NOT set isReadOnlyAgent when the agent has write_file (#5312)', () => {
+      const { childConfig } = buildChildConfig(
+        baseArgs({
+          namedAgent: namedAgent({ tools: ['read_file', 'write_file', 'grep'] }),
+        }),
+      );
+      expect(childConfig.isNamedAgent).toBe(true);
+      expect(childConfig.isReadOnlyAgent).toBeUndefined();
+    });
+
+    it('does NOT set isReadOnlyAgent when the agent has bash (#5312)', () => {
+      const { childConfig } = buildChildConfig(
+        baseArgs({
+          namedAgent: namedAgent({ tools: ['read_file', 'bash', 'grep'] }),
+        }),
+      );
+      expect(childConfig.isReadOnlyAgent).toBeUndefined();
+    });
+
+    it('does NOT set isReadOnlyAgent for inherit-all agents (undefined tools) (#5312)', () => {
+      // general-purpose has no tools: declaration — inherit-all is NOT read-only.
+      const { childConfig } = buildChildConfig(
+        baseArgs({ namedAgent: namedAgent({}) }), // no tools field
+      );
+      expect(childConfig.isNamedAgent).toBe(true);
+      expect(childConfig.isReadOnlyAgent).toBeUndefined();
+    });
+
+    // ── #5310: namedAgentGrantedTools for memory-prompt derivation ────────────
+
+    it('sets namedAgentGrantedTools from effectiveAllowedTools for named agents with a tool list (#5310)', () => {
+      const tools = ['read_file', 'grep', 'memory_search'];
+      const { childConfig } = buildChildConfig(
+        baseArgs({ namedAgent: namedAgent({ tools }) }),
+      );
+      expect(childConfig.namedAgentGrantedTools).toEqual(tools);
+    });
+
+    it('does NOT set namedAgentGrantedTools for inherit-all named agents (#5310)', () => {
+      // No tools: → effectiveAllowedTools is undefined → field absent.
+      const { childConfig } = buildChildConfig(
+        baseArgs({ namedAgent: namedAgent({}) }),
+      );
+      expect(childConfig.namedAgentGrantedTools).toBeUndefined();
+    });
+
+    it('does NOT set namedAgentGrantedTools for unnamed dispatches (#5310)', () => {
+      const { childConfig } = buildChildConfig(baseArgs({ namedAgent: undefined }));
+      expect(childConfig.namedAgentGrantedTools).toBeUndefined();
+    });
   });
 
   describe('model resolution', () => {

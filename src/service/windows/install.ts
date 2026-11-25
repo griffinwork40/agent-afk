@@ -140,7 +140,7 @@ export function installWindowsTask(name: ServiceName, opts: WindowsInstallOption
     label,
     autoRestartOnRebuild: false,
     notes: [
-      `Task registered as ${label}. It will auto-start on next login and restart on crash (RestartOnFailure).`,
+      `Task registered as ${label}. It will auto-start on next login and restart on crash or version-drift exit (RestartOnFailure).`,
     ],
   };
 }

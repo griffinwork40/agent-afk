@@ -6,6 +6,7 @@ import type { AgentSession } from '../session/agent-session.js';
 import type { TelemetryRecord, TaskCompletionDetails } from './scheduler.js';
 import { readTelemetryHistory } from './telemetry-reader.js';
 import { readStreakHistory, STREAK_HISTORY_BYTE_CAP } from './scheduler.streak-history.js';
+import { DEFAULT_FAILURE_STREAK_THRESHOLD } from './scheduler.failure-streak.js';
 import { addSchedule, loadSchedules, toScheduledTask } from './schedule-store.js';
 import { enqueue } from './queue-store.js';
 import { getSchedulesPath } from '../../paths.js';
@@ -197,16 +198,18 @@ describe('durable scheduler streak integration', () => {
     fails = false;
     await s.tick('t');  // success → completion (due: undefined notifyOn is not 'failure' nor 'never')
     fails = true;
-    for (let n = 0; n < 3; n++) await s.tick('t');  // errors, 3rd triggers escalation
+    for (let n = 0; n < DEFAULT_FAILURE_STREAK_THRESHOLD; n++) await s.tick('t');  // errors, Nth triggers escalation
     fails = false;
     await s.tick('t');  // recovery
     const history = await readTelemetryHistory(path, { taskId: 't', limit: 10 }) as TelemetryRecord[];
     // All 5 runs produce due decisions: undefined notifyOn matches neither suppression branch
     expect(history.every((r) => r.notificationDecision?.state === 'due')).toBe(true);
     expect(history[0]?.notificationDecision?.kind).toBe('completion');
-    expect(history[3]?.notificationDecision?.kind).toBe('escalation');
-    expect(history[4]?.notificationDecision?.kind).toBe('recovery');
-    expect(cb).toHaveBeenCalledTimes(5);
+    expect(history[1]?.notificationDecision?.kind).toBe('failure');
+    expect(history[2]?.notificationDecision?.kind).toBe('failure');
+    expect(history[DEFAULT_FAILURE_STREAK_THRESHOLD]?.notificationDecision?.kind).toBe('escalation');
+    expect(history[DEFAULT_FAILURE_STREAK_THRESHOLD + 1]?.notificationDecision?.kind).toBe('recovery');
+    expect(cb).toHaveBeenCalledTimes(DEFAULT_FAILURE_STREAK_THRESHOLD + 2);
   });
 
   it('stamps first over-cap failure as inexact when task predates the history window', async () => {

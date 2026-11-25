@@ -1163,6 +1163,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_GLOBAL_CHAT_URL",
+      "source": "src/config/env.global-chat.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_GOBLIN_MASCOT",
       "source": "src/config/env.ui.ts"
     },
@@ -2283,11 +2288,6 @@
     },
     {
       "kind": "flag",
-      "name": "afk acp --dangerously-skip-permissions",
-      "source": "src/cli/commands/acp.ts"
-    },
-    {
-      "kind": "flag",
       "name": "afk acp --help",
       "source": "src/cli/commands/acp.ts"
     },
@@ -2434,11 +2434,6 @@
     {
       "kind": "flag",
       "name": "afk chat --continue",
-      "source": "src/cli/commands/shared-command-options.ts"
-    },
-    {
-      "kind": "flag",
-      "name": "afk chat --dangerously-skip-permissions",
       "source": "src/cli/commands/shared-command-options.ts"
     },
     {
@@ -3234,11 +3229,6 @@
     {
       "kind": "flag",
       "name": "afk interactive --continue",
-      "source": "src/cli/commands/shared-command-options.ts"
-    },
-    {
-      "kind": "flag",
-      "name": "afk interactive --dangerously-skip-permissions",
       "source": "src/cli/commands/shared-command-options.ts"
     },
     {
@@ -4500,6 +4490,11 @@
       "kind": "slash",
       "name": "/ghost",
       "source": "src/cli/slash/commands/ghost.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/global",
+      "source": "src/cli/slash/commands/global.ts"
     },
     {
       "kind": "slash",

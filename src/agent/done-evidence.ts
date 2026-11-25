@@ -44,20 +44,27 @@ export interface ToolEventMin {
 }
 
 /**
- * True when a `patch_apply` event is a dry-run preview (writes nothing).
+ * True when a `patch_apply` event writes nothing to disk and must not count
+ * as either a mutation or done-evidence. Two cases:
+ *
+ *   1. `dry_run: true` — a preview that never touches files.
+ *   2. `changes: []` — an empty change list; the handler returns a synthetic
+ *      `'applied'` success but no file is actually written, so the event must
+ *      not advance `lastMutationIndex` or satisfy `doneHasCorroboratingEvidence`.
+ *
  * Parses the JSON `inputRaw` field if present; falls back to `false` (treats
  * as a real write) when the field is absent or unparseable — the conservative
- * direction (a real write is always counted, a spurious dry-run skip is safe).
+ * direction (a real write is always counted, a spurious no-op skip is safe).
  */
 export function isPatchApplyDryRun(e: ToolEventMin): boolean {
   if (!e.inputRaw) return false;
   try {
     const parsed: unknown = JSON.parse(e.inputRaw);
-    return (
-      parsed !== null &&
-      typeof parsed === 'object' &&
-      (parsed as Record<string, unknown>)['dry_run'] === true
-    );
+    if (parsed === null || typeof parsed !== 'object') return false;
+    const p = parsed as Record<string, unknown>;
+    if (p['dry_run'] === true) return true;
+    if (p['changes_empty'] === true) return true;
+    return false;
   } catch {
     return false;
   }

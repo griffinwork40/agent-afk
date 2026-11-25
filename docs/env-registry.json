@@ -511,6 +511,15 @@
       "category": "misc"
     },
     {
+      "name": "AFK_GLOBAL_CHAT_URL",
+      "description": "WebSocket URL of the global-chat relay server. When unset, /global falls back to the official AFK relay at wss://afk-global-chat-relay.griffinwork40.workers.dev/v1/room/global. Set this to point /global at a different relay instead.",
+      "type": "string",
+      "required": false,
+      "default": "wss://afk-global-chat-relay.griffinwork40.workers.dev/v1/room/global",
+      "example": "wss://relay.example.com/v1/room/global",
+      "category": "misc"
+    },
+    {
       "name": "AFK_GOBLIN_MASCOT",
       "description": "Reacting goblin mini-sprite in the reserved footer band while the agent runs tools (3 rows, animated). 1 = on, unset/0 = off (default). Claims terminal rows, so it is opt-in.",
       "type": "boolean",

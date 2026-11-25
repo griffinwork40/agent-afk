@@ -202,7 +202,6 @@ export const CHILD_ALLOWED_TOOLS = [
   'skill',
   'state_get',
   'state_query',
-  'artifact_publish',
 ];
 
 // Recon allowlist for a READ-ONLY skill's forked child. This is the tool half

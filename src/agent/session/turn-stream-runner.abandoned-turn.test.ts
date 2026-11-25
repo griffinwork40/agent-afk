@@ -948,6 +948,138 @@ describe('end-of-turn work finishes before the turn is released', () => {
     expect(messageTexts(hello)).toEqual(['Echo: hello']);
     expect(messageTexts(after)).toEqual(['Echo: after']);
   }, 5000);
+
+  /**
+   * R1.5: slow Stop hook on an ABANDONED turn being settled.
+   *
+   * The existing slow-Stop tests (above) keep the original reader attached so
+   * the terminal event is pulled through the live loop. R1.5 covers the
+   * settlement path: the consumer broke early (no interrupt), so a later send
+   * triggers `settle()`, which calls `endTurn` in its `finally`. The Stop hook
+   * runs inside settlement — before `endTurn` releases the waiting send — so
+   * `startedTurns` and ledger order must reflect the same ordering guarantee
+   * as the live-reader case.
+   */
+  it('R1.5: a slow Stop hook during settlement blocks the next send until after the done is recorded', async () => {
+    const sessionId = `eot-settle-stop-${Date.now()}`;
+    const { session, provider, stopEntered, releaseStop } = sessionWithSlowStop(sessionId);
+
+    // Break immediately after the first event — no ESC, no interrupt. The turn
+    // is parked (abandoned, not settling yet).
+    for await (const _event of session.sendMessageStream('long gated task')) break;
+
+    // Start the next send; this triggers settlement of the parked turn.
+    const realEvents: OutputEvent[] = [];
+    const realFinished = (async () => {
+      for await (const e of session.sendMessageStream('real message')) realEvents.push(e);
+    })();
+
+    // Let settlement reach the terminal so the Stop hook fires. The tail is
+    // released so the gated long turn can emit its terminal event.
+    provider.releaseTail();
+
+    // Wait until settlement's Stop hook has entered but not yet returned.
+    await stopEntered;
+    await new Promise((r) => setTimeout(r, 30));
+
+    // While the Stop hook is blocked, the next send must NOT have started yet:
+    // `endTurn` runs in settle().finally, after the Stop hook completes.
+    const startedDuringStop = [...provider.startedTurns];
+
+    releaseStop();
+    await realFinished;
+    await session.close();
+
+    // Only the settled turn ran while the hook was blocked.
+    expect(startedDuringStop).toEqual(['long gated task']);
+    // After the hook released, the real message ran normally.
+    expect(messageTexts(realEvents)).toEqual(['Echo: real message']);
+
+    // Ledger order: user(long) → done(interrupted) → user(real) → done(end_turn).
+    const kinds = (await ledgerOf(sessionId)).filter((r) => r.kind === 'user' || r.kind === 'done');
+    expect(kinds.map((r) => r.kind)).toEqual(['user', 'done', 'user', 'done']);
+    expect(kinds[1]!.stopReason).toBe('interrupted');
+    expect(kinds[3]!.stopReason).toBe('end_turn');
+  }, 8000);
+});
+
+describe('abandoned turn: sendMessage path after settlement (R2.2-2)', () => {
+  it('sendMessage resolves normally after a parked turn is settled on the next send', async () => {
+    const sessionId = `parked-sendmessage-${Date.now()}`;
+    const provider = createScriptedProvider(sessionId);
+    const session = new AgentSession({ model: 'sonnet', provider });
+
+    // Park a turn without interrupting (consumer bails on the first event).
+    for await (const _event of session.sendMessageStream('long task')) break;
+
+    // sendMessage (non-streaming) is the next send: it must wait for settlement
+    // to finish, then run its own turn and return a Message.
+    const message = await session.sendMessage('next via sendMessage');
+    await session.close();
+
+    expect(message.role).toBe('assistant');
+    expect(typeof message.content === 'string' && message.content).toBeTruthy();
+    expect(provider.startedTurns).toEqual(['long task', 'next via sendMessage']);
+
+    // Ledger: user(long) → done(interrupted) → user(next) → done(end_turn).
+    const records = await ledgerOf(sessionId);
+    const kinds = records.filter((r) => r.kind === 'user' || r.kind === 'done');
+    expect(kinds.map((r) => r.kind)).toEqual(['user', 'done', 'user', 'done']);
+    expect(kinds[3]).toHaveProperty('stopReason', 'end_turn');
+  });
+});
+
+describe('abandoned turn: cancelled send preserves prior turn plan-text state (R2.2-3)', () => {
+  /**
+   * Contract: `beginTurn()` on the plan-text tracker fires only via
+   * `onTurnStart` in `runStream`, which runs only after the send has cleared
+   * the pipeline and pushed its message. A send cancelled while waiting behind
+   * a settling turn exits early (via `buildInterruptedDone(0)`) before
+   * `onTurnStart` is ever called, so it must not reset `roundChars` or the
+   * refusal counter mid-flight in the settling turn.
+   *
+   * What this test asserts: the cancelled send produces exactly one event
+   * (`done` with `stopReason: 'interrupted'`), never reaches the provider,
+   * and the session remains live so the next real send runs normally. The
+   * tail text from the settling turn does NOT bleed into the subsequent turn's
+   * plan-text window (the same isolation guarantee as R2.2-1, now under a
+   * cancelled-send interleave).
+   */
+  it('a cancelled send ends with interrupted done and does not reach the provider', async () => {
+    const provider = createScriptedProvider(`cancel-refusal-${Date.now()}`);
+    const session = new AgentSession({ model: 'sonnet', provider });
+    const longMessage = `long gated task ${'z'.repeat(120)}`;
+
+    // ESC a gated long turn so settlement is parked on the tail.
+    await sendThenEscAndBreak(session, longMessage);
+
+    // Queue a send that parks behind the settling turn, then cancel it.
+    const cancelledEvents: OutputEvent[] = [];
+    const cancelledFinished = (async () => {
+      for await (const e of session.sendMessageStream('check plan')) cancelledEvents.push(e);
+    })();
+    await new Promise((r) => setTimeout(r, 20));
+    await session.interrupt(); // cancels the queued send before it starts
+    await cancelledFinished;
+
+    // The cancelled send must have produced exactly one event: an interrupted done.
+    expect(cancelledEvents).toHaveLength(1);
+    expect(cancelledEvents[0]!.type).toBe('done');
+    expect(stopReasonOf(cancelledEvents)).toBe('interrupted');
+
+    // Release the tail so settlement can finish.
+    provider.releaseTail();
+
+    // The session must remain live: the next real send runs normally, and its
+    // fresh turn begins with a clean plan-text window (beginTurn resets state).
+    const afterEvents = await collect(session, 'check plan');
+    await session.close();
+
+    // The cancelled send never reached the provider.
+    expect(provider.startedTurns).toEqual([longMessage, 'check plan']);
+    // The gated turn's tail text does NOT bleed into the new turn's gate.
+    expect(messageTexts(afterEvents)).toEqual(['Plan gate: refuse']);
+  }, 8000);
 });
 
 /**
