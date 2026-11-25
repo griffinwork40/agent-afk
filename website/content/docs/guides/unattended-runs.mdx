@@ -69,7 +69,7 @@ Ask for a terminal state and evidence you can inspect:
 
 A successful process exit or an agent saying Done does not certify the task's correctness. For code work, require meaningful tests or checks **after the last change**.
 
-daemon.verifyDone (enabled by default) gates completion pushes behind an evidence check: it looks for at least one successful evidence-producing tool call (write, edit, or executed command) in the turn. An unsupported Done claim is labeled **Done (unverified)** rather than treated as proven. Use `enforceDoneEvidence` for a stricter interactive-session check that also requires a verification step after the last code change.
+`daemon.verifyDone` (enabled by default) gates completion pushes behind an evidence check: it looks for at least one successful evidence-producing tool call (write, edit, or executed command) in the turn. An unsupported Done claim is labeled **Done (unverified)** rather than treated as proven. Use `enforceDoneEvidence` (REPL sessions only) for a stricter interactive-session check that also requires a verification step after the last code change.
 
 A Done push with at least one structured field but no Pending bullet shows **Pending: not stated**, so a report that says nothing about remaining work reads differently from one that says `Pending: none`.
 
