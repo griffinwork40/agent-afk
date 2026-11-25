@@ -40,8 +40,11 @@ vi.mock('./acp.session.js', () => ({
   closeAcpSession: (h: unknown) => mockCloseAcpSession(h),
 }));
 
+const mockDeleteAcpMapping = vi.fn(async (_id: string): Promise<void> => undefined);
+
 vi.mock('./acp.session-map.js', () => ({
   resolveAcpId: (id: string) => mockResolveAcpId(id),
+  deleteAcpMapping: (id: string) => mockDeleteAcpMapping(id),
 }));
 
 vi.mock('./acp.session-record.js', () => ({
@@ -75,6 +78,7 @@ beforeEach(() => {
   mockReadRecord.mockReturnValue(undefined);
   mockWriteRecord.mockReturnValue(undefined);
   mockPruneRecord.mockReturnValue(undefined);
+  mockDeleteAcpMapping.mockResolvedValue(undefined);
   mockBuildAcpSession.mockResolvedValue({
     session: { close: vi.fn().mockResolvedValue(undefined) },
     memoryStore: { close: vi.fn() },
@@ -157,6 +161,22 @@ describe('loadAcpSession — unknown id', () => {
     mockCheckJournalExists.mockReturnValue('error');
     await loadAcpSession(BASE_PARAMS, BASE_OPTS).catch(() => {});
     expect(mockPruneRecord).not.toHaveBeenCalled();
+  });
+
+  it('deletes the stale map entry when hasMappedEntry and journal is enoent', async () => {
+    // acpId !== afkId → hasMappedEntry = true
+    mockResolveAcpId.mockReturnValue('different-afk-id');
+    mockCheckJournalExists.mockReturnValue('enoent');
+    await loadAcpSession(BASE_PARAMS, BASE_OPTS).catch(() => {});
+    expect(mockDeleteAcpMapping).toHaveBeenCalledWith(BASE_PARAMS.sessionId);
+  });
+
+  it('does not call deleteAcpMapping when acpId === afkId (no map entry)', async () => {
+    // acpId === afkId (identity mapping) → hasMappedEntry = false
+    mockResolveAcpId.mockImplementation((id) => id);
+    mockCheckJournalExists.mockReturnValue('enoent');
+    await loadAcpSession(BASE_PARAMS, BASE_OPTS).catch(() => {});
+    expect(mockDeleteAcpMapping).not.toHaveBeenCalled();
   });
 });
 

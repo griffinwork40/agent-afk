@@ -32,6 +32,7 @@ import { randomUUID } from 'node:crypto';
 
 import { getAcpSessionMapPath } from '../../paths.js';
 import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
+import { checkJournalExists } from '../../agent/journal/reader.js';
 
 export interface AcpSessionEntry { afkId?: string; cwd?: string }
 export type AcpSessionMap = Record<string, string | AcpSessionEntry>;
@@ -152,8 +153,15 @@ async function acquireMapLock(): Promise<string> {
   throw new Error('acp session-map lock contested after retries');
 }
 
-function releaseMapLock(_token: string, lock: string): void {
-  try { unlinkSync(lock); } catch { /* best-effort */ }
+function releaseMapLock(token: string, lock: string): void {
+  try {
+    // Only unlink if the token still matches what we wrote.  A concurrent
+    // caller may have cleared a stale lock and re-acquired it between our
+    // last write and now; unlinking unconditionally would evict the new
+    // holder's live lock.
+    const current = readFileSync(lock, 'utf8').trim();
+    if (current === token) unlinkSync(lock);
+  } catch { /* lock already gone or unreadable — nothing to release */ }
 }
 
 /**
@@ -179,11 +187,21 @@ export async function recordAcpMapping(acpId: string, afkId: string): Promise<vo
  * Called by acp.session-load when the mapped journal no longer exists so
  * the same dead entry is not re-resolved on every future load attempt.
  * Serialized via the same O_EXCL lock as recordAcpMapping.
+ *
+ * Re-checks journal existence after acquiring the lock to guard the race
+ * window between the caller's initial check and the lock acquisition: a
+ * concurrent session/new for the same acpId may have written a fresh record
+ * and mapping in that interval. If the journal now exists, the entry is live
+ * and must not be deleted.
  */
 export async function deleteAcpMapping(acpId: string): Promise<void> {
   const lock = mapLockPath();
   const token = await acquireMapLock();
   try {
+    // Re-check inside the lock: a concurrent writer may have created the
+    // journal between our caller's check and here.
+    const afkId = resolveAcpId(acpId);
+    if (checkJournalExists(afkId) === 'exists') return;
     const map = readAcpSessionMap();
     // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
     delete map[acpId];
