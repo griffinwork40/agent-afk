@@ -84,8 +84,6 @@ export interface AgentTaskContext {
 interface AttemptResult {
   responseText: string;
   doneUnverified: boolean;
-  /** Set when a cron-task elicitation was declined and a handoff written. */
-  elicitationMessage?: string;
 }
 
 /**
@@ -123,7 +121,10 @@ export async function executeAgentTask(
   const fallbackFields: ModelFallbackFields = {};
   ctx.idleDetector.increment();
   try {
-    const outcome = await runWithTaskRetry(() => runAgentAttempt(ctx, task, trigger, fallbackFields), {
+    let wroteHandoff = false;
+    const outcome = await runWithTaskRetry(() => runAgentAttempt(ctx, task, trigger, fallbackFields, () => {
+      wroteHandoff = true;
+    }), {
       ...policy,
       signal: ctx.shutdownSignal ?? new AbortController().signal,
       ...(ctx.isCancelled !== undefined ? { isCancelled: ctx.isCancelled } : {}),
@@ -139,6 +140,14 @@ export async function executeAgentTask(
       } : {}),
     });
     const attemptsField = policy.maxAttempts > 1 ? { attempts: outcome.attempts } : {};
+    // The durable question owns the run's notice, even if the turn later fails.
+    const notificationFields = wroteHandoff ? {
+      notificationDecision: {
+        state: 'suppressed' as const,
+        kind: outcome.ok ? 'completion' as const : 'failure' as const,
+        reason: task.notifyOn === 'never' ? 'policy-never' as const : 'handoff-pending' as const,
+      },
+    } : {};
     if (!outcome.ok) {
       const record: TelemetryRecord = {
         ...baseRecord,
@@ -147,11 +156,12 @@ export async function executeAgentTask(
         errorMessage: redactInlineSecrets(errorMessage(outcome.error)),
         ...fallbackFields,
         ...attemptsField,
+        ...notificationFields,
       };
       ctx.writeTelemetry(record, task);
       return record;
     }
-    const { responseText, doneUnverified, elicitationMessage } = outcome.value;
+    const { responseText, doneUnverified } = outcome.value;
     const record: TelemetryRecord = {
       ...baseRecord,
       durationMs: ctx.now() - startTimeMs,
@@ -161,12 +171,9 @@ export async function executeAgentTask(
         ? `${responseText.slice(0, 280)}… [truncated]`
         : responseText,
       ...attemptsField,
+      ...notificationFields,
     };
-    // When a cron-task elicitation was declined, pass the task-aware
-    // notification message as responseText so onTaskComplete routes it
-    // through the normal notifyOn path (#3243 gap 1 partial).
-    const notifyResponseText = elicitationMessage ?? responseText;
-    ctx.writeTelemetry(record, task, { responseText: notifyResponseText, ...(doneUnverified ? { doneUnverified: true } : {}) });
+    ctx.writeTelemetry(record, task, { responseText, ...(doneUnverified ? { doneUnverified: true } : {}) });
     return record;
   } finally {
     ctx.idleDetector.decrement();
@@ -189,6 +196,7 @@ async function runAgentAttempt(
   task: ScheduledTask,
   trigger: TelemetryTrigger,
   fallbackFields: ModelFallbackFields,
+  onHandoffWritten: () => void,
 ): Promise<AttemptResult> {
   let session: AgentSession | null = null;
   let memoryStore: MemoryStore | null = null;
@@ -216,9 +224,6 @@ async function runAgentAttempt(
     // uninstalled in the finally block so cron ticks never inherit it.
     // For cron/sessionstart tasks, install a lightweight handler that writes
     // a durable handoff and immediately declines (#3243 gap 1 partial).
-    // Scoped per attempt: only the final retry's elicitation is notified.
-    // Within that attempt the latest persisted question wins; earlier attempts
-    // cannot leak a stale question into the final completion notification.
     //
     // Concurrency invariant (#3619): handlers are installed into a per-session
     // keyed slot (installForSession / uninstallForSession) rather than the
@@ -227,7 +232,6 @@ async function runAgentAttempt(
     // which is unique per tick). Uninstalling one slot never affects another.
     // ask-question.ts resolves the right handler via context.sessionId, which
     // equals elicitationKey (both come from daemonTraceLabel in session-spawn.ts).
-    let elicitationMessage: string | undefined;
     if (trigger === 'pull') {
       elicitationRouter.installForSession(elicitationKey, makeDaemonElicitationHandler({
         taskId: task.taskId,
@@ -240,12 +244,10 @@ async function runAgentAttempt(
       }));
       handlerInstalled = true;
     } else {
-      // Resolve the task's notifyChat to a concrete chat id for the rich
-      // Telegram handoff path (#3243 item 2). Falls back to primaryChatId
-      // when notifyChat is unset so the operator's default chat is used.
-      const resolvedChatId = ctx.options.resolveNotifyChat !== undefined
-        ? (ctx.options.resolveNotifyChat(task.notifyChat, task.taskId) ?? ctx.options.primaryChatId)
-        : ctx.options.primaryChatId;
+      // An explicit override must pass the injected allowlist resolver.
+      // Without an override or a co-hosted bot, the raw push resolves defaults.
+      const resolvedChatId = ctx.options.resolveNotifyChat?.(task.notifyChat, task.taskId)
+        ?? (ctx.options.bot !== undefined ? ctx.options.primaryChatId : undefined);
       // resolvedThreadId is intentionally only set for the primary chat: per-chat
       // thread IDs are specific to a single chat and cannot be safely forwarded
       // to a different (notifyChat-resolved) chat without risking a wrong-thread
@@ -259,9 +261,10 @@ async function runAgentAttempt(
         resumeContext: resumeContextFromTask(task),
         cronExpression: task.cronExpression,
         ...(ctx.handoffsDir !== undefined ? { handoffsDir: ctx.handoffsDir } : {}),
-        ...(ctx.options.bot !== undefined && resolvedChatId !== undefined
-          ? { bot: ctx.options.bot, chatId: resolvedChatId, ...(resolvedThreadId !== undefined ? { threadId: resolvedThreadId } : {}) }
-          : { onHandoffWritten: (msg) => { elicitationMessage = msg; } }),
+        bot: ctx.options.bot,
+        chatId: resolvedChatId,
+        threadId: resolvedChatId !== undefined ? resolvedThreadId : undefined,
+        onHandoffWritten,
       }));
       handlerInstalled = true;
     }
@@ -285,7 +288,6 @@ async function runAgentAttempt(
     return {
       responseText,
       doneUnverified: probeDoneUnverified(ctx, responseText, response),
-      elicitationMessage,
     };
   } finally {
     // Capture before close clears metadata, even when sendMessage rejects.

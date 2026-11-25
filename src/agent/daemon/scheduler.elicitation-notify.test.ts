@@ -8,7 +8,7 @@
  *
  * 2. Integration tests for the wiring in `CronScheduler`: when a cron task's
  *    session calls `ask_question`, the cron handler writes a durable handoff
- *    record and fires `onTaskComplete` with a task-aware notification message.
+ *    record and sends a question instead of a completion notice.
  *
  * @module agent/daemon/scheduler.elicitation-notify.test
  */
@@ -53,6 +53,9 @@ import {
 } from './scheduler.elicitation-notify.js';
 import { CronScheduler, type TelemetryRecord, type TaskCompletionDetails } from './scheduler.js';
 import { elicitationRouter } from '../elicitation-router.js';
+import { operatorNotify } from '../operator-notify.js';
+
+vi.mock('../operator-notify.js', () => ({ operatorNotify: vi.fn().mockResolvedValue(null) }));
 import type { AgentSession } from '../session/agent-session.js';
 import type { AgentConfig } from '../types.js';
 import type { ScheduledTask } from './triggers.js';
@@ -138,42 +141,39 @@ describe('makeCronElicitationHandler', () => {
     expect(rec['requestType']).toBe('ask_question');
   });
 
-  it('calls onHandoffWritten with a task-aware message when handoff succeeds', async () => {
-    const messages: string[] = [];
+  it('signals that the durable handoff was written', async () => {
+    const onHandoffWritten = vi.fn();
     const handler = makeCronElicitationHandler({
       taskId: 'task-2',
       originalCommand: '/run',
       cronExpression: '* * * * *',
       handoffsDir,
-      onHandoffWritten: (m) => { messages.push(m); },
+      onHandoffWritten,
     });
     await handler(request, { signal });
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain('task-2');
-    expect(messages[0]).toContain('/run');
-    expect(messages[0]).toContain('Should I proceed?');
+    expect(onHandoffWritten).toHaveBeenCalledOnce();
   });
 
   it('declines immediately without calling onHandoffWritten when signal is pre-aborted', async () => {
     const ac = new AbortController();
     ac.abort();
-    const messages: string[] = [];
+    const onHandoffWritten = vi.fn();
     const handler = makeCronElicitationHandler({
       taskId: 'task-3',
       originalCommand: '/cmd',
       handoffsDir,
-      onHandoffWritten: (m) => { messages.push(m); },
+      onHandoffWritten,
     });
     const result = await handler(request, { signal: ac.signal });
     expect(result).toEqual({ action: 'decline' });
-    expect(messages).toHaveLength(0);
+    expect(onHandoffWritten).not.toHaveBeenCalled();
     // No handoff written (pre-abort fast path)
     const files = readdirSync(handoffsDir).filter((f) => f.endsWith('.json'));
     expect(files).toHaveLength(0);
   });
 
   it('does not call onHandoffWritten when handoff write fails', async () => {
-    const messages: string[] = [];
+    const onHandoffWritten = vi.fn();
     // Force a write failure portably: a directory path nested under a regular
     // FILE fails mkdir/write with ENOTDIR (POSIX) or ENOENT/EEXIST (win32).
     // `/dev/null/...` is NOT portable — on Windows it resolves to a creatable
@@ -185,11 +185,11 @@ describe('makeCronElicitationHandler', () => {
       taskId: 'task-4',
       originalCommand: '/cmd',
       handoffsDir: badDir,
-      onHandoffWritten: (m) => { messages.push(m); },
+      onHandoffWritten,
     });
     const result = await handler(request, { signal });
     expect(result).toEqual({ action: 'decline' });
-    expect(messages).toHaveLength(0);
+    expect(onHandoffWritten).not.toHaveBeenCalled();
   });
 });
 
@@ -205,6 +205,7 @@ describe('CronScheduler cron elicitation notify', () => {
   let savedProjectMcp: string | undefined;
 
   beforeEach(() => {
+    vi.mocked(operatorNotify).mockClear();
     dir = mkdtempSync(join(tmpdir(), 'afk-elicit-sched-'));
     telemetryPath = join(dir, 'forge-telemetry.jsonl');
     handoffsDir = join(dir, 'handoffs');
@@ -331,18 +332,6 @@ describe('CronScheduler cron elicitation notify', () => {
     expect(rec['status']).toBe('pending');
   });
 
-  it('when elicitation fires, onTaskComplete receives task-aware responseText', async () => {
-    const completions: Array<{ record: TelemetryRecord; details?: TaskCompletionDetails }> = [];
-    const s = makeScheduler(true, (r, d) => { completions.push({ record: r, details: d }); });
-    s.register(task());
-    await s.tick('elicit-task');
-    await s.stop();
-    expect(completions).toHaveLength(1);
-    const notifyText = completions[0]?.details?.responseText ?? '';
-    expect(notifyText).toContain('elicit-task');
-    expect(notifyText).not.toBe('done');
-  });
-
   it('elicitation handler is uninstalled after the tick completes', async () => {
     const s = makeScheduler(true);
     s.register(task());
@@ -353,8 +342,7 @@ describe('CronScheduler cron elicitation notify', () => {
   });
 
   it('sessionstart trigger also gets the cron handler', async () => {
-    const completions: Array<{ record: TelemetryRecord; details?: TaskCompletionDetails }> = [];
-    const s = makeScheduler(true, (r, d) => { completions.push({ record: r, details: d }); });
+    const s = makeScheduler(true);
     const t: ScheduledTask = {
       taskId: 'elicit-ss',
       command: '/ss-cmd',
@@ -367,7 +355,6 @@ describe('CronScheduler cron elicitation notify', () => {
     await s.stop();
     const files = readdirSync(handoffsDir).filter((f) => f.endsWith('.json'));
     expect(files).toHaveLength(1);
-    const notifyText = completions[0]?.details?.responseText ?? '';
-    expect(notifyText).toContain('elicit-ss');
+    expect(operatorNotify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('elicit-ss'), expect.anything());
   });
 });
