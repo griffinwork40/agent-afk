@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [6.2.1] - 2026-11-25
+
 ### Fixed
 - address remaining advisory findings — provider comment + runtime tests (#5282) (9eca85c97)
 - address remaining census items — node: subpaths and gap rationales (#5277) (9a868cc88)
