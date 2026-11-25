@@ -30,8 +30,6 @@ export interface AcpServerOptions {
   maxTurns: number;
   input: Readable;
   output: Writable;
-  /** Skip the permission bridge entirely; independent gates still apply. */
-  dangerouslySkipPermissions?: boolean;
   /** Diagnostics sink; defaults to stderr. Never stdout. */
   log?: (line: string) => void;
   /** How long a cancelled turn keeps draining queued updates (ms). */
@@ -95,7 +93,6 @@ async function runConnection(options: AcpServerOptions): Promise<void> {
   const ctx: ServerContext = {
     opts: {
       model: options.model, maxTurns: options.maxTurns,
-      ...(options.dangerouslySkipPermissions !== undefined ? { dangerouslySkipPermissions: options.dangerouslySkipPermissions } : {}),
       ...(options.cancelGraceMs !== undefined ? { cancelGraceMs: options.cancelGraceMs } : {}),
     },
     peer, initialized: false,

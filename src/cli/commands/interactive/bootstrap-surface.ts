@@ -53,17 +53,14 @@ export function createReplSurface(a: {
   if (a.resumeTarget?.stored) {
     reseedStatsFromStored(stats, a.resumeTarget.stored, a.resumeTarget.resumeId);
   }
-  // Initial permission mode: --dangerously-skip-permissions wins, else the
-  // resolved afk.config.json `permissionMode` (loadConfig now always returns one
-  // — DEFAULT_CLI_PERMISSION_MODE = bypass for new installs, overridable by the
+  // Initial permission mode: --permission-mode flag wins over the resolved
+  // afk.config.json `permissionMode` (loadConfig now always returns one —
+  // DEFAULT_CLI_PERMISSION_MODE = bypass for new installs, overridable by the
   // config key). Stamped on stats so the status-line badge + the plan/AFK/bypass
   // gate getters reflect it from turn 1; the session is constructed with the same
   // value via sharedDeps. The `!== undefined` guard is retained defensively.
-  // Precedence: --dangerously-skip-permissions (always bypass) >
-  // --permission-mode <mode> > afk.config.json permissionMode.
-  const initialPermissionMode = a.options.dangerouslySkipPermissions
-    ? ('bypassPermissions' as const)
-    : a.options.permissionMode ?? a.cliConfig.permissionMode;
+  // Precedence: --permission-mode <mode> > afk.config.json permissionMode.
+  const initialPermissionMode = a.options.permissionMode ?? a.cliConfig.permissionMode;
   if (initialPermissionMode !== undefined) {
     stats.permissionMode = initialPermissionMode;
   }

@@ -31,7 +31,7 @@
  * path). The patch_apply locations-overflow test FAILS on 0a045c5d6.
  */
 import { describe, expect, it } from 'vitest';
-import { buildPendingStart } from './acp.permission.policy.js';
+import { buildPendingStart } from './__test-utils__/acp-build-pending-start.js';
 import { serializedBytes } from './acp.translate.bounds.js';
 
 const SESSION_CWD = '/home/user/project';

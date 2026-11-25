@@ -63,7 +63,7 @@ function chatParams(): ChatSessionSetupParams {
     maxBudgetUsd: undefined, taskBudget: undefined, maxOutputTokens: undefined,
     maxToolUseIterations: undefined, worktreeCwd: undefined, traceWriter: undefined,
     mcpManager: undefined, resumeConfig: {}, permissionMode: undefined,
-    dangerouslySkipPermissions: undefined, temperature: undefined, baseUrl: undefined,
+    temperature: undefined, baseUrl: undefined,
     openaiBaseUrl: undefined, autoResumeOnUsageLimit: undefined,
   };
 }

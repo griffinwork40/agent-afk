@@ -26,6 +26,7 @@ import { emitSessionIdAssigned } from './session-id-trace.js';
 import { resolveProvider, providerForModel } from '../providers/index.js';
 import { ProviderRouter } from '../providers/router/provider-router.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
+import { primeSessionCredential } from './credential-prime.js';
 import {
   getConfiguredFallbackModel,
   injectedFirstFactory,
@@ -108,6 +109,9 @@ function buildProviderQuery(
       // Read live (per arming check), so a `/config set models.fallback` lands
       // without a session restart. The router owns eligibility.
       getFallbackModel: getConfiguredFallbackModel,
+      // Library sessions get the same stored-login refresh the CLI entry
+      // points await at startup (see credential-prime.ts for the skip rules).
+      primeCredential: (m) => primeSessionCredential(config, m),
     },
   );
 }
