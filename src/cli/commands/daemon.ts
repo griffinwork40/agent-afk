@@ -102,7 +102,7 @@ export function formatTaskCompletion(
     // Use spread to count Unicode code points so the slice boundary never
     // falls inside a surrogate pair (e.g. emoji represented as two UTF-16 units).
     const chars = [...msg];
-    lines.push(`error: ${chars.length > 400 ? `${chars.slice(0, 400).join('')}… [truncated]` : msg}`);
+    lines.push(`error: ${chars.length > 400 ? `${chars.slice(0, 400).join('')}… [truncated]` : chars.join('')}`);
   }
   if (hasOutput) {
     lines.push('', responseText as string);
