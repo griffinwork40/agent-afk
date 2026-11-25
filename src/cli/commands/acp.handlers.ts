@@ -15,10 +15,9 @@ import { buildAcpSession, closeAcpSession, type AcpSessionOptions } from './acp.
 import { AcpNotFoundError, loadAcpSession, replayHistory } from './acp.session-load.js';
 import { recordAcpMapping, resolveAcpId } from './acp.session-map.js';
 import { writeAcpSessionRecord } from './acp.session-record.js';
-import { createAcpPermissionGate } from './acp.permission.js';
 import { createTranslatorState } from './acp.translate.js';
 import { AcpInvalidParams, parseSessionSetup, type SessionSetup } from './acp.params.js';
-import { cancelTurn, makeEmitToolCall, runPromptTurn, type LiveSession } from './acp.prompt-turn.js';
+import { cancelTurn, runPromptTurn, type LiveSession } from './acp.prompt-turn.js';
 import {
   INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, RESOURCE_NOT_FOUND, normalizePrompt,
 } from './acp.server.protocol.js';
@@ -39,7 +38,6 @@ function unknownSession(sessionId: string): AcpError {
 export interface HandlerOptions {
   model: AgentModelInput;
   maxTurns: number;
-  dangerouslySkipPermissions?: boolean;
   /** Turn-cancel drain window; tests shorten it. */
   cancelGraceMs?: number;
 }
@@ -105,36 +103,21 @@ function parseSetup(params: unknown, mode: 'new' | 'load' | 'resume'): SessionSe
   }
 }
 
-/** Create the live record, its translator and (unless skipped) its gate. */
+/** Create the live record and its translator. */
 function prepareLive(ctx: ServerContext, id: string, setup: SessionSetup): { live: LiveSession; options: AcpSessionOptions } {
   const translator = createTranslatorState();
   const window = knownContextWindow(ctx.opts.model);
   if (window !== undefined) translator.contextWindowSize = window;
   const live: LiveSession = { id, cwd: setup.cwd, translator, closing: false, wireMcp: JSON.stringify(setup.wireMcp) };
-  if (!ctx.opts.dangerouslySkipPermissions) {
-    live.gate = createAcpPermissionGate(ctx.peer, id, {
-      skip: false,
-      emitToolCall: makeEmitToolCall(live, ctx.peer),
-      onCancelled: () => cancelTurn(live, ctx.log),
-      cwd: setup.cwd,
-      turnActive: () => live.active !== undefined && !live.active.cancelled && live.active.ending !== true,
-    });
-  }
-  // The first start of a call that will not ask is in_progress, not pending (profile §5).
-  const gate = live.gate;
-  translator.requiresConsent = gate
-    ? (name, input) => gate.wouldAsk?.(name, input) ?? true
-    : () => false;
+  // The first start of every call is in_progress, not pending (no gate).
+  translator.requiresConsent = () => false;
   const options: AcpSessionOptions = {
     model: ctx.opts.model,
     maxTurns: ctx.opts.maxTurns,
-    dangerouslySkipPermissions: ctx.opts.dangerouslySkipPermissions,
     cwd: setup.cwd,
     sessionId: id,
     mcpServers: setup.mcpServers,
     ...(setup.systemPrompt !== undefined ? { systemPrompt: setup.systemPrompt } : {}),
-    ...(live.gate ? { canUseTool: live.gate.canUseTool } : {}),
-    ...(live.gate?.forChild ? { childCanUseTool: live.gate.forChild } : {}),
   };
   return { live, options };
 }
@@ -255,10 +238,9 @@ export async function handleRestore(
   }
 }
 
-/** Remove and release a session, discarding its gate and grants. */
+/** Remove and release a session. */
 export async function releaseSession(ctx: ServerContext, live: LiveSession): Promise<void> {
   if (ctx.sessions.get(live.id) === live) ctx.sessions.delete(live.id);
-  live.gate = undefined;
   const handle = live.handle;
   live.handle = undefined;
   if (handle) await closeAcpSession(handle).catch((err: unknown) => ctx.log(`[acp] close failed: ${String(err)}`));

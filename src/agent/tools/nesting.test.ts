@@ -303,7 +303,7 @@ describe('createChildProviderFactory — readOnlyState invariant', () => {
     const stubExecutor = { execute: () => Promise.resolve({ content: [] }) } as unknown as import('./subagent-executor.js').SubagentExecutor;
     const provider = factory({ childExecutor: stubExecutor, model: 'gpt-4o' });
     // OpenAI-compatible provider stores options in providerOpts
-    const opts = (provider as { providerOpts: { readOnlyState?: boolean } }).providerOpts;
+    const opts = (provider as unknown as { providerOpts: { readOnlyState?: boolean } }).providerOpts;
     expect(opts.readOnlyState).toBe(true);
   });
 });

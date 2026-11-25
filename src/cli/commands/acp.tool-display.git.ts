@@ -1,9 +1,9 @@
 /**
- * `git_read` content classification for the ACP approval policy (profile
- * section 6). Pure: plans the call with the tool's own argument policy and
- * inspects the argv that would run, never the filesystem or the repository.
+ * `git_read` content classification for ACP tool display. Pure: plans the call
+ * with the tool's own argument policy and inspects the argv that would run,
+ * never the filesystem or the repository.
  *
- * @module cli/commands/acp.permission.git
+ * @module cli/commands/acp.tool-display.git
  */
 import path from 'node:path';
 import { planGitRead } from '../../agent/tools/git-read.policy.js';

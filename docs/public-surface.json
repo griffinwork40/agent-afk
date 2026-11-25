@@ -2273,11 +2273,6 @@
     },
     {
       "kind": "flag",
-      "name": "afk acp --dangerously-skip-permissions",
-      "source": "src/cli/commands/acp.ts"
-    },
-    {
-      "kind": "flag",
       "name": "afk acp --help",
       "source": "src/cli/commands/acp.ts"
     },
@@ -2424,11 +2419,6 @@
     {
       "kind": "flag",
       "name": "afk chat --continue",
-      "source": "src/cli/commands/shared-command-options.ts"
-    },
-    {
-      "kind": "flag",
-      "name": "afk chat --dangerously-skip-permissions",
       "source": "src/cli/commands/shared-command-options.ts"
     },
     {
@@ -3224,11 +3214,6 @@
     {
       "kind": "flag",
       "name": "afk interactive --continue",
-      "source": "src/cli/commands/shared-command-options.ts"
-    },
-    {
-      "kind": "flag",
-      "name": "afk interactive --dangerously-skip-permissions",
       "source": "src/cli/commands/shared-command-options.ts"
     },
     {

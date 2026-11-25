@@ -12,6 +12,23 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [6.2.1] - 2026-11-25
+
+### Fixed
+- address remaining advisory findings — provider comment + runtime tests (#5282) (9eca85c97)
+- address remaining census items — node: subpaths and gap rationales (#5277) (9a868cc88)
+- hash-pin harbor wheel and add bench-harbor PR job (#5126 follow-up) (#5284) (37dce77d6)
+- address remaining two advisory findings from pr-triage batch (#5281) (058bc6f82)
+- read relay URL lazily so `/global` sees afk.env vars (#5295) (ebaf2a75b)
+- increase timeouts for Windows-sensitive tests (#5274) (de6015a77)
+- add Assumptions bullet to Done terminal state for declined `ask_question` proceeds (#5285) (fe39f7228)
+- remove duplicate `artifact_publish` entry from CHILD_ALLOWED_TOOLS (#5283) (699eeb219)
+
+### Removed
+- delete unreachable AFK remote-control channel (delete path, #5189) (#5280) (67bacc290)
+- remove vestigial `--dangerously-skip-permissions` flag (#5296) (300209ce7)
+- remove ACP permission bridge (#5294) (e653ba374)
+
 ## [6.2.0] - 2026-11-24
 
 ### Added
