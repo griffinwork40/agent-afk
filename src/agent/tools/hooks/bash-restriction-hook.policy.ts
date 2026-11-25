@@ -39,6 +39,29 @@
 import { getReadDenylist, parseReadDenylistEntries } from '../handlers/read-denylist.js';
 import { env } from '../../../config/env.js';
 import { relocatedAfkSensitiveRoots } from './afk-home-refs.js';
+// Invariant: circular-import safety — policy.ts → bash-restriction-hook.ts → policy.ts
+//
+// This import creates a cycle: bash-restriction-hook.ts imports
+// buildSensitiveRootCandidates from this module, and this module imports
+// builtinBashSensitiveRoots back from bash-restriction-hook.ts.
+//
+// The cycle is SAFE today because builtinBashSensitiveRoots is declared as a
+// hoisted `function` declaration (not `const` or an arrow function) in
+// bash-restriction-hook.ts. Function declarations are hoisted to the top of
+// their module scope and are therefore available before the module body
+// finishes executing, so the circular reference resolves correctly at runtime.
+//
+// Hazard: if builtinBashSensitiveRoots is ever refactored from a `function`
+// declaration to a `const` or arrow function, it will be subject to the
+// Temporal Dead Zone (TDZ). The circular import would then cause the binding
+// to read as `undefined` at the moment policy.ts first evaluates, silently
+// emptying the credential floor that check-2 depends on — with NO runtime
+// error thrown and NO type-system signal.
+//
+// DO NOT refactor builtinBashSensitiveRoots to `const` or an arrow function
+// without first breaking this cycle (e.g. by moving builtinBashSensitiveRoots
+// to a third leaf module that neither bash-restriction-hook.ts nor policy.ts
+// imports circularly).
 import { builtinBashSensitiveRoots } from './bash-restriction-hook.js';
 
 /**

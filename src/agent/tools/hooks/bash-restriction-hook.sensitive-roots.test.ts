@@ -23,7 +23,7 @@ import { join, resolve } from 'path';
 
 import { deriveRestrictedSubstrings, builtinBashSensitiveRoots } from './bash-restriction-hook.js';
 import { buildSensitiveRootCandidates } from './bash-restriction-hook.policy.js';
-import { _resetReadDenylistCacheForTests } from '../handlers/read-denylist.js';
+import { _resetReadDenylistCacheForTests, getReadDenylist, parseReadDenylistEntries } from '../handlers/read-denylist.js';
 import { resetAfkHomeWarnLatchForTests } from '../afk-home-warn.js';
 
 const HOME = homedir();
@@ -31,6 +31,7 @@ const HOME = homedir();
 afterEach(() => {
   _resetReadDenylistCacheForTests();
   resetAfkHomeWarnLatchForTests();
+  delete process.env['AFK_READ_DENYLIST'];
 });
 
 // ---------------------------------------------------------------------------
@@ -193,5 +194,44 @@ describe('buildSensitiveRootCandidates stability', () => {
     const a = deriveRestrictedSubstrings(grants);
     const b = deriveRestrictedSubstrings(grants);
     expect(a).toEqual(b);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. AFK_READ_DENYLIST dual-spelling contract
+//    When AFK_READ_DENYLIST is set, buildSensitiveRootCandidates() must include
+//    BOTH the as-spelled expanded form (from parseReadDenylistEntries) AND the
+//    resolved form (from getReadDenylist), so bash commands that name symlinks
+//    rather than their real paths are still blocked.
+// ---------------------------------------------------------------------------
+
+describe('AFK_READ_DENYLIST dual-spelling contract through buildSensitiveRootCandidates', () => {
+  it('includes the as-spelled expanded form from parseReadDenylistEntries', () => {
+    process.env['AFK_READ_DENYLIST'] = '~/sensitive-custom';
+    _resetReadDenylistCacheForTests();
+    const candidates = buildSensitiveRootCandidates();
+    const asSpelled = parseReadDenylistEntries(process.env['AFK_READ_DENYLIST']);
+    // parseReadDenylistEntries expands leading ~ → HOME; the result must appear
+    // in candidates so bash commands that use the as-spelled path are blocked.
+    const expected = join(HOME, 'sensitive-custom');
+    expect(asSpelled).toContain(expected);
+    expect(candidates).toContain(expected);
+  });
+
+  it('includes the resolved form (at least one element ends with sensitive-custom)', () => {
+    process.env['AFK_READ_DENYLIST'] = '~/sensitive-custom';
+    _resetReadDenylistCacheForTests();
+    const candidates = buildSensitiveRootCandidates();
+    // getReadDenylist() returns symlink-resolved paths; on most systems
+    // ~/sensitive-custom resolves to the same expanded path, but we check
+    // by suffix to be filesystem-agnostic.
+    expect(candidates.some((c) => c.endsWith('sensitive-custom'))).toBe(true);
+  });
+
+  it('getReadDenylist includes the entry when AFK_READ_DENYLIST is set', () => {
+    process.env['AFK_READ_DENYLIST'] = '~/sensitive-custom';
+    _resetReadDenylistCacheForTests();
+    const denylist = getReadDenylist();
+    expect(denylist.some((c) => c.endsWith('sensitive-custom'))).toBe(true);
   });
 });
