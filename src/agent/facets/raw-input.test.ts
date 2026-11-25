@@ -17,7 +17,13 @@ describe('extractRawToolInput', () => {
       id_prefix: 'verify',
     });
     // The whitelist is the documented contract — `command` is not in it.
-    expect([...RAW_INPUT_FIELDS]).toEqual(['file_path', 'name', 'id_prefix', 'dry_run']);
+    expect([...RAW_INPUT_FIELDS]).toEqual([
+      'file_path',
+      'name',
+      'id_prefix',
+      'dry_run',
+      'changes_empty',
+    ]);
   });
 
   it('drops large/sensitive fields (command, content, new_string, old_string, value)', () => {
@@ -76,8 +82,17 @@ describe('extractRawToolInput', () => {
     expect(raw).not.toContain('new content');
   });
 
-  it('does not persist changes_paths when changes is absent or empty (#3182)', () => {
-    expect(extractRawToolInput({ changes: [] })).toBeUndefined();
+  it('persists changes_empty marker when changes is an empty array (#5257)', () => {
+    // An empty changes array means the handler returns synthetic 'applied' but
+    // writes nothing. extractRawToolInput must emit a changes_empty marker so
+    // isPatchApplyDryRun can detect the no-op in production (the `changes` field
+    // itself is never forwarded, so the guard needs this explicit signal).
+    const raw = extractRawToolInput({ changes: [] });
+    expect(raw).toBeDefined();
+    expect(JSON.parse(raw as string)).toEqual({ changes_empty: true });
+  });
+
+  it('does not persist changes_paths when changes is absent or not an array (#3182)', () => {
     expect(extractRawToolInput({ changes: 'not-an-array' })).toBeUndefined();
   });
 
