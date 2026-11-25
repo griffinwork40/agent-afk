@@ -16,14 +16,14 @@ afk config set permissionMode plan
 afk i
 ```
 
-The setting takes effect in new sessions. For a single run, use `afk i --permission-mode plan` or `afk chat "Inspect this project" --permission-mode plan`. The `--dangerously-skip-permissions` flag forces bypass mode for a run. An unconfigured CLI uses bypass mode; the daemon also runs in bypass mode. Check the active mode in the REPL status line (`⚡ bypass` for bypass, `● plan` for plan).
+The setting takes effect in new sessions. For a single run, use `afk i --permission-mode plan` or `afk chat "Inspect this project" --permission-mode plan`. An unconfigured CLI uses bypass mode; the daemon also runs in bypass mode. Check the active mode in the REPL status line (`⚡ bypass` for bypass, `● plan` for plan).
 
 | Mode | Behavior |
 |---|---|
 | `bypassPermissions` | New-install CLI default. No path containment or out-of-root approval for file tools. |
 | `plan` | Read-only investigation, with write-class tools blocked until the plan is approved. |
 
-In an interactive session, **Shift+Tab** cycles between `plan` and `bypassPermissions`. Use Shift+Tab to toggle plan mode during a session. `/plan` also controls plan mode. The `--dangerously-skip-permissions` flag does not make irreversible actions safe.
+In an interactive session, **Shift+Tab** cycles between `plan` and `bypassPermissions`. Use Shift+Tab to toggle plan mode during a session. `/plan` also controls plan mode.
 
 ## What path approval covers
 

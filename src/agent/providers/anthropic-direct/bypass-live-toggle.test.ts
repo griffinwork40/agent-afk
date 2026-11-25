@@ -2,8 +2,8 @@
  * Regression test for the live `/bypass` (permission-mode) toggle.
  *
  * The reported bug: starting a session in `bypassPermissions` (via
- * `--dangerously-skip-permissions`, the `permissionMode` config key, or the
- * daemon) and then turning bypass OFF mid-session left the agent effectively
+ * the `permissionMode` config key or the daemon) and then turning bypass OFF
+ * mid-session left the agent effectively
  * unrestricted while the UI badge cleared — i.e. `/bypass off` failed UNSAFE.
  *
  * Root cause: `setPermissionMode()` updated only the system-prompt mode field,
@@ -57,7 +57,7 @@ describe('AnthropicDirectProvider — live /bypass toggle changes effective enfo
     const provider = new AnthropicDirectProvider();
     const baseDir = mkdtempSync(path.join(tmpdir(), 'bypass-live-'));
     try {
-      // Start bypassed — mirrors --dangerously-skip-permissions / config / daemon.
+      // Start bypassed — mirrors permissionMode config / daemon.
       const q = provider.query({
         prompt: 'noop',
         config: {

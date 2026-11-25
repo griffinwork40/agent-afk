@@ -463,8 +463,7 @@ export const DEFAULT_CONFIG: Omit<CliConfig, 'apiKey'> = {
  * path-approval prompt are OFF, so the agent reads/writes anywhere with no
  * confirmation. This is the new-install default and it persists every session
  * until the operator changes it (`afk config set permissionMode default`, a
- * `permissionMode` key in afk.config.json, `--dangerously-skip-permissions`, or
- * the live `/bypass` toggle).
+ * `permissionMode` key in afk.config.json, or the live `/bypass` toggle).
  *
  * Scope is deliberately narrow: this default lives at the loadConfig() layer,
  * which only `afk chat` + `afk interactive` consume via `cliConfig.permissionMode`.
