@@ -10,7 +10,7 @@ describe('pool idle touch-and-recheck', () => {
   it('warm acquires allocate no timers and eviction waits only the remaining idle window', async () => {
     vi.useFakeTimers();
     const client = { alive: true, lastActivityAt: Date.now(), pendingRequests: 0,
-      onExit: vi.fn(), onRequestTimeout: vi.fn(), dispose: vi.fn().mockResolvedValue(undefined) };
+      unref: vi.fn(), onExit: vi.fn(), onRequestTimeout: vi.fn(), dispose: vi.fn().mockResolvedValue(undefined) };
     const pool = new LspServerPool({ idleShutdownMs: 100, startClient: async () => client as unknown as LspClient });
     await pool.acquire(spec, '/workspace');
     await vi.advanceTimersByTimeAsync(60);
@@ -30,7 +30,7 @@ describe('pool idle touch-and-recheck', () => {
   it('keeps pending requests alive and observes subsequent client activity', async () => {
     vi.useFakeTimers();
     const client = { alive: true, lastActivityAt: Date.now(), pendingRequests: 1,
-      onExit: vi.fn(), onRequestTimeout: vi.fn(), dispose: vi.fn().mockResolvedValue(undefined) };
+      unref: vi.fn(), onExit: vi.fn(), onRequestTimeout: vi.fn(), dispose: vi.fn().mockResolvedValue(undefined) };
     const pool = new LspServerPool({ idleShutdownMs: 100, startClient: async () => client as unknown as LspClient });
     await pool.acquire(spec, '/workspace');
     await vi.advanceTimersByTimeAsync(150);

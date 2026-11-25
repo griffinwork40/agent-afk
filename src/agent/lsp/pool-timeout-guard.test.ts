@@ -401,6 +401,56 @@ describe('pooled request timeout incidents', () => {
     expect(guard.recentCrashes).toBe(0);
   });
 
+  it('unrefs the warming process when the last acquirer times out', async () => {
+    // Contract: when every acquirer gives up via timeout, the pool fires
+    // unrefStart.abort(), which propagates to client.unref() via the listener
+    // wired in createEntry's startClient .then() — allowing a one-shot
+    // `afk chat` process to exit while the warming server keeps initializing.
+    //
+    // Uses startClient with a delayed resolution (t=100ms fake time) so the
+    // 50ms acquire timeout fires first. When the .then() runs at t=100ms it
+    // sees unrefStart.signal.aborted===true and calls client.unref() inline.
+    // Avoids vi.spyOn(LspClient.prototype, …) which leaks across test files.
+    const { root, spec, guard } = setup({ silent: true });
+    const fakeUnref = vi.fn();
+    const fakeClient = {
+      unref: fakeUnref,
+      ref: vi.fn(),
+      dispose: vi.fn().mockResolvedValue(undefined),
+      alive: true,
+      killSync: vi.fn(),
+      lastActivityAt: Date.now(),
+      pendingRequests: 0,
+      onRequestTimeout: vi.fn(),
+      onExit: vi.fn(),
+      request: vi.fn(),
+    } as unknown as LspClient;
+    const pool = new LspServerPool({
+      guardFor: () => guard,
+      abandonedStartGraceMs: 20,
+      startClient: () => new Promise<LspClient>((resolve) => {
+        // Resolve after 100ms so the 50ms acquire timeout fires first.
+        setTimeout(() => resolve(fakeClient), 100);
+      }),
+    });
+    pools.push(pool);
+    vi.useFakeTimers();
+
+    // Sole acquirer times out at t=50ms: waitForStart's finally fires
+    // unrefStart.abort(). The startClient promise is still pending.
+    const result = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await result).toMatchObject({ kind: 'timeout' });
+    expect(pool.size).toBe(1); // start still warming, not grace-killed
+
+    // t=100ms: startClient resolves, createEntry's .then() runs, sees
+    // unrefStart.signal.aborted===true, calls client.unref() immediately.
+    await vi.advanceTimersByTimeAsync(50);
+    expect(fakeUnref).toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
   it('a server whose start outlives three short-budget acquires is still usable by a later longer-budget acquire', async () => {
     // Regression: a healthy server with a ~3s cold start must not be disabled
     // by three diagnostics calls (short timeoutMs) before it has warmed up.
