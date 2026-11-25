@@ -34,7 +34,7 @@ vi.mock('../../utils/debug.js', () => ({ debugLog: vi.fn() }));
 
 const { AgentSession } = await import('./agent-session.js');
 const { __setAnthropicClientFactory } = await import('../providers/anthropic-direct/index.js');
-const { resetSlotBindings } = await import('./model-slots.js');
+const { resetSlotBindings, setSlotBindings } = await import('./model-slots.js');
 const { _resetKeychainReadCache, refreshClaudeCodeOauthTokenWithStatus } = await import('../auth/keychain.js');
 const { _resetRefreshedClaudeCodeOauthToken, _resetLastResolvedAnthropicCredential } = await import('../auth/credential-resolver.js');
 const { _resetClaudeLoginStatus } = await import('../auth/claude-login-status.js');
@@ -395,6 +395,22 @@ describe('sessionNeedsStoredLogin skip rules (no I/O)', () => {
     ['non-Anthropic model', { model: 'gpt-5' }],
   ])('%s does not need the stored login', (_label, config) => {
     expect(sessionNeedsStoredLogin(config as never, undefined)).toBe(false);
+    expect(securityCalls()).toEqual([]);
+  });
+
+  it('slot with its own key does not need the stored login', () => {
+    // Bind the `medium` slot with its own apiKey so applySlotCredentials sets
+    // probe.apiKey — the skip rule at credential-prime.ts:47 must fire.
+    setSlotBindings({
+      local: { id: '' },
+      small: { id: 'claude-haiku-5-5' },
+      medium: { id: 'claude-sonnet-4-6', apiKey: 'sk-ant-api03-slot-own-key' },
+      large: { id: 'claude-opus-5-5' },
+      subagent: { id: '' },
+    });
+    // Resolve via the tier name so resolveBinding returns the configured slot.
+    expect(sessionNeedsStoredLogin({ model: 'medium' } as never, undefined)).toBe(false);
+    // The skip must be pure logic — no keychain subprocess should have been invoked.
     expect(securityCalls()).toEqual([]);
   });
 
