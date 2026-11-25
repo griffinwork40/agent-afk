@@ -451,6 +451,61 @@ describe('pooled request timeout incidents', () => {
     vi.useRealTimers();
   });
 
+  it('re-refs the warming process when a new acquirer joins after unrefStart fired, then unrefs when it leaves', async () => {
+    // Contract: acquirer A times out → unrefStart.abort() → client.unref().
+    // At next tick acquirer B calls acquire() on the same key while the start
+    // is still warming. waitForStart() must call client.ref() so the event
+    // loop stays alive while B is waiting. When B's wait ends (either the
+    // start resolves or B times out), the ref is released.
+    const { root, spec, guard } = setup({ silent: true });
+    const fakeRef = vi.fn();
+    const fakeUnref = vi.fn();
+    let resolveStart!: (c: LspClient) => void;
+    const fakeClient = {
+      unref: fakeUnref,
+      ref: fakeRef,
+      dispose: vi.fn().mockResolvedValue(undefined),
+      alive: true,
+      killSync: vi.fn(),
+      lastActivityAt: Date.now(),
+      pendingRequests: 0,
+      onRequestTimeout: vi.fn(),
+      onExit: vi.fn(),
+      request: vi.fn(),
+    } as unknown as LspClient;
+    const pool = new LspServerPool({
+      guardFor: () => guard,
+      abandonedStartGraceMs: 20,
+      startClient: () => new Promise<LspClient>((resolve) => {
+        resolveStart = resolve;
+      }),
+    });
+    pools.push(pool);
+    vi.useFakeTimers();
+
+    // Acquirer A: times out at t=50ms, triggering unrefStart.abort() → unref().
+    const resultA = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await resultA).toMatchObject({ kind: 'timeout' });
+    expect(pool.size).toBe(1); // start still warming
+
+    // Acquirer B joins at t=50ms, after unrefStart has already fired.
+    // waitForStart() must call ref() on the client once the start resolves.
+    const resultB = pool.acquire(spec, root, { timeoutMs: 200 }).catch((err: unknown) => err);
+
+    // Resolve the startClient promise so the .then() in waitForStart fires.
+    resolveStart(fakeClient);
+    await vi.advanceTimersByTimeAsync(0); // flush microtasks
+
+    expect(fakeRef).toHaveBeenCalled();
+
+    // B should receive the client.
+    const clientB = await resultB;
+    expect(clientB).toBe(fakeClient);
+
+    vi.useRealTimers();
+  });
+
   it('a server whose start outlives three short-budget acquires is still usable by a later longer-budget acquire', async () => {
     // Regression: a healthy server with a ~3s cold start must not be disabled
     // by three diagnostics calls (short timeoutMs) before it has warmed up.

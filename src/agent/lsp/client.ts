@@ -47,11 +47,19 @@ export interface RequestOptions {
   /** Per-call deadline in ms. Absent = no deadline (signal/death still apply). */
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
+}
+
+/**
+ * Options for `LspClient.start`. Extends `RequestOptions` with
+ * `unrefSignal`, which is only meaningful during the initialize handshake
+ * and is not passed to individual RPC requests.
+ */
+export interface StartOptions extends RequestOptions {
   /**
-   * `LspClient.start` only. When this signal fires the in-flight initialize
-   * is unreferenced (so it no longer holds a one-shot process alive) but NOT
-   * aborted — the server keeps warming under its own initialize deadline.
-   * Ignored by `request`.
+   * When this signal fires the in-flight initialize is unreferenced (so it
+   * no longer holds a one-shot process alive) but NOT aborted — the server
+   * keeps warming under its own initialize deadline. Only honoured by
+   * `LspClient.start`; ignored by `request`.
    */
   readonly unrefSignal?: AbortSignal;
 }
@@ -130,6 +138,15 @@ export class LspClient {
   }
 
   /**
+   * Re-establish the event-loop reference on the server process. Called by
+   * the pool when a new acquirer joins a warming start whose `unrefStart` has
+   * already fired, so the event loop stays alive while the new waiter waits.
+   */
+  ref(): void {
+    this.setRef(true);
+  }
+
+  /**
    * Keep the event loop alive while a caller awaits this server. An idle warm
    * server is unref'd so it never holds a finished one-shot process open.
    * Returns the release function (idempotent).
@@ -156,7 +173,7 @@ export class LspClient {
    * `LspClientError` on spawn failure, early exit, timeout, or abort (the
    * process is killed in every failure case).
    */
-  static async start(spec: ServerSpec, root: string, opts: RequestOptions = {}): Promise<LspClient> {
+  static async start(spec: ServerSpec, root: string, opts: StartOptions = {}): Promise<LspClient> {
     if (opts.signal?.aborted) throw new LspClientError('aborted', 'Aborted');
     let proc: ChildProcess;
     try {

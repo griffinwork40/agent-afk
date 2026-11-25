@@ -225,6 +225,14 @@ export class LspServerPool {
     entry.waiters++;
     if (entry.abandonTimer) clearTimeout(entry.abandonTimer);
     entry.abandonTimer = null;
+    // Re-ref: if a previous timeout-waiter already fired unrefStart, the
+    // warming process is currently unreferenced. Re-ref it for the duration
+    // of this wait so a one-shot process cannot drain the event loop while
+    // we are still waiting for the server to finish initializing.
+    let reRefClient: LspClient | null = null;
+    if (entry.unrefStart.signal.aborted && entry.starting !== null) {
+      void starting.then((c) => { reRefClient = c; c.ref(); }).catch(() => {});
+    }
     const cleanups: Array<() => void> = [];
     const guard = new Promise<never>((_, reject) => {
       if (opts.timeoutMs !== undefined) {
@@ -273,6 +281,17 @@ export class LspServerPool {
           }
         }, this.opts.abandonedStartGraceMs ?? ABANDONED_START_GRACE_MS);
         entry.abandonTimer.unref();
+      }
+      // Release the re-ref taken for this waiter. If we are the last waiter
+      // and unrefStart already fired, leave the client unref'd (no acquirer
+      // is waiting). If other waiters remain, they hold their own re-refs.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+      const capturedReRef = reRefClient as LspClient | null;
+      reRefClient = null;
+      if (capturedReRef !== null) {
+        if (entry.waiters === 0 && entry.unrefStart.signal.aborted) {
+          capturedReRef.unref();
+        }
       }
     }
   }
