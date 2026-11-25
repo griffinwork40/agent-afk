@@ -14,8 +14,8 @@
  *   - Idle timers are `.unref()`ed and every live server is disposed on
  *     graceful cleanup via `registerCleanup`; client-process guards hard exit.
  *   - Every `evict()` call records the resulting dispose promise in
- *     `evictedDisposals`; `disposeAll()` and `killAll()` await/drain that set
- *     so callers can remove the cwd immediately after cleanup returns.
+ *     `evictedDisposals`; `disposeAll()` awaits that set (and `killAll()` drains
+ *     it) so callers can remove the cwd immediately after cleanup returns.
  *   - A guard-tripping timeout (`onRequestTimeout`) evicts the client
  *     unconditionally, even when `pendingRequests > 0`. Those in-flight
  *     requests will reject with `'exited'`. This is intentional: the guard
@@ -183,6 +183,10 @@ export class LspServerPool {
           }
         });
         client.onExit(() => {
+          // unsubTimeout() is a no-op here: markDead() already cleared
+          // timeoutListeners before firing exitListeners, so the set is empty.
+          // Called anyway for defensive symmetry with the onRequestTimeout path
+          // (which evicts without an exit event and needs the unsub to fire).
           unsubTimeout();
           if (this.entries.get(key) === entry) {
             const fallout = lastTimeoutAt !== null && Date.now() - lastTimeoutAt <= TIMEOUT_EXIT_FALLOUT_MS;
@@ -300,9 +304,9 @@ export class LspServerPool {
    * and only reachable from interactive exit paths) by covering daemon,
    * one-shot, and Telegram process exits (#4309 item 2).
    *
-   * Also drains `evictedDisposals`: those clients were already killed as part
-   * of eviction, so their processes are gone — we just drop the pending
-   * promises so the GC can reclaim them.
+   * Also drains `evictedDisposals`: those clients were evicted (idle shutdown
+   * or crash) and their disposal is already in flight — we drop the pending
+   * promises here since there is no async path to await them on hard exit.
    */
   killAll(): void {
     for (const entry of this.entries.values()) {
@@ -321,7 +325,11 @@ export class LspServerPool {
     // A still-starting entry disposes its own client (and awaits its exit)
     // once the abort lands; wait for that too so callers can rm the cwd.
     const starting = all.map((e) => e.starting).filter((p): p is Promise<LspClient> => p !== null);
-    // Snapshot evicted disposals before evict() adds more.
+    // Snapshot evicted disposals before evict() adds more. The `.finally()`
+    // microtask on each promise removes settled entries from the live set, so
+    // spreading `this.evictedDisposals` after the evict loop would miss any
+    // promise that settled in the microtask gap. The snapshot here ensures
+    // every in-flight disposal is awaited regardless of when it settles.
     const evicted = [...this.evictedDisposals];
     for (const e of all) {
       e.abortStart.abort();
