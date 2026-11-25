@@ -278,11 +278,11 @@ For a malformed request with no usable id use null. Errors to valid requests ech
 | `acp.translate.ts` / A2 | `createTranslatorState(): TranslatorState` |
 | `acp.translate.ts` / A2 | `translateOutputEvent(ev: OutputEvent, st: TranslatorState, ctx: TranslatorContext): SessionUpdate[]` |
 | `acp.translate.ts` / A2 | `finishTurn(st: TranslatorState, meta?: TurnMetadata): FinishedTurn` |
-| `acp.tool-kind.ts` / A2 | `toolKind(toolName: string): ToolKind`, `toolTitle(toolName: string, input?: unknown): string`, `toolLocations(toolName: string, input: unknown, cwd: string): ToolCallLocation[]` |
+| `acp.tool-kind.ts` / A2 | `toolKind(toolName: string): ToolKind`, `toolTitle(toolName: string, input?: unknown, cwd?: string): string`, `toolLocations(toolName: string, input: unknown, cwd: string): ToolCallLocation[]` |
 | `acp.diff.ts` / A2 | `translateDiff(diff: DiffPayload, input: unknown, cwd: string): DiffContent[]` |
 | `acp.permission.ts` / A3 | `createAcpPermissionGate(peer: AcpClientPeer, sessionId: string, opts: AcpPermissionOptions): AcpPermissionGate` |
 | `acp.session-load.ts` / A4 | `loadAcpSession(params: LoadSessionRequest, opts: AcpSessionOptions): Promise<AcpSessionHandle>` |
-| `acp.session-load.ts` / A4 | `replayHistory(sessionId: string, peer: AcpClientPeer): Promise<void>` |
+| `acp.session-load.ts` / A4 | `replayHistory(sessionId: string, peer: AcpClientPeer, cwd?: string): Promise<void>` |
 
 `AcpClientPeer.request(method, params, signal?)` returns `Promise<unknown>`; `notify(method, params)` returns `Promise<void>`. The concrete peer additionally exposes `handleResponse(frame): boolean` and `close(reason?): void`. A1 routes inbound responses to it before method dispatch. The injected `write(frame)` serializes protocol writes. Outbound request rejection is an internal failure, never permission approval.
 

@@ -12,7 +12,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OutputEvent } from '../../agent/types/session-types.js';
 
 vi.mock('./acp.session.js', () => ({ buildAcpSession: vi.fn(), closeAcpSession: vi.fn(async () => undefined) }));
-vi.mock('../../agent/journal/reader.js', () => ({ journalExists: vi.fn(() => true) }));
+vi.mock('../../agent/journal/reader.js', () => ({
+  journalExists: vi.fn(() => true),
+  checkJournalExists: vi.fn(() => 'exists' as const),
+}));
 vi.mock('./acp.replay.js', () => ({ emitReplayUpdates: vi.fn(async () => undefined) }));
 // The real writer, wrapped so one test can make the backfill write fail.
 vi.mock('./acp.session-record.js', async (importOriginal) => {
