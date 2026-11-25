@@ -33,6 +33,8 @@
     "src/cli/commands/browser.test.ts": { "R4": 2 },
     "src/cli/login-command.test.ts": { "R4": 1 },
     "src/cli/slash/commands/diff.test.ts": { "R4": 2 },
+    "src/desktop/backend.windows.integration.test.ts": { "R4": 1 },
+    "src/desktop/private-directory.windows.integration.test.ts": { "R4": 1 },
     "src/service/launchd.test.ts": { "R4": 9 },
     "src/service/systemd.test.ts": { "R4": 6 },
     "src/utils/atomic-write.test.ts": { "R4": 5 },

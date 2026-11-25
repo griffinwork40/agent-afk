@@ -183,7 +183,26 @@ export function createStubParentSession(
 //
 // 'procedure_write' is deliberately NOT included: there is no analogous safe subset — a
 // procedure is either written or not. Per-skill opt-in remains the intended route.
-export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'memory_update', ...WORKSPACE_CHILD_TOOL_NAMES, 'agent', 'skill', 'state_get', 'state_query'];
+//
+// desktop_* tools are deliberately excluded (integration-risk I1): desktop tools
+// drive the pointer and keyboard of the host machine. A forked child that can call
+// desktop_screenshot shares the same physical display as its parent and any other
+// sibling — there is no per-child isolation. Any delegation of desktop capability
+// must be explicit and single-owner. The host-wide exclusive ownership lock (Tranche 2)
+// will enforce the single-owner invariant; for now, exclusion from children is the
+// conservative safe default. `desktop_*` tools start with 'desktop_' and are
+// identified by that prefix so future input tools are excluded automatically.
+export const CHILD_ALLOWED_TOOLS = [
+  ...BUILTIN_TOOL_NAMES.filter((t) => !t.startsWith('desktop_')),
+  ...AWARENESS_TOOL_NAMES,
+  'memory_search',
+  'memory_update',
+  ...WORKSPACE_CHILD_TOOL_NAMES,
+  'agent',
+  'skill',
+  'state_get',
+  'state_query',
+];
 
 // Recon allowlist for a READ-ONLY skill's forked child. This is the tool half
 // of read-only-skill enforcement (the bash half is the dispatcher's

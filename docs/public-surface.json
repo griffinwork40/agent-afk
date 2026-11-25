@@ -1043,6 +1043,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_DESKTOP_ENABLED",
+      "source": "src/config/env.desktop.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_DIFF_LINES",
       "source": "src/config/env.misc.ts"
     },
@@ -2240,6 +2245,16 @@
       "kind": "env",
       "name": "VITEST",
       "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "WSL_DISTRO_NAME",
+      "source": "src/config/env.desktop.ts"
+    },
+    {
+      "kind": "env",
+      "name": "WSL_INTEROP",
+      "source": "src/config/env.desktop.ts"
     },
     {
       "kind": "env",
@@ -4815,6 +4830,11 @@
       "kind": "tool",
       "name": "create_schedule",
       "source": "src/agent/tools/schemas.schedule.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "desktop_screenshot",
+      "source": "src/agent/tools/schemas.desktop-tools.ts"
     },
     {
       "kind": "tool",

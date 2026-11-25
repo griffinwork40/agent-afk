@@ -20,6 +20,9 @@ import type { AnthropicToolDef } from './types.js';
 describe('builtinToolSchemas', () => {
   it('contains exactly 50 tools', () => {
     // 24 invariant core + 26 optional tail = 50
+    // desktop_screenshot is opt-in (AFK_DESKTOP_ENABLED) and NOT in
+    // builtinToolSchemas — it is appended by buildProviderSchemas via
+    // desktopSchemas() when enabled (mirrors AFK_READONLY_GIT_TOOL pattern).
     expect(builtinToolSchemas).toHaveLength(50);
   });
 
@@ -85,6 +88,8 @@ describe('builtinToolSchemas', () => {
       'browser_act',
       'browser_screenshot',
       'browser_close',
+      // desktop_screenshot is NOT here: opt-in via AFK_DESKTOP_ENABLED,
+      // appended by desktopSchemas() at provider construction time.
       'clipboard_write',
       'clipboard_read',
       'list_sessions',
@@ -186,6 +191,8 @@ describe('builtinToolSchemas', () => {
       // are optional in the JSON Schema; the handler enforces the mutual-exclusion
       // at call time (same pattern as model_complete and web_scrape).
       'artifact_publish',
+      // `desktop_screenshot` is not in builtinToolSchemas (opt-in via AFK_DESKTOP_ENABLED)
+      // so it does not appear here.
     ]);
     for (const tool of builtinToolSchemas) {
       expect(tool.input_schema.required).toBeDefined();
