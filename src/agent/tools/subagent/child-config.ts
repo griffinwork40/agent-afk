@@ -223,6 +223,7 @@ export function buildChildConfigWithoutNesting(args: BuildChildConfigArgs) {
     childModel, childIsOpenAI, apiKey,
     effectiveMaxTurns, effectiveMaxToolUseIterations,
     depth, maxDepth,
+    effectiveAllowedTools,
   );
 
   return { childConfig, childModel, childWriteCapable, childSideEffectFree, resolvedAccess, effectiveAllowedTools, effectiveReadOnlyBash, childModelSource };

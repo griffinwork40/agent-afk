@@ -44,8 +44,8 @@ import { WorkspaceStore, createWorkspaceHandlers } from '../../workspace/index.j
 import { StateStore } from '../../state/state-store.js';
 import { createStateHandlers } from '../../state/state-tools.js';
 import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
-import { grantsWorkspacePrompt, providerGrantsTool, skillManifestGranted } from '../shared/tool-grant.js';
-import { isSkillManifestAlways } from '../../../config/env.js';
+import { grantsWorkspacePrompt, providerGrantsTool } from '../shared/tool-grant.js';
+import { resolveIncludeSkillManifest } from './index.skill-manifest.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { selectBaseSchemas } from './base-schemas.js';
 import { sortMcpSchemas } from '../../tools/schemas.order.js';
@@ -67,19 +67,6 @@ import { chainProviderClose } from '../shared/chain-provider-close.js';
 import { logFragmentTokens } from '../shared/prompt-fragment-tokens.js';
 
 const PROVIDER_NAME = 'openai-compatible';
-
-/** Compute the includeSkillManifest flag for buildSystemPromptWiring. Mirrors
- * resolveIncludeSkillManifest in anthropic-direct/provider-query-setup.ts. */
-function resolveIncludeSkillManifest(
-  hasSkillExecutor: boolean,
-  grantsTool: (toolName: string) => boolean,
-): boolean {
-  return skillManifestGranted(
-    hasSkillExecutor,
-    grantsTool,
-    isSkillManifestAlways(),
-  );
-}
 
 export class OpenAICompatibleProvider implements ModelProvider {
   readonly name = PROVIDER_NAME;
@@ -314,6 +301,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       includeSkillManifest: resolveIncludeSkillManifest(
         this.providerOpts.skillExecutor !== undefined && this.providerOpts.skillExecutor !== null,
         (toolName) => this.grantsTool(toolName),
+        config.isUnnamedWorker,
       ),
       workspacePromptEnabled: grantsWorkspacePrompt((toolName) => this.grantsTool(toolName)),
       readOnlyMemory: this.providerOpts.readOnlyMemory,
@@ -487,8 +475,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // Destructive-git gate — parity with anthropic-direct. Blocks checkout/
     // switch/restore/clean/reset --hard/stash drop|clear|pop for all children.
     if (this.providerOpts.blockDestructiveGit === true) dispatcherOpts.blockDestructiveGit = true;
-    // Path-containment bypass: bypassPermissions (explicit) + autonomous (AFK)
-    // both disable path containment for every per-call context.
+    // Path-containment bypass: bypassPermissions disables path containment for
+    // every per-call context.
     dispatcherOpts.allowAll = pathContainmentBypassed(permissionMode);
     // This provider IS the session's GrantManager — parity with
     // AnthropicDirectProvider.buildDispatcher. The dispatcher injects it onto

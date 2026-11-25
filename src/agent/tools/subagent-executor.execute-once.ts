@@ -41,6 +41,7 @@ import {
   checkNestedScope,
   checkAndRunRemoteDispatch,
 } from './subagent-executor.execute-once.helpers.js';
+import { checkForkModeBackgroundGate } from './subagent-executor.execute-once.fork-gate.js';
 import { resolveChildInheritedReadRoots } from './subagent-executor.execute-once.read-scope.js';
 
 export interface ExecuteOnceArgs {
@@ -192,6 +193,8 @@ export async function executeOnce(
 
   // Pre-dispatch implementation-intent gate (#3754): rejects implementation briefs sent to read-only named agents.
   { const r = checkReadOnlyDispatchIntent(childWriteCapable, namedAgent, parsed.prompt, classifyDispatchIntent); if (r !== undefined) { budgetReceipt?.rollback(); return r; } }
+
+  { const r = checkForkModeBackgroundGate(parsed.mode, ctx.defaultConfig.skillDispatchName); if (r !== undefined) { budgetReceipt?.rollback(); return r; } } // #5177: before isolation — avoids leaking a locked worktree on rejected background dispatch
 
   // isolation:"worktree" — may mutate childConfig.cwd; a continuation reuses the chain's tree.
   let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;

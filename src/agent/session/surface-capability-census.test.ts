@@ -46,9 +46,15 @@ const census: Record<Surface, Record<string, Cell>> = {
   },
   daemon: {
     sessionTrace: wired, childTrace: wired, skillTrace: wired,
-    sessionPrompt: gap, sessionOverlay: gap, hooksAtSessionCwd: wired,
+    sessionPrompt: intentional('Daemon factory has no cwd at build time; tasks that need a prompt set it in sessionConfig.',
+      daemon, 'No sessionPrompt / sessionOverlay: daemon tasks receive no session-level'),
+    sessionOverlay: intentional('No operator overlay: no session prompt to attach it to.',
+      daemon, 'No sessionPrompt / sessionOverlay: daemon tasks receive no session-level'),
+    hooksAtSessionCwd: wired,
     childPrompt: intentional('Task children fall back to the handoff contract.', daemon, 'Daemon tasks carry no base prompt'),
-    childOverlay: gap, childCwd: wired, nestedCwd: wired,
+    childOverlay: intentional('No session-level overlay to forward to children.',
+      daemon, 'No childOverlay: without a session-level overlay there is nothing to'),
+    childCwd: wired, nestedCwd: wired,
     background: intentional('Background dispatch is interactive-only.', daemon, 'No backgroundRegistry: background dispatch is interactive-only.'),
     diskMcp: wired, userHooks: wired, modelRouting: wired, outerOrchestration: unchecked('Builder chain runs; SDK/network/disk infrastructure and process startup are faked.'),
   },
@@ -64,8 +70,14 @@ const census: Record<Surface, Record<string, Cell>> = {
     sessionTrace: wired, childTrace: wired, skillTrace: wired,
     sessionPrompt: wired, childPrompt: wired, childOverlay: wired,
     childCwd: wired, nestedCwd: wired, background: wired, diskMcp: wired,
-    sessionOverlay: wired, hooksAtSessionCwd: gap,
-    userHooks: gap, modelRouting: gap, outerOrchestration: unchecked('Builder chain runs; SDK/network/disk infrastructure and process startup are faked.'),
+    sessionOverlay: wired,
+    hooksAtSessionCwd: intentional('Web server cannot safely load project hooks from a browser-supplied cwd.',
+      'web-server/session-owner.ts', 'No hooksAtSessionCwd / userHooks: loadHooksConfig is not called here.'),
+    userHooks: intentional('Web server has no concept of a user config dir relative to a browser-supplied cwd.',
+      'web-server/session-owner.ts', 'No hooksAtSessionCwd / userHooks: loadHooksConfig is not called here.'),
+    modelRouting: intentional('Web surface always uses AnthropicDirectProvider; no credential-resolution path at session-create time.',
+      'web-server/session-owner.provider.ts', 'No modelRouting: the web surface always constructs AnthropicDirectProvider as'),
+    outerOrchestration: unchecked('Builder chain runs; SDK/network/disk infrastructure and process startup are faked.'),
   },
   ACP: {
     sessionTrace: wired, childTrace: wired, skillTrace: wired,
@@ -73,7 +85,7 @@ const census: Record<Surface, Record<string, Cell>> = {
     sessionOverlay: wired, hooksAtSessionCwd: wired,
     childCwd: wired, nestedCwd: wired,
     background: intentional('ACP lists "No background subagents" as a surface limit (website/content/docs/surfaces/acp.mdx:264); executor wiring leaves it unconfigured.',
-      ownership, 'elsewhere background dispatch reports as unconfigured'),
+      `${cli}acp.session.ts`, 'No backgroundRegistry: ACP lists "No background subagents" as a surface'),
     diskMcp: wired, userHooks: wired, modelRouting: wired,
     outerOrchestration: unchecked('Builder chain runs with explicit inputs; JSON-RPC server, client-supplied MCP list and approval bridge are not executed.'),
   },
@@ -101,7 +113,10 @@ function actual(rt: SurfaceRuntime, otherModel: SurfaceRuntime): Record<string, 
     childCwd: has('cwd'), nestedCwd: has('nestedCwd'), background: has('backgroundRegistry'),
     hooksAtSessionCwd: hookArgs?.cwd === 'session-cwd',
     diskMcp: rt.calls('loadMcpConfig').length > 0 && mcpPassed,
-    userHooks: rt.calls('loadHooksConfig').length > 0 && rt.calls('createDefaultHookRegistry').some((o) => o.args[4] === token),
+    // Match on token presence anywhere in args rather than pinning to position 4,
+    // so a reordered createDefaultHookRegistry signature doesn't silently fail
+    // the census with a misleading capability-name-only error message.
+    userHooks: rt.calls('loadHooksConfig').length > 0 && rt.calls('createDefaultHookRegistry').some((o) => o.args.includes(token)),
     modelRouting: providers[0]?.args[0] !== otherModel.calls('provider')[0]?.args[0],
   };
 }
@@ -125,10 +140,21 @@ function checkValues(surface: Surface, rt: SurfaceRuntime): void {
 
 function sourceComments(file: string): string {
   const text = readFileSync(path.join(src, file), 'utf8');
-  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text);
+  // History: the previous implementation used ts.createScanner with skipTrivia=false,
+  // but the TS lexer mis-tokenises template-middle spans that contain \n escape sequences
+  // (e.g. `${a}\n\n${b}`): after the first CloseBraceToken the backslash is emitted as
+  // FirstToken, making the scanner lose track of the template and consume the rest of the
+  // file as a single FirstTemplateToken — swallowing every comment below that point.
+  // ts.getLeadingCommentRanges works at the text level and is unaffected by template
+  // tokenisation; it reliably extracts every // and /* */ comment in the source.
+  const seen = new Set<number>();
   const comments: string[] = [];
-  for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
-    if (kind === ts.SyntaxKind.SingleLineCommentTrivia || kind === ts.SyntaxKind.MultiLineCommentTrivia) comments.push(scanner.getTokenText());
+  for (let pos = 0; pos < text.length; pos++) {
+    const ranges = ts.getLeadingCommentRanges(text, pos);
+    if (ranges === undefined) continue;
+    for (const r of ranges) {
+      if (!seen.has(r.pos)) { seen.add(r.pos); comments.push(text.slice(r.pos, r.end)); }
+    }
   }
   return comments.join('\n');
 }
@@ -156,6 +182,18 @@ describe('session surface capability census', () => {
       expect(expectedSites.some((site) => site.startsWith(`${file}:`)), reason).toBe(true);
     }
     expect(productionSites(src), 'New production bootstrap: add a surface probe/census, or a source-cited non-surface exemption in surface-census-sites.ts.').toEqual(expectedSites);
+  });
+
+  it('negative control: check() throws when a wired capability is recorded as a gap', () => {
+    // This test commits the previously-manual "bite test": if check() does not
+    // catch a wired-but-gap mismatch the census is silently broken. The
+    // assertion error message must name the surface and capability.
+    expect(() => check('REPL', 'sessionTrace', gap, /* observed = */ true)).toThrow(
+      /REPL \/ sessionTrace: census says gap, builder is wired/,
+    );
+    expect(() => check('REPL', 'sessionTrace', wired, /* observed = */ false)).toThrow(
+      /REPL \/ sessionTrace: census says wired, builder is omitted/,
+    );
   });
 
   for (const surface of surfaces) {

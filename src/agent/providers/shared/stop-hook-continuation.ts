@@ -33,7 +33,7 @@ import { debugLog } from '../../../utils/debug.js';
 import { emitSessionPhase } from '../../trace/emit.js';
 import type { HookRegistry, StopContext } from '../../hooks.js';
 import { dispatchStopHook } from '../../session/hooks-dispatch.js';
-import { classifyDoneEvidence, doneHasCorroboratingEvidence, type ToolEventMin } from '../../done-evidence.js';
+import { classifyDoneEvidence, doneHasCorroboratingEvidence, isPatchApplyDryRun, type ToolEventMin } from '../../done-evidence.js';
 import { parseTerminalState } from '../../outcomes/terminal-state.js';
 import type { AgentConfig } from '../../types.js';
 import type { Message } from '../../types.js';
@@ -167,7 +167,7 @@ function buildStopContext(ctx: BeforeTurnEndContext): StopContext {
   const terminalKind = parseTerminalState(text)?.kind;
   const isDone = terminalKind === 'done';
   const successfulToolNames = ctx.toolEvents
-    .filter((e) => !e.isError)
+    .filter((e) => !e.isError && !(e.toolName === 'patch_apply' && isPatchApplyDryRun(e)))
     .map((e) => e.toolName);
   return {
     event: 'Stop' as const,

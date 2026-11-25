@@ -956,6 +956,48 @@ export interface AgentConfig {
   isUnnamedWorker?: boolean;
 
   /**
+   * When true, the session is a named-agent sub-agent (forked by `buildChildConfig`
+   * with a non-undefined `namedAgent`). Providers use this flag in
+   * `resolveToolSystemPrompt` to return base-only conventions (or read-only
+   * conventions when `isReadOnlyAgent` is also true) rather than the full
+   * interactive compound. Named agents cannot receive slash commands,
+   * bash-passthrough blocks, background-subagent results, queued user messages,
+   * or peer messages — those blocks are delivered only to top-level interactive
+   * sessions (#5309). They also never host the skill manifest at 78 k chars; the
+   * manifest gate (`includeSkillManifest`) covers that path.
+   *
+   * Default: `undefined` / `false`.
+   */
+  isNamedAgent?: boolean;
+
+  /**
+   * When true (and `isNamedAgent` is also true), the session's granted tool
+   * surface has no edit_file, write_file, or bash. Used by
+   * `resolveToolSystemPrompt` to return `TOOL_SYSTEM_PROMPT_READONLY` instead
+   * of `TOOL_SYSTEM_PROMPT_BASE` so the model is not instructed to prefer tools
+   * it cannot call (#5312).
+   *
+   * Default: `undefined` / `false`.
+   */
+  isReadOnlyAgent?: boolean;
+
+  /**
+   * Effective tool allowlist for a named-agent sub-agent, captured at config-
+   * build time from `effectiveAllowedTools` (the intersection of the agent's
+   * declared `tools:` and any parent cage). Set only when `isNamedAgent=true`
+   * and the agent declares a `tools:` list; `undefined` means inherit-all.
+   *
+   * Used by `resolveMemorySystemPrompt` to derive the memory-prompt tier from
+   * the actual tool grant rather than the flag-based heuristic — if
+   * `memory_update` is absent from this list the model must not be told it can
+   * call it (#5310).
+   *
+   * Not set on unnamed workers or skill-dispatch sub-agents (they have their
+   * own grant paths).
+   */
+  namedAgentGrantedTools?: readonly string[];
+
+  /**
    * When true, the session runs on a non-interactive surface where no human is
    * available to answer an `ask_question` elicitation — the daemon, a
    * scheduler/cron-launched task, or a one-shot `afk chat` invocation. On these

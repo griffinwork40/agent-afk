@@ -47,7 +47,7 @@ function fakeHandle(): acpSession.AcpSessionHandle {
 
 function makeCtx(sessions: ServerContext['sessions'] = new Map()): ServerContext {
   return {
-    opts: { model: 'sonnet', maxTurns: 0, dangerouslySkipPermissions: true },
+    opts: { model: 'sonnet', maxTurns: 0 },
     peer: { request: vi.fn(), notify: vi.fn(async () => undefined) } as unknown as ServerContext['peer'],
     initialized: true, sessions, restoring: new Set(), promptWrites: new Map(), log: () => {},
   };
@@ -159,9 +159,7 @@ describe.each(['load', 'resume'] as const)('%s of a session that is not live', (
     expect(readFileSync(getAcpSessionRecordPath('s-corrupt'), 'utf8')).toBe('{ not json');
   });
 
-  it('honours a cwd an earlier build stored in the shared map', async () => {
-    await writeAcpSessionMap({ 's-legacy': { cwd: ws } });
-    expect(((await restore('s-legacy', other, mode)) as AcpError).code).toBe(INVALID_PARAMS);
-    await expect(restore('s-legacy', ws, mode)).resolves.toEqual({});
+  it('accepts a session with no record (predates the check) with any cwd and writes its record', async () => {
+    await expect(restore('s-no-record', ws, mode)).resolves.toEqual({});
   });
 });

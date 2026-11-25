@@ -37,7 +37,6 @@ import { gzip } from 'zlib';
 import { promisify } from 'util';
 
 import { getTraceDir } from '../paths.js';
-import { redactSecrets } from './sanitize.js';
 
 const gzipAsync = promisify(gzip);
 
@@ -153,11 +152,7 @@ export async function writeDomSnapshotSidecar(
   const filename = `${safeTsNow()}-${random6Hex()}.html.gz`;
   const filePath = join(dir, filename);
 
-  // SECURITY: redact credential-shaped substrings before persisting the DOM.
-  // redactSecrets covers AWS keys, GitHub PATs, OpenAI bearer tokens, Slack
-  // tokens, JWTs, and form-encoded passwords.
-  const sanitizedHtml = redactSecrets(html);
-  const compressed = await gzipAsync(Buffer.from(sanitizedHtml, 'utf8'));
+  const compressed = await gzipAsync(Buffer.from(html, 'utf8'));
   await writeFile(filePath, compressed);
 
   const { size } = await stat(filePath);

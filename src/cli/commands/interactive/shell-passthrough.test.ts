@@ -156,13 +156,18 @@ describe('ShellPassthrough.dispatch', () => {
   it('reports an active FG job via hasActiveForeground while running', async () => {
     const { pt } = harness();
     expect(pt.hasActiveForeground()).toBe(false);
-    const promise = pt.dispatch('!sleep 0.2');
-    // Yield a microtask so the dispatch can spawn and set activeFgJobId.
-    await new Promise((r) => setTimeout(r, 30));
+    // Use a longer sleep on Windows where `sleep` may not be available as a
+    // shell built-in and process spawn is slower; the extra wall-clock time
+    // gives the dispatch a chance to set activeFgJobId before we poll.
+    const sleepCmd = process.platform === 'win32' ? 'timeout /t 2 /nobreak' : 'sleep 0.5';
+    const promise = pt.dispatch(`!${sleepCmd}`);
+    // Yield enough time for the dispatch to spawn and set activeFgJobId.
+    await new Promise((r) => setTimeout(r, process.platform === 'win32' ? 500 : 50));
     expect(pt.hasActiveForeground()).toBe(true);
     await promise;
     expect(pt.hasActiveForeground()).toBe(false);
-  });
+  // Windows CI runners are slow to spawn shells; give them extra headroom.
+  }, process.platform === 'win32' ? 30_000 : 10_000);
 
   it('abortActiveForeground kills an in-flight FG and returns true', async () => {
     const { pt, lines } = harness();

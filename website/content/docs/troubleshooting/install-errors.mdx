@@ -24,6 +24,16 @@ Run `node --version` and `npm --version` in your terminal. Both should print a v
 | `EBADENGINE` | npm found a package whose supported Node.js or npm versions do not match yours. This may be a warning or a failed install. | Read which package the message names and its required versions. For AFK, compare `node --version` with [requirements](/installation#requirements), install a supported Node version, then retry `npm install -g agent-afk`. See npm's [engine requirements](https://docs.npmjs.com/cli/v11/configuring-npm/package-json#engines) and [installation guide](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm); do not force an unsupported version. |
 | `EACCES` | npm does not have permission to write to the installation location. | On macOS or Linux, follow npm's [global-install permissions guide](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally): use a Node version manager or a user-owned npm directory. Its manual directory instructions do not apply to Windows. Do not run AFK as root to get past an install problem. |
 
+## Updating on native Windows: EBUSY or a running-process warning
+
+Windows will not replace a loaded native binary, including `better-sqlite3`'s `.node` file. Another AFK session, Telegram bot, or daemon can therefore make `afk update` (or a manual global npm install) fail with `EBUSY`.
+
+Before installing, `afk update` refuses when it finds another live session, a running AFK Task Scheduler service, or a live Telegram/default-daemon PID marker in the current AFK state directory. It lists what to close or stop; `--no-restart` does not bypass this check. `afk update --check` still works without stopping anything.
+
+Close other AFK sessions. Stop a background Telegram bot with `afk telegram stop`; for installed services, end the `AFK-telegram` and `AFK-daemon` tasks in Windows Task Scheduler. Stop foreground bots/daemons in their terminals. Then retry the update and start your services again afterward. The updater does not stop or restart them for you.
+
+Detection is best-effort: processes using a different AFK home/state directory, unadvertised sessions, custom daemon instances, or unavailable service status may be missed. Old PID markers can also refer to a reused PID; verify the listed process rather than deleting markers blindly. An npm `EBUSY` failure on Windows prints the same recovery guidance. If it persists after all AFK processes are stopped, inspect npm's error path for another file-locking application. Failed-install recovery/rollback is not guaranteed. This restriction does not apply to macOS, Linux, or AFK installed inside WSL2.
+
 ## The afk command is not found
 
 | If you see | What it means | What to do |

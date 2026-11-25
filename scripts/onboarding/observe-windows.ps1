@@ -11,7 +11,12 @@ $directory = [IO.Path]::GetDirectoryName($log)
 "Observation bootstrap`r`nCommand: node --version" | Set-Content -LiteralPath $log -Encoding UTF8
 try {
     $node = (Get-Command node.exe -ErrorAction Stop).Source
-    & $node --version 2>&1 | Out-File -LiteralPath $log -Append -Encoding UTF8
+    # Use redirection operator 6>&1 is not needed here; capture stderr separately
+    # to avoid the interaction between $ErrorActionPreference = 'Stop' and 2>&1:
+    # merging stderr into the success stream with 2>&1 can produce ErrorRecord
+    # objects that Stop would then treat as terminating errors.
+    $nodeOut = & $node --version 2>&1
+    $nodeOut | Out-File -LiteralPath $log -Append -Encoding UTF8
     "Exit code: $LASTEXITCODE" | Out-File -LiteralPath $log -Append -Encoding UTF8
 } catch {
     $_ | Out-File -LiteralPath $log -Append -Encoding UTF8
@@ -27,8 +32,12 @@ $info.FileName = $node
 $info.Arguments = '"' + $driver + '" "' + $log + '" "' + $shell + '"'
 $info.UseShellExecute = $false
 # Include-list: provider keys, npm tokens and AFK settings must not leak in.
-# Keep real APPDATA so npm uses the installer's normal global prefix. AFK_HOME
-# and USERPROFILE isolate afk and Claude credential files from this account.
+# Keep real APPDATA so npm uses the installer's normal global prefix — this is
+# intentional: we want to observe npm install into the real global location, not
+# a sandboxed one, because that is what a first-time user experiences. This means
+# the script installs agent-afk into the observer's real npm global prefix. Use a
+# dedicated observation account, not your daily account (see the checklist).
+# AFK_HOME and USERPROFILE isolate afk and Claude credential files from this account.
 $info.EnvironmentVariables.Clear()
 foreach ($name in @('PATH', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT',
     'TEMP', 'TMP', 'PROCESSOR_ARCHITECTURE', 'ProgramFiles', 'ProgramFiles(x86)',

@@ -92,6 +92,9 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // gpt-5.5, gpt-5.6 sol/terra/luna support 128k max output). The gpt-6 values
   // below are an UNVERIFIED estimate carried over from the 5.x family; the Codex
   // catalog exposes no max-output figure to check them against.
+  'gpt-6.2-sol': 128_000,
+  'gpt-6.2-astra': 128_000,
+  'gpt-6.1-terra': 128_000,
   'gpt-6.1-sol': 128_000,
   'gpt-6-astra': 128_000,
   'gpt-6-sol': 128_000,

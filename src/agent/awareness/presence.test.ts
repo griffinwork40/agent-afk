@@ -526,10 +526,10 @@ describe('setPresenceBlocked', () => {
   });
 
   it('preserves every other field, including afk (they are independent)', async () => {
-    const { writePresenceFile, setPresenceAfk, setPresenceBlocked, readPresenceFiles } =
+    const { writePresenceFile, patchPresenceFile, setPresenceBlocked, readPresenceFiles } =
       await getPresenceMod();
     await writePresenceFile(mkInfo({ sessionId: 'blocked-2', cwd: '/tmp/keepme' }));
-    await setPresenceAfk('blocked-2', true);
+    await patchPresenceFile('blocked-2', (r) => { r.afk = true; });
 
     await setPresenceBlocked('blocked-2', true);
     const rec = (await readPresenceFiles())[0]!;
@@ -597,13 +597,13 @@ describe('presence write serialization', () => {
   // one of the two mutations, so the test fails 100% of the time rather than
   // flaking on fs scheduling.
   it('does not drop a concurrent mutation to a different field (lost update)', async () => {
-    const { writePresenceFile, setPresenceBlocked, setPresenceAfk, readPresenceFiles } =
+    const { writePresenceFile, setPresenceBlocked, patchPresenceFile, readPresenceFiles } =
       await getPresenceMod();
     await writePresenceFile(mkInfo({ sessionId: 'race-1' }));
 
     // Fire both WITHOUT awaiting the first, so the two read-modify-write cycles
     // overlap exactly as the elicitation router's unawaited set/clear pair does.
-    await Promise.all([setPresenceBlocked('race-1', true), setPresenceAfk('race-1', true)]);
+    await Promise.all([setPresenceBlocked('race-1', true), patchPresenceFile('race-1', (r) => { r.afk = true; })]);
 
     const rec = (await readPresenceFiles())[0]!;
     expect(rec.blockedSince).toBeDefined();
@@ -611,13 +611,13 @@ describe('presence write serialization', () => {
   });
 
   it('preserves every mutation across three overlapping writers', async () => {
-    const { writePresenceFile, setPresenceBlocked, setPresenceAfk, updatePresenceCwd, readPresenceFiles } =
+    const { writePresenceFile, setPresenceBlocked, patchPresenceFile, updatePresenceCwd, readPresenceFiles } =
       await getPresenceMod();
     await writePresenceFile(mkInfo({ sessionId: 'race-2', cwd: '/tmp/before' }));
 
     await Promise.all([
       setPresenceBlocked('race-2', true),
-      setPresenceAfk('race-2', true),
+      patchPresenceFile('race-2', (r) => { r.afk = true; }),
       updatePresenceCwd('race-2', '/tmp/after'),
     ]);
 

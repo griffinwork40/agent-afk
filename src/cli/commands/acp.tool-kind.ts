@@ -1,10 +1,8 @@
 import type { ToolCallLocation, ToolKind } from './acp.wire.js';
 import { inputRecord, resolveDisplayPath, validPath } from './acp.translate.paths.js';
-import { delegationSuffix } from './acp.permission.labels.js';
-import { outsidePaths } from './acp.permission.paths.js';
+import { delegationSuffix, outsidePaths, sensitiveMarkers } from './acp.tool-display.js';
 import path from 'node:path';
 import { oneLine, toolDetail } from './acp.tool-title.js';
-import { sensitiveMarkers } from './acp.permission.sensitive.js';
 
 const readTools = new Set([
   'read_file', 'view_image', 'extract_document', 'json_query', 'list_directory',

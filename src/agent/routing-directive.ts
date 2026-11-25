@@ -82,7 +82,7 @@ Reserve \`ask_question\` for the narrow set of things no tool can resolve: a gen
 - Do NOT use when the user has already provided sufficient context — infer and proceed instead.
 - The result \`action\` will be \`accept\` (answered), \`cancel\` (user interrupted), \`decline\` (no handler), or \`skip\` (optional question skipped).
 - \`allow_custom\` (choice/multi_choice only): opt-in to a free-form entry affordance. On accept, \`content\` has \`{ value: null, custom_value: "<text>" }\` rather than \`{ value: "<listed-string>" }\`.
-- After a \`cancel\` or \`decline\`, stop and tell the user what information you need — do not loop and re-ask.`;
+- After a \`cancel\` or \`decline\`, do not loop and re-ask. Either proceed on a stated assumption (reversible work) or end with a **Blocked** terminal state naming exactly what the operator must supply (irreversible work).`;
 
 /**
  * End-of-turn protocol directive — canonical source.
@@ -111,6 +111,7 @@ Every turn must end in one externally identifiable terminal state. AFK users nee
 - Evidence: <durable location — file path, commit SHA, trace path, test output, or memory key; never transcript-only>
 - What changed: <world-state delta>
 - Deferred: <anything still pending, with why; or "none">
+- Assumptions: <any assumption you proceeded on after a declined or cancelled ask_question, plus the rationale; omit this bullet when no assumptions were made>
 - Not checked: <what you did not verify that a reader could reasonably assume you did; always include, using "nothing material" when true>
 - Undo: <how to reverse this turn's changes, or "irreversible" plus what cannot be reversed; include only if this turn changed something outside the conversation, such as files, commits, pushes, messages, or external systems; omit this bullet otherwise>
 - If files were written or edited but no \`git commit\` ran, say so explicitly — name the uncommitted paths and why (e.g. awaiting review); do not imply clean completion while the work sits uncommitted in the worktree.

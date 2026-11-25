@@ -74,7 +74,7 @@ const SECRET_KEY_PATTERN = /key|token|secret|password|credential|auth/i;
  *      and digits, with no dotted extension.
  *
  * Originally lived in redact-secrets.ts; moved here as a file-local helper
- * after the redactSecrets module was removed (issue #4xxx).
+ * after the generic redactSecrets module was removed (PR #5172).
  */
 export function looksLikeFilesystemPath(run: string): boolean {
   if (!run.includes('/') || /[+=]/.test(run)) return false;

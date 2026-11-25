@@ -11,6 +11,9 @@ import path from 'node:path';
 import type { McpServerConfig } from '../../agent/mcp/types.js';
 import type { McpServerStdio } from './acp.wire.js';
 
+/** Maximum UTF-8 byte length accepted for a client-supplied systemPrompt (32 KiB). */
+const SYSTEM_PROMPT_MAX_BYTES = 32_768;
+
 /** Thrown for any invalid-params condition; `detail` is for stderr only. */
 export class AcpInvalidParams extends Error {
   constructor(readonly detail: string) {
@@ -91,6 +94,8 @@ export interface SessionSetup {
   wireMcp: McpServerStdio[];
   mcpServers: Record<string, McpServerConfig>;
   sessionId?: string;
+  /** Client-supplied system prompt to append to the session prompt (session/new only). */
+  systemPrompt?: string;
 }
 
 /**
@@ -106,15 +111,22 @@ export function parseSessionSetup(
   if (dirs !== undefined && dirs !== null && (!Array.isArray(dirs) || dirs.length > 0)) {
     throw new AcpInvalidParams('additionalDirectories is not supported');
   }
+  let systemPrompt: string | undefined;
   if (p['systemPrompt'] !== undefined && p['systemPrompt'] !== null) {
-    throw new AcpInvalidParams('systemPrompt is not supported');
+    if (typeof p['systemPrompt'] !== 'string') throw new AcpInvalidParams('systemPrompt must be a string');
+    if (mode !== 'new') throw new AcpInvalidParams('systemPrompt is only supported on session/new');
+    if (Buffer.byteLength(p['systemPrompt'], 'utf8') > SYSTEM_PROMPT_MAX_BYTES) {
+      throw new AcpInvalidParams(`systemPrompt exceeds maximum size of ${SYSTEM_PROMPT_MAX_BYTES} bytes`);
+    }
+    if (p['systemPrompt'].trim().length > 0) systemPrompt = p['systemPrompt'];
   }
   const rawMcp = mode === 'resume' && p['mcpServers'] === undefined ? [] : p['mcpServers'];
   const wireMcp = parseMcpServers(rawMcp);
   const mcpServers = convertMcpServers(wireMcp);
   const cwd = validateCwd(p['cwd']);
-  if (mode === 'new') return { cwd, wireMcp, mcpServers };
+  if (mode === 'new') return { cwd, wireMcp, mcpServers, ...(systemPrompt !== undefined ? { systemPrompt } : {}) };
   const sessionId = p['sessionId'];
   if (typeof sessionId !== 'string' || sessionId === '') throw new AcpInvalidParams('sessionId required');
+  /* invariant: systemPrompt is always undefined here — mode guard above */
   return { cwd, wireMcp, mcpServers, sessionId };
 }

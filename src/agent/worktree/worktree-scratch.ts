@@ -64,13 +64,39 @@ export type ScratchGitRunner = (
   args: string[],
 ) => Promise<{ stdout: string; stderr: string }>;
 
-/** Missing, unreadable, or malformed metadata never sanctions scratch deletion. */
+/**
+ * Per-process cache: once we've read a worktree's meta, the result is stable
+ * for the lifetime of the process (the file is only written at worktree-create
+ * time). Cache key is the normalised absolute worktree root.
+ */
+const _scratchDisposableCache = new Map<string, boolean>();
+
+/** Test seam: reset the per-process cache (mirrors `_resetScratchRootsCacheForTests` in scratch-roots.ts). */
+export function _resetScratchDisposableCacheForTests(): void { _scratchDisposableCache.clear(); }
+
+/**
+ * Missing, unreadable, or malformed metadata never sanctions scratch deletion.
+ *
+ * Uses a forward-slash join so the path fed to `fs.readFile` is correct even
+ * when `worktreePath` was produced by `extractWorktreePath` (which normalises
+ * Windows backslashes to forward slashes). Native `path.join` on Windows would
+ * re-interpret a POSIX-style path and may produce a wrong result.
+ */
 export async function isScratchDisposable(worktreePath: string): Promise<boolean> {
+  const cached = _scratchDisposableCache.get(worktreePath);
+  if (cached !== undefined) return cached;
   try {
-    const meta: unknown = JSON.parse(await fs.readFile(join(worktreePath, AFK_META_FILE), 'utf-8'));
-    return typeof meta === 'object' && meta !== null && !Array.isArray(meta) &&
+    // Use forward-slash concatenation so the path is correct even when
+    // worktreePath was normalised to POSIX separators by extractWorktreePath.
+    const metaPath = worktreePath.endsWith('/') ? `${worktreePath}${AFK_META_FILE}` : `${worktreePath}/${AFK_META_FILE}`;
+    const meta: unknown = JSON.parse(await fs.readFile(metaPath, 'utf-8'));
+    const result = typeof meta === 'object' && meta !== null && !Array.isArray(meta) &&
       'scratchDisposable' in meta && meta.scratchDisposable === true;
-  } catch {
+    _scratchDisposableCache.set(worktreePath, result);
+    return result;
+  } catch (err) {
+    debugLog('[worktree-scratch] isScratchDisposable: could not read meta for', worktreePath, '—', errorMessage(err));
+    _scratchDisposableCache.set(worktreePath, false);
     return false;
   }
 }

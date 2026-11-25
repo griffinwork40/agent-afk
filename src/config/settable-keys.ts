@@ -116,6 +116,10 @@ export const PROTECTED_ENV_KEYS: ReadonlySet<string> = new Set([
   'AFK_FRAMEWORK_DIR',
   'TELEGRAM_DATA_DIR',
   'AFK_TELEGRAM_CWD',
+  // Global-chat relay endpoint -- agent must not redirect messages to an
+  // attacker-controlled relay (same rationale as the *_BASE_URL suffix rule:
+  // an endpoint redirect carries the full conversation to wherever it points).
+  'AFK_GLOBAL_CHAT_URL',
 ]);
 
 export type EnvKeyClass = 'settable' | 'secret' | 'protected' | 'non-config' | 'unknown';
@@ -271,8 +275,7 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'telegram.notify.primaryChatId', tier: 'human', type: 'number', clamp: { min: -1e15, max: 1e15, integer: true }, description: 'Primary Telegram chat id (human-tier: notification-redirect vector).' },
   { path: 'telegram.notify.targets', tier: 'human', type: 'number-array', description: 'Custom Telegram target chat ids (human-tier: notification-redirect vector).' },
   { path: 'telegram.tagOnlyChats', tier: 'human', type: 'number-array', description: 'Chat ids where the bot answers only when addressed (reply to the bot, @mention, or text_mention resolving to the bot). Human-tier: it governs which chats the bot will respond in — a message-routing / who-can-drive-the-bot control, same class as the allowlist and telegram.notify.*. Requires Telegram privacy mode OFF for the bot to matter in groups.' },
-  { path: 'telegram.verifyDone', tier: 'human', type: 'boolean', description: 'Opt-in AFK "Done" verification gate (human-tier: a self-honesty check on the agent\'s own completion reporting — the agent must not be able to disable it on its own config, same rationale as enableShellHooks/permissionMode).' },
-  { path: 'enforceDoneEvidence', tier: 'human', type: 'boolean', description: 'Opt-in terminal-state enforcement gate, active in every permission mode: a turn that self-certifies "Done" with no corroborating evidence (a successful file write/edit or executed command) gets a framework correction injected into the next turn, which must substantiate or downgrade the claim (issue #237). Human-tier: a self-honesty check the agent must not be able to disable on its own config, same rationale as telegram.verifyDone. Sibling of telegram.verifyDone (which only relabels the Telegram push; this one bounces the turn).' },
+  { path: 'enforceDoneEvidence', tier: 'human', type: 'boolean', description: 'Opt-in terminal-state enforcement gate, active in every permission mode: a turn that self-certifies "Done" with no corroborating evidence (a successful file write/edit or executed command) gets a framework correction injected into the next turn, which must substantiate or downgrade the claim (issue #237). Human-tier: a self-honesty check the agent must not be able to disable on its own config.' },
   { path: 'fileCheckpoints', tier: 'human', type: 'boolean', description: 'Per-turn file checkpoints behind /rewind → files/both in the interactive REPL (#4271); default on, false opts out. Human-tier: it disables the operator\'s undo of agent file edits, which the agent must not be able to switch off on its own config.' },
   { path: 'interactive.worktreeAutoname', tier: 'agent', type: 'boolean', description: 'Auto-name worktrees.' },
   { path: 'interactive.suggestGhost', tier: 'agent', type: 'boolean', description: 'Ghost-text suggestions in the REPL.' },

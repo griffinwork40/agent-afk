@@ -6,8 +6,10 @@ import type { AgentSession } from '../session/agent-session.js';
 import type { TelemetryRecord, TaskCompletionDetails } from './scheduler.js';
 import { readTelemetryHistory } from './telemetry-reader.js';
 import { readStreakHistory, STREAK_HISTORY_BYTE_CAP } from './scheduler.streak-history.js';
-import { addSchedule, toScheduledTask } from './schedule-store.js';
+import { DEFAULT_FAILURE_STREAK_THRESHOLD } from './scheduler.failure-streak.js';
+import { addSchedule, loadSchedules, toScheduledTask } from './schedule-store.js';
 import { enqueue } from './queue-store.js';
+import { getSchedulesPath } from '../../paths.js';
 
 vi.mock('node-cron', () => ({ schedule: vi.fn(() => ({ stop() {}, destroy() {} })) }));
 vi.mock('../providers/index.js', () => ({ providerForModel: () => 'anthropic-direct' }));
@@ -32,7 +34,7 @@ afterEach(async () => {
   _resetDaemonDefaultCwdCache();
   rmSync(dir, { recursive: true, force: true });
 });
-function scheduler(onTaskComplete?: NonNullable<ConstructorParameters<typeof CronScheduler>[0]>['onTaskComplete'], notifyOn: 'failure' | 'never' = 'failure'): CronScheduler {
+function scheduler(onTaskComplete?: NonNullable<ConstructorParameters<typeof CronScheduler>[0]>['onTaskComplete'], notifyOn: 'failure' | 'never' | 'always' = 'failure'): CronScheduler {
   const s = new CronScheduler({ telemetryPath: path, budgetGate: async () => ({ skip: false }),
     sessionFactory: () => ({ sendMessage: () => fails ? Promise.reject(new Error('diagnostic')) : Promise.resolve({ content: 'ok' }), close: async () => {} }) as unknown as AgentSession,
     ...(onTaskComplete !== undefined ? { onTaskComplete } : {}),
@@ -171,6 +173,100 @@ describe('durable scheduler streak integration', () => {
     const recovery = await readTelemetryHistory(path, { taskId: 't', limit: 1 }) as TelemetryRecord[];
     expect(recovery[0]?.notificationDecision?.kind).toBe('recovery');
   });
+  it('notifyOn always fires callbacks on success and failure, not just failure policy', async () => {
+    const cb = vi.fn();
+    const s = scheduler(cb, 'always');
+    fails = false;
+    await s.tick('t');
+    fails = true;
+    await s.tick('t');
+    expect(cb).toHaveBeenCalledTimes(2);
+    const history = await readTelemetryHistory(path, { taskId: 't', limit: 10 }) as TelemetryRecord[];
+    expect(history[0]?.notificationDecision).toEqual({ state: 'due', kind: 'completion' });
+    expect(history[1]?.notificationDecision).toEqual({ state: 'due', kind: 'failure' });
+  });
+
+  it('undefined notifyOn (legacy config / builtin) behaves like always through escalation', async () => {
+    const cb = vi.fn();
+    // Register with no notifyOn (mimics legacy config / builtin worktree-prune task)
+    const s = new CronScheduler({ telemetryPath: path, budgetGate: async () => ({ skip: false }),
+      sessionFactory: () => ({ sendMessage: () => fails ? Promise.reject(new Error('diagnostic')) : Promise.resolve({ content: 'ok' }), close: async () => {} }) as unknown as AgentSession,
+      onTaskComplete: cb,
+    });
+    s.register({ taskId: 't', command: 'test', trigger: 'cron', cronExpression: '* * * * *' });
+    schedulers.push(s);
+    fails = false;
+    await s.tick('t');  // success → completion (due: undefined notifyOn is not 'failure' nor 'never')
+    fails = true;
+    for (let n = 0; n < DEFAULT_FAILURE_STREAK_THRESHOLD; n++) await s.tick('t');  // errors, Nth triggers escalation
+    fails = false;
+    await s.tick('t');  // recovery
+    const history = await readTelemetryHistory(path, { taskId: 't', limit: 10 }) as TelemetryRecord[];
+    // All 5 runs produce due decisions: undefined notifyOn matches neither suppression branch
+    expect(history.every((r) => r.notificationDecision?.state === 'due')).toBe(true);
+    expect(history[0]?.notificationDecision?.kind).toBe('completion');
+    expect(history[1]?.notificationDecision?.kind).toBe('failure');
+    expect(history[2]?.notificationDecision?.kind).toBe('failure');
+    expect(history[DEFAULT_FAILURE_STREAK_THRESHOLD]?.notificationDecision?.kind).toBe('escalation');
+    expect(history[DEFAULT_FAILURE_STREAK_THRESHOLD + 1]?.notificationDecision?.kind).toBe('recovery');
+    expect(cb).toHaveBeenCalledTimes(DEFAULT_FAILURE_STREAK_THRESHOLD + 2);
+  });
+
+  it('stamps first over-cap failure as inexact when task predates the history window', async () => {
+    // Fill the telemetry file beyond the byte cap with an older task's records,
+    // then register a task whose createdAt predates the window start (so the
+    // window cannot prove it had no prior runs).
+    mkdirSync(join(dir, 'agent-framework'), { recursive: true });
+    const config = addSchedule({ name: 'Old task', command: 'test', cron: '* * * * *', enabled: true });
+    // Back-date createdAt so it falls BEFORE the oldest record in the capped window.
+    writeFileSync(getSchedulesPath(), JSON.stringify(loadSchedules().map((s) =>
+      s.id === config.id ? { ...s, createdAt: '2000-01-01T00:00:00.000Z' } : s)));
+    const padding = JSON.stringify({
+      taskId: 'other', status: 'success', triggeredAt: '2020-01-01T00:00:00Z', durationMs: 0,
+      responseExcerpt: 'x'.repeat(1024),
+    });
+    writeFileSync(path, `${padding}\n`.repeat(Math.ceil(STREAK_HISTORY_BYTE_CAP / 1024)));
+    const s = scheduler();
+    s.register(toScheduledTask(config));
+    await s.tick(config.id);
+    const history = await readTelemetryHistory(path, { taskId: config.id, limit: 1 }) as TelemetryRecord[];
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ status: 'error', failureStreak: { count: 1, exact: false } });
+  });
+
+  it('stamps first over-cap failure as inexact when the task has no schedule-store entry', async () => {
+    // The scheduler task has no corresponding schedules.json entry, so getSchedule()
+    // returns undefined and createdAt is unknown → the window cannot be exact.
+    const padding = JSON.stringify({
+      taskId: 'other', status: 'success', triggeredAt: '2020-01-01T00:00:00Z', durationMs: 0,
+      responseExcerpt: 'x'.repeat(1024),
+    });
+    writeFileSync(path, `${padding}\n`.repeat(Math.ceil(STREAK_HISTORY_BYTE_CAP / 1024)));
+    // 't' is registered in the scheduler but NOT added to the schedule store.
+    const s = scheduler();
+    await s.tick('t');
+    const history = await readTelemetryHistory(path, { taskId: 't', limit: 1 }) as TelemetryRecord[];
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ status: 'error', failureStreak: { count: 1, exact: false } });
+  });
+
+  it('stamps first over-cap failure as inexact when the schedule store cannot be read', async () => {
+    // Write an invalid (non-JSON-array) schedules.json so getSchedule() throws;
+    // the catch branch must not convert an unknown history into an exact one.
+    mkdirSync(join(dir, 'config'), { recursive: true });
+    writeFileSync(getSchedulesPath(), 'NOT_VALID_JSON');
+    const padding = JSON.stringify({
+      taskId: 'other', status: 'success', triggeredAt: '2020-01-01T00:00:00Z', durationMs: 0,
+      responseExcerpt: 'x'.repeat(1024),
+    });
+    writeFileSync(path, `${padding}\n`.repeat(Math.ceil(STREAK_HISTORY_BYTE_CAP / 1024)));
+    const s = scheduler();
+    await s.tick('t');
+    const history = await readTelemetryHistory(path, { taskId: 't', limit: 1 }) as TelemetryRecord[];
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ status: 'error', failureStreak: { count: 1, exact: false } });
+  });
+
   it('notifyOn never suppresses all callbacks through escalation, re-escalation and recovery', async () => {
     const cb = vi.fn();
     const s = scheduler(cb, 'never');

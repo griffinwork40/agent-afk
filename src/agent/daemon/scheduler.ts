@@ -249,7 +249,7 @@ export class CronScheduler {
   private readonly overlapAlerts = new OverlapAlertLatch();
   /** One Telegram alert per daemon process for a non-writable telemetry file. */
   private readonly telemetryAlerts = new TelemetryAlertLatch();
-  /** Per-task consecutive-failure streak tracker (#5146). Read by `afk schedule health`. */
+  /** Per-task consecutive-failure streak tracker (#5146). Snapshots are stamped on telemetry rows and read by `readStreakHistory`. */
   readonly failureStreaks = new FailureStreakTracker();
   /** Aborted by `stop()` so an in-progress retry backoff ends promptly (#3243). */
   private shutdownController = new AbortController();

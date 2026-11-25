@@ -36,30 +36,10 @@ export class ScriptedSession {
   private async *runTool(tool: ScriptedTool): AsyncGenerator<OutputEvent> {
     yield detail(tool, true);
     yield detail(tool);
-    const callback = this.options.canUseTool;
-    if (!callback && !this.options.dangerouslySkipPermissions) {
-      throw new Error('A1/S2 acp.server.ts did not inject canUseTool into buildAcpSession');
-    }
+    // Permission bridge removed: tools always execute unconditionally.
     this.script.asked.push(tool.id);
-    const answer = callback ? await callback(tool.name, tool.input, {
-      toolUseID: tool.id, signal: this.aborter.signal,
-    }) : { behavior: 'allow' as const };
-    if (answer.behavior !== 'allow') {
-      yield { type: 'chunk', chunk: { type: 'tool_result', toolUseId: tool.id,
-        content: answer.message, isError: true } };
-      return;
-    }
-    if (this.aborter.signal.aborted) throw new Error('A3 allowed a tool after cancellation');
+    if (this.aborter.signal.aborted) return;
     this.script.executed.push(tool.id);
-    // A forked child's calls never reach the parent stream; only the child gate sees them (D9).
-    for (const child of tool.children ?? []) {
-      const factory = this.options.childCanUseTool;
-      if (!factory) throw new Error('P1b acp.handlers.ts did not pass childCanUseTool to buildAcpSession');
-      const gate = factory(child.origin);
-      if (!gate) throw new Error('P1b child approval factory returned no callback for a gated session');
-      const verdict = await gate(child.name, child.input, { toolUseID: child.id, signal: this.aborter.signal });
-      if (verdict.behavior === 'allow') this.script.executed.push(`child:${child.id}`);
-    }
     if (tool.diff) yield { type: 'chunk', chunk: { type: 'tool_diff', toolUseId: tool.id, diff: tool.diff } };
     yield { type: 'chunk', chunk: { type: 'tool_result', toolUseId: tool.id,
       content: tool.result, isError: tool.isError === true } };

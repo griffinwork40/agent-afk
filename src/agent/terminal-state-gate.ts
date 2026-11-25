@@ -48,8 +48,8 @@ export const TERMINAL_STATE_GATE_CORRECTION =
 export interface TerminalStateGateOptions {
   /**
    * Live enable getter — reads the human-tier `enforceDoneEvidence` config on
-   * every turn (so a mid-session config change takes effect without restart,
-   * matching `telegram.verifyDone`'s fresh-read semantics). Default off.
+   * every turn (so a mid-session config change takes effect without restart).
+   * Default off.
    */
   isEnabled: () => boolean;
   /**

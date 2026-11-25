@@ -53,6 +53,16 @@ describe('CHILD_ALLOWED_TOOLS', () => {
     expect(CHILD_ALLOWED_TOOLS).not.toContain('state_cas');
     expect(CHILD_ALLOWED_TOOLS).not.toContain('state_delete');
   });
+
+  it('contains no duplicate tool names', () => {
+    const seen = new Set<string>();
+    const duplicates: string[] = [];
+    for (const name of CHILD_ALLOWED_TOOLS) {
+      if (seen.has(name)) duplicates.push(name);
+      seen.add(name);
+    }
+    expect(duplicates).toEqual([]);
+  });
 });
 
 describe('buildSkillRestrictedProvider', () => {
@@ -293,7 +303,7 @@ describe('createChildProviderFactory — readOnlyState invariant', () => {
     const stubExecutor = { execute: () => Promise.resolve({ content: [] }) } as unknown as import('./subagent-executor.js').SubagentExecutor;
     const provider = factory({ childExecutor: stubExecutor, model: 'gpt-4o' });
     // OpenAI-compatible provider stores options in providerOpts
-    const opts = (provider as { providerOpts: { readOnlyState?: boolean } }).providerOpts;
+    const opts = (provider as unknown as { providerOpts: { readOnlyState?: boolean } }).providerOpts;
     expect(opts.readOnlyState).toBe(true);
   });
 });

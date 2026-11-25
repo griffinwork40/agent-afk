@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest';
 import {
   TOOL_SYSTEM_PROMPT_BASE,
   TOOL_SYSTEM_PROMPT,
+  TOOL_SYSTEM_PROMPT_READONLY,
   SLASH_COMMAND_ROUTING_PROMPT,
   BASH_PASSTHROUGH_PROMPT,
   BG_SUBAGENT_RESULT_PROMPT,
@@ -234,5 +235,79 @@ describe('resolveToolSystemPrompt — unnamed worker dedupe (#3359)', () => {
     expect(resolveToolSystemPrompt(undefined, undefined)).toBe(TOOL_SYSTEM_PROMPT);
     // Skill-dispatch sub-agents return base-only (unchanged).
     expect(resolveToolSystemPrompt(true, undefined)).toBe(TOOL_SYSTEM_PROMPT_BASE);
+  });
+});
+
+// ─── #5309 — Named children get interactive message-tag blocks ────────────────
+
+describe('resolveToolSystemPrompt — named-agent tier (#5309)', () => {
+  it('named agent (read-write) gets base-only conventions, not the full interactive compound', () => {
+    // Named agents cannot receive slash commands, bash-passthrough blocks,
+    // background-subagent results, queued user messages, or peer messages.
+    const result = resolveToolSystemPrompt(false, undefined, true, false);
+    expect(result).toBe(TOOL_SYSTEM_PROMPT_BASE);
+    expect(result).not.toContain('<command-name>');
+    expect(result).not.toContain('<bash-passthrough>');
+    expect(result).not.toContain('<background-subagent-result>');
+    expect(result).not.toContain('<peer-session-message>');
+    expect(result).not.toContain('harness appends a user text block');
+  });
+
+  it('named agent (read-only) gets the read-only conventions constant (#5312)', () => {
+    const result = resolveToolSystemPrompt(false, undefined, true, true);
+    expect(result).toBe(TOOL_SYSTEM_PROMPT_READONLY);
+    // Must not mention write/shell tools the agent cannot call.
+    expect(result).not.toContain('edit_file');
+    expect(result).not.toContain('write_file');
+    expect(result).not.toContain('destructive shell commands');
+    expect(result).not.toContain('<command-name>');
+  });
+
+  it('TOOL_SYSTEM_PROMPT_READONLY is a strict subset of TOOL_SYSTEM_PROMPT_BASE (shorter)', () => {
+    expect(TOOL_SYSTEM_PROMPT_READONLY.length).toBeLessThan(TOOL_SYSTEM_PROMPT_BASE.length);
+  });
+
+  it('isNamedAgent=false (or absent) leaves existing behaviour unchanged', () => {
+    // Passing isNamedAgent=false must not trigger the named-agent branch.
+    expect(resolveToolSystemPrompt(false, undefined, false, false)).toBe(TOOL_SYSTEM_PROMPT);
+    expect(resolveToolSystemPrompt(false, undefined, undefined, undefined)).toBe(TOOL_SYSTEM_PROMPT);
+  });
+
+  it('isUnnamedWorker still takes priority over isNamedAgent', () => {
+    // isUnnamedWorker=true is checked first; named-agent branch never fires.
+    expect(resolveToolSystemPrompt(false, true, true, false)).toBe('');
+    expect(resolveToolSystemPrompt(false, true, true, true)).toBe('');
+  });
+});
+
+// ─── #5310 — Research agent told it has memory_update when it doesn't ─────────
+
+describe('resolveMemorySystemPrompt — tool-grant override (#5310)', () => {
+  it('search-only when memory_update is absent from grantedTools', () => {
+    // research-agent has memory_search but NOT memory_update.
+    const tools = ['read_file', 'grep', 'glob', 'memory_search', 'agent'];
+    expect(resolveMemorySystemPrompt(false, true, tools)).toBe(MEMORY_SYSTEM_PROMPT_SEARCH_ONLY);
+  });
+
+  it('readonly when memory_update IS in grantedTools (fact writes OK)', () => {
+    const tools = ['read_file', 'grep', 'memory_search', 'memory_update'];
+    expect(resolveMemorySystemPrompt(false, true, tools)).toBe(MEMORY_SYSTEM_PROMPT_READONLY);
+  });
+
+  it('tool-grant check is skipped when grantedTools is undefined (flag-based path)', () => {
+    // No tool list supplied → fall through to flag-based logic unchanged.
+    expect(resolveMemorySystemPrompt(false, true, undefined)).toBe(MEMORY_SYSTEM_PROMPT_READONLY);
+    expect(resolveMemorySystemPrompt(true, false, undefined)).toBe(MEMORY_SYSTEM_PROMPT_SEARCH_ONLY);
+    expect(resolveMemorySystemPrompt(false, false, undefined)).toBe(MEMORY_SYSTEM_PROMPT);
+  });
+
+  it('tool-grant check takes priority over readOnlyMemory=false', () => {
+    // Even if the flag says "not read-only", an absent memory_update means search-only.
+    const tools = ['memory_search'];
+    expect(resolveMemorySystemPrompt(false, false, tools)).toBe(MEMORY_SYSTEM_PROMPT_SEARCH_ONLY);
+  });
+
+  it('the search-only prompt does NOT mention memory_update', () => {
+    expect(MEMORY_SYSTEM_PROMPT_SEARCH_ONLY).not.toContain('memory_update');
   });
 });

@@ -131,8 +131,21 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
   const agentTypeListing = args.agentTypeListing ?? '';
 
   // --- Stable fragments (computed once; not cwd-dependent) ---
-  const toolBase = resolveToolSystemPrompt(config.isSkillDispatch, config.isUnnamedWorker);
-  const memoryPrompt = resolveMemorySystemPrompt(readOnlyMemory, readOnlyState);
+  // Named agents get base-only (or read-only) conventions — never the full
+  // interactive compound which includes slash-command routing, bash-passthrough,
+  // background-subagent result delivery, queued-message flush, and peer-message
+  // blocks that named agents can never receive (#5309, #5312).
+  const toolBase = resolveToolSystemPrompt(
+    config.isSkillDispatch,
+    config.isUnnamedWorker,
+    config.isNamedAgent,
+    config.isReadOnlyAgent,
+  );
+  // Named agents: derive memory tier from the actual tool grant so research-agent
+  // (memory_search only) gets search-only rather than the readonly variant
+  // that still mentions memory_update (#5310).
+  const namedAgentTools = config.isNamedAgent ? config.namedAgentGrantedTools : undefined;
+  const memoryPrompt = resolveMemorySystemPrompt(readOnlyMemory, readOnlyState, namedAgentTools);
   // Invariant: kept in lockstep with anthropic-direct's call site.
   // `excludeName` omits the executing skill's own entry for a skill-dispatch
   // fork (AgentConfig.skillDispatchName); `cwd` is forwarded so project skills
