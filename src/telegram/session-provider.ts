@@ -18,16 +18,17 @@ export function buildTelegramProvider(
     ...(ctx.mcpManager !== undefined ? { mcpManager: ctx.mcpManager } : {}),
     ...(ctx.stateStore !== undefined ? { stateStore: ctx.stateStore } : {}),
   };
+  const permissions = { allowedTools: topLevelSurfaceAllowedTools(ctx.mcpManager?.getMcpToolWireNames() ?? []) };
   if (family === 'xai' || family === 'xai-oauth') {
     const authMode = resolveXaiConstructionAuthMode(family, family === 'xai-oauth');
-    return new XaiProvider({ ...shared, ...(authMode !== undefined ? { authMode } : {}) });
+    return new XaiProvider({ ...shared, permissions, ...(authMode !== undefined ? { authMode } : {}) });
   }
   if (family !== 'anthropic-direct') {
-    return new OpenAICompatibleProvider({ ...shared, workspaceStore: ctx.workspaceStore });
+    return new OpenAICompatibleProvider({ ...shared, workspaceStore: ctx.workspaceStore, permissions });
   }
   return new AnthropicDirectProvider({
     ...shared,
     workspaceStore: ctx.workspaceStore,
-    permissions: { allowedTools: topLevelSurfaceAllowedTools(ctx.mcpManager?.getMcpToolWireNames() ?? []) },
+    permissions,
   });
 }
