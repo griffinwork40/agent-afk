@@ -221,13 +221,13 @@ describe('presence.peer concurrency', () => {
   it('all concurrent mutations land on the presence file', async () => {
     await writeInitialPresence();
     const { setPresenceTurnState, setPresencePeerInbox, setPresenceName } = await getPeerMod();
-    const { touchPresenceHeartbeat, setPresenceAfk } = await getPresenceMod();
+    const { touchPresenceHeartbeat, patchPresenceFile } = await getPresenceMod();
 
     // Fire all without await — they must serialize through the queue.
     const ops = [
       setPresenceTurnState(SESSION_ID, 'busy'),
       touchPresenceHeartbeat(SESSION_ID),
-      setPresenceAfk(SESSION_ID, true),
+      patchPresenceFile(SESSION_ID, (r) => { r.afk = true; }),
       setPresenceName(SESSION_ID, 'concurrent-name'),
     ];
     await Promise.all(ops);

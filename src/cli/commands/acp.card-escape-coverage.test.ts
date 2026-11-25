@@ -286,54 +286,5 @@ describe('acp card escape coverage: no display field contains bidi/invisible/tag
     );
   });
 
-  it('permission request options.name strings are clean of bidi characters', async () => {
-    // permissionOptions() builds option names from server-generated constants, but
-    // validate the guarantee holds end-to-end via a real permission card.
-    const conn = connect();
-    vi.mocked(buildAcpSession).mockImplementation(async options => {
-      const script = {
-        turns: [{
-          prompt: 'Write',
-          steps: [
-            { kind: 'tool' as const, id: 'tool-1', name: 'write_file',
-              input: { file_path: path.join(temporaryRoot, 'x.txt'), content: 'y\n' },
-              result: 'ok' },
-            { type: 'done' as const, metadata: { stopReason: 'end_turn' as const } },
-          ],
-        }],
-        executed: [] as string[], asked: [] as string[],
-      };
-      const handle = fakeHandle(options, script);
-      sessions.push(handle.session as unknown as ScriptedSession);
-      return handle;
-    });
 
-    const sessionId = await initSession(conn);
-    conn.send({ jsonrpc: '2.0', id: 3, method: 'session/prompt',
-      params: { sessionId, prompt: [{ type: 'text', text: 'Write' }] } });
-
-    // Collect until permission request arrives
-    let permIndex = -1;
-    for (let i = 2; permIndex < 0 && i < 20; i++) {
-      const frame = await conn.frameAt(i, `collecting frame ${i}`);
-      if (frame['method'] === 'session/request_permission') { permIndex = i; break; }
-    }
-    expect(permIndex).toBeGreaterThan(-1);
-
-    // Check all option names are clean
-    const permFrame = conn.frames[permIndex]!;
-    expect(() => assertNoEscapedChars([permFrame])).not.toThrow();
-
-    // Reply with a JSON-RPC response using the server's id, then wait for prompt response
-    const permId = permFrame['id'];
-    conn.send({ jsonrpc: '2.0', id: permId,
-      result: { outcome: { outcome: 'selected', optionId: 'allow_once' } } });
-
-    // Collect remaining frames until id=3 response arrives
-    for (let i = permIndex + 1; i < 20; i++) {
-      const frame = await conn.frameAt(i, `collecting frame ${i}`);
-      if (frame['id'] === 3) break;
-    }
-    await conn.close();
-  });
 });

@@ -10,7 +10,7 @@ import type { OutputEvent } from '../../agent/types/session-types.js';
 import { finishTurn, translateOutputEvent } from './acp.translate.js';
 import type { AcpSessionHandle } from './acp.session.js';
 import type {
-  AcpClientPeer, AcpPermissionGate, SessionUpdate, StopReason, ToolCallStart, TranslatorState, TurnMetadata,
+  AcpClientPeer, SessionUpdate, StopReason, ToolCallStart, TranslatorState, TurnMetadata,
 } from './acp.wire.js';
 import { sanitizeDisplay } from './acp.translate.bounds.js';
 import { closeOpenToolCalls, observeSentUpdate } from './acp.translate.terminal.js';
@@ -18,8 +18,6 @@ import { closeOpenToolCalls, observeSentUpdate } from './acp.translate.terminal.
 export interface ActiveTurn {
   abort: AbortController;
   cancelled: boolean;
-  /** Set once the stream is drained: new child asks are denied (D9). */
-  ending?: boolean;
   /** Settles once the prompt response is decided (never rejects). */
   done: Promise<void>;
 }
@@ -29,7 +27,6 @@ export interface LiveSession {
   cwd: string;
   handle?: AcpSessionHandle;
   translator: TranslatorState;
-  gate?: AcpPermissionGate;
   active?: ActiveTurn;
   closing: boolean;
   /** Canonical JSON of the wire MCP list the session was opened with (D15 reopen check). */
@@ -64,7 +61,6 @@ export function cancelTurn(live: LiveSession, log: (l: string) => void): void {
   if (!turn || turn.cancelled) return;
   turn.cancelled = true;
   live.translator.cancelled = true;
-  try { live.gate?.cancelAll(); } catch (err) { log(`[acp] gate cancelAll failed: ${String(err)}`); }
   turn.abort.abort();
   live.handle?.session.interrupt().catch((err: unknown) => log(`[acp] interrupt failed: ${String(err)}`));
 }
@@ -213,16 +209,10 @@ export async function runPromptTurn(
       meta = await consumeStream(live, turn, text, deps);
     } catch (err) {
       if (!turn.cancelled) {
-        // Deny open permission requests first, so no card is marked failed
-        // while its session/request_permission is still open at the client.
-        try { live.gate?.cancelAll(); } catch (e) { deps.log(`[acp] gate cancelAll failed: ${String(e)}`); }
         await sendClosingUpdates(live, deps, false);
         throw err;
       }
     }
-    // D9: no child-originated card may stay pending or in progress after the turn.
-    turn.ending = true;
-    try { await live.gate?.endTurn?.(); } catch (err) { deps.log(`[acp] endTurn failed: ${String(err)}`); }
     await sendClosingUpdates(live, deps, !turn.cancelled);
     let finished;
     try {
