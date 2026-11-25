@@ -53,7 +53,7 @@ const WORKTREE_BASE_BASE =
   "Base git ref for the worktree created by --worktree. Default: the remote's default branch (origin/main), fetched fresh. Pass HEAD to base on your local checkout instead. Also: AFK_WORKTREE_BASE";
 
 const DSP_BASE =
-  'Force bypass mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation';
+  'Force unrestricted mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation';
 
 /**
  * Register the options shared by `afk chat` and `afk interactive` onto `cmd`.
@@ -78,7 +78,7 @@ export function applySharedChatOptions(
     worktreeBaseDescriptionSuffix = '.',
     dangerouslySkipPermissionsDescription =
       DSP_BASE +
-      ' (permissionMode=bypassPermissions). Disable persistently with `afk config set permissionMode default`. Does not affect ask_question.',
+      ' (permissionMode=bypassPermissions). Disable persistently with `afk config set permissionMode plan`. Does not affect ask_question.',
   } = overrides;
 
   return cmd

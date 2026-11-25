@@ -100,7 +100,7 @@ Guide: [chat](/surfaces/chat)
 | `--resume <id>` | Resume a persisted session by id |  |
 | `--continue` | Continue the most recent persisted session in cwd |  |
 | `--permission-mode <mode>` | Permission mode: acceptEdits\|bypassPermissions\|plan\|dontAsk\|auto. Overrides afk.config.json permissionMode. Does not affect ask_question. |  |
-| `--dangerously-skip-permissions` | Force bypass mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation (permissionMode=bypassPermissions). Disable persistently with `afk config set permissionMode default`. Does not affect ask_question. |  |
+| `--dangerously-skip-permissions` | Force unrestricted mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation (permissionMode=bypassPermissions). Disable persistently with `afk config set permissionMode plan`. Does not affect ask_question. |  |
 | `-s, --stream` | [no-op] reserved; use --format stream-json for headless streaming | `false` |
 | `-f, --format <format>` | Output format (text\|json\|stream-json) | `"text"` |
 | `--max-budget-usd <usd>` | Hard session cost ceiling in USD. Env: AFK_MAX_BUDGET_USD |  |
@@ -2679,7 +2679,7 @@ Usage: `afk acp [options]`
 | --- | --- | --- |
 | `-m, --model <model>` | model to use for sessions (default: configured default) |  |
 | `--max-turns <n>` | maximum messages sent per session (0 = uncapped; default: 0) | `"0"` |
-| `--dangerously-skip-permissions` | Force bypass mode: skip all permission prompts for all sessions created by this server |  |
+| `--dangerously-skip-permissions` | Force unrestricted mode: skip all permission prompts for all sessions created by this server |  |
 | `-h, --help` | display help for command |  |
 
 ## `afk pause`
