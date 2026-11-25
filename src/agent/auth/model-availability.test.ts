@@ -9,10 +9,10 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const loadAnthropicCredential = vi.fn<[], string | undefined>();
-const loadOpenAICredential = vi.fn<[], string | undefined>();
+const loadAnthropicCredential = vi.fn<() => string | undefined>();
+const loadOpenAICredential = vi.fn<() => string | undefined>();
 const resolveOpenAIAuth = vi.fn();
-const providerForModel = vi.fn<[string | undefined], string>();
+const providerForModel = vi.fn<(m: string | undefined) => string>();
 
 vi.mock('./credential-resolver.js', () => ({
   loadAnthropicCredential: (...args: unknown[]) => loadAnthropicCredential(...(args as [])),
@@ -143,15 +143,15 @@ describe('modelAvailability', () => {
   });
 
   describe('xai slot', () => {
-    const originalXai = process.env.XAI_API_KEY;
+    const originalXai = process.env['XAI_API_KEY'];
 
     beforeEach(() => {
-      delete process.env.XAI_API_KEY;
+      delete process.env['XAI_API_KEY'];
     });
 
     afterEach(() => {
-      if (originalXai === undefined) delete process.env.XAI_API_KEY;
-      else process.env.XAI_API_KEY = originalXai;
+      if (originalXai === undefined) delete process.env['XAI_API_KEY'];
+      else process.env['XAI_API_KEY'] = originalXai;
     });
 
     it('is available when slot has per-slot apiKey even without XAI_API_KEY env', () => {

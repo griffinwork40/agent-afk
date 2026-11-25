@@ -60,104 +60,104 @@ vi.mock('../providers/index.js', async (importOriginal) => {
 });
 
 describe('loadXaiApiKey', () => {
-  const original = process.env.XAI_API_KEY;
+  const original = process.env['XAI_API_KEY'];
 
   afterEach(() => {
-    if (original === undefined) delete process.env.XAI_API_KEY;
-    else process.env.XAI_API_KEY = original;
+    if (original === undefined) delete process.env['XAI_API_KEY'];
+    else process.env['XAI_API_KEY'] = original;
   });
 
   it('returns XAI_API_KEY when set', () => {
-    process.env.XAI_API_KEY = 'xai-metered-key-9999';
+    process.env['XAI_API_KEY'] = 'xai-metered-key-9999';
     expect(loadXaiApiKey()).toBe('xai-metered-key-9999');
   });
 
   it('returns undefined when unset', () => {
-    delete process.env.XAI_API_KEY;
+    delete process.env['XAI_API_KEY'];
     expect(loadXaiApiKey()).toBeUndefined();
   });
 });
 
 describe('resolveCredentialForModel — xAI injection contract', () => {
-  const originalXai = process.env.XAI_API_KEY;
-  const originalOpenAI = process.env.OPENAI_API_KEY;
-  const originalAnthropic = process.env.ANTHROPIC_API_KEY;
+  const originalXai = process.env['XAI_API_KEY'];
+  const originalOpenAI = process.env['OPENAI_API_KEY'];
+  const originalAnthropic = process.env['ANTHROPIC_API_KEY'];
 
   beforeEach(() => {
-    delete process.env.XAI_API_KEY;
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env['XAI_API_KEY'];
+    delete process.env['OPENAI_API_KEY'];
+    delete process.env['ANTHROPIC_API_KEY'];
   });
 
   afterEach(() => {
-    if (originalXai === undefined) delete process.env.XAI_API_KEY;
-    else process.env.XAI_API_KEY = originalXai;
-    if (originalOpenAI === undefined) delete process.env.OPENAI_API_KEY;
-    else process.env.OPENAI_API_KEY = originalOpenAI;
-    if (originalAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
-    else process.env.ANTHROPIC_API_KEY = originalAnthropic;
+    if (originalXai === undefined) delete process.env['XAI_API_KEY'];
+    else process.env['XAI_API_KEY'] = originalXai;
+    if (originalOpenAI === undefined) delete process.env['OPENAI_API_KEY'];
+    else process.env['OPENAI_API_KEY'] = originalOpenAI;
+    if (originalAnthropic === undefined) delete process.env['ANTHROPIC_API_KEY'];
+    else process.env['ANTHROPIC_API_KEY'] = originalAnthropic;
   });
 
   it('injects XAI_API_KEY for grok models (apikey path)', () => {
-    process.env.XAI_API_KEY = 'xai-only-key';
+    process.env['XAI_API_KEY'] = 'xai-only-key';
     expect(resolveCredentialForModel('grok-4.5')).toBe('xai-only-key');
   });
 
   it('returns undefined for grok when only OAuth would be available (no env key)', () => {
     // Even if SuperGrok tokens exist on disk, session config must not receive
     // them — XaiProvider resolves the store itself.
-    delete process.env.XAI_API_KEY;
+    delete process.env['XAI_API_KEY'];
     expect(resolveCredentialForModel('grok-4.5')).toBeUndefined();
   });
 
   it('never injects OPENAI_API_KEY for grok models', () => {
-    process.env.OPENAI_API_KEY = 'sk-openai-leak';
-    delete process.env.XAI_API_KEY;
+    process.env['OPENAI_API_KEY'] = 'sk-openai-leak';
+    delete process.env['XAI_API_KEY'];
     expect(resolveCredentialForModel('grok-4.5')).toBeUndefined();
   });
 
   it('still returns OPENAI_API_KEY for gpt models', () => {
-    process.env.OPENAI_API_KEY = 'sk-openai';
+    process.env['OPENAI_API_KEY'] = 'sk-openai';
     expect(resolveCredentialForModel('gpt-4o')).toBe('sk-openai');
   });
 
   it('explicit xai with Claude model returns only XAI_API_KEY (never Anthropic)', () => {
-    process.env.XAI_API_KEY = 'xai-forced';
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-leak';
+    process.env['XAI_API_KEY'] = 'xai-forced';
+    process.env['ANTHROPIC_API_KEY'] = 'sk-ant-leak';
     expect(resolveCredentialForModel('claude-sonnet-4-6', { explicit: 'xai' })).toBe('xai-forced');
   });
 
   it('explicit xai with Claude model and no XAI_API_KEY returns undefined (not Anthropic)', () => {
-    delete process.env.XAI_API_KEY;
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-leak';
+    delete process.env['XAI_API_KEY'];
+    process.env['ANTHROPIC_API_KEY'] = 'sk-ant-leak';
     expect(resolveCredentialForModel('claude-sonnet-4-6', { explicit: 'xai' })).toBeUndefined();
   });
 
   it('without explicit hints, Claude model still resolves Anthropic', () => {
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-ok';
-    delete process.env.XAI_API_KEY;
+    process.env['ANTHROPIC_API_KEY'] = 'sk-ant-ok';
+    delete process.env['XAI_API_KEY'];
     expect(resolveCredentialForModel('claude-sonnet-4-6')).toBe('sk-ant-ok');
   });
 });
 
 describe('preloadClaudeKeychainOAuth — startup refresh guard', () => {
-  const originalAnthropic = process.env.ANTHROPIC_API_KEY;
-  const originalOauth = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  const originalAnthropic = process.env['ANTHROPIC_API_KEY'];
+  const originalOauth = process.env['CLAUDE_CODE_OAUTH_TOKEN'];
 
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(loadClaudeCodeOauthToken).mockReturnValue(undefined);
     _resetRefreshedClaudeCodeOauthToken();
     _resetKeychainReadCache();
-    delete process.env.ANTHROPIC_API_KEY;
-    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    delete process.env['ANTHROPIC_API_KEY'];
+    delete process.env['CLAUDE_CODE_OAUTH_TOKEN'];
   });
 
   afterEach(() => {
-    if (originalAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
-    else process.env.ANTHROPIC_API_KEY = originalAnthropic;
-    if (originalOauth === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
-    else process.env.CLAUDE_CODE_OAUTH_TOKEN = originalOauth;
+    if (originalAnthropic === undefined) delete process.env['ANTHROPIC_API_KEY'];
+    else process.env['ANTHROPIC_API_KEY'] = originalAnthropic;
+    if (originalOauth === undefined) delete process.env['CLAUDE_CODE_OAUTH_TOKEN'];
+    else process.env['CLAUDE_CODE_OAUTH_TOKEN'] = originalOauth;
   });
 
   it('skips the refresh for non-Anthropic providers (no dead keychain work)', async () => {
@@ -168,11 +168,11 @@ describe('preloadClaudeKeychainOAuth — startup refresh guard', () => {
   });
 
   it('skips the refresh when an env credential already takes precedence', async () => {
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-api03-env';
+    process.env['ANTHROPIC_API_KEY'] = 'sk-ant-api03-env';
     expect(await preloadClaudeKeychainOAuth('anthropic-direct')).toBeUndefined();
 
-    delete process.env.ANTHROPIC_API_KEY;
-    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'sk-ant-oat01-env';
+    delete process.env['ANTHROPIC_API_KEY'];
+    process.env['CLAUDE_CODE_OAUTH_TOKEN'] = 'sk-ant-oat01-env';
     expect(await preloadClaudeKeychainOAuth('anthropic-direct')).toBeUndefined();
 
     expect(refreshClaudeCodeOauthToken).not.toHaveBeenCalled();

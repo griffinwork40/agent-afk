@@ -363,7 +363,7 @@ describe.skipIf(process.platform === 'win32')(
       const events = await readTrace(join(traceDir, 'trace.jsonl'));
       const abortEvents = events.filter((e) => e.kind === 'abort');
       const verifyEvent = events.find(
-        (e) => e.kind === 'tool_call' && (e.payload as Record<string, unknown>).toolUseId === 'verify',
+        (e) => e.kind === 'tool_call' && (e.payload as Record<string, unknown>)['toolUseId'] === 'verify',
       );
 
       // Exactly one abort trace event from the root
@@ -410,7 +410,7 @@ describe.skipIf(process.platform === 'win32')(
       const events = await readTrace(join(traceDir, 'trace.jsonl'));
       const abortEvents = events.filter((e) => e.kind === 'abort');
       const verifyEvent = events.find(
-        (e) => e.kind === 'tool_call' && (e.payload as Record<string, unknown>).toolUseId === 'verify',
+        (e) => e.kind === 'tool_call' && (e.payload as Record<string, unknown>)['toolUseId'] === 'verify',
       );
 
       expect(abortEvents).toHaveLength(1);
@@ -446,7 +446,7 @@ describe.skipIf(process.platform === 'win32')(
       const events = await readTrace(join(traceDir, 'trace.jsonl'));
       const abortEvents = events.filter((e) => e.kind === 'abort');
       const verifyEvent = events.find(
-        (e) => e.kind === 'tool_call' && (e.payload as Record<string, unknown>).toolUseId === 'verify',
+        (e) => e.kind === 'tool_call' && (e.payload as Record<string, unknown>)['toolUseId'] === 'verify',
       );
 
       expect(abortEvents).toHaveLength(1);
@@ -482,7 +482,7 @@ describe.skipIf(process.platform === 'win32')(
       const events = await readTrace(join(traceDir, 'trace.jsonl'));
       const abortEvents = events.filter((e) => e.kind === 'abort');
       const verifyEvent = events.find(
-        (e) => e.kind === 'tool_call' && (e.payload as Record<string, unknown>).toolUseId === 'verify',
+        (e) => e.kind === 'tool_call' && (e.payload as Record<string, unknown>)['toolUseId'] === 'verify',
       );
 
       // The child has no descendants, so cascadedTo = []
@@ -519,7 +519,7 @@ describe.skipIf(process.platform === 'win32')(
       const events = await readTrace(join(traceDir, 'trace.jsonl'));
       const abortEvents = events.filter((e) => e.kind === 'abort');
       const verifyEvent = events.find(
-        (e) => e.kind === 'tool_call' && (e.payload as Record<string, unknown>).toolUseId === 'verify',
+        (e) => e.kind === 'tool_call' && (e.payload as Record<string, unknown>)['toolUseId'] === 'verify',
       );
 
       expect(abortEvents).toHaveLength(1);

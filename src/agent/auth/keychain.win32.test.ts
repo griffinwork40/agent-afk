@@ -23,7 +23,7 @@ vi.mock('os', async (importOriginal) => {
 // Provide a mock handle for h1ModelFetch so the token-refresh test can
 // intercept the fetch call that keychain.ts now routes through h1ModelFetch
 // (rather than globalThis.fetch) to force HTTP/1.1 (issue #3335).
-const h1FetchMock = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>();
+const h1FetchMock = vi.fn<typeof fetch>();
 vi.mock('../providers/shared/h1-fetch.js', () => ({
   h1ModelFetch: h1FetchMock,
 }));

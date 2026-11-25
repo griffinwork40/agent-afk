@@ -397,11 +397,11 @@ describe('buildRuntimeStateSource.getUsage', () => {
     const src = buildRuntimeStateSource(defaultDeps());
     const usage = src.getUsage();
     expect(usage).toHaveLength(1);
-    expect(usage[0].provider).toBe('anthropic');
-    expect(usage[0].account).toBe('oauth');
-    expect(usage[0].status).toBe('ok');
-    expect(usage[0].fiveHourPct).toBe(74);
-    expect(usage[0].sevenDayPct).toBe(12);
+    expect(usage[0]!.provider).toBe('anthropic');
+    expect(usage[0]!.account).toBe('oauth');
+    expect(usage[0]!.status).toBe('ok');
+    expect(usage[0]!.fiveHourPct).toBe(74);
+    expect(usage[0]!.sevenDayPct).toBe(12);
   });
 
   it('reports status=stale when the snapshot is older than STALE_AFTER_MS', () => {
@@ -411,7 +411,7 @@ describe('buildRuntimeStateSource.getUsage', () => {
     });
     const src = buildRuntimeStateSource(defaultDeps());
     const usage = src.getUsage();
-    expect(usage[0].status).toBe('stale');
+    expect(usage[0]!.status).toBe('stale');
   });
 
   it('does not include fiveHourPct when fiveHourUtilization is absent', () => {
@@ -421,8 +421,8 @@ describe('buildRuntimeStateSource.getUsage', () => {
     });
     const src = buildRuntimeStateSource(defaultDeps());
     const usage = src.getUsage();
-    expect(usage[0].fiveHourPct).toBeUndefined();
-    expect(usage[0].sevenDayPct).toBe(30);
+    expect(usage[0]!.fiveHourPct).toBeUndefined();
+    expect(usage[0]!.sevenDayPct).toBe(30);
   });
 });
 
