@@ -5,6 +5,7 @@ import type { RiskVerdict } from './risk-classifier.js';
 import type { MutationVerdict } from './command-classifier.js';
 import { findHighBashPattern } from './risk-classifier.bash-boundary.js';
 import { isSafeAtCommandPosition } from './risk-classifier.bash-safe.js';
+import { classifyRmRisk } from './risk-classifier.rm-predicate.js';
 
 // ---------------------------------------------------------------------------
 // Bash rule tables
@@ -204,7 +205,20 @@ export function classifyCommandRisk(
   // glued to a preceding word character (`platform `, `retrieval `), which
   // can never start a shell word — see risk-classifier.bash-boundary.ts.
   const high = findHighBashPattern(cmd, BASH_HIGH);
-  if (high !== undefined) return { level: 'high', reason: `bash-pattern: matched '${high}'`, category: 'bash-destructive' };
+  if (high !== undefined) {
+    // Secondary predicate for plain `rm` (#5292): `rm -rf` (index 0) stays
+    // unconditionally HIGH. Only the plain `'rm '` token (index 1) is eligible
+    // for downgrade — when classifyRmRisk determines the arguments target only
+    // declared-ephemeral locations with no recursive/structural flags, it
+    // returns 'medium' so routine daemon temp-file cleanup is auto-allowed.
+    if (high === 'rm ') {
+      const rmLevel = classifyRmRisk(cmd);
+      if (rmLevel === 'medium') {
+        return { level: 'medium', reason: `bash-pattern: matched '${high}' (ephemeral-safe)`, category: 'bash-mutating' };
+      }
+    }
+    return { level: 'high', reason: `bash-pattern: matched '${high}'`, category: 'bash-destructive' };
+  }
   for (const p of BASH_MEDIUM) {
     if (cmd.includes(p)) return { level: 'medium', reason: `bash-pattern: matched '${p}'`, category: 'bash-mutating' };
   }
