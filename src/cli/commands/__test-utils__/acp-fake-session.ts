@@ -38,7 +38,7 @@ export class ScriptedSession {
     yield detail(tool);
     // Permission bridge removed: tools always execute unconditionally.
     this.script.asked.push(tool.id);
-    if (this.aborter.signal.aborted) return;
+    if (this.aborter.signal.aborted) throw new Error('A3 tool executed after cancellation');
     this.script.executed.push(tool.id);
     if (tool.diff) yield { type: 'chunk', chunk: { type: 'tool_diff', toolUseId: tool.id, diff: tool.diff } };
     yield { type: 'chunk', chunk: { type: 'tool_result', toolUseId: tool.id,
