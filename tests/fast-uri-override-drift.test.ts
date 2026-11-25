@@ -58,6 +58,43 @@ function parseCapSemver(capToken: string): [number, number, number] | null {
   return [Number(m[1]), Number(m[2] ?? 0), Number(m[3] ?? 0)];
 }
 
+/**
+ * Assert that a fast-uri range string has a valid cap (exactly `<MAJOR.0.0`).
+ *
+ * Returns `null` on success, or an error message string on failure.  Factored
+ * out as a pure helper so unit tests can call it with synthetic range strings
+ * and confirm that a revert to major-only logic (which would accept `<4.1.0`)
+ * is caught immediately.
+ *
+ * Valid:   ">=3.1.9 <4"      → cap [4,0,0] === [4,0,0] ✓
+ * Invalid: ">=3.1.9 <4.1.0"  → cap [4,1,0] !== [4,0,0] ✗
+ */
+function assertCapValid(range: string): string | null {
+  const capMatch = /(<\s*\d+(?:\.\d+)*)/.exec(range);
+  if (!capMatch) {
+    return (
+      `fast-uri override "${range}" does not contain an upper-bound cap (e.g. "<4"). ` +
+      'Without the cap, pnpm may resolve to fast-uri >=4 which is outside ' +
+      "ajv's declared ^3.0.1 range."
+    );
+  }
+  const cap = parseCapSemver(capMatch[1]!);
+  if (!cap) {
+    return `Could not parse semver from fast-uri cap "${capMatch[1]}"`;
+  }
+  // The cap must be exactly [MAJOR, 0, 0] — i.e. a plain major-version boundary
+  // with no minor or patch component.  Accepting <4.1.0 would admit 4.x builds
+  // that break ajv's ^3.0.1 compatibility constraint.
+  if (cmpSemver(cap, [FAST_URI_CAP_MAJOR, 0, 0]) !== 0) {
+    return (
+      `fast-uri cap "${capMatch[1]}" must be exactly <${FAST_URI_CAP_MAJOR} ` +
+      `(i.e. [${FAST_URI_CAP_MAJOR},0,0]), got [${cap.join(',')}]. ` +
+      "A non-zero minor/patch component admits 4.x versions outside ajv's ^3 range."
+    );
+  }
+  return null;
+}
+
 describe('fast-uri override range drift guard', () => {
   it('pnpm-workspace.yaml exists and is readable', () => {
     expect(() => fs.readFileSync(workspaceYaml, 'utf8')).not.toThrow();
@@ -99,37 +136,23 @@ describe('fast-uri override range drift guard', () => {
     const yaml = fs.readFileSync(workspaceYaml, 'utf8');
     const range = parseFastUriRange(yaml)!;
 
-    // Extract the full upper-bound token, e.g. "<4", "<4.0.0", "<4.1.0".
-    const capMatch = /(<\s*\d+(?:\.\d+)*)/.exec(range);
-    expect(
-      capMatch,
-      `fast-uri override "${range}" does not contain an upper-bound cap (e.g. "<4"). ` +
-        'Without the cap, pnpm may resolve to fast-uri >=4 which is outside ' +
-        "ajv's declared ^3.0.1 range.",
-    ).not.toBeNull();
-
-    const cap = parseCapSemver(capMatch![1]!);
-    expect(
-      cap,
-      `Could not parse semver from fast-uri cap "${capMatch![1]}"`,
-    ).not.toBeNull();
-
-    // The cap must be <= 4.0.0, i.e. cmpSemver(cap, [4,0,0]) <= 0.
-    expect(
-      cmpSemver(cap!, [FAST_URI_CAP_MAJOR, 0, 0]),
-      `fast-uri cap "${capMatch![1]}" exceeds major version ${FAST_URI_CAP_MAJOR}.0.0. ` +
-        "Raising it beyond 4 risks breaking ajv's ^3 compatibility constraint.",
-    ).toBeLessThanOrEqual(0);
+    // Delegate to the testable helper so the same logic covers unit tests below.
+    const err = assertCapValid(range);
+    expect(err, err ?? undefined).toBeNull();
   });
 
-  it('fast-uri override cap rejects a range like <4.1.0 (would admit 4.x)', () => {
-    // "<4.1.0" parses to [4, 1, 0] which is > [4, 0, 0] — the guard must catch this.
-    const cap = parseCapSemver('<4.1.0');
-    expect(cap).toEqual([4, 1, 0]);
-    expect(
-      cmpSemver(cap!, [FAST_URI_CAP_MAJOR, 0, 0]),
-      '<4.1.0 should be detected as exceeding the [4,0,0] boundary',
-    ).toBeGreaterThan(0);
+  it('assertCapValid: ">=3.1.9 <4.1.0" should fail (minor cap admits 4.x)', () => {
+    // A revert to major-only logic (<= major) would silently accept this range.
+    // assertCapValid must reject it because the cap [4,1,0] !== [4,0,0].
+    const err = assertCapValid('>=3.1.9 <4.1.0');
+    expect(err, 'assertCapValid should return an error for <4.1.0').not.toBeNull();
+    expect(err).toMatch(/4,1,0/);
+  });
+
+  it('assertCapValid: ">=3.1.9 <4" should pass (exact major-version boundary)', () => {
+    // The canonical production value — must be accepted.
+    const err = assertCapValid('>=3.1.9 <4');
+    expect(err, `assertCapValid rejected a valid range: ${err}`).toBeNull();
   });
 
   it('parseFastUriRange handles quoted and unquoted values', () => {
