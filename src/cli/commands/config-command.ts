@@ -106,7 +106,7 @@ export function registerConfigCommand(program: Command): void {
         const effortVal = env.AFK_EFFORT || '(unset — SDK default)';
         console.log(`  Effort: ${palette.info(effortVal)}`);
 
-        console.log(`  Permission Mode: ${bypassEnabled ? palette.warning(`${permissionMode} (bypass — path containment off)`) : palette.info(`${permissionMode} (path containment on)`)}`);
+        console.log(`  Permission Mode: ${bypassEnabled ? palette.warning(`${permissionMode} (unrestricted — path containment off)`) : palette.info(`${permissionMode} (path containment on)`)}`);
 
         console.log(palette.meta('\n  Edit config:'));
         console.log(palette.meta('    afk config set permissionMode plan      # re-enable path containment'));

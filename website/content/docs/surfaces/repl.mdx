@@ -57,7 +57,7 @@ The conversation and completed tool output become scrollback. The live area show
 | --- | --- |
 | Model and working directory | Which model is active and where tools operate. |
 | `⎇ branch #123` | Current git branch and its open pull request, when available. PR lookup needs a working `gh` installation and may appear after the branch. |
-| `○ default`, `● plan`, `⚡ bypass`, `◐ AFK` | Current permission mode. |
+| `○ default`, `● plan`, `⚡ unrestricted`, `◐ AFK` | Current permission mode. |
 | Context bar, tokens, and cost | Context occupancy and session usage. Turn and budget caps appear when configured. |
 | `847 tok/s` | Live token throughput while the model streams, not an end-to-end speed guarantee. |
 | `2↗` | Running background subagent count. A progress banner can also show `N running` when several children are active. |
@@ -239,12 +239,12 @@ The non-TUI model listing marks unavailable aliases with `needs sign-in`. The cu
 **Shift+Tab** cycles `default → plan → bypassPermissions → default`. The status line and transient mode notice show the active mode.
 
 <Callout type="warn">
-`bypassPermissions` removes path-approval prompts and containment. Do not treat Shift+Tab as only a plan toggle: cycling from plan lands in bypass. See [Permissions](/configuration/permissions).
+`bypassPermissions` removes path-approval prompts and containment. Do not treat Shift+Tab as only a plan toggle: cycling from plan lands in unrestricted mode. See [Permissions](/configuration/permissions).
 </Callout>
 
 `/plan on` enters a read-only planning conversation: writes and mutating shell commands are refused, while read-only investigation runs. `/plan off` returns to default mode and starts a turn to save the plan under `.afk/plans/` and implement it. Shift+Tab changes modes without seeding implementation.
 
-When the agent proposes leaving plan mode, its approval picker lets you restore the previous mode, explicitly choose bypass when different, keep planning, or type revision feedback. Free-text feedback is not approval. Approval schedules a separate save-and-implement turn; writes remain blocked for the rest of the current planning turn.
+When the agent proposes leaving plan mode, its approval picker lets you restore the previous mode, explicitly choose unrestricted mode when different, keep planning, or type revision feedback. Free-text feedback is not approval. Approval schedules a separate save-and-implement turn; writes remain blocked for the rest of the current planning turn.
 
 Use `/tasks` to browse subagents and Enter to view a selected task. During streaming, Tab can open the newest running subagent's live view if no completion menu takes precedence. Type a message and Enter there to send it to that child, or Esc to return to the parent view.
 
@@ -263,7 +263,7 @@ Other slash-command highlights, grouped by task:
 `/goal` stores a project-scoped objective across sessions; changes are saved immediately but enter the model's standing context at the next session start. `/todo` manages this session's durable checklist. `/spine` manages the git-tracked `SPINE.md` architecture manifest, including its invariants and rejected patterns. See [Goal tracking](/guides/goal-tracking), [State store](/guides/state-store), and [Spine](/guides/spine).
 
 {/* docs-refs-ignore-next-line */}
-Use `/allow-dir` to authorize another directory, or revoke a grant with its `--revoke` option. There is no `/bypass` command, use the permission cycle when you deliberately want bypass mode.
+Use `/allow-dir` to authorize another directory, or revoke a grant with its `--revoke` option. There is no `/bypass` command, use the permission cycle when you deliberately want unrestricted mode.
 
 Use `/help` and the [slash-command reference](/reference/slash-commands) for the full list and arguments. See [Skills](/skills/overview) for skill workflows.
 

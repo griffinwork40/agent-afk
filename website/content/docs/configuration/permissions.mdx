@@ -1,6 +1,6 @@
 ---
 title: "Choose a permission mode"
-description: "Understand the bypass baseline, plan mode, and path approval."
+description: "Understand the unrestricted baseline, plan mode, and path approval."
 ---
 
 A new CLI installation starts in `bypassPermissions`: the agent can use file tools outside the working directory without a path approval prompt. Neither mode is a sandbox or a per-command confirmation system.
@@ -16,7 +16,7 @@ afk config set permissionMode plan
 afk i
 ```
 
-The setting takes effect in new sessions. For a single run, use `afk i --permission-mode plan` or `afk chat "Inspect this project" --permission-mode plan`. The `--dangerously-skip-permissions` flag forces bypass mode for a run. An unconfigured CLI uses bypass mode; the daemon also runs in bypass mode. Check the active mode in the REPL status line (`⚡ bypass` for bypass, `● plan` for plan).
+The setting takes effect in new sessions. For a single run, use `afk i --permission-mode plan` or `afk chat "Inspect this project" --permission-mode plan`. The `--dangerously-skip-permissions` flag forces unrestricted mode for a run. An unconfigured CLI uses unrestricted mode; the daemon also runs in unrestricted mode. Check the active mode in the REPL status line (`⚡ unrestricted` for unrestricted, `● plan` for plan).
 
 | Mode | Behavior |
 |---|---|
@@ -29,7 +29,7 @@ In an interactive session, **Shift+Tab** cycles between `plan` and `bypassPermis
 
 `read_file`, `write_file`, `edit_file`, `list_directory`, `glob`, and `grep` check granted roots in `default` mode. The initial working directory is granted. For an outside path, you can allow once, allow for the session, persist a grant for later sessions, or deny. Use `/allow-dir` to grant a directory in advance; forked subagents cannot answer an interactive path prompt, so authorize access in the parent first. Noninteractive requests cannot answer a prompt.
 
-A separate protected credential-path floor still refuses typed read tools even in bypass mode. On interactive surfaces a bash restriction hook also detects certain credential-path references and interpreter one-liners; it is not an OS security boundary, and headless bash has different restrictions. Do not treat `default` mode as a shell sandbox. See [Safety](/concepts/safety) and [Tool access](/guides/tool-access).
+A separate protected credential-path floor still refuses typed read tools even in unrestricted mode. On interactive surfaces a bash restriction hook also detects certain credential-path references and interpreter one-liners; it is not an OS security boundary, and headless bash has different restrictions. Do not treat `default` mode as a shell sandbox. See [Safety](/concepts/safety) and [Tool access](/guides/tool-access).
 
 ### Read-only exceptions to the credential floor
 
@@ -40,7 +40,7 @@ Every exception is **read-only**. Writes to `~/.ssh` and `~/.afk/config` are blo
 Add your own protected paths with `AFK_READ_DENYLIST` (colon-separated absolute paths; a leading `~/` is expanded). Operator entries are matched before the exceptions, so `AFK_READ_DENYLIST=~/.afk/config/mcp.json` re-protects the registry if yours holds inline secrets, and `AFK_READ_DENYLIST=~/.ssh` re-denies every `~/.ssh` exception. Built-in entries always apply and cannot be removed.
 
 <Callout type="warn">
-Bypass grants broad file access. For work on untrusted code, use a disposable environment or isolated worktree, and set `permissionMode` to `default` if you need path prompts. Built-in credential protections do not replace an OS sandbox.
+Unrestricted mode grants broad file access. For work on untrusted code, use a disposable environment or isolated worktree, and set `permissionMode` to `default` if you need path prompts. Built-in credential protections do not replace an OS sandbox.
 </Callout>
 
 ## Hook controls are separate
