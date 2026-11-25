@@ -117,13 +117,26 @@ export function assembleQueryPrompt(args: PromptAssemblyArgs): AssembledPrompt {
   // that tag) would push them to ask "which skill?" instead of engaging with
   // their SKILL.md body. The ask_question strip in the dispatcher wiring is
   // the structural backstop for the same failure mode.
-  const toolBase = resolveToolSystemPrompt(config.isSkillDispatch, config.isUnnamedWorker);
+  // Named agents get base-only (or read-only) conventions — never the full
+  // interactive compound which includes slash-command routing, bash-passthrough,
+  // background-subagent result delivery, queued-message flush, and peer-message
+  // blocks that named agents can never receive (#5309, #5312).
+  const toolBase = resolveToolSystemPrompt(
+    config.isSkillDispatch,
+    config.isUnnamedWorker,
+    config.isNamedAgent,
+    config.isReadOnlyAgent,
+  );
   // Read-only memory child sessions get a slimmed prompt that omits write
   // instructions for memory_update / procedure_write — keeps the model from
   // being told about tools it does not have.
   // Child sessions (readOnlyState) can write facts but not hot memory — give
   // them the slimmed child-prompt variant that omits hot-write guidance.
-  const memoryPrompt = resolveMemorySystemPrompt(args.readOnlyMemory, args.readOnlyState);
+  // Named agents: derive tier from the actual tool grant so research-agent
+  // (memory_search only) gets search-only rather than the readonly variant
+  // that still mentions memory_update (#5310).
+  const namedAgentTools = config.isNamedAgent ? config.namedAgentGrantedTools : undefined;
+  const memoryPrompt = resolveMemorySystemPrompt(args.readOnlyMemory, args.readOnlyState, namedAgentTools);
   const workspacePrompt = resolveWorkspaceSystemPrompt(args.workspaceEnabled);
 
   // Awareness identity fields interleaved into the `# Environment` fragment

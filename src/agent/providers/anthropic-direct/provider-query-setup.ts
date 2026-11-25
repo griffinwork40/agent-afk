@@ -84,8 +84,18 @@ export function resolveUserSystem(sp: AgentConfig['systemPrompt']): string | nul
   return normalizeSystemPromptOverlay(sp);
 }
 
-/** Compute the includeSkillManifest flag for assembleQueryPrompt. */
-function resolveIncludeSkillManifest(ctx: ProviderQueryContext): boolean {
+/**
+ * Compute the includeSkillManifest flag for assembleQueryPrompt.
+ *
+ * Unnamed workers (`isUnnamedWorker=true`) must NOT receive the skill manifest:
+ * they cannot invoke skills directly (they are bare `agent` tool dispatches with
+ * no skill executor of their own), and the manifest is the largest single
+ * fragment (~78 k chars). The existing `skillManifestGranted` gate does not
+ * exclude them because their `grantsTool('skill')` check is true (inherit-all).
+ * The `isUnnamedWorker` short-circuit closes that gap (#5311).
+ */
+function resolveIncludeSkillManifest(ctx: ProviderQueryContext, isUnnamedWorker: boolean | undefined): boolean {
+  if (isUnnamedWorker) return false;
   return skillManifestGranted(
     ctx.skillExecutor !== undefined && ctx.skillExecutor !== null,
     ctx.grantsTool,
@@ -221,7 +231,7 @@ export function setUpQuerySession(
     // Gate: include iff executor present AND `skill` is not explicitly denied.
     // Uses fail-open fallback for absent callbacks (pre-gate compat). See
     // `skillManifestGranted` in tool-grant.ts for the full rule.
-    includeSkillManifest: resolveIncludeSkillManifest(ctx),
+    includeSkillManifest: resolveIncludeSkillManifest(ctx, config.isUnnamedWorker),
     runtimeStateSource,
     userSystem,
     // Dynamic agent-type listing injected into the volatile system-prompt tail

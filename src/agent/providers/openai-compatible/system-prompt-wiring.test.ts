@@ -222,8 +222,9 @@ describe('buildSystemPromptWiring — unnamed-worker toolBase dedupe guard (#335
     const { initialSystemPrompt } = buildSystemPromptWiring(
       makeArgs({ config: { model: 'sonnet', isUnnamedWorker: true } as SystemPromptWiringArgs['config'] }),
     );
-    // Verify the call site passes isSkillDispatch=undefined and isUnnamedWorker=true.
-    expect(systemPromptMod.resolveToolSystemPrompt).toHaveBeenCalledWith(undefined, true);
+    // Verify the call site passes isSkillDispatch=undefined, isUnnamedWorker=true,
+    // isNamedAgent=undefined, isReadOnlyAgent=undefined (#5309 added the extra params).
+    expect(systemPromptMod.resolveToolSystemPrompt).toHaveBeenCalledWith(undefined, true, undefined, undefined);
     // The assembled prompt must not start with a blank line (which would happen
     // if '' were pushed into parts[] before the join('\n\n')).
     expect(initialSystemPrompt).not.toMatch(/^\n/);
