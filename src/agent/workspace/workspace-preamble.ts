@@ -100,6 +100,10 @@ export function renderWorkspacePreamble(
         // Malformed JSON — omit silently
       }
     }
+
+    if (entry.artifact_id) {
+      lines.push(`Artifact: ${entry.artifact_id}`);
+    }
   }
 
   lines.push('---');

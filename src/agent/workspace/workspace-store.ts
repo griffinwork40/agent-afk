@@ -50,6 +50,12 @@ export interface WorkspaceEntry {
   relation_type: WorkspaceRelationType | null;
   created_at: string;
   seq: number;
+  /**
+   * Optional stable artifact ID (`art_<32hex>`) linking this entry to a
+   * registered artifact in the content-addressed registry (#1415 item 3).
+   * Null when no artifact is associated.
+   */
+  artifact_id: string | null;
 }
 
 /** Input type for publishing a new entry — id/created_at/seq are auto-set. */
@@ -65,6 +71,11 @@ export interface WorkspacePublishInput {
   /** IDs of related entries. */
   relates_to?: number[];
   relation_type?: WorkspaceRelationType;
+  /**
+   * Optional stable artifact ID (`art_<32hex>`) linking this entry to a
+   * registered artifact in the content-addressed registry (#1415 item 3).
+   */
+  artifact_id?: string;
 }
 
 // ── Schema ───────────────────────────────────────────────────────────────────
@@ -89,7 +100,8 @@ CREATE TABLE IF NOT EXISTS workspace_entries (
   relates_to TEXT,
   relation_type TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  seq INTEGER NOT NULL
+  seq INTEGER NOT NULL,
+  artifact_id TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ws_session_seq ON workspace_entries(session_id, seq);
@@ -141,8 +153,28 @@ export class WorkspaceStore {
     this.db = new Database(dbPath ?? ':memory:');
     configureSqliteConnection(this.db);
     this.db.exec(SCHEMA_SQL);
+    this._applyMigrations();
   }
 
+
+  /**
+   * Additive schema migration: add columns that did not exist in older
+   * in-memory or file-backed workspace DBs (safe no-op when already present).
+   *
+   * Invariant: each ALTER TABLE is guarded by a PRAGMA table_info check so it
+   * never fails on a fresh schema that already includes the column.
+   */
+  private _applyMigrations(): void {
+    const cols = (this.db.pragma('table_info(workspace_entries)') as Array<{ name: string }>)
+      .map((c) => c.name);
+    if (!cols.includes('artifact_id')) {
+      this.db.exec('ALTER TABLE workspace_entries ADD COLUMN artifact_id TEXT;');
+    }
+    // Create the partial index after ensuring the column exists (safe no-op if already present)
+    this.db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_ws_artifact_id ON workspace_entries(artifact_id) WHERE artifact_id IS NOT NULL;`,
+    );
+  }
 
   /**
    * Publish a new workspace entry. Returns the assigned row id.
@@ -153,13 +185,16 @@ export class WorkspaceStore {
    * path (subscriptions use pure in-memory JS filter checks).
    */
   publish(entry: WorkspacePublishInput): number {
+    if (entry.artifact_id !== undefined && !/^art_[0-9a-f]{32}$/.test(entry.artifact_id)) {
+      throw new Error(`Invalid artifact_id format: must match art_<32 hex chars>, got "${entry.artifact_id}"`);
+    }
     let insertedEntry: WorkspaceEntry | undefined;
     const txn = this.db.transaction(() => {
       const nextSeq = this.nextSeq(entry.session_id);
       const stmt = this.db.prepare(`
         INSERT INTO workspace_entries
-          (session_id, type, subject, content, evidence, confidence, agent_id, relates_to, relation_type, seq)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (session_id, type, subject, content, evidence, confidence, agent_id, relates_to, relation_type, seq, artifact_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const result = stmt.run(
         entry.session_id,
@@ -172,6 +207,7 @@ export class WorkspaceStore {
         entry.relates_to !== undefined ? JSON.stringify(entry.relates_to) : null,
         entry.relation_type ?? null,
         nextSeq,
+        entry.artifact_id ?? null,
       );
       const id = Number(result.lastInsertRowid);
       // Read back the full row so notifySubscribers receives a complete

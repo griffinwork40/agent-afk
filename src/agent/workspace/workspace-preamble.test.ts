@@ -25,6 +25,7 @@ function makeEntry(overrides: Partial<WorkspaceEntry> = {}): WorkspaceEntry {
     relation_type: null,
     created_at: '2026-08-18T00:00:00.000Z',
     seq: 1,
+    artifact_id: null,
     ...overrides,
   };
 }
@@ -118,6 +119,18 @@ describe('renderWorkspacePreamble', () => {
     // At least two '---' dividers expected
     const dividers = output.match(/^---$/gm);
     expect(dividers?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('renders artifact_id when present', () => {
+    const output = renderWorkspacePreamble([
+      makeEntry({ artifact_id: 'art_' + 'a'.repeat(32) }),
+    ]);
+    expect(output).toContain('Artifact: art_' + 'a'.repeat(32));
+  });
+
+  it('omits artifact line when artifact_id is null', () => {
+    const output = renderWorkspacePreamble([makeEntry({ artifact_id: null })]);
+    expect(output).not.toContain('Artifact:');
   });
 
   it('renders all valid entry types capitalised', () => {
