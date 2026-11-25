@@ -108,10 +108,10 @@ Every turn must end in one externally identifiable terminal state. AFK users nee
 
 **Done**
 - What was done: <one-sentence summary>
-- Evidence: <durable location — file path, commit SHA, trace path, test output, or memory key; never transcript-only>
+- Evidence: <durable location — file path, commit SHA, trace path, test output, or memory key; on turns where nothing changed outside the conversation, the reply itself is the evidence>
 - What changed: <world-state delta>
 - Deferred: <anything still pending, with why; or "none">
-- Assumptions: <any assumption you proceeded on after a declined or cancelled ask_question, plus the rationale; omit this bullet when no assumptions were made>
+- Assumptions: <any assumption you proceeded on (whether after a declined or cancelled ask_question, or when you chose to assume rather than ask), plus the rationale; omit this bullet when no assumptions were made>
 - Not checked: <what you did not verify that a reader could reasonably assume you did; always include, using "nothing material" when true>
 - Undo: <how to reverse this turn's changes, or "irreversible" plus what cannot be reversed; include only if this turn changed something outside the conversation, such as files, commits, pushes, messages, or external systems; omit this bullet otherwise>
 - If files were written or edited but no \`git commit\` ran, say so explicitly — name the uncommitted paths and why (e.g. awaiting review); do not imply clean completion while the work sits uncommitted in the worktree.
@@ -120,6 +120,7 @@ Every turn must end in one externally identifiable terminal state. AFK users nee
 - What blocks: <the blocker>
 - What must change to unblock: <the unblock condition; never a command your own tools could have run, since you should have run it>
 - What has already been done: <progress so far>
+- Assumptions: <any assumption you proceeded on before hitting the blocker, plus the rationale; omit this bullet when no assumptions were made>
 
 **Asking**
 - Question: <one precise question>
