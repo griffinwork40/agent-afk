@@ -313,30 +313,19 @@ elicitations via `ledgerOriginatedPendingChats` (a `Set<number>` in
 `handlers/message.ts`) so phone replies are delivered even though no `AgentSession` is
 running inside the daemon for this session.
 
-### Signed write-back
+### Answer handling
 
-After the operator answers, the daemon:
-
-1. Reads the per-session HMAC key from `~/.afk/state/sessions/<id>/session.key`.
-   Nothing writes this key at present (see the status note above), so the daemon
-   finds no key and skips the write-back.
-2. Signs the response with `signElicitationResponse` (HMAC-SHA256 over
-   `recordKind‖sessionId‖reqId‖stableStringify(result)`).
-3. Appends a signed `elicitation_response` record to the ledger.
-
-The REPL verifies the HMAC before acting on the response. An unverified or stray write
-is silently ignored — it cannot drive the agent.
+After the operator answers, the daemon resolves the pending elicitation locally
+but discards the result — the REPL does not receive the answer. Restoring this
+path requires `ensureSessionKey` and `makeLedgerChannelHandler` (tracked in
+#5189). No test currently covers this intercept path; coverage is tracked in
+#5189.
 
 ### Security boundary
 
-The HMAC layer guards against **accidental cross-session bleed** and **stray writers**.
-It is NOT a defence against a malicious same-user process (which can read the 0600 key
-and already has the user's OS privileges). Telegram ingress remains gated by the
-existing `AFK_TELEGRAM_ALLOWED_CHAT_IDS` allowlist. A remote reply is an input to the
-agent's reasoning, never a way around a blocking hook.
-
-For the full design, threat model, flow diagram, five hard invariants, and known
-limitations, see [`docs/afk-remote-control.md`](../../docs/afk-remote-control.md).
+Telegram ingress is gated by the existing `AFK_TELEGRAM_ALLOWED_CHAT_IDS`
+allowlist. A remote reply is an input to the agent's reasoning, never a way
+around a blocking hook.
 
 ---
 
