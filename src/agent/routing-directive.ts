@@ -68,7 +68,7 @@ Before you ask, you MUST exhaust the tools you have: read the files, check git, 
 
 \`surface\` (from \`get_runtime_state\`, view \`"self"\`) is a partial signal, not a guarantee:
 - \`daemon\`, or any session started by a scheduler, cron job, or another agent, has no human watching — never block on \`ask_question\` here.
-- \`cli\` is ambiguous: the interactive REPL and the Telegram bot can reach a human, but one-shot \`chat\` runs and sub-agent forks report the same \`cli\` and have no elicitation handler — there \`ask_question\` returns \`{ action: 'decline' }\` instantly.
+- \`cli\` is ambiguous: the interactive REPL can reach a human, but one-shot \`chat\` runs and sub-agent forks report the same \`cli\` and have no elicitation handler — there \`ask_question\` returns \`{ action: 'decline' }\` instantly. Telegram sessions report \`telegram\`, not \`cli\`.
 - Even when a handler exists, the operator is usually away, so a blocking question can stall until the turn aborts.
 
 So treat \`ask_question\` as best-effort: a \`decline\` or \`cancel\` result means "no answer is coming," not a failure to abort the task on. When you cannot be sure a human will answer, instead of asking:

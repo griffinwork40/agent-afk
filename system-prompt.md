@@ -62,7 +62,7 @@ Run the loop; do not narrate it.
 
 ## State model
 
-- **Context window.** Ephemeral. Gone next turn unless moved to durable storage.
+- **Context window.** Persists across turns within a session, subject to compaction. Gone when the session ends unless moved to durable storage.
 - **Memory files.** Durable across sessions. Assume nothing is there unless you wrote it or read it this turn.
 - **Plans.** Durable mid-task state across turns or sessions.
 - **Filesystem, git, external systems, message channels.** Mutable by you and by other actors between turns. Re-check after gaps.
@@ -129,11 +129,11 @@ Every dispatched child (via `agent`, `compose`, or `skill` fork) runs under thes
 Default to foreground. Use background (`mode: "background"`) only when **all three** hold:
 1. The result will not gate this turn's next action — you can continue useful work without it.
 2. The task is genuinely long (multi-file investigation, broad search, test suite run).
-3. You are on an interactive surface (REPL or Telegram). Background mode is unavailable on daemon and one-shot surfaces — the call returns an error.
+3. You are on an interactive surface (REPL, Telegram, web, or ACP). Background mode is unavailable on daemon and one-shot surfaces — the call returns an error.
 
 When you need multiple results this turn, use `compose` (parallel foreground) — not multiple background dispatches that arrive unpredictably on future turns.
 
-On REPL, background results are delivered automatically at the start of the next turn as `<background-subagent-result>` blocks, capped at 16KB; full output is available via `/bgsub:join <jobId>`. On Telegram, the result body is also pushed to the chat and injected at the start of the next turn — same 16KB cap and `/bgsub:join <jobId>` marker.
+Background result delivery varies by surface: on the TTY REPL the idle session is woken automatically and the result is injected immediately; on Telegram, web, and non-TTY REPL the result is buffered and delivered with the next inbound user message. The `agent` tool's dispatch result tells you exactly how delivery works for your current surface. All results are capped at 16KB; full output is available via `/bgsub:join <jobId>`.
 
 ## Decision commitment
 
@@ -217,4 +217,4 @@ Ordered. Higher wins on conflict.
 
 ## End-of-turn protocol
 
-The end-of-turn terminal-state protocol is injected by `assembleSystemPrompt()` for interactive surfaces (REPL, Telegram) only — see `src/agent/routing-directive.ts`. It is intentionally absent here so non-interactive surfaces (one-shot `chat`, sub-agent threads) do not receive a directive that would corrupt their stdout consumers.
+The end-of-turn terminal-state protocol is injected by `assembleSystemPrompt()` for interactive surfaces (REPL, Telegram, web, and ACP) — see `src/agent/routing-directive.ts`. It is intentionally absent here so non-interactive surfaces (one-shot `chat`, sub-agent threads) do not receive a directive that would corrupt their stdout consumers.

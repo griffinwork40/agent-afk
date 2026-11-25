@@ -29,9 +29,10 @@ export const askQuestionTool: AnthropicToolDef = {
     '`surface` (from `get_runtime_state`, view "self") is a partial signal, not a guarantee:\n' +
     '- `daemon`, or any session started by a scheduler, cron, or another agent: no human is\n' +
     '  watching — never block on a question here.\n' +
-    '- `cli` is AMBIGUOUS: the interactive REPL and Telegram bot reach a human, but one-shot\n' +
+    '- `cli` is AMBIGUOUS: the interactive REPL can reach a human, but one-shot\n' +
     '  `chat` runs and sub-agent forks report the same `cli` with no elicitation handler —\n' +
-    "  there the call returns `{ action: 'decline' }` instantly.\n" +
+    "  there the call returns `{ action: 'decline' }` instantly. Telegram sessions\n" +
+    '  report `telegram`, not `cli`.\n' +
     '- Even with a handler, the operator is usually away, so a blocking question may stall\n' +
     '  until the turn aborts.\n' +
     'Treat this tool as best-effort: `decline` or `cancel` means "no answer is coming," not a\n' +
