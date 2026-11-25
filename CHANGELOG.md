@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [6.3.0] - 2026-11-25
+
 ### Added
 - bump sol/astra/terra aliases to latest OpenAI flagships (#5308) (47f06347b)
 - global-chat: default relay URL, add to first-run banner, fix stale docs (#5307) (77edcd302)
