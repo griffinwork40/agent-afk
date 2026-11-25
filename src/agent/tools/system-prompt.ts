@@ -25,6 +25,26 @@ export const TOOL_SYSTEM_PROMPT_BASE = `You have access to tools for working wit
 - Prefer \`agent\` (and \`skill\`) for multi-file investigation, verification that needs tools or fresh evidence, parallel hypotheses, and any work that would otherwise consume large amounts of inline context. The main session is the coordinator; subagents are the investigators.`;
 
 /**
+ * Read-only tool-usage conventions — only the tools a read-only named agent
+ * actually has (read_file, grep, glob, list_directory, web_scrape, etc.).
+ *
+ * Used for named agents whose granted tool surface has no edit_file, write_file,
+ * or bash — the full TOOL_SYSTEM_PROMPT_BASE mentions those tools and would tell
+ * a read-only agent to "prefer edit_file" and "avoid destructive bash" when it
+ * cannot call either. Those stray instructions waste context and may confuse the
+ * model (#5312).
+ *
+ * Callers gate on the tool grant: if the agent has none of
+ * Edit/Write/Bash in its allowlist, use this; otherwise use TOOL_SYSTEM_PROMPT_BASE.
+ */
+export const TOOL_SYSTEM_PROMPT_READONLY = `You have access to read-only tools for searching and inspecting the filesystem. Follow these conventions:
+
+- Use glob and grep to discover files before reading individual files.
+- Use read_file with absolute paths. Quote paths that contain spaces with double quotes.
+- When grep output is long it is capped to a head+tail view — the command still completes. If you need the elided middle, narrow the pattern or path rather than re-running the same broad query.
+- Use absolute paths for file operations.`;
+
+/**
  * Slash-command routing instruction — only meaningful for main (interactive)
  * sessions where a user may type a `/skill` slash command. Must NOT be
  * included in skill-dispatch sub-agents: they receive a "Run the <name> skill"
@@ -291,7 +311,7 @@ Use FTS5 syntax: "exact phrase", term1 AND term2, prefix*.`;
  * concatenation inline and fell behind when the compound gained the
  * background-subagent fragment.)
  *
- * Three tiers:
+ * Four tiers:
  * - unnamed-worker sub-agents (`isUnnamedWorker=true`) → empty string `''`.
  *   The base conventions are already embedded in `UNNAMED_SUBAGENT_WORKER_PROMPT`
  *   (which becomes `config.systemPrompt` via `composeUnnamedWorkerPrompt`).
@@ -303,6 +323,11 @@ Use FTS5 syntax: "exact phrase", term1 AND term2, prefix*.`;
  *   are all interactive-only and would mislead a dispatched skill (which receives
  *   a "Run the <name> skill" directive, not a `<command-name>` tag or any
  *   REPL-delivered envelope).
+ * - named-agent sub-agents (`isNamedAgent=true`) → base or read-only conventions,
+ *   never the full interactive compound. Named agents cannot receive slash
+ *   commands, bash-passthrough blocks, background-subagent results, queued
+ *   user messages, or peer messages (#5309). `isReadOnlyAgent` further narrows
+ *   to `TOOL_SYSTEM_PROMPT_READONLY` when the agent has no write/bash tools (#5312).
  * - every other session → the full compound (base + slash-command routing +
  *   bash-passthrough + background-subagent result delivery + queued-message
  *   flush).
@@ -310,8 +335,11 @@ Use FTS5 syntax: "exact phrase", term1 AND term2, prefix*.`;
 export function resolveToolSystemPrompt(
   isSkillDispatch: boolean | undefined,
   isUnnamedWorker?: boolean | undefined,
+  isNamedAgent?: boolean | undefined,
+  isReadOnlyAgent?: boolean | undefined,
 ): string {
   if (isUnnamedWorker) return '';
+  if (isNamedAgent) return isReadOnlyAgent ? TOOL_SYSTEM_PROMPT_READONLY : TOOL_SYSTEM_PROMPT_BASE;
   return isSkillDispatch ? TOOL_SYSTEM_PROMPT_BASE : TOOL_SYSTEM_PROMPT;
 }
 
@@ -327,11 +355,23 @@ export function resolveToolSystemPrompt(
  *   child sessions that have `memory_search` + `memory_update` (target:"fact")
  *   but not hot-writes or `procedure_write`.
  * - otherwise → {@link MEMORY_SYSTEM_PROMPT}: full parent session.
+ *
+ * When `grantedTools` is supplied (the agent's effective tool allowlist), it
+ * takes precedence over the flag-based tier for the `readOnlyMemory` decision:
+ * if `memory_update` is absent from the granted set the agent cannot call it,
+ * so the prompt must not advertise it (#5310). The flags are still the
+ * authority for `readOnlyState` (which controls hot-write guidance).
  */
 export function resolveMemorySystemPrompt(
   readOnlyMemory: boolean | undefined,
   readOnlyState?: boolean | undefined,
+  grantedTools?: readonly string[] | undefined,
 ): string {
+  // Tool-grant override: if the agent's allowlist excludes memory_update,
+  // it can never write facts — use search-only regardless of the flag.
+  if (grantedTools !== undefined && !grantedTools.includes('memory_update')) {
+    return MEMORY_SYSTEM_PROMPT_SEARCH_ONLY;
+  }
   if (readOnlyMemory) return MEMORY_SYSTEM_PROMPT_SEARCH_ONLY;
   if (readOnlyState) return MEMORY_SYSTEM_PROMPT_READONLY;
   return MEMORY_SYSTEM_PROMPT;

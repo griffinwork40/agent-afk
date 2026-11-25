@@ -136,6 +136,21 @@ export function resolveChildBudgets(
  * Construct the base `AgentConfig` object from resolved fields. Provider
  * wiring happens separately in `wireChildNesting`.
  */
+/**
+ * Whether an effective tool allowlist has no write or shell tools, making the
+ * agent read-only for the purposes of tool-convention prompt selection (#5312).
+ *
+ * "Write/shell" is defined as any of: edit_file, write_file, patch_apply,
+ * bash, Bash (Claude-Code alias), Edit (Claude-Code alias), Write
+ * (Claude-Code alias). An undefined allowlist (inherit-all) is treated as
+ * NOT read-only — the agent may have write access.
+ */
+function isReadOnlyToolSurface(allowedTools: string[] | undefined): boolean {
+  if (allowedTools === undefined) return false;
+  const WRITE_OR_SHELL = new Set(['edit_file', 'write_file', 'patch_apply', 'bash', 'Bash', 'Edit', 'Write']);
+  return !allowedTools.some((t) => WRITE_OR_SHELL.has(t));
+}
+
 export function buildBaseChildConfig(
   parsed: Pick<AgentInput, 'cwd' | 'writeRoots' | 'readRoots'>,
   namedAgent: RegisteredAgent | undefined,
@@ -147,10 +162,18 @@ export function buildBaseChildConfig(
   effectiveMaxToolUseIterations: number,
   depth: number,
   maxDepth: number,
+  effectiveAllowedTools?: string[] | undefined,
 ): AgentConfig {
   const systemPromptParts =
     namedAgent !== undefined
-      ? { systemPrompt: namedAgent.definition.prompt }
+      ? {
+          systemPrompt: namedAgent.definition.prompt,
+          isNamedAgent: true as const,
+          ...(isReadOnlyToolSurface(effectiveAllowedTools) ? { isReadOnlyAgent: true as const } : {}),
+          // Capture effective tool list so assemblers can derive memory-prompt
+          // tier from the actual grant (memory_update absent → search-only) #5310.
+          ...(effectiveAllowedTools !== undefined ? { namedAgentGrantedTools: effectiveAllowedTools } : {}),
+        }
       : { systemPrompt: composeUnnamedWorkerPrompt(defaultConfig.operatorOverlay), isUnnamedWorker: true as const };
 
   return {
