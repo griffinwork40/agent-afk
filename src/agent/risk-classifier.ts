@@ -409,6 +409,13 @@ export function classifyRiskDetailed(
     return { level: 'safe', category: 'read-only' };
   }
 
+  // ---- desktop capture -----------------------------------------------------
+  // desktop_screenshot reads pixels and changes nothing on the host, so it is
+  // 'safe' like browser_screenshot. Unlike a browser screenshot it can show
+  // anything on the operator's screen, which is why the capability stays off
+  // until AFK_DESKTOP_ENABLED is set (see handlers/desktop-provider.ts).
+  if (tool === 'desktop_screenshot') return { level: 'safe', category: 'read-only' };
+
   // ---- web_scrape ----------------------------------------------------------
   // web_scrape issues outbound HTTP requests (and optionally headless-browser
   // renders for JS-heavy pages). It may hit rate-limited, metered, or

@@ -12,7 +12,7 @@
  * single source of truth those three surfaces now consume.
  */
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { topLevelSurfaceAllowedTools } from './top-level-allowlist.js';
 import { BUILTIN_TOOL_NAMES } from './schemas.js';
 import { MEMORY_TOOL_NAMES } from '../memory/index.js';
@@ -20,8 +20,27 @@ import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from './handlers/exit-plan-mode.js';
 import { WORKSPACE_TOOL_NAMES, WORKSPACE_CHILD_TOOL_NAMES } from '../workspace/index.js';
 import { STATE_TOOL_NAMES } from '../state/state-tools.js';
+import { desktopToolNames } from './desktop-surface.js';
+import { CHILD_ALLOWED_TOOLS, RECON_ALLOWED_TOOLS } from './nesting.js';
+import { checkToolPermission } from './permissions.js';
+
+beforeEach(() => vi.stubEnv('AFK_DESKTOP_ENABLED', undefined));
+afterEach(() => vi.unstubAllEnvs());
 
 describe('topLevelSurfaceAllowedTools', () => {
+  it.each([undefined, '0', '1', ' TrUe '])('gates desktop permissions at the top level only (%j)', (raw) => {
+    vi.stubEnv('AFK_DESKTOP_ENABLED', raw);
+    const enabled = raw === '1' || raw === ' TrUe ';
+    const allowedTools = topLevelSurfaceAllowedTools();
+    expect(allowedTools.includes('desktop_screenshot')).toBe(enabled);
+    expect(checkToolPermission('desktop_screenshot', { allowedTools }).allowed).toBe(enabled);
+    expect(desktopToolNames()).toEqual(enabled ? ['desktop_screenshot'] : []);
+    for (const childTools of [CHILD_ALLOWED_TOOLS, RECON_ALLOWED_TOOLS]) {
+      expect(childTools).not.toContain('desktop_screenshot');
+      expect(checkToolPermission('desktop_screenshot', { allowedTools: [...childTools] }).allowed).toBe(false);
+    }
+  });
+
   it('includes exit_plan_mode (the always-on, plan-mode-only tool that was missing)', () => {
     expect(topLevelSurfaceAllowedTools()).toContain(EXIT_PLAN_MODE_TOOL_NAME);
     expect(topLevelSurfaceAllowedTools()).toContain('exit_plan_mode');
