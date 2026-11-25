@@ -41,6 +41,7 @@ jobs:
       - test-dashboard
       - publish-bundle
       - bench-harbor
+      - test-relay
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -869,3 +870,37 @@ jobs:
 
       - name: Run bench/harbor pytest suite
         run: python -m pytest bench/harbor/ -q
+
+  # The relay Cloudflare Worker under relay/ has its own pnpm workspace and
+  # test suite (Miniflare integration tests, 12 tests). It is not part of the
+  # root pnpm workspace, so it needs its own install + test step. The tests
+  # run with Node's built-in test runner via tsx (no Vitest dependency).
+  # See relay/package.json and issue #5287.
+  test-relay:
+    name: Test (relay)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: relay/pnpm-lock.yaml
+
+      - name: Install relay dependencies
+        run: cd relay && pnpm install --frozen-lockfile
+
+      - name: Typecheck relay
+        run: cd relay && pnpm typecheck
+
+      - name: Test relay
+        run: cd relay && pnpm test
