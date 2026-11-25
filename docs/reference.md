@@ -68,7 +68,7 @@ The `afk` CLI exposes two dozen top-level commands registered in `src/cli/index.
 | `worktree` | Manage AFK-created git worktrees (list / prune) |
 | `migrate` | Import plugins / skills / MCP servers from Claude Code or Codex |
 | `service` | Install/manage an always-on background process as a macOS LaunchAgent (install / uninstall / status / restart) |
-| `update` | Self-update the `afk` CLI (`--check`, `--pin`) |
+| `update` | Self-update the `afk` CLI (`--check`, `--pin`); on Windows, automatically detects running afk processes that would cause an EBUSY lock and aborts with guidance before calling npm — see [Windows updating](windows-setup.md#updating-on-native-windows) |
 | `trace` | Inspect session witness traces (show / list / diff) |
 | `bg` | Inspect persisted background-subagent job logs after the REPL exits (list / tail / replay) |
 | `browser` | Connect / disconnect a real Chrome instance for browser automation |
