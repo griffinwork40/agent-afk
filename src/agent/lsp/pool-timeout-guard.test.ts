@@ -503,6 +503,78 @@ describe('pooled request timeout incidents', () => {
     const clientB = await resultB;
     expect(clientB).toBe(fakeClient);
 
+    // The ref taken for B's wait must be released when B's waitForStart
+    // returns: entry.waiters drops to 0 and unrefStart already fired, so
+    // the finally block calls capturedReRef.unref() — completing the
+    // ref()/unref() pair and letting the event loop drain once B is done.
+    expect(fakeUnref).toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it('does not orphan a c.ref() when acquirer B times out before starting resolves', async () => {
+    // Contract: reRefNeeded flag prevents orphaned c.ref() in the race where B
+    // times out before `starting` resolves.
+    //   (A) A times out at t=50ms → unrefStart.abort() fires.
+    //   (B) B joins at t=50ms; waitForStart registers:
+    //       `void starting.then((c) => { if (reRefNeeded) { reRefClient = c; c.ref(); } })`
+    //   (C) B times out at t=100ms → finally runs, sets reRefNeeded=false,
+    //       capturedReRef is still null (starting hasn't resolved yet).
+    //   (D) starting resolves at t=150ms → .then() fires but reRefNeeded===false,
+    //       so c.ref() is NOT called — no orphaned ref, event loop can drain.
+    //
+    // Without the reRefNeeded flag, step D would call c.ref() unconditionally,
+    // leaving a ref with no matching unref and keeping a one-shot process alive.
+    const { root, spec, guard } = setup({ silent: true });
+    const fakeRef = vi.fn();
+    const fakeUnref = vi.fn();
+    let resolveStart!: (c: LspClient) => void;
+    const fakeClient = {
+      unref: fakeUnref,
+      ref: fakeRef,
+      dispose: vi.fn().mockResolvedValue(undefined),
+      alive: true,
+      killSync: vi.fn(),
+      lastActivityAt: Date.now(),
+      pendingRequests: 0,
+      onRequestTimeout: vi.fn(),
+      onExit: vi.fn(),
+      request: vi.fn(),
+    } as unknown as LspClient;
+    const pool = new LspServerPool({
+      guardFor: () => guard,
+      abandonedStartGraceMs: 5_000, // keep entry alive long enough
+      startClient: () => new Promise<LspClient>((resolve) => {
+        resolveStart = resolve;
+      }),
+    });
+    pools.push(pool);
+    vi.useFakeTimers();
+
+    // A: times out at t=50ms → unrefStart fires.
+    const resultA = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await resultA).toMatchObject({ kind: 'timeout' });
+    expect(pool.size).toBe(1); // still warming
+
+    // B: joins after unrefStart has fired, but times out at t=100ms (before
+    // startClient resolves at t=150ms).
+    const resultB = pool.acquire(spec, root, { timeoutMs: 50 }).catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await resultB).toMatchObject({ kind: 'timeout' });
+    // B timed out without ever calling ref() (starting hadn't resolved yet).
+    expect(fakeRef).not.toHaveBeenCalled();
+
+    // startClient resolves at t=150ms. The .then() fires AFTER B's finally,
+    // which set reRefNeeded=false. ref() must NOT be called (no orphan).
+    resolveStart(fakeClient);
+    await vi.advanceTimersByTimeAsync(0); // flush microtasks
+    expect(fakeRef).not.toHaveBeenCalled();
+
+    // The unref wired in createEntry's .then() (for unrefStart) DOES fire,
+    // because unrefStart.signal was already aborted when fakeClient resolved.
+    expect(fakeUnref).toHaveBeenCalledTimes(1);
+
     vi.useRealTimers();
   });
 

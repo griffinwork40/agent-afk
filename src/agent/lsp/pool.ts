@@ -229,9 +229,16 @@ export class LspServerPool {
     // warming process is currently unreferenced. Re-ref it for the duration
     // of this wait so a one-shot process cannot drain the event loop while
     // we are still waiting for the server to finish initializing.
+    //
+    // reRefNeeded is a synchronous cancellation flag: if this waiter times
+    // out or aborts before `starting` resolves, the finally block sets it to
+    // false so the .then() callback — which may fire after finally — skips
+    // the ref() call, preventing an orphaned c.ref() with no matching unref.
     let reRefClient: LspClient | null = null;
+    let reRefNeeded = false;
     if (entry.unrefStart.signal.aborted && entry.starting !== null) {
-      void starting.then((c) => { reRefClient = c; c.ref(); }).catch(() => {});
+      reRefNeeded = true;
+      void starting.then((c) => { if (reRefNeeded) { reRefClient = c; c.ref(); } }).catch(() => {});
     }
     const cleanups: Array<() => void> = [];
     const guard = new Promise<never>((_, reject) => {
@@ -282,6 +289,9 @@ export class LspServerPool {
         }, this.opts.abandonedStartGraceMs ?? ABANDONED_START_GRACE_MS);
         entry.abandonTimer.unref();
       }
+      // Cancel the pending .then() ref-callback: if starting has not yet
+      // resolved, the flag prevents an orphaned c.ref() with no unref pair.
+      reRefNeeded = false;
       // Release the re-ref taken for this waiter. If we are the last waiter
       // and unrefStart already fired, leave the client unref'd (no acquirer
       // is waiting). If other waiters remain, they hold their own re-refs.
