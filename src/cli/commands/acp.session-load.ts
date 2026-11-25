@@ -34,7 +34,7 @@ import type { AcpClientPeer, LoadSessionRequest } from './acp.wire.js';
 import { AcpInvalidParams, convertMcpServers } from './acp.params.js';
 import type { AcpSessionHandle, AcpSessionOptions } from './acp.session.js';
 import { buildAcpSession, closeAcpSession } from './acp.session.js';
-import { resolveAcpId } from './acp.session-map.js';
+import { deleteAcpMapping, resolveAcpId } from './acp.session-map.js';
 import { pruneAcpSessionRecord, readAcpSessionRecord, writeAcpSessionRecord } from './acp.session-record.js';
 import { emitReplayUpdates } from './acp.replay.js';
 
@@ -57,12 +57,19 @@ export async function loadAcpSession(
   // Resolve ACP id → AFK journal id (identity when no mapping exists).
   const afkId = resolveAcpId(acpId);
 
+  // Track whether a map entry exists so we can prune it when the journal is gone.
+  const hasMappedEntry = afkId !== acpId;
+
   // Fail fast: verify the journal exists before allocating anything.
   // Prune the stale record only on a true ENOENT; transient errors (EACCES,
   // EIO, …) must not permanently delete the record of a live session.
   const journalState = checkJournalExists(afkId);
   if (journalState !== 'exists') {
-    if (journalState === 'enoent') pruneAcpSessionRecord(acpId);
+    if (journalState === 'enoent') {
+      pruneAcpSessionRecord(acpId);
+      // Evict the stale map entry so future load attempts don't re-resolve it.
+      if (hasMappedEntry) await deleteAcpMapping(acpId);
+    }
     throw new AcpNotFoundError(`Unknown session: ${acpId}`);
   }
   // Throws (internal) on an unreadable or malformed record: never treated as "no record".

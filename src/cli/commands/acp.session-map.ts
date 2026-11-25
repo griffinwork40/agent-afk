@@ -28,6 +28,7 @@
 
 import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import { getAcpSessionMapPath } from '../../paths.js';
 import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
@@ -82,37 +83,67 @@ function mapLockPath(): string {
 }
 
 /**
- * Acquire the O_EXCL advisory lock. Returns the fd on success, or throws
- * after `LOCK_RETRIES` attempts. Each attempt waits `LOCK_BASE_MS * 2^i` ms.
+ * Acquire the O_EXCL advisory lock. Returns the lock token on success, or
+ * throws after `LOCK_RETRIES` attempts. Each attempt waits `LOCK_BASE_MS *
+ * 2^i` ms. The token format is `${pid}:${timestamp}:${uuid}` — written into
+ * the lock file so stale-lock detection can verify both that the holder PID
+ * is alive AND that it is the same instance that acquired the lock (guards
+ * against PID reuse between the kill(0) check and the unlink).
  */
-async function acquireMapLock(): Promise<number> {
+async function acquireMapLock(): Promise<string> {
   const lock = mapLockPath();
   mkdirSync(dirname(lock), { recursive: true });
+  const token = `${process.pid}:${Date.now()}:${randomUUID()}`;
   for (let i = 0; i < LOCK_RETRIES; i++) {
     try {
       const fd = openSync(lock, 'wx');
-      writeSync(fd, String(process.pid));
-      return fd;
+      writeSync(fd, token);
+      closeSync(fd);
+      return token;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       // Check for dead holder — stale lock from a killed process.
       try {
-        const pidStr = readFileSync(lock, 'utf8').trim();
-        const pid = parseInt(pidStr, 10);
+        const rawToken = readFileSync(lock, 'utf8').trim();
+        const pid = parseInt(rawToken.split(':')[0] ?? '', 10);
         if (!isNaN(pid)) {
           try {
             process.kill(pid, 0);
-            // Process is alive — normal contention, fall through to sleep.
+            // PID is alive. Guard against PID reuse: re-read the token and
+            // only treat as a live contender if the full token still matches
+            // what we first read. If it changed, another process already
+            // re-acquired the lock — fall through to sleep and retry.
+            try {
+              const currentToken = readFileSync(lock, 'utf8').trim();
+              if (currentToken !== rawToken) {
+                // Token changed: lock was re-acquired between our two reads.
+                // Fall through to sleep.
+              }
+              // Token unchanged: genuine live holder — fall through to sleep.
+            } catch { /* can't re-read — treat as live */ }
           } catch (killErr) {
             if ((killErr as NodeJS.ErrnoException).code === 'ESRCH') {
-              // Holder is dead — remove stale lock and retry immediately.
-              try { unlinkSync(lock); } catch { /* ignore */ }
-              continue;
+              // Holder is dead. TOCTOU guard: re-read token before unlinking.
+              // If the token changed, a new holder already re-acquired the
+              // lock — skip the unlink and fall through to sleep.
+              try {
+                const recheck = readFileSync(lock, 'utf8').trim();
+                if (recheck !== rawToken) {
+                  // New holder present — do not unlink. Fall through to sleep.
+                } else {
+                  // Token still matches the dead PID — safe to remove stale lock.
+                  try { unlinkSync(lock); } catch { /* already gone or re-acquired */ }
+                  continue;
+                }
+              } catch {
+                // Can't re-read — assume another process grabbed it; do not unlink.
+              }
             }
             // EPERM: process exists but we can't signal it — treat as alive.
+            // Also falls through here when ESRCH + token-changed path above.
           }
         }
-      } catch { /* can't read PID — treat lock as live */ }
+      } catch { /* can't read token — treat lock as live */ }
     }
     if (i < LOCK_RETRIES - 1) {
       await new Promise<void>((resolve) => setTimeout(resolve, Math.min(LOCK_BASE_MS * Math.pow(2, i), LOCK_MAX_MS)));
@@ -121,8 +152,7 @@ async function acquireMapLock(): Promise<number> {
   throw new Error('acp session-map lock contested after retries');
 }
 
-function releaseMapLock(fd: number, lock: string): void {
-  try { closeSync(fd); } catch { /* best-effort */ }
+function releaseMapLock(_token: string, lock: string): void {
   try { unlinkSync(lock); } catch { /* best-effort */ }
 }
 
@@ -134,13 +164,32 @@ function releaseMapLock(fd: number, lock: string): void {
 export async function recordAcpMapping(acpId: string, afkId: string): Promise<void> {
   if (acpId === afkId) return;
   const lock = mapLockPath();
-  const fd = await acquireMapLock();
+  const token = await acquireMapLock();
   try {
     const map = readAcpSessionMap();
     map[acpId] = afkId;
     await writeAcpSessionMap(map);
   } finally {
-    releaseMapLock(fd, lock);
+    releaseMapLock(token, lock);
+  }
+}
+
+/**
+ * Remove a stale acpId → afkId mapping from the session map.
+ * Called by acp.session-load when the mapped journal no longer exists so
+ * the same dead entry is not re-resolved on every future load attempt.
+ * Serialized via the same O_EXCL lock as recordAcpMapping.
+ */
+export async function deleteAcpMapping(acpId: string): Promise<void> {
+  const lock = mapLockPath();
+  const token = await acquireMapLock();
+  try {
+    const map = readAcpSessionMap();
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+    delete map[acpId];
+    await writeAcpSessionMap(map);
+  } finally {
+    releaseMapLock(token, lock);
   }
 }
 
