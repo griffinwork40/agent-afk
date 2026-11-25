@@ -3,7 +3,7 @@
  * of read-only execution. Tables retain their original order and raw view. */
 import type { RiskVerdict } from './risk-classifier.js';
 import type { MutationVerdict } from './command-classifier.js';
-import { findHighBashPattern } from './risk-classifier.bash-boundary.js';
+import { findHighBashPattern, matchesAtWordStart } from './risk-classifier.bash-boundary.js';
 import { isSafeAtCommandPosition } from './risk-classifier.bash-safe.js';
 import { classifyRmRisk } from './risk-classifier.rm-predicate.js';
 
@@ -214,6 +214,17 @@ export function classifyCommandRisk(
     if (high === 'rm ') {
       const rmLevel = classifyRmRisk(cmd);
       if (rmLevel === 'medium') {
+        // Item 1: even though rm itself is ephemeral-safe, check whether the
+        // compound command also contains another BASH_HIGH pattern (e.g. chmod,
+        // eval). Skip indices 0 ('rm -rf') and 1 ('rm ') which already fired.
+        // Use matchesAtWordStart directly (not findHighBashPattern) to avoid
+        // SEPARATOR_EVASION re-matching the same rm token and falsely returning
+        // high for a plain ephemeral rm.
+        for (const p of BASH_HIGH.slice(2)) {
+          if (matchesAtWordStart(cmd, p)) {
+            return { level: 'high', reason: `bash-pattern: matched '${p}'`, category: 'bash-destructive' };
+          }
+        }
         return { level: 'medium', reason: `bash-pattern: matched '${high}' (ephemeral-safe)`, category: 'bash-mutating' };
       }
     }

@@ -109,8 +109,8 @@ describe('classifyRmRisk -- MEDIUM cases (sampled false positives from #5292 aud
     expect(classifyRmRisk('rm -f .prs-open.json /tmp/gh.err')).toBe('medium');
   });
 
-  it('plain named file (no glob, no absolute non-tmp)', () => {
-    expect(classifyRmRisk('rm file.txt')).toBe('medium');
+  it('plain named file (no glob, no absolute non-tmp) is HIGH (not positively ephemeral)', () => {
+    expect(classifyRmRisk('rm file.txt')).toBe('high');
   });
 
   it('rm -f on a named temp file', () => {
@@ -137,12 +137,12 @@ describe('classifyRmRisk -- MEDIUM cases (sampled false positives from #5292 aud
     expect(classifyRmRisk('rm data/input._raw')).toBe('medium');
   });
 
-  it('rm with -i flag and named file is MEDIUM (-i is non-recursive)', () => {
-    expect(classifyRmRisk('rm -i file.txt')).toBe('medium');
+  it('rm with -i flag and ephemeral file is MEDIUM (-i is non-recursive)', () => {
+    expect(classifyRmRisk('rm -i .scratch/file.txt')).toBe('medium');
   });
 
-  it('rm with -v flag and named file is MEDIUM', () => {
-    expect(classifyRmRisk('rm -v file.txt')).toBe('medium');
+  it('rm with -v flag and ephemeral file is MEDIUM', () => {
+    expect(classifyRmRisk('rm -v /tmp/file.txt')).toBe('medium');
   });
 });
 
@@ -169,5 +169,62 @@ describe('classifyRmRisk -- glob in ephemeral namespace (MEDIUM)', () => {
 
   it('glob *.tmp is MEDIUM (ephemeral extension)', () => {
     expect(classifyRmRisk('rm work*.tmp')).toBe('medium');
+  });
+});
+
+describe('classifyRmRisk -- shell expansion (HIGH)', () => {
+  it('dollar-sign variable in quoted arg is HIGH', () => {
+    // tokenizer strips quotes; "$TARGET" becomes $TARGET token
+    expect(classifyRmRisk('rm -f "$TARGET"')).toBe('high');
+  });
+
+  it('dollar-sign in unquoted arg is HIGH', () => {
+    expect(classifyRmRisk('rm $HOME/.config')).toBe('high');
+  });
+
+  it('tilde home dir is HIGH', () => {
+    expect(classifyRmRisk('rm ~/sensitive')).toBe('high');
+  });
+
+  it('tilde home dir with -f flag is HIGH', () => {
+    expect(classifyRmRisk('rm -f ~/.ssh/id_ed25519')).toBe('high');
+  });
+
+  it('backtick expansion is HIGH', () => {
+    expect(classifyRmRisk('rm `mktemp`')).toBe('high');
+  });
+});
+
+describe('classifyRmRisk -- compound commands with additional rm (HIGH)', () => {
+  it('second rm is recursive -> HIGH', () => {
+    expect(classifyRmRisk('rm /tmp/a; rm -r src/')).toBe('high');
+  });
+
+  it('second rm targets non-ephemeral absolute path -> HIGH', () => {
+    expect(classifyRmRisk('rm /tmp/a && rm /etc/hosts')).toBe('high');
+  });
+
+  it('second rm even with ephemeral targets -> HIGH (conservative; cannot inspect all segments)', () => {
+    expect(classifyRmRisk('rm /tmp/a; rm /tmp/b')).toBe('high');
+  });
+});
+
+describe('classifyRmRisk -- path traversal (HIGH)', () => {
+  it('/tmp/../etc/hosts traverses out of tmp -> HIGH', () => {
+    expect(classifyRmRisk('rm /tmp/../etc/hosts')).toBe('high');
+  });
+
+  it('/var/tmp/../../../etc/passwd traverses out of var/tmp -> HIGH', () => {
+    expect(classifyRmRisk('rm /var/tmp/../../../etc/passwd')).toBe('high');
+  });
+
+  it('/tmp/../../home/user/secrets traverses out of tmp -> HIGH', () => {
+    expect(classifyRmRisk('rm /tmp/../../home/user/secrets')).toBe('high');
+  });
+});
+
+describe('classifyRmRisk -- bare cache/ (not .cache/) is HIGH', () => {
+  it('bare cache/ subdir in relative path is HIGH (not ephemeral)', () => {
+    expect(classifyRmRisk('rm project/cache/data')).toBe('high');
   });
 });

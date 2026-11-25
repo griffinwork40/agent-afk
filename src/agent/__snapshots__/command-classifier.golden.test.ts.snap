@@ -2896,9 +2896,9 @@ exports[`pre-migration command verdict golden receipts (#3846) > rm file.txt 1`]
   "release": {},
   "releaseIds": [],
   "risk": {
-    "category": "bash-mutating",
-    "level": "medium",
-    "reason": "bash-pattern: matched 'rm ' (ephemeral-safe)",
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'rm '",
   },
   "rootDestruct": {},
 }

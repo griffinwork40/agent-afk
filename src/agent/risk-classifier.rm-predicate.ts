@@ -13,13 +13,15 @@
 //   2. A glob character (*, ?, [, {) appears in an argument that does NOT
 //      resolve to a declared-ephemeral namespace.
 //   3. An absolute path that is not under /tmp or /var/tmp is targeted.
+//   4. Any argument contains a shell expansion marker ($, backtick, or ~ prefix).
+//   5. The command contains additional rm invocations after a shell metacharacter.
 //
 // Declared-ephemeral namespaces (glob-safe targets):
 //   /tmp/...           OS temp dir
 //   /var/tmp/...       OS temp dir, persists across reboots but still ephemeral
 //   .scratch/...       agent scratch convention
 //   <dir>/_raw/...     pipeline raw-input artifacts
-//   <dir>/cache/...    cache dirs
+//   <dir>/.cache/...   .cache/ dirs (dotfile convention only)
 //   *.tmp              explicit .tmp extension
 //   *._raw             explicit ._raw extension
 //   Named temp-file conventions used in daemon tasks (from sampled FPs):
@@ -29,6 +31,8 @@
 // never passed to this function -- it stays unconditionally HIGH.
 //
 // @module agent/risk-classifier.rm-predicate
+
+import path from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -58,12 +62,12 @@ const EPHEMERAL_PREFIXES: readonly string[] = [
 const EPHEMERAL_PATTERNS: readonly RegExp[] = [
   /^\.scratch\//,              // .scratch/ prefix
   /(?:^|\/)_raw\//,            // <dir>/_raw/ pipeline artifacts (leading or mid-path)
-  /(?:^|\/)\.?cache\//,        // .cache/ or cache/ dirs (leading or mid-path)
+  /(?:^|\/)\.cache\//,          // .cache/ dirs (dotfile convention only)
   /\.tmp$/,                    // *.tmp extension
   /\._raw$/,                   // *._raw extension
   // Named temp-file conventions used in daemon tasks (from sampled FPs):
-  // Matches: .brief-out.tmp  .brief-err.tmp  .brief-out.txt  etc.
-  /^\.[a-z][-a-z0-9]*[-.](?:tmp|err|out|json|txt)$/,
+  // Matches: .brief-out.tmp  .brief-err.tmp  .brief-out.txt  .brief-err.txt
+  /^\.brief-(?:out|err)\.(?:tmp|txt)$/,
   /^\.prs-[^/]*\.json$/,       // .prs-*.json stale cache files
   /^\.forecast-[^/]*/,         // .forecast-queue artifacts
 ];
@@ -71,8 +75,9 @@ const EPHEMERAL_PATTERNS: readonly RegExp[] = [
 // True when `arg` resolves to a declared-ephemeral location.
 // Called only on non-flag argument tokens.
 function isEphemeral(arg: string): boolean {
+  const normalizedArg = arg.startsWith('/') ? path.posix.normalize(arg) : arg;
   for (const prefix of EPHEMERAL_PREFIXES) {
-    if (arg.startsWith(prefix)) return true;
+    if (normalizedArg.startsWith(prefix)) return true;
   }
   for (const pattern of EPHEMERAL_PATTERNS) {
     if (pattern.test(arg)) return true;
@@ -85,8 +90,9 @@ function isEphemeral(arg: string): boolean {
 // unconditionally HIGH regardless of other rules.
 function isNonEphemeralAbsolute(arg: string): boolean {
   if (!arg.startsWith('/')) return false;
+  const normalized = path.posix.normalize(arg);
   for (const prefix of EPHEMERAL_PREFIXES) {
-    if (arg.startsWith(prefix)) return false;
+    if (normalized.startsWith(prefix)) return false;
   }
   return true;
 }
@@ -150,6 +156,13 @@ function tokenizeRmArgs(cmd: string): string[] {
 // Public API
 // ---------------------------------------------------------------------------
 
+// Returns true when `cmd` contains a shell metacharacter (;, |, &) followed
+// by another rm invocation -- signals additional command segments we cannot
+// fully inspect, so we conservatively return HIGH.
+function hasAdditionalRmSegments(cmd: string): boolean {
+  return /[;|&]\s*(?:[gsGS])?[Rr][Mm](?:\s|$)/.test(cmd);
+}
+
 /**
  * Secondary predicate for plain `rm` commands. Called only after the 'rm '
  * BASH_HIGH token fires (not after 'rm -rf' -- that stays unconditional).
@@ -190,6 +203,18 @@ export function classifyRmRisk(cmd: string): 'high' | 'medium' {
   // No arguments parsed -> conservative HIGH (can't inspect).
   if (args.length === 0) return 'high';
 
+  // Item 3: additional rm segments after a metacharacter -> HIGH (conservative;
+  // we cannot fully inspect the subsequent rm invocations).
+  if (hasAdditionalRmSegments(cmd)) return 'high';
+
+  // Item 2: shell expansion markers -> HIGH (value unknown at classify time).
+  // $VAR, `cmd`, ~/ or bare ~ all expand to paths we cannot inspect safely.
+  for (const arg of args) {
+    if (arg.includes('$')) return 'high';
+    if (arg.includes('`')) return 'high';
+    if (arg === '~' || arg.startsWith('~/')) return 'high';
+  }
+
   let hasNonFlagArg = false;
 
   for (const arg of args) {
@@ -214,6 +239,17 @@ export function classifyRmRisk(cmd: string): 'high' | 'medium' {
 
     // Rule 2: glob character in a non-ephemeral argument -> HIGH.
     if (GLOB_CHARS.test(arg) && !isEphemeral(arg)) return 'high';
+
+    // Rule 4: relative path containing a bare cache/ segment (not .cache/) is
+    // not an ephemeral location and is not a recognized daemon convention.
+    // project/cache/data is a project directory, not a system temp cache.
+    if (!arg.startsWith('/') && /(?:^|\/)cache\//.test(arg)) return 'high';
+
+    // Rule 5: relative path with no positive ephemeral match -> HIGH.
+    // Only downgrade when the argument is a positively-identified ephemeral
+    // target (declared prefix or pattern). Unknown relative paths like
+    // "foo.txt" or "old-file.txt" stay HIGH -- we cannot prove they are safe.
+    if (!arg.startsWith('/') && !isEphemeral(arg)) return 'high';
   }
 
   // No arguments other than flags -> HIGH (bare `rm -f` with no target is
