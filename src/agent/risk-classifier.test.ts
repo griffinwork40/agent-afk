@@ -202,6 +202,113 @@ describe('classifyRisk — bash high', () => {
   });
 });
 
+// ---- chmod secondary predicate (#5293) ------------------------------------
+// Invariant: bare 'chmod' is no longer in BASH_HIGH. Only permission-widening
+// invocations are high: octal with group/other write bits, symbolic g+w/o+w/+w,
+// -R recursive flag, or a system-directory / path-traversal target.
+// Benign patterns (chmod +x on a local script, chmod 755, chmod u+x) must pass
+// through to the default-medium tier — the false-positives that drove this fix.
+describe('classifyRisk — chmod secondary predicate (#5293)', () => {
+  // ── allowed (not high) ────────────────────────────────────────────────────
+  it('chmod +x script.sh → NOT high (false-positive from gate-precision audit)', () => {
+    expect(classifyRisk('bash', { command: 'chmod +x script.sh' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod +x ga_fetch.sh → NOT high (observed false-positive #1)', () => {
+    expect(classifyRisk('bash', { command: 'chmod +x ga_fetch.sh' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod +x fetch_cty.sh → NOT high (observed false-positive #2)', () => {
+    expect(classifyRisk('bash', { command: 'chmod +x fetch_cty.sh' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod u+x script.sh → NOT high (user-only execute)', () => {
+    expect(classifyRisk('bash', { command: 'chmod u+x script.sh' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod 755 file → NOT high (no write bits for group/other)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 755 file' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod 644 file → NOT high (no write bits for group/other)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 644 file' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod u+rw file → NOT high (user-only read/write)', () => {
+    expect(classifyRisk('bash', { command: 'chmod u+rw file' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod 700 dir → NOT high (owner-only rwx)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 700 dir' }, ctx)).not.toBe('high');
+  });
+
+  // ── blocked (high) ────────────────────────────────────────────────────────
+  it('chmod 777 file → high (world-writable octal)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 777 file' }, ctx)).toBe('high');
+  });
+
+  it('chmod 666 file → high (world-writable, no execute)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 666 file' }, ctx)).toBe('high');
+  });
+
+  it('chmod 022 file → high (group/other write bits)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 022 file' }, ctx)).toBe('high');
+  });
+
+  it('chmod 002 file → high (other-write bit)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 002 file' }, ctx)).toBe('high');
+  });
+
+  it('chmod g+w file → high (group write)', () => {
+    expect(classifyRisk('bash', { command: 'chmod g+w file' }, ctx)).toBe('high');
+  });
+
+  it('chmod o+w file → high (other write)', () => {
+    expect(classifyRisk('bash', { command: 'chmod o+w file' }, ctx)).toBe('high');
+  });
+
+  it('chmod a+w file → high (all write)', () => {
+    expect(classifyRisk('bash', { command: 'chmod a+w file' }, ctx)).toBe('high');
+  });
+
+  it('chmod +w file → high (all write, bare +w)', () => {
+    expect(classifyRisk('bash', { command: 'chmod +w file' }, ctx)).toBe('high');
+  });
+
+  it('chmod go+rw file → high (group+other write)', () => {
+    expect(classifyRisk('bash', { command: 'chmod go+rw file' }, ctx)).toBe('high');
+  });
+
+  it('chmod -R 755 / → high (recursive flag)', () => {
+    expect(classifyRisk('bash', { command: 'chmod -R 755 /' }, ctx)).toBe('high');
+  });
+
+  it('chmod -R +x scripts/ → high (recursive flag, even for execute-only mode)', () => {
+    expect(classifyRisk('bash', { command: 'chmod -R +x scripts/' }, ctx)).toBe('high');
+  });
+
+  it('chmod 755 /etc/shadow → high (system directory target)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 755 /etc/shadow' }, ctx)).toBe('high');
+  });
+
+  it('chmod +x ../../etc/passwd → high (path traversal)', () => {
+    expect(classifyRisk('bash', { command: 'chmod +x ../../etc/passwd' }, ctx)).toBe('high');
+  });
+
+  it('chmod 777 /usr/local/bin/tool → high (system directory + world-writable)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 777 /usr/local/bin/tool' }, ctx)).toBe('high');
+  });
+
+  // ── gchmod (GNU alias) always stays high via BASH_HIGH table ─────────────
+  it('gchmod 777 x → high (gchmod remains in BASH_HIGH table)', () => {
+    expect(classifyRisk('bash', { command: 'gchmod 777 x' }, ctx)).toBe('high');
+  });
+
+  it('gchmod +x x → high (gchmod always blocked regardless of mode)', () => {
+    expect(classifyRisk('bash', { command: 'gchmod +x x' }, ctx)).toBe('high');
+  });
+});
+
 // ---- bash medium-risk patterns -------------------------------------------
 describe('classifyRisk — bash medium', () => {
   it('git push (no force) → medium', () => {

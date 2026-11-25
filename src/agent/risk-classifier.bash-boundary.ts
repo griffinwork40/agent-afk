@@ -80,3 +80,68 @@ export function findHighBashPattern(
   }
   return undefined;
 }
+
+// ---------------------------------------------------------------------------
+// chmod secondary predicate (#5293)
+// ---------------------------------------------------------------------------
+
+// Invariant: these module-level constants are pre-compiled once and reused
+// across every call to isChmodDangerous. They must not be mutated.
+//
+// OCTAL_MODE captures 3- or 4-digit octal strings (optional leading `0` for
+// the sticky/setuid/setgid bit). Group-write is bit 2 of the middle digit;
+// other-write is bit 2 of the last digit. `0777` is dangerous; `0755` is not.
+//
+// WRITE_WIDENING_SYMBOLIC matches symbolic mode clauses that grant write
+// access to group (`g`), other (`o`), or all (`a` / bare `+`):
+//   `+w`, `a+w`, `g+w`, `o+w`, `ug+rw`, `go+w`, `g=w`, `o=rw`, …
+// The pattern anchors on a word boundary or comma so it does not false-fire
+// on the file argument (`g+w_script.sh` is a filename, not a mode).
+const OCTAL_MODE = /\b(0?[0-7]{3})\b/g;
+// Who-list must contain at least one of a/g/o for a write grant to be widening.
+// A bare `+w` (empty who-list) is treated as `a+w` by POSIX and is widening.
+// `u+rw` grants only to the owner — not widening. `ug+rw` has `g` — widening.
+const WRITE_WIDENING_SYMBOLIC =
+  /(?:^|[,\s])(?:[ugo]*[ago][ugo]*[+][^,\s]*[w][^,\s]*|[+][^,\s]*[w][^,\s]*|[ago][+=][^,\s]*[w][^,\s]*)/;
+
+/**
+ * Secondary predicate for `chmod` (#5293).
+ *
+ * Returns `true` (HIGH) when the invocation is genuinely permission-widening:
+ *   - Octal mode grants group-write or other-write (e.g. `777`, `666`, `022`).
+ *   - Symbolic mode grants write to group/other/all (`g+w`, `o+w`, `+w`, …).
+ *   - `-R` / `--recursive` flag is present.
+ *   - Target path is under a system directory or traverses `..`.
+ *
+ * Returns `false` (allow) for benign patterns: `chmod +x script.sh`,
+ * `chmod u+x`, `chmod 755 file`, `chmod 644 file`.
+ *
+ * Invariant: this function is only called when `chmod` appears at a word
+ * start in `cmd` — the caller is responsible for that pre-check.
+ */
+export function isChmodDangerous(cmd: string): boolean {
+  // Recursive flag: chmod -R … touches an unbounded subtree.
+  if (/\bchmod\b[^;|&\n]*\s(?:-[a-zA-Z]*R[a-zA-Z]*|--recursive)\b/.test(cmd)) return true;
+
+  // Target path under a system directory or traversing `..`.
+  if (/\bchmod\b[^;|&\n]*\s(?:\/(?:bin|sbin|usr|etc|lib|boot|sys|proc|dev)\b|\.\.(?:\/|$))/.test(cmd)) return true;
+
+  // Extract the tokens after `chmod` up to the next shell separator so we
+  // examine only this command's arguments, not a chained command's args.
+  const afterChmod = cmd.match(/\bchmod\b[^;|&\n]*/)?.[0] ?? cmd;
+
+  // Octal mode: group-write (bit 2 of middle digit) or other-write (bit 2 of last digit).
+  for (const m of afterChmod.matchAll(OCTAL_MODE)) {
+    const oct = m[1]!;
+    // Strip optional leading special-mode digit (0755 → 755).
+    const digits = oct.replace(/^0/, '');
+    const groupDigit = parseInt(digits[digits.length - 2]!, 8);
+    const otherDigit = parseInt(digits[digits.length - 1]!, 8);
+    if ((groupDigit & 0o2) !== 0 || (otherDigit & 0o2) !== 0) return true;
+  }
+
+  // Symbolic mode: write granted to group, other, or all.
+  if (WRITE_WIDENING_SYMBOLIC.test(afterChmod)) return true;
+
+  return false;
+}

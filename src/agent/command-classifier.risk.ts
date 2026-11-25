@@ -3,7 +3,7 @@
  * of read-only execution. Tables retain their original order and raw view. */
 import type { RiskVerdict } from './risk-classifier.js';
 import type { MutationVerdict } from './command-classifier.js';
-import { findHighBashPattern } from './risk-classifier.bash-boundary.js';
+import { findHighBashPattern, isChmodDangerous, matchesAtWordStart } from './risk-classifier.bash-boundary.js';
 import { isSafeAtCommandPosition } from './risk-classifier.bash-safe.js';
 
 // ---------------------------------------------------------------------------
@@ -22,7 +22,6 @@ const BASH_HIGH: readonly string[] = [
   'rm ',
   'sudo',
   'eval ',
-  'chmod',
   'chown',
   'git push --force',
   'git push -f',
@@ -205,6 +204,13 @@ export function classifyCommandRisk(
   // can never start a shell word — see risk-classifier.bash-boundary.ts.
   const high = findHighBashPattern(cmd, BASH_HIGH);
   if (high !== undefined) return { level: 'high', reason: `bash-pattern: matched '${high}'`, category: 'bash-destructive' };
+  // Secondary predicate: chmod is only high-risk when it widens permissions
+  // (octal with group/other write bits, symbolic g+w/o+w/+w, -R recursive, or
+  // system-directory / path-traversal target). Bare `chmod +x script.sh` is benign.
+  // (#5293 — gate-precision-audit 2026-11-23 found 0% precision on bare 'chmod').
+  if (matchesAtWordStart(cmd, 'chmod') && isChmodDangerous(cmd)) {
+    return { level: 'high', reason: "bash-pattern: matched 'chmod'", category: 'bash-destructive' };
+  }
   for (const p of BASH_MEDIUM) {
     if (cmd.includes(p)) return { level: 'medium', reason: `bash-pattern: matched '${p}'`, category: 'bash-mutating' };
   }
