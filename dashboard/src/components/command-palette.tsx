@@ -114,23 +114,27 @@ export function CommandPalette({ onNavigate, sessions = [], onSelectSession, onI
 
   const runnable = commands.filter((c) => c.web !== 'gated');
 
-  // Partition into recent / native / skills groups.
+  // Partition into recent / native / skills / other groups.
   const recentSet = new Set(recentNames);
   const recent = recentNames
     .map((n) => runnable.find((c) => c.name === n))
     .filter((c): c is SlashCommand => c !== undefined);
   const natives = runnable.filter((c) => c.kind === 'native' && !recentSet.has(c.name));
   const skills  = runnable.filter((c) => c.kind === 'skill'  && !recentSet.has(c.name));
+  // Catch-all for any future `kind` values not covered above.
+  const others  = runnable.filter((c) => c.kind !== 'native' && c.kind !== 'skill' && !recentSet.has(c.name));
 
   function renderCommand(c: SlashCommand, groupPrefix: string) {
     const name = formatSlashCommandName(c.name);
-    const displaySummary = c.summary.length > SUMMARY_CAP
-      ? `${c.summary.slice(0, SUMMARY_CAP)}…`
+    // Use code-point-safe slicing to avoid splitting surrogate pairs (emoji, etc.).
+    const codePoints = Array.from(c.summary);
+    const displaySummary = codePoints.length > SUMMARY_CAP
+      ? `${codePoints.slice(0, SUMMARY_CAP).join('')}…`
       : c.summary;
     return (
       <Command.Item
         key={`${groupPrefix}:${c.name}`}
-        value={`command:${c.name}`}
+        value={`${groupPrefix}:command:${c.name}`}
         keywords={[name, c.summary]}
         onSelect={() => { recordRecentCommand(c.name); close(false); onInsertCommand?.(`${name} `); }}
         className={itemClass}
@@ -212,6 +216,12 @@ export function CommandPalette({ onNavigate, sessions = [], onSelectSession, onI
             {onInsertCommand && skills.length > 0 && (
               <Command.Group heading="Skills" className={groupClass}>
                 {skills.map((c) => renderCommand(c, 'skill'))}
+              </Command.Group>
+            )}
+
+            {onInsertCommand && others.length > 0 && (
+              <Command.Group heading="Other Commands" className={groupClass}>
+                {others.map((c) => renderCommand(c, 'other'))}
               </Command.Group>
             )}
 

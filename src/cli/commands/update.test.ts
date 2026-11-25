@@ -30,6 +30,10 @@ vi.mock('../update-checker.js', () => ({
 vi.mock('child_process', () => ({
   spawn: vi.fn(),
 }));
+vi.mock('./update.windows.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./update.windows.js')>(),
+  findWindowsUpdateBlockers: vi.fn(async () => []),
+}));
 
 vi.mock('../palette.js', () => ({
   palette: {
@@ -86,6 +90,7 @@ const mockWritePendingUpdateMarker = vi.mocked(writePendingUpdateMarker);
 const mockWriteUpdateCache = vi.mocked(writeUpdateCache);
 const mockSpawn = vi.mocked(spawn);
 const mockGetVersion = vi.mocked(getVersion);
+const originalPlatform = process.platform;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -124,6 +129,7 @@ describe('afk update', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
     // npm CLI exists in the running Node installation unless a test overrides it.
     mockExistsSync.mockReturnValue(true);
     mockRealpathSync.mockImplementation((p: string) => p);
@@ -138,6 +144,7 @@ describe('afk update', () => {
     consoleSpy.mockRestore();
     consoleErrSpy.mockRestore();
     stderrSpy.mockRestore();
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
     process.exitCode = originalExitCode;
   });
 

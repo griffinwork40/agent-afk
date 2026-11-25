@@ -6,11 +6,20 @@
  * Invariants:
  *   - Concurrent `acquire`s for the same key share ONE in-flight start.
  *   - A dead client (crash, exit, failed start) is evicted immediately; the
- *     next `acquire` spawns a fresh one. A dead handle is never returned.
+ *     next `acquire` spawns a fresh one UNLESS the crash-loop guard has
+ *     tripped, in which case `acquire` throws `LspClientError('disabled', …)`
+ *     until the guard's cooldown expires (~5 min, #5131).
  *   - A start that every acquirer has abandoned (timeout/abort) is disposed,
  *     so a server that never finishes `initialize` is not left orphaned.
  *   - Idle timers are `.unref()`ed and every live server is disposed on
  *     graceful cleanup via `registerCleanup`; client-process guards hard exit.
+ *   - Every `evict()` call records the resulting dispose promise in
+ *     `evictedDisposals`; `disposeAll()` awaits that set (and `killAll()` drains
+ *     it) so callers can remove the cwd immediately after cleanup returns.
+ *   - A guard-tripping timeout (`onRequestTimeout`) evicts the client
+ *     unconditionally, even when `pendingRequests > 0`. Those in-flight
+ *     requests will reject with `'exited'`. This is intentional: the guard
+ *     trip means the server is considered hung/broken.
  *
  * Key deviation from the #4272 contract wording: the key also includes the
  * spec's command + args, so two different binaries for the same language and
@@ -22,6 +31,7 @@
 import { realpathSync } from 'node:fs';
 import { env } from '../../config/env.js';
 import { registerCleanup } from '../../utils/cleanupRegistry.js';
+import { debugLog } from '../../utils/debug.js';
 import { LspClient, LspClientError } from './client.js';
 import { CrashLoopGuard, getOrCreateGuard } from './crash-loop-guard.js';
 import type { ServerSpec } from './server-spec.js';
@@ -95,6 +105,7 @@ export function poolKey(spec: ServerSpec, root: string): string {
 
 export class LspServerPool {
   private readonly entries = new Map<string, Entry>();
+  private readonly evictedDisposals = new Set<Promise<void>>();
   private spawnCount = 0;
 
   constructor(private readonly opts: LspServerPoolOptions = {}) {}
@@ -114,9 +125,9 @@ export class LspServerPool {
    * Rejects with `LspClientError` on spawn failure, crash during start,
    * timeout, or abort. Never returns a dead client.
    *
-   * Rejects with `LspClientError` kind `'exited'` when the crash-loop guard
+   * Rejects with `LspClientError` kind `'disabled'` when the crash-loop guard
    * has tripped for this server (3 crashes within 120 s): the caller should
-   * silently degrade rather than retry.
+   * degrade rather than retry. The guard auto-expires after a cooldown (~5 min).
    */
   async acquire(spec: ServerSpec, root: string, opts: AcquireOptions = {}): Promise<LspClient> {
     if (opts.signal?.aborted) throw new LspClientError('aborted', 'Aborted');
@@ -124,7 +135,7 @@ export class LspServerPool {
     // Check crash-loop guard before attempting any spawn.
     const guard = (this.opts.guardFor ?? getOrCreateGuard)(key);
     if (guard.failed) {
-      throw new LspClientError('exited', 'LSP server disabled: crash-loop guard tripped');
+      throw new LspClientError('disabled', 'LSP server disabled: crash-loop guard tripped');
     }
     let entry = this.entries.get(key);
     if (entry?.client && !entry.client.alive) {
@@ -163,15 +174,25 @@ export class LspServerPool {
         // fallout, not a new incident. A tripping timeout evicts the hung
         // client (evict-first, so its exit is not counted again).
         let lastTimeoutAt: number | null = null;
-        client.onRequestTimeout(() => {
+        const unsubTimeout = client.onRequestTimeout(() => {
           if (this.entries.get(key) !== entry) return;
           lastTimeoutAt = Date.now();
-          if (guard.recordCrash()) this.evict(entry);
+          if (guard.recordCrash()) {
+            debugLog('[lsp] crash-loop guard tripped (request timeout)', { key });
+            this.evict(entry);
+          }
         });
         client.onExit(() => {
+          // unsubTimeout() is a no-op here: markDead() already cleared
+          // timeoutListeners before firing exitListeners, so the set is empty.
+          // Called anyway for defensive symmetry with the onRequestTimeout path
+          // (which evicts without an exit event and needs the unsub to fire).
+          unsubTimeout();
           if (this.entries.get(key) === entry) {
             const fallout = lastTimeoutAt !== null && Date.now() - lastTimeoutAt <= TIMEOUT_EXIT_FALLOUT_MS;
-            if (!fallout) guard.recordCrash();
+            if (!fallout && guard.recordCrash()) {
+              debugLog('[lsp] crash-loop guard tripped (server exit)', { key });
+            }
             this.evict(entry);
           }
         });
@@ -187,7 +208,11 @@ export class LspServerPool {
           // this rejection lands the entry is already evicted, so the guard
           // check below is skipped. Cancellation and missing binaries excluded.
           const lspErr = err instanceof LspClientError ? err : null;
-          if (!lspErr || (lspErr.kind !== 'spawn' && lspErr.kind !== 'aborted')) guard.recordCrash();
+          if (!lspErr || (lspErr.kind !== 'spawn' && lspErr.kind !== 'aborted')) {
+            if (guard.recordCrash()) {
+              debugLog('[lsp] crash-loop guard tripped (failed start)', { key });
+            }
+          }
           this.evict(entry);
         }
         throw err instanceof LspClientError ? err : new LspClientError('spawn', 'Failed to spawn LSP server');
@@ -266,7 +291,11 @@ export class LspServerPool {
     entry.abandonTimer = null;
     const client = entry.client;
     entry.client = null;
-    if (client) void client.dispose();
+    if (client) {
+      const p = client.dispose();
+      this.evictedDisposals.add(p);
+      void p.finally(() => this.evictedDisposals.delete(p));
+    }
   }
 
   /**
@@ -274,6 +303,10 @@ export class LspServerPool {
    * `process.on('exit')` handler. Complements `disposeAll()` (which is async
    * and only reachable from interactive exit paths) by covering daemon,
    * one-shot, and Telegram process exits (#4309 item 2).
+   *
+   * Also drains `evictedDisposals`: those clients were evicted (idle shutdown
+   * or crash) and their disposal is already in flight — we drop the pending
+   * promises here since there is no async path to await them on hard exit.
    */
   killAll(): void {
     for (const entry of this.entries.values()) {
@@ -282,6 +315,7 @@ export class LspServerPool {
       if (client) client.killSync();
     }
     this.entries.clear();
+    this.evictedDisposals.clear();
   }
 
   /** Dispose every server (tests, process exit). */
@@ -291,6 +325,12 @@ export class LspServerPool {
     // A still-starting entry disposes its own client (and awaits its exit)
     // once the abort lands; wait for that too so callers can rm the cwd.
     const starting = all.map((e) => e.starting).filter((p): p is Promise<LspClient> => p !== null);
+    // Snapshot evicted disposals before evict() adds more. The `.finally()`
+    // microtask on each promise removes settled entries from the live set, so
+    // spreading `this.evictedDisposals` after the evict loop would miss any
+    // promise that settled in the microtask gap. The snapshot here ensures
+    // every in-flight disposal is awaited regardless of when it settles.
+    const evicted = [...this.evictedDisposals];
     for (const e of all) {
       e.abortStart.abort();
       this.evict(e);
@@ -298,6 +338,11 @@ export class LspServerPool {
     await Promise.all([
       ...clients.map((c) => c.dispose()),
       ...starting.map((p) => p.then((c) => c.dispose(), () => undefined)),
+      // Also await any clients that were evicted before disposeAll() ran —
+      // their disposal is still in flight and may be holding the cwd open.
+      ...evicted,
+      // And pick up anything evict() just added for the entries we drained.
+      ...this.evictedDisposals,
     ]);
   }
 }

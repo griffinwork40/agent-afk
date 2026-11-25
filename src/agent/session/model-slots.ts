@@ -184,10 +184,10 @@ export const GROK_FLAGSHIP_ID = 'grok-4.5';
 // short alias (sol/luna/astra/terra). Same discipline as the Claude constants
 // above: bump one line when a new flagship ships; the alias table, `/model`
 // picker, and provider routing all follow from these definitions.
-export const GPT_SOL_ID = 'gpt-6.1-sol';
+export const GPT_SOL_ID = 'gpt-6.2-sol';
 export const GPT_LUNA_ID = 'gpt-6-luna';
-export const GPT_ASTRA_ID = 'gpt-6-astra';
-export const GPT_TERRA_ID = 'gpt-5.6-terra';
+export const GPT_ASTRA_ID = 'gpt-6.2-astra';
+export const GPT_TERRA_ID = 'gpt-6.1-terra';
 
 /**
  * Default tier bindings — an unconfigured install behaves identically to the

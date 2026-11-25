@@ -43,16 +43,10 @@ export function registerAcpCommand(program: Command): void {
       parseMaxTurns,
       '0',
     )
-    // Fix #1: add --dangerously-skip-permissions flag
-    .option(
-      '--dangerously-skip-permissions',
-      'Force bypass mode: skip all permission prompts for all sessions created by this server',
-    )
     .action(
       async (options: {
         model?: AgentModelInput;
         maxTurns: string;
-        dangerouslySkipPermissions?: boolean;
       }) => {
         try {
           await runAcpServer({
@@ -60,7 +54,6 @@ export function registerAcpCommand(program: Command): void {
             maxTurns: Number(options.maxTurns),
             input: process.stdin,
             output: process.stdout,
-            dangerouslySkipPermissions: options.dangerouslySkipPermissions,
           });
           // D17: every session is closed (journal closed, trace sealed) or
           // abandoned at its deadline; a timer left by session close must not

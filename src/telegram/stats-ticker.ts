@@ -12,6 +12,21 @@
 import { checkVersionDrift, decideVersionDriftAction } from './version-check.js';
 import { readDiskVersion, UNKNOWN_VERSION } from './daemon-version.js';
 
+/**
+ * Exit code for a version-drift restart signal.
+ *
+ * On Windows the Telegram bot runs as a Task Scheduler task whose only
+ * relaunch rule is `<RestartOnFailure>` — it fires only on a non-zero exit
+ * code.  A clean exit (0) leaves the bot dead after an update.
+ *
+ * On macOS (launchd KeepAlive) and Linux (systemd Restart=always) the
+ * supervisor relaunches after ANY exit, so code 1 is equally harmless there.
+ *
+ * Using 1 on win32 and 0 everywhere else keeps the semantics correct across
+ * all three platforms without changing the installed task definition.
+ */
+export const DRIFT_EXIT_CODE: number = process.platform === 'win32' ? 1 : 0;
+
 /** Default tick period: 5 minutes. 12 deferrals at this rate ≈ 1h of grace. */
 export const STATS_TICK_MS = 300000;
 
@@ -52,8 +67,10 @@ export function runStatsTick(
   log(`\n📊 Stats: ${stats.activeSessions} active sessions, ${stats.totalChats} total chats`);
 
   // Version drift check — re-reads package.json and compares to the startup
-  // version. Exits cleanly so the updated binary takes over on next restart
-  // under launchd KeepAlive.
+  // version. Exits so the updated binary takes over on the supervisor's next
+  // restart: launchd KeepAlive (macOS) and systemd Restart=always (Linux)
+  // relaunch after exit 0; Task Scheduler RestartOnFailure (Windows) requires
+  // a non-zero code — see DRIFT_EXIT_CODE.
   try {
     const diskVersion = readVersion();
     if (diskVersion === UNKNOWN_VERSION) {
@@ -89,7 +106,7 @@ export function runStatsTick(
       case 'exit':
       case 'force-exit':
         if (decision.message !== undefined) log(`⚠️ ${decision.message}`);
-        exit(0);
+        exit(DRIFT_EXIT_CODE);
     }
     return decision.deferrals;
   } catch {

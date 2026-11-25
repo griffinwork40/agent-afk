@@ -107,11 +107,13 @@ describe('formatTerminalStateForTelegram', () => {
     expect(msg).not.toContain('not stated');
   });
 
-  it('never adds "not stated" to blocked or asking', () => {
+  it('never adds "not stated" to blocked, asking, or interrupted', () => {
     const blocked = formatTerminalStateForTelegram({ kind: 'blocked', rawBody: '', whatBlocks: 'no token' });
     const asking = formatTerminalStateForTelegram({ kind: 'asking', rawBody: '', question: 'which branch?' });
+    const interrupted = formatTerminalStateForTelegram({ kind: 'interrupted', rawBody: '', whatWasInProgress: 'running tests' });
     expect(blocked).not.toContain('not stated');
     expect(asking).not.toContain('not stated');
+    expect(interrupted).not.toContain('not stated');
   });
 
   it('places "not stated" before the unverified caveat line', () => {

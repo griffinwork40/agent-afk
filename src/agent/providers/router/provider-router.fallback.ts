@@ -57,6 +57,8 @@ export interface FallbackDeps {
   providerNameForModel: (model: string | undefined) => string;
   /** Raw configured fallback model input (alias, tier, or id), or undefined. */
   getFallbackModel?: () => string | undefined;
+  /** Same prime the router awaits before its own builds (stored-login refresh). Never throws. */
+  primeCredential?: (model: string | undefined) => Promise<void>;
 }
 
 type FallbackRequest = Extract<ProviderEvent, { type: 'model.fallback_request' }>;
@@ -125,10 +127,14 @@ async function driveInitQuietly(inner: ActiveInner): Promise<ProviderEvent[] | u
 /** Build + init an inner; any synchronous throw or init failure reads as `undefined`. */
 async function startInner(
   host: FallbackRouterHost,
+  deps: FallbackDeps,
   model: string | undefined,
   live: JournalMessage[] | undefined,
 ): Promise<ProviderEvent[] | undefined> {
   try {
+    // The fallback (or switch-back) model may be an Anthropic model on the
+    // stored login, so it gets the same prime as the router's own builds.
+    await deps.primeCredential?.(model);
     host.active = host.buildInner(model, /* seed */ true, live);
     const pre = await driveInitQuietly(host.active);
     if (pre !== undefined) return pre;
@@ -246,7 +252,7 @@ export class ModelFallbackController {
     }
     host.currentModel = to; // e
     host.activeModel = to;
-    const pre = await startInner(host, to, stripped); // f
+    const pre = await startInner(host, this.deps, to, stripped); // f
     if (pre === undefined) {
       yield* this.restorePrimary(prevCurrent, prevActive, snapshot);
       yield { type: 'error', error: request.error };
@@ -279,7 +285,7 @@ export class ModelFallbackController {
   ): AsyncGenerator<ProviderEvent, void> {
     this.host.currentModel = prevCurrent;
     this.host.activeModel = prevActive;
-    const pre = await startInner(this.host, prevActive, snapshot);
+    const pre = await startInner(this.host, this.deps, prevActive, snapshot);
     if (pre !== undefined) for (const ev of pre) yield ev;
   }
 }

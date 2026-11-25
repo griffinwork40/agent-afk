@@ -17,7 +17,6 @@ import type { SessionStats } from '../cli/slash/types.js';
 import { type TelegramRoute, routeKey } from './route.js';
 import { sessionRegistry, type SessionRegistry } from '../agent/session/session-registry.js';
 import { ensureRegistryHandle, archiveRegistryHandle } from './session-manager.registry.js';
-import { resolveActiveRouteForChat } from './session-manager.active-route.js';
 import { hydrateStatsFromStore, getRouteSessionId, getRouteSessionName, persistSessionName } from './session-manager.hydrate-stats.js';
 import { evictIdleSessions, evictStaleSessionData, clearElicitationRouteForKey } from './session-manager.evict-idle.js';
 import { demandLoadSidecar } from './session-manager.demand-load.js';
@@ -769,11 +768,9 @@ export class SessionManager {
    * `undefined` when the chat has no topic sessions (non-topic chat, or all
    * sessions belong to General).
    *
-   * Used by the auto-subscribe loop to route watch output to the correct topic
-   * thread without an inbound message context. The lookup scans `sessionData`
-   * (in-memory, populated from disk on start) for all entries that share
-   * `chatId` and carry a `threadId`, then picks the entry with the most-recent
-   * `lastActivity` timestamp.
+   * The lookup scans `sessionData` (in-memory, populated from disk on start)
+   * for all entries that share `chatId` and carry a `threadId`, then picks
+   * the entry with the most-recent `lastActivity` timestamp.
    *
    * Backward-compatible: returns `undefined` for any chat that has never used
    * Telegram topics, leaving the downstream `sendOptions` call equivalent to
@@ -813,10 +810,4 @@ export class SessionManager {
     return busy;
   }
 
-  /**
-   * Return the most recently active route for a given chatId, or `undefined`
-   * when no session data exists for that chat. Delegates to the extracted
-   * `resolveActiveRouteForChat` helper (session-manager.active-route.ts).
-   */
-  getActiveRouteForChat(chatId: number): TelegramRoute | undefined { return resolveActiveRouteForChat(this.sessionData.values(), chatId); }
 }

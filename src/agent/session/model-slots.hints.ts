@@ -23,6 +23,9 @@ import { SLOT_NAMES, DIRECT_MODEL_ALIASES } from './model-slots.js';
  * subset, not the whole acceptable set.
  */
 export const OPENAI_MODEL_HINTS: readonly string[] = [
+  'gpt-6.2-sol',
+  'gpt-6.2-astra',
+  'gpt-6.1-terra',
   'gpt-6.1-sol',
   'gpt-6-astra',
   'gpt-6-sol',

@@ -23,6 +23,19 @@ export const DEFAULT_SESSION_TIMEOUT_MS = 0;
 export const RESET_DRAIN_TIMEOUT_MS = 5_000;
 
 /**
+ * Bounded wait used by {@link ProviderTurns.drain} to settle an abandoned
+ * provider turn before the next send pushes its message. A provider that
+ * never yields a terminal after interrupt must not block every later send
+ * forever. 5s matches {@link RESET_DRAIN_TIMEOUT_MS}: long enough for a
+ * normal interrupted turn to flush its tail; short enough that a stuck
+ * provider does not freeze the session. On timeout the stuck turn is force-
+ * ended so the waiting send can proceed.
+ *
+ * Refs #5174
+ */
+export const SETTLE_DRAIN_TIMEOUT_MS = 5_000;
+
+/**
  * Optional policy object that may grant a BOUNDED extension when the timeout
  * deadline is reached, instead of firing immediately.
  *

@@ -223,16 +223,16 @@ describe('OpenAI family aliases (sol/luna/astra/terra)', () => {
   });
 
   it('resolves each family alias to its pinned wire id (case-insensitive)', () => {
-    expect(resolveModelInput('sol')).toBe('gpt-6.1-sol');
-    expect(resolveModelInput('SOL')).toBe('gpt-6.1-sol');
+    expect(resolveModelInput('sol')).toBe('gpt-6.2-sol');
+    expect(resolveModelInput('SOL')).toBe('gpt-6.2-sol');
     expect(resolveModelInput('Luna')).toBe('gpt-6-luna');
-    expect(resolveModelInput('  astra  ')).toBe('gpt-6-astra');
-    expect(resolveBinding('terra')).toEqual({ id: 'gpt-5.6-terra' });
+    expect(resolveModelInput('  astra  ')).toBe('gpt-6.2-astra');
+    expect(resolveBinding('terra')).toEqual({ id: 'gpt-6.1-terra' });
   });
 
   it('stays pinned regardless of tier rebindings', () => {
     const rebound = makeSlots({ medium: 'claude-sonnet-4-6', large: 'claude-opus-5-5' });
-    expect(resolveModelInput('sol', rebound)).toBe('gpt-6.1-sol');
+    expect(resolveModelInput('sol', rebound)).toBe('gpt-6.2-sol');
     expect(resolveModelInput('luna', rebound)).toBe('gpt-6-luna');
   });
 
@@ -277,6 +277,7 @@ describe('MODEL_ALIASES_HINT (single source of truth for the /model picker)', ()
       'opus', 'opus_1m', 'opus-5.5', 'opus-5.5_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable', 'grok',
       'sol', 'luna', 'astra', 'terra',
       // Curated OpenAI wire ids (OPENAI_MODEL_HINTS)
+      'gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra',
       'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna',
       'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
       'gpt-5.5',

@@ -130,6 +130,30 @@ async function renderViaBrowser(
 }
 
 /**
+ * Build the user-facing error thrown when markdown mode receives binary content.
+ *
+ * `ct` must be the bare MIME type (parameters already stripped). File-extension
+ * alternatives like \.docx would never match here; only real MIME types are
+ * tested. OOXML formats (.docx, .xlsx, .pptx) are ZIP-based and handled by
+ * extract_document, but servers rarely send their vnd.openxmlformats-* MIME
+ * type — they typically send application/octet-stream or application/zip, so
+ * they are caught by the zip branch of the isExtractable check.
+ */
+export function binaryContentError(ct: string): Error {
+  const isExtractable = /application\/(pdf|zip)/i.test(ct);
+  // view_image supports only .png, .jpg/.jpeg, .gif, .webp — mirroring
+  // the MIME_MAP in src/agent/tools/handlers/view-image.ts. Other image/*
+  // types (svg+xml, avif, tiff, bmp, …) fall through to the generic branch.
+  const isSupportedImage = /^image\/(png|jpe?g|gif|webp)$/i.test(ct);
+  const hint = isExtractable
+    ? `Download the file with bash and read it with extract_document instead.`
+    : isSupportedImage
+      ? `Download the file with bash and use view_image to inspect it instead.`
+      : `Download the file with bash instead. For .pdf, .docx, .xlsx, .pptx, or .zip files you can then read it with extract_document; for supported images (.png, .jpg, .gif, .webp) use view_image.`;
+  return new Error(`web_scrape markdown mode received binary content (${ct}). ${hint}`);
+}
+
+/**
  * Scrape a URL to markdown, escalating to a headless render when the cheap
  * fetch yields thin content.
  *
@@ -174,21 +198,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     if (res.ok) {
       if (BINARY_RE.test(contentType)) {
         const ct = (contentType.split(';')[0] ?? contentType).trim();
-        // ct is the bare MIME type (parameters stripped above), so file-extension
-        // alternatives like \.docx would never match; test only real MIME types.
-        const isExtractable = /application\/(pdf|zip)/i.test(ct);
-        // view_image supports only .png, .jpg/.jpeg, .gif, .webp — mirroring
-        // the MIME_MAP in src/agent/tools/handlers/view-image.ts. Other image/*
-        // types (svg+xml, avif, tiff, bmp, …) fall through to the generic branch.
-        const isSupportedImage = /^image\/(png|jpe?g|gif|webp)$/i.test(ct);
-        const hint = isExtractable
-          ? `Download the file with bash and read it with extract_document instead.`
-          : isSupportedImage
-            ? `Download the file with bash and use view_image to inspect it instead.`
-            : `Download the file with bash instead. For .pdf, .docx, .xlsx, .pptx, or .zip files you can then read it with extract_document; for supported images (.png, .jpg, .gif, .webp) use view_image.`;
-        throw new Error(
-          `web_scrape markdown mode received binary content (${ct}). ${hint}`,
-        );
+        throw binaryContentError(ct);
       }
       const body = await res.text();
       diagnostics.fetch.rawBodyBytes = Buffer.byteLength(body, 'utf8');

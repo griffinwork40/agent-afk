@@ -4,6 +4,7 @@ import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { homedir, userInfo } from 'os';
 import { join } from 'path';
 import { h1ModelFetch } from '../providers/shared/h1-fetch.js';
+import { recordClaudeLoginStatus, type ClaudeLoginRefreshResult } from './claude-login-status.js';
 
 interface ParsedCredentials {
   accessToken: string;
@@ -170,29 +171,66 @@ export function loadClaudeCodeOauthToken(opts: { quiet?: boolean; background?: b
  * credential should use that return value rather than re-reading the store.
  */
 export async function refreshClaudeCodeOauthToken(): Promise<string | undefined> {
+  return (await refreshClaudeCodeOauthTokenWithStatus()).token;
+}
+
+// Invariant: one token refresh in flight per process. The stored refresh
+// token may rotate on every exchange, so two concurrent exchanges (several
+// library sessions starting at once, or a session-start prime racing a 401
+// retry) could each spend the same refresh token and the loser would write a
+// dead one back. Concurrent callers join the in-flight promise instead.
+let _refreshInFlight: Promise<ClaudeLoginRefreshResult> | undefined;
+
+/**
+ * {@link refreshClaudeCodeOauthToken} plus a {@link ClaudeLoginStatus} that
+ * says why no token came back. Single-flight: concurrent callers share one
+ * store read and at most one network exchange. Never throws.
+ */
+export function refreshClaudeCodeOauthTokenWithStatus(): Promise<ClaudeLoginRefreshResult> {
+  if (_refreshInFlight) return _refreshInFlight;
+  const flight = runRefresh().then((result) => {
+    recordClaudeLoginStatus(result.status);
+    return result;
+  }).finally(() => {
+    if (_refreshInFlight === flight) _refreshInFlight = undefined;
+  });
+  _refreshInFlight = flight;
+  return flight;
+}
+
+async function runRefresh(): Promise<ClaudeLoginRefreshResult> {
   const blob = readCredentialsBlob();
-  if (blob === undefined) return undefined;
+  if (blob === undefined) return { status: 'no-login' };
 
   const parsed = parseCredentials(blob);
-  if (parsed === undefined) return undefined;
+  if (parsed === undefined) {
+    // A record whose access token is empty but which still carries a refresh
+    // token can be repaired by a refresh; anything else is unusable.
+    const refreshToken = readRefreshTokenOnly(blob);
+    if (refreshToken === undefined) return { status: hasOauthRecord(blob) ? 'no-token' : 'no-login' };
+    return exchangeAndWriteBack(blob, refreshToken);
+  }
 
   if (parsed.expiresAt !== undefined && parsed.expiresAt > Date.now() + REFRESH_MARGIN_MS) {
-    return parsed.accessToken;
+    return { token: parsed.accessToken, status: 'valid' };
   }
 
   if (!parsed.refreshToken) {
     process.stderr.write(
       'agent-afk: OAuth token expired and no refresh token available. Run `claude login` to refresh.\n',
     );
-    return undefined;
+    return { status: 'expired-no-refresh' };
   }
+  return exchangeAndWriteBack(blob, parsed.refreshToken);
+}
 
-  const refreshed = await postTokenRefresh(parsed.refreshToken);
+async function exchangeAndWriteBack(blob: string, refreshToken: string): Promise<ClaudeLoginRefreshResult> {
+  const refreshed = await postTokenRefresh(refreshToken);
   if (!refreshed) {
     process.stderr.write(
       'agent-afk: OAuth token refresh failed. Run `claude login` to refresh.\n',
     );
-    return undefined;
+    return { status: 'refresh-failed' };
   }
 
   try {
@@ -213,7 +251,7 @@ export async function refreshClaudeCodeOauthToken(): Promise<string | undefined>
     );
   }
 
-  return refreshed.accessToken;
+  return { token: refreshed.accessToken, status: 'refreshed' };
 }
 
 /**
@@ -303,6 +341,26 @@ function parseCredentials(blob: string): ParsedCredentials | undefined {
     result.expiresAt = expiresAt;
   }
   return result;
+}
+
+function oauthRecord(blob: string): Record<string, unknown> | undefined {
+  try {
+    const json: unknown = JSON.parse(blob);
+    if (typeof json !== 'object' || json === null) return undefined;
+    const oauth = (json as Record<string, unknown>)['claudeAiOauth'];
+    return typeof oauth === 'object' && oauth !== null ? (oauth as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasOauthRecord(blob: string): boolean {
+  return oauthRecord(blob) !== undefined;
+}
+
+function readRefreshTokenOnly(blob: string): string | undefined {
+  const rt = oauthRecord(blob)?.['refreshToken'];
+  return typeof rt === 'string' && rt.length > 0 ? rt : undefined;
 }
 
 interface TokenRefreshResponse {

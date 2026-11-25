@@ -79,7 +79,7 @@ export async function setPermissionMode(mode: PermissionMode, deps: ConfigDeps):
   deps.getPlanExit().recordModeTransition(mode, current);
   await deps.getProviderQuery().setPermissionMode(mode);
   deps.getStateManager().setSessionMetadata((prev) => ({ ...prev, permissionMode: mode }));
-  deps.pushSidebandEvent({ type: 'plan_mode', mode: mode === 'plan' ? 'plan' : 'default' });
+  deps.pushSidebandEvent({ type: 'plan_mode', mode });
 }
 
 /** Override the base system prompt on the live config and the provider. */

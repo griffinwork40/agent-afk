@@ -38,7 +38,13 @@
  */
 
 /** The exact non-sensitive scalar fields facet derivation reads from a tool input. */
-export const RAW_INPUT_FIELDS = ['file_path', 'name', 'id_prefix', 'dry_run'] as const;
+export const RAW_INPUT_FIELDS = [
+  'file_path',
+  'name',
+  'id_prefix',
+  'dry_run',
+  'changes_empty',
+] as const;
 
 /** Per-field character cap — a pathologically large field value is truncated. */
 export const RAW_INPUT_FIELD_CAP = 4096;
@@ -70,16 +76,24 @@ export function extractRawToolInput(input: unknown): string | undefined {
   // sidecar data, not just hand-constructed test inputs (#3182).
   const changes = obj['changes'];
   if (Array.isArray(changes)) {
-    const paths: string[] = [];
-    for (const ch of changes) {
-      if (ch && typeof ch === 'object') {
-        const p = (ch as Record<string, unknown>)['path'];
-        if (typeof p === 'string' && paths.length < CHANGES_PATHS_CAP) {
-          paths.push(p.length > RAW_INPUT_FIELD_CAP ? p.slice(0, RAW_INPUT_FIELD_CAP) : p);
+    if (changes.length === 0) {
+      // Empty changes list: the handler returns a synthetic 'applied' success but
+      // writes nothing. Persist a marker so isPatchApplyDryRun can detect this in
+      // production — extractRawToolInput never emits a `changes` field, so the
+      // guard in done-evidence.ts must check this marker instead (#5257 item 2).
+      picked['changes_empty'] = true;
+    } else {
+      const paths: string[] = [];
+      for (const ch of changes) {
+        if (ch && typeof ch === 'object') {
+          const p = (ch as Record<string, unknown>)['path'];
+          if (typeof p === 'string' && paths.length < CHANGES_PATHS_CAP) {
+            paths.push(p.length > RAW_INPUT_FIELD_CAP ? p.slice(0, RAW_INPUT_FIELD_CAP) : p);
+          }
         }
       }
+      if (paths.length > 0) picked['changes_paths'] = paths;
     }
-    if (paths.length > 0) picked['changes_paths'] = paths;
   }
 
   return Object.keys(picked).length > 0 ? JSON.stringify(picked) : undefined;

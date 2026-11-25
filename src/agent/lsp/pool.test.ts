@@ -154,12 +154,40 @@ describe('LspServerPool', () => {
   }, 10_000);
 
   it('kills a start every acquirer abandoned after the grace window', async () => {
-    const { spec } = setup({ silent: true });
+    // Relies on setup() writing a logFile so readFakeLog() can find the pid.
+    // The logFile path is embedded in the fake server script by writeFakeLspServer.
+    const { logFile, spec } = setup({ silent: true });
     const pool = newPool({ abandonedStartGraceMs: 50 });
     const err = await pool.acquire(spec, tempDir, { timeoutMs: 100 }).catch((e: unknown) => e);
     expect((err as LspClientError).kind).toBe('timeout');
     await until(() => pool.size === 0);
+    // Wait for the server process itself to exit, not just pool eviction.
+    await until(() => {
+      const log = readFakeLog(logFile);
+      const pid = log.find((e) => e.spawn !== undefined)?.spawn;
+      return pid === undefined || !pidAlive(pid);
+    });
   }, 10_000);
+
+  it('disposeAll awaits the dispose promise of an evicted client (#5255)', async () => {
+    // Primary fix from #5235: evict() records the dispose promise in
+    // evictedDisposals; disposeAll() must await it so the cwd is not busy.
+    const { spec } = setup({ spawnGrandchild: true });
+    const pool = newPool({ idleShutdownMs: 50 });
+    const root = path.join(tempDir, `cwd-evict-${++counter}`);
+    mkdirSync(root, { recursive: true });
+    const client = await pool.acquire(spec, root);
+    const pid = client.pid!;
+    // Wait for the idle eviction to fire and add the dispose promise to evictedDisposals.
+    await until(() => !client.alive);
+    // disposeAll() must await the already-evicted client's dispose promise.
+    await pool.disposeAll();
+    // The process must be gone — if evictedDisposals was not awaited, disposeAll
+    // would return while the dispose was still in flight and pid would still be alive.
+    expect(pidAlive(pid)).toBe(false);
+    // The cwd must be removable immediately after disposeAll returns.
+    expect(() => rmSync(root, { recursive: true, force: true })).not.toThrow();
+  }, 15_000);
 
   it('reads the idle window from AFK_LSP_IDLE_SHUTDOWN_MS', () => {
     vi.stubEnv('AFK_LSP_IDLE_SHUTDOWN_MS', '1234');
@@ -339,7 +367,7 @@ describe('crash-loop guard', () => {
     // The 4th acquire must be rejected immediately (no new spawn).
     const err = await pool.acquire(spec, tempDir, { timeoutMs: 2_000 }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(LspClientError);
-    expect((err as LspClientError).kind).toBe('exited');
+    expect((err as LspClientError).kind).toBe('disabled');
     expect(spawnCount(logFile)).toBe(3); // no 4th spawn
   }, 30_000);
 

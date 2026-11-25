@@ -9,6 +9,7 @@ import {
   writeUpdateCache,
 } from '../update-checker.js';
 import { isNewerVersion } from '../update-version.js';
+import { createEbusyDetector, findWindowsUpdateBlockers, WINDOWS_UPDATE_LOCK_GUIDANCE } from './update.windows.js';
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(-[\da-z.]+)?$/i;
 
@@ -70,6 +71,15 @@ export function registerUpdateCommand(program: Command): void {
         }
       }
 
+      const blockers = await findWindowsUpdateBlockers();
+      if (blockers.length > 0) {
+        console.error(palette.warning('Update aborted: other afk processes may lock native binaries on Windows.'));
+        for (const blocker of blockers) console.error(palette.dim(`  ${blocker}`));
+        console.error(palette.warning(WINDOWS_UPDATE_LOCK_GUIDANCE));
+        process.exitCode = 1;
+        return;
+      }
+
       const npmCli = resolveNpmCli();
       if (npmCli === undefined) {
         console.error(palette.warning('Could not locate npm in the running Node installation. Aborting rather than using a different global prefix.'));
@@ -78,7 +88,10 @@ export function registerUpdateCommand(program: Command): void {
       }
       console.log(`Updating agent-afk: ${palette.dim(current)} → ${palette.bold(target)}`);
 
-      const { code, signal } = await runNpmInstall(target, npmCli, opts.restart !== false);
+      const { code, signal, ebusy } = await runNpmInstall(target, npmCli, opts.restart !== false);
+      if (process.platform === 'win32' && code !== 0 && ebusy) {
+        console.error(palette.warning(`npm reported EBUSY (a file is busy or locked). ${WINDOWS_UPDATE_LOCK_GUIDANCE}`));
+      }
       if (code === 0) {
         writePendingUpdateMarker(target);
         console.log(palette.success(`✓ agent-afk@${target} installed.`));
@@ -89,7 +102,7 @@ export function registerUpdateCommand(program: Command): void {
         // failed lifecycle restarts require an explicit new CLI invocation.
         console.log(palette.dim(opts.restart === false
           ? '  Install lifecycle scripts skipped; no forced service restarts. Idle version watchdogs remain active.'
-          : '  Telegram updates through its idle-aware watchdog. If a service remains on the old version, run `afk service restart <name>` when idle.'));
+          : '  Telegram updates through its idle-aware watchdog (exits with a restart signal so the service supervisor relaunches the new binary). If a service remains on the old version, run `afk service restart <name>` when idle.'));
       } else if (signal !== null) {
         console.error(palette.warning(`npm install was killed by signal ${signal}.`));
         process.exitCode = 1;
@@ -100,7 +113,7 @@ export function registerUpdateCommand(program: Command): void {
     });
 }
 
-interface ExitResult { code: number | null; signal: NodeJS.Signals | null }
+interface ExitResult { code: number | null; signal: NodeJS.Signals | null; ebusy?: boolean }
 
 function runNpmInstall(version: string, npmCli: string, restart: boolean): Promise<ExitResult> {
   return new Promise((resolve) => {
@@ -112,8 +125,23 @@ function runNpmInstall(version: string, npmCli: string, restart: boolean): Promi
     if (!restart) args.push('--ignore-scripts');
     args.push(`agent-afk@${version}`);
     console.log(palette.dim(`  ${process.execPath} ${args.join(' ')}`));
-    const child = spawn(process.execPath, args, { stdio: 'inherit' });
-    child.on('error', () => resolve({ code: 1, signal: null }));
-    child.on('exit', (code, signal) => resolve({ code, signal }));
+    const windows = process.platform === 'win32';
+    const child = spawn(process.execPath, args, { stdio: windows ? ['inherit', 'pipe', 'pipe'] : 'inherit' });
+    let ebusy = false;
+    if (windows) {
+      const stdoutDetector = createEbusyDetector();
+      const stderrDetector = createEbusyDetector();
+      child.stdout?.on('data', (chunk: Buffer) => {
+        process.stdout.write(chunk);
+        if (stdoutDetector(chunk)) ebusy = true;
+      });
+      child.stderr?.on('data', (chunk: Buffer) => {
+        process.stderr.write(chunk);
+        if (stderrDetector(chunk)) ebusy = true;
+      });
+    }
+    child.on('error', (error: NodeJS.ErrnoException) => resolve({ code: 1, signal: null, ebusy: error.code === 'EBUSY' }));
+    // Pipes can still carry npm's final diagnostic after exit; wait for close on Windows.
+    child.on(windows ? 'close' : 'exit', (code, signal) => resolve({ code, signal, ebusy }));
   });
 }

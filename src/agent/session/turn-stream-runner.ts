@@ -129,7 +129,8 @@ export class TurnStreamRunner {
     this.turns = new ProviderTurns({
       consume: (event, turnDeps) => this.consumeProviderEvent(event, turnDeps),
       interruptProvider: () => this.deps.getProviderQuery().interrupt(),
-      recordSyntheticDone: (turn) => this.recordSyntheticDone(turn.turnStartMs, turn.interrupted),
+      recordSyntheticDone: (turn) =>
+        this.recordSyntheticDone(turn.turnStartMs, turn.interrupted && !turn.hadProviderError),
     });
     // Every seal path (close, reset, abort) must leave the ledger with an
     // abandoned turn's `done`, even when it has not finished stopping (#4830).
@@ -307,6 +308,15 @@ export class TurnStreamRunner {
       this.turns.withdraw(send);
       throw err;
     }
+    const initError = this.deps.stateManager.getInitializationError?.();
+    if (initError !== undefined) {
+      // The provider never started (e.g. no usable credential). Report the
+      // init error as this send's terminal `error` event, so a host that only
+      // sends or streams learns why, instead of a stream that ends silently.
+      this.turns.withdraw(send);
+      yield { type: 'error', error: initError };
+      return;
+    }
     if (send.cancelled) {
       // Interrupted, or the conversation ended, before it started: nothing
       // reached the provider, so there is no turn to record. The consumer
@@ -394,6 +404,7 @@ export class TurnStreamRunner {
         // the terminal yield has completed the turn, not abandoned it.
         const terminal = isTerminalProviderEvent(result.value);
         if (terminal) this.turns.markTerminal(turn);
+        if (result.value.type === 'error') turn.hadProviderError = true;
         const output = await this.consumeProviderEvent(result.value, deps);
         if (terminal) this.turns.endTurn(turn);
         if (output) {
@@ -432,7 +443,7 @@ export class TurnStreamRunner {
         // single terminal while events.jsonl readers always see a `done` with
         // stopReason / durationMs. See turn-stream-runner.fatal-done.ts for the
         // stopReason mapping.
-        if (!doneYielded) this.recordSyntheticDone(turnStartMs);
+        if (!doneYielded) this.recordSyntheticDone(turnStartMs, turn.interrupted && !turn.hadProviderError);
       }
     }
   }

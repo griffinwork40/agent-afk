@@ -1865,6 +1865,36 @@ describe('SubagentExecutor', () => {
       expect(teardownMock).toHaveBeenCalledTimes(1);
     });
 
+    it('mode: "background" is rejected inside a fork-mode skill (skillDispatchName set), even when a registry is wired — #5177', async () => {
+      // A fork-mode skill runs in a single turn. Any background child it
+      // dispatches is orphaned when that turn ends and was previously logged
+      // as "succeeded" with no deliverable. The guard in executeOnce must
+      // reject the dispatch BEFORE forking — no handle should be created.
+      const registry = new BackgroundAgentRegistry({});
+      const forkSpy = vi.fn();
+      mockSubagentMgr.forkSubagent = forkSpy;
+
+      const forkChildCtx: SubagentExecutorContext = {
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        // skillDispatchName set signals "this executor is a fork-mode skill child"
+        defaultConfig: { ...mockConfig, skillDispatchName: 'my-research-skill' },
+        defaultSubagentModel: 'claude-sonnet-4-5',
+        backgroundRegistry: registry,
+        depth: 1,
+      };
+      const forkChildExecutor = new SubagentExecutor(forkChildCtx);
+
+      const result = await forkChildExecutor.execute(
+        makeCall({ input: { prompt: 'do research', mode: 'background' } }),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/Background subagent dispatch is not allowed inside a fork-mode skill/);
+      // The guard fires before forkSubagent — no orphan handle is created.
+      expect(forkSpy).not.toHaveBeenCalled();
+    });
+
     it('mode: "background" with registry: returns jobId immediately, never awaits runToResult', async () => {
       const registry = new BackgroundAgentRegistry({});
       const { handle, fireTerminal } = bgHandle();
