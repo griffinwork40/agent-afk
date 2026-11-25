@@ -24,7 +24,7 @@ import { explainIdentityFailure } from '../../commands/interactive/global-chat-m
 import type { ChatCompositor, ChatStdin, ChatStdout } from '../../commands/interactive/global-chat-terminal.js';
 
 export interface GlobalCommandDeps {
-  /** `AFK_GLOBAL_CHAT_URL`, or undefined when no relay is configured. */
+  /** Relay URL — `AFK_GLOBAL_CHAT_URL` override or the built-in default. */
   relayUrl: string | undefined;
   createIdentityStore: () => IdentityStore;
   createMuteStore: () => MuteStore;
@@ -46,7 +46,7 @@ interface LiveCompositor extends ChatCompositor {
 }
 
 const USAGE = 'Usage: /global | /global name <name> | /global status | /global off';
-const NO_RELAY = 'Global chat has no relay configured. Point it at one with AFK_GLOBAL_CHAT_URL.';
+const NO_RELAY = 'Global chat relay URL is empty. The official relay should be preconfigured; set AFK_GLOBAL_CHAT_URL to override.';
 const NOT_TTY = '/global needs the interactive terminal REPL.';
 
 function defaultIsTty(): boolean {
@@ -107,14 +107,14 @@ async function status(ctx: SlashContext, deps: GlobalCommandDeps, store: Identit
   const identity = await store.load();
   ctx.out.info(`Global chat: ${enabled ? 'enabled' : 'off'}`);
   ctx.out.info(`Identity: ${identity ? display(identity) : 'none yet'}`);
-  ctx.out.info(`Relay: ${deps.relayUrl ? 'configured' : 'not configured (set AFK_GLOBAL_CHAT_URL)'}`);
+  ctx.out.info(`Relay: ${deps.relayUrl ? 'configured' : 'none (set AFK_GLOBAL_CHAT_URL)'}`);
 }
 
 export function createGlobalCommand(deps: GlobalCommandDeps): SlashCommand {
   return {
     name: '/global',
     requires: ['tty'],
-    summary: 'Open public chat when a relay is configured',
+    summary: 'Chat with other AFK users',
     usage: '/global [name <name> | status | off]',
     async handler(ctx, args) {
       const compositor = liveCompositor(ctx, deps);

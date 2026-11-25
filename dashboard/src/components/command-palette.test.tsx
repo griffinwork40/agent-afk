@@ -131,3 +131,23 @@ it('caps displayed summary at SUMMARY_CAP chars; full text stays searchable', as
   const item = displayed.closest('[cmdk-item]') ?? displayed.closest('[data-value]');
   expect(item).not.toBeNull();
 });
+
+it('caps summary at SUMMARY_CAP code points when the summary contains emoji (surrogate pairs)', async () => {
+  // Build a summary that is exactly SUMMARY_CAP+5 code points, where the last
+  // several code points are emoji (U+1F389 🎉, a surrogate pair in UTF-16).
+  // With the old `.slice()` approach the cap would split the first emoji's
+  // surrogate pair; Array.from() must keep every retained code point intact.
+  const emojiSummary = 'A'.repeat(SUMMARY_CAP - 1) + '🎉'.repeat(6); // 65 code points total
+  const emojiCmd = { name: '/emoji', summary: emojiSummary, kind: 'native' as const, web: 'ok' as const };
+  vi.mocked(fetchCommands).mockResolvedValue([emojiCmd]);
+  render(<CommandPalette onNavigate={vi.fn()} sessions={[]} onInsertCommand={vi.fn()} />);
+  openPalette();
+  await screen.findByText('/emoji');
+  const displayed = screen.getByText((t) => t.startsWith('A') && t.endsWith('…'));
+  // The displayed text must be exactly SUMMARY_CAP code points + the ellipsis.
+  const codePoints = Array.from(displayed.textContent ?? '');
+  expect(codePoints.length).toBe(SUMMARY_CAP + 1); // SUMMARY_CAP code points + '…'
+  // The last retained code point before '…' must be a complete emoji, not a lone surrogate.
+  const lastRetained = codePoints[codePoints.length - 2];
+  expect(lastRetained).toBe('🎉');
+});

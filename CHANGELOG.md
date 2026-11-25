@@ -12,6 +12,20 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- global-chat: default relay URL, add to first-run banner, fix stale docs (#5307) (77edcd302)
+
+### Fixed
+- fix scratch-dir Windows paths, add missing tests, and log catch (#5268) (e6d3b4a53)
+- strengthen EACCES test, unify truncation paths, and test binaryContentError (#5271) (200d89a7e)
+- add evicted-disposal test, defensive copy, and comment fixes in LSP pool (#5273) (595c59a87)
+- derive streak threshold from constant and add kind assertions (#5266) (cf1d93ab0)
+- add emoji surrogate-pair test for command palette summary cap (#5265) (2ebf6f901)
+- update Windows install message to mention drift-exit restart (#5264) (b2d0bfe17)
+
+### Changed
+- use per-SHA concurrency group on main to prevent run supersession (#5298) (867a1931c)
+
 ## [6.2.1] - 2026-11-25
 
 ### Fixed
