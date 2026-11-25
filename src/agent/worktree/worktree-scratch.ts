@@ -71,6 +71,9 @@ export type ScratchGitRunner = (
  */
 const _scratchDisposableCache = new Map<string, boolean>();
 
+/** Test seam: reset the per-process cache (mirrors `_resetScratchRootsCacheForTests` in scratch-roots.ts). */
+export function _resetScratchDisposableCacheForTests(): void { _scratchDisposableCache.clear(); }
+
 /**
  * Missing, unreadable, or malformed metadata never sanctions scratch deletion.
  *
@@ -93,6 +96,7 @@ export async function isScratchDisposable(worktreePath: string): Promise<boolean
     return result;
   } catch (err) {
     debugLog('[worktree-scratch] isScratchDisposable: could not read meta for', worktreePath, '—', errorMessage(err));
+    _scratchDisposableCache.set(worktreePath, false);
     return false;
   }
 }

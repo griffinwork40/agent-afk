@@ -43,7 +43,7 @@ function makeArgs(
   return {
     options: {
       parent: { sessionId: 'parent-sess' },
-      config: {},
+      config: { model: 'claude-sonnet-5' },
       agentType: 'test-agent',
     },
     id: 'child-id',
@@ -70,7 +70,7 @@ describe('assembleChildConfig — real preamble composition (unmocked injectors)
     const cfg = assembleChildConfig(makeArgs({
       options: {
         parent: { sessionId: 'p' },
-        config: { maxToolUseIterations: 50, depth: 2, maxDepth: 6 },
+        config: { model: 'claude-sonnet-5', maxToolUseIterations: 50, depth: 2, maxDepth: 6 },
         agentType: 't',
       },
     }));
@@ -89,7 +89,7 @@ describe('assembleChildConfig — real preamble composition (unmocked injectors)
         parent: { sessionId: 'p' },
         // cwd must be inside .afk-worktrees/ so the preamble recognises it as
         // a worktree child and emits the scratch-dir sentence.
-        config: { depth: 1, maxDepth: 6, cwd: '/repo/.afk-worktrees/my-slug/src' },
+        config: { model: 'claude-sonnet-5', depth: 1, maxDepth: 6, cwd: '/repo/.afk-worktrees/my-slug/src' },
         agentType: 't',
       },
       scratchDisposable: true,
@@ -106,7 +106,7 @@ describe('assembleChildConfig — real preamble composition (unmocked injectors)
     const cfg = assembleChildConfig(makeArgs({
       options: {
         parent: { sessionId: 'p' },
-        config: { depth: 1, maxDepth: 6, cwd: '/repo/.afk-worktrees/my-slug/src' },
+        config: { model: 'claude-sonnet-5', depth: 1, maxDepth: 6, cwd: '/repo/.afk-worktrees/my-slug/src' },
         agentType: 't',
       },
       // scratchDisposable intentionally omitted
@@ -120,7 +120,7 @@ describe('assembleChildConfig — real preamble composition (unmocked injectors)
     const cfg = assembleChildConfig(makeArgs({
       options: {
         parent: { sessionId: 'p' },
-        config: { maxToolUseIterations: 50, depth: 6, maxDepth: 6 },
+        config: { model: 'claude-sonnet-5', maxToolUseIterations: 50, depth: 6, maxDepth: 6 },
         agentType: 't',
       },
     }));
