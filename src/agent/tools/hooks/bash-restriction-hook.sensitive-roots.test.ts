@@ -17,13 +17,15 @@
  *     preserved exactly.
  */
 
-import { describe, expect, it, afterEach } from 'vitest';
-import { homedir } from 'os';
+import { describe, expect, it, afterEach, vi } from 'vitest';
+import * as fs from 'fs';
+import { homedir, tmpdir } from 'os';
 import { join, resolve } from 'path';
 
 import { deriveRestrictedSubstrings, builtinBashSensitiveRoots } from './bash-restriction-hook.js';
 import { buildSensitiveRootCandidates } from './bash-restriction-hook.policy.js';
 import { _resetReadDenylistCacheForTests, getReadDenylist, parseReadDenylistEntries } from '../handlers/read-denylist.js';
+import { safeRealpath } from '../handlers/write-denylist.js';
 import { resetAfkHomeWarnLatchForTests } from '../afk-home-warn.js';
 
 const HOME = homedir();
@@ -233,5 +235,31 @@ describe('AFK_READ_DENYLIST dual-spelling contract through buildSensitiveRootCan
     _resetReadDenylistCacheForTests();
     const denylist = getReadDenylist();
     expect(denylist.some((c) => c.endsWith('sensitive-custom'))).toBe(true);
+  });
+
+  it('symlink fixture: candidates contains BOTH as-spelled symlink path (source 3) AND resolved real dir (source 2)', () => {
+    // This test exercises the exact regression vector from PR #734:
+    // when AFK_READ_DENYLIST names a symlink, the resolved real path must
+    // also appear in candidates — otherwise a bash command that navigates
+    // through the real path bypasses the block.
+    const realDir = fs.mkdtempSync(join(tmpdir(), 'afk-denylist-real-'));
+    const spelledPath = join(tmpdir(), `afk-denylist-symlink-${Date.now()}`);
+    fs.symlinkSync(realDir, spelledPath);
+    try {
+      vi.stubEnv('AFK_READ_DENYLIST', spelledPath);
+      _resetReadDenylistCacheForTests();
+      const candidates = buildSensitiveRootCandidates();
+      // Source 3 (as-spelled via parseReadDenylistEntries): the symlink path itself
+      expect(candidates).toContain(spelledPath);
+      // Source 2 (resolved via getReadDenylist): the real directory the symlink points to.
+      // Use safeRealpath to match how resolveLists() canonicalises the entry
+      // (on macOS /tmp is a symlink to /private/tmp, so realDir and its
+      // safeRealpath form differ — the candidates list holds the canonical form).
+      expect(candidates).toContain(safeRealpath(realDir));
+    } finally {
+      vi.unstubAllEnvs();
+      fs.unlinkSync(spelledPath);
+      fs.rmdirSync(realDir);
+    }
   });
 });
