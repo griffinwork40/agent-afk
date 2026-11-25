@@ -20,6 +20,7 @@ export type PermissionMode =
   | 'dontAsk'
   | 'auto';
 
+// SYNC: keep in sync with src/utils/permission-mode.ts (VALID_PERMISSION_MODE_SET); enforced by src/utils/permission-mode.test.ts.
 /**
  * Runtime set of valid {@link PermissionMode} values. Kept in sync with the
  * union above — add a member to the union, add it here.

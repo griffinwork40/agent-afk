@@ -335,6 +335,12 @@ export const ALLOWED_PAIRS: ReadonlyArray<AllowedPair> = [
   },
   // ── Rule 2: Foundation → Core/Infra ────────────────────────────────────────
   {
+    file: 'src/utils/permission-mode.test.ts',
+    importContains: 'agent/',
+    reason:
+      'Foundation→Core test file: sync guard importing VALID_PERMISSION_MODES from sdk-types to assert the duplicated set stays in sync. Test-only; no production violation.',
+  },
+  {
     file: 'src/config/mutate.ts',
     importContains: 'agent/',
     reason:

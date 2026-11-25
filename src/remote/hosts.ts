@@ -17,7 +17,14 @@
 import { promises as fs } from 'node:fs';
 import { getRemoteHostsPath } from '../paths.js';
 import type { PermissionMode } from '../agent/types/sdk-types.js';
-import { isValidPermissionMode, VALID_PERMISSION_MODES } from '../agent/types/sdk-types.js';
+import {
+  classifyPermissionMode,
+  isConfigPermissionMode,
+  warnPermissionModeRemoval,
+  warnPermissionModeNotConfigurable,
+  warnPermissionModeUnknown,
+} from '../utils/permission-mode.js';
+import type { RemovedPermissionMode } from '../utils/permission-mode.js';
 
 export interface RemoteHost {
   name: string;
@@ -70,13 +77,23 @@ export async function loadHosts(path: string = getRemoteHostsPath()): Promise<Re
     if (typeof entry['afkPath'] === 'string' && entry['afkPath'] !== '') host.afkPath = entry['afkPath'];
     if (entry['unlockKeychain'] === true) host.unlockKeychain = true;
     if (typeof entry['permissionMode'] === 'string' && entry['permissionMode'] !== '') {
-      if (!isValidPermissionMode(entry['permissionMode'])) {
-        throw new Error(
-          `${path}: host "${name}" has invalid permissionMode "${entry['permissionMode']}". ` +
-          `Valid modes: ${[...VALID_PERMISSION_MODES].join(', ')}`,
-        );
+      const pm = entry['permissionMode'];
+      const kind = classifyPermissionMode(pm);
+      // Config and hosts.json accept only plan and bypassPermissions — the same
+      // set enforced by settable-keys.ts. The wider SDK set (acceptEdits,
+      // dontAsk, auto) is available only via the --permission-mode CLI flag.
+      if (kind === 'valid' && isConfigPermissionMode(pm)) {
+        host.permissionMode = pm as PermissionMode;
+      } else if (kind === 'removed') {
+        warnPermissionModeRemoval(pm as RemovedPermissionMode);
+        // field is dropped; host continues to load without a pinned mode
+      } else if (kind === 'valid') {
+        warnPermissionModeNotConfigurable(pm);
+        // field is dropped; host continues to load without a pinned mode
+      } else {
+        warnPermissionModeUnknown(pm);
+        // field is dropped; host continues to load without a pinned mode
       }
-      host.permissionMode = entry['permissionMode'];
     }
     hosts[name] = host;
   }

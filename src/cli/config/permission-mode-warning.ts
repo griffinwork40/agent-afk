@@ -1,38 +1,14 @@
-// Invariant: warn once per removed mode per process, buffered across the REPL startup screen clear.
-const warnedRemovedModes = new Set<RemovedPermissionMode>();
-let deferredPermissionModeWarnings: string[] | null = null;
-
-/** Permission modes that existed before v6 and are no longer accepted in config files. */
-export type RemovedPermissionMode = 'default' | 'autonomous';
-
-/** Test-only reset of the warn-once tracker and deferral buffer. Internal API. */
-export function _resetPermissionModeWarnCache(): void {
-  warnedRemovedModes.clear();
-  deferredPermissionModeWarnings = null;
-}
-
-/** Start buffering the removal warning instead of writing to stderr. Idempotent. */
-export function deferPermissionModeWarnings(): void {
-  deferredPermissionModeWarnings ??= [];
-}
-
-/** Print buffered warnings and end deferral. A second flush is a no-op. */
-export function flushDeferredPermissionModeWarnings(): void {
-  const pending = deferredPermissionModeWarnings ?? [];
-  deferredPermissionModeWarnings = null;
-  // eslint-disable-next-line no-console -- one-shot operator UX warning
-  for (const msg of pending) console.warn(msg);
-}
-
-export function warnPermissionModeRemoval(mode: RemovedPermissionMode): void {
-  if (warnedRemovedModes.has(mode)) return;
-  warnedRemovedModes.add(mode);
-  const message =
-    `[afk] permissionMode "${mode}" was removed. The session will run in bypassPermissions. Set "permissionMode": "plan" for a read-only session.`;
-  if (deferredPermissionModeWarnings !== null) {
-    deferredPermissionModeWarnings.push(message);
-  } else {
-    // eslint-disable-next-line no-console -- one-shot operator UX warning
-    console.warn(message);
-  }
-}
+// Re-exports from Foundation (src/utils/permission-mode.ts) so CLI-layer
+// consumers keep a single import path. The warn-once state and defer/flush
+// buffer live in utils so src/remote/ can also reach them without a
+// cross-layer import.
+export {
+  classifyPermissionMode,
+  _resetPermissionModeWarnCache,
+  deferPermissionModeWarnings,
+  flushDeferredPermissionModeWarnings,
+  warnPermissionModeRemoval,
+  warnPermissionModeNotConfigurable,
+  warnPermissionModeUnknown,
+} from '../../utils/permission-mode.js';
+export type { RemovedPermissionMode } from '../../utils/permission-mode.js';

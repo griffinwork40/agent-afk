@@ -1,6 +1,6 @@
 {
   "limit": 350,
   "entries": {
-
+    "scripts/audit-layer-imports.allowlist.ts": { "loc": 355, "reason": "Added sync-guard test allowlist entry for permission-mode.test.ts cross-layer import" }
   }
 }
