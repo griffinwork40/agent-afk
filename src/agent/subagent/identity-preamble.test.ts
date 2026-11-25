@@ -195,6 +195,9 @@ describe('renderSubagentIdentityPreamble', () => {
       // scratchDisposable intentionally omitted
     });
     expect(out).not.toContain('.afk-scratch');
+    // The stash rule must still be emitted even when the scratch-dir sentence
+    // is suppressed — the two rules are independent.
+    expect(out).toContain(WORKTREE_STASH_RULE);
   });
 
   it('does NOT emit the scratch-dir rule when in a worktree but scratchDisposable is false', () => {
@@ -206,6 +209,9 @@ describe('renderSubagentIdentityPreamble', () => {
       scratchDisposable: false,
     });
     expect(out).not.toContain('.afk-scratch');
+    // The stash rule must still be emitted even when the scratch-dir sentence
+    // is suppressed — the two rules are independent.
+    expect(out).toContain(WORKTREE_STASH_RULE);
   });
 
   it('does NOT emit the scratch-dir rule outside a worktree', () => {
