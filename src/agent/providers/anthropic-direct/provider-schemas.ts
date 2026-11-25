@@ -16,6 +16,7 @@ import { getRuntimeStateTool } from '../../awareness/index.js';
 import { stateToolSchemas, stateReadToolSchemas } from '../../state/state-schemas.js';
 import type { AnthropicDirectProviderOptions } from './provider-options.js';
 import { readOnlyGitSchemas } from '../../tools/readonly-git-surface.js';
+import { desktopSchemas } from '../../tools/desktop-surface.js';
 import type { AnthropicToolDef } from '../../tools/types.js';
 
 /**
@@ -42,7 +43,8 @@ import type { AnthropicToolDef } from '../../tools/types.js';
  */
 export function buildProviderSchemas(opts: AnthropicDirectProviderOptions): AnthropicToolDef[] {
   // `git_read` (#3754) joins the builtins only while AFK_READONLY_GIT_TOOL is on.
-  const schemas = [...builtinToolSchemas, ...readOnlyGitSchemas()];
+  // `desktop_screenshot` joins only while AFK_DESKTOP_ENABLED is on (desktop-surface.ts).
+  const schemas = [...builtinToolSchemas, ...readOnlyGitSchemas(), ...desktopSchemas()];
   // Recon sessions (readOnlyMemory=true) get only `memory_search`. Child
   // sessions (readOnlyMemory=false, readOnlyState=true) get search +
   // memory_update; hot-write is blocked at hook time, not schema time. Full

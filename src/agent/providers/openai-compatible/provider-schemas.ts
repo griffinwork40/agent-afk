@@ -5,11 +5,12 @@ import { memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
 import { workspacePublishTool, workspaceQueryTool, workspaceSubscribeTool } from '../../workspace/index.js';
 import { getRuntimeStateTool } from '../../awareness/index.js';
 import { readOnlyGitSchemas } from '../../tools/readonly-git-surface.js';
+import { desktopSchemas } from '../../tools/desktop-surface.js';
 import { isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
 
 /** Construction and fork-time catalogs share the same schema/handler gate. */
 export function buildProviderSchemas(opts: OpenAICompatibleProviderOptions): AnthropicToolDef[] {
-  const schemas: AnthropicToolDef[] = [...builtinToolSchemas, ...readOnlyGitSchemas()];
+  const schemas: AnthropicToolDef[] = [...builtinToolSchemas, ...readOnlyGitSchemas(), ...desktopSchemas()];
   schemas.push(...(opts.readOnlyMemory === true ? [memorySearchTool] : memoryToolSchemas));
   schemas.push(...(isStateRestricted(opts.readOnlyMemory, opts.readOnlyState) ? stateReadToolSchemas : stateToolSchemas));
   // A store alone enables publish/query, not subscriptions: only forked children

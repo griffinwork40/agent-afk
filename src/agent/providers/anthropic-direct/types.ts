@@ -131,6 +131,7 @@ export type ToolCategory =
   | 'mcp'
   | 'web'
   | 'browser'
+  | 'desktop'
   | 'planning'
   | 'schedule'
   | 'other';
