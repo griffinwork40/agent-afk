@@ -24,9 +24,8 @@
 
 import { TelegramError } from 'telegraf';
 import type { Context } from 'telegraf';
-import { markdownToTelegramHtml } from './formatter.js';
+import { markdownToTelegramHtml, splitLongMessage } from './formatter.js';
 import { floodRetryAfterMs, realSleep, replyWithFloodRetry as replyWithFloodRetryImpl } from './streaming.retry.js';
-import { splitLongMessage } from './formatter.js';
 
 /** Throttle interval matching the 20-calls-per-5 s Bot API budget. */
 export const DRAFT_THROTTLE_MS = 250;
@@ -83,7 +82,9 @@ export async function sendOrEditDraft(
 
   // Generate a draft_id on the first call (before throttle so we have an id
   // ready, but isDraftMode stays false until the API call succeeds).
-  if (!state.draftId) {
+  // Use strict null check: generateDraftId() always returns >= 1, but
+  // draftId is typed `number | null` and 0 is not a valid draft_id anyway.
+  if (state.draftId === null) {
     state.draftId = generateDraftId();
   }
 
@@ -167,7 +168,11 @@ async function callDraftApi(
     text: html,
     draft_id: draftId,
     parse_mode: 'HTML' as const,
+    // can_stop: false — the bot controls the generation lifecycle; the user
+    // cannot interrupt a draft-streaming turn mid-flight via the client UI.
     can_stop: false,
+    // keep_on_stop: false — if the draft is somehow stopped, discard it rather
+    // than leaving a stale draft visible in the chat.
     keep_on_stop: false,
   };
 
@@ -188,6 +193,9 @@ async function callDraftApi(
         state.isDraftMode = true;
       } catch {
         // Retry exhausted — the draft update is lost but the turn continues.
+        // Set lastDraftAt so the next call doesn't burst immediately after
+        // recovery (avoids hitting the 20/5 s budget on the next live update).
+        state.lastDraftAt = Date.now();
         // Clear draftId so the next call starts fresh.
         state.draftId = null;
       }

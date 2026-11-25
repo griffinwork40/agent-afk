@@ -196,14 +196,17 @@ export async function streamResponse(
 
   // Build the sendUpdate override for draft mode: wraps sendOrEditDraft so it
   // matches the (state, ctx, chatId, text, force?) signature of SendUpdateFn.
-  const sendUpdate = isPrivateChat
+  // draftState is always defined when isPrivateChat is true (see makeDraftState
+  // call above), but TS cannot narrow through the ternary — capture it in a
+  // narrowed local to avoid the non-null assertion operator.
+  const sendUpdate = isPrivateChat && draftState !== undefined
     ? async (
         _state: StreamState,
         c: typeof ctx,
         id: number,
         text: string,
         force = false,
-      ) => sendOrEditDraft(draftState!, c, id, text, force)
+      ) => sendOrEditDraft(draftState, c, id, text, force)
     : undefined;
 
   const handlerParams: HandlerParams = {
