@@ -58,7 +58,7 @@ describe('buildToolRows', () => {
   it('lists groups first, then non-locked non-grouped builtins, then MCP servers, then extra configured entries', () => {
     const rows = buildToolRows(['zeta', 'alpha'], ['mcp__alpha__echo', 'browser_open', 'bash', 'read_file']);
     const entries = rows.map((r) => r.entry);
-    expect(entries.slice(0, 5)).toEqual(['browser', 'image', 'clipboard', 'peer', 'schedules']);
+    expect(entries.slice(0, 6)).toEqual(['browser', 'image', 'clipboard', 'peer', 'schedules', 'desktop']);
     expect(entries).toContain('bash');
     expect(entries.filter((e) => LOCKED_TOOLS.has(e))).toEqual(['read_file']); // only via config, flagged
     expect(rows.find((r) => r.entry === 'read_file')!.detail).toContain('locked');

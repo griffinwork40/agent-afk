@@ -15,7 +15,7 @@ export const LOCKED_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /** Fixed group names, intentionally not a general glob language. */
-export const TOOL_GROUP_NAMES = ['browser', 'image', 'clipboard', 'peer', 'schedules'] as const;
+export const TOOL_GROUP_NAMES = ['browser', 'image', 'clipboard', 'peer', 'schedules', 'desktop'] as const;
 
 // Contract: computed lazily (first call, then memoized) so loading this module
 // never dereferences schema arrays during import-cycle evaluation.
@@ -30,6 +30,7 @@ export function toolGroups(): Readonly<Record<string, readonly string[]>> {
     clipboard: ['clipboard_read', 'clipboard_write'],
     peer: ['list_sessions', 'send_to_session'],
     schedules: ['create_schedule', 'update_schedule', 'list_schedules', 'get_schedule_history', 'cancel_schedule'],
+    desktop: ALL_TOOL_SCHEMAS.filter((s) => s.name.startsWith('desktop_')).map((s) => s.name),
   };
   return groupsCache;
 }

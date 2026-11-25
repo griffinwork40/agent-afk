@@ -22,6 +22,9 @@
  * @module agent/trace/types
  */
 
+import type { DesktopEventPayload } from './events.desktop.js';
+export type { DesktopEventPayload } from './events.desktop.js';
+
 /** All trace event kinds — must match the contract doc. */
 export type TraceEventKind =
   | 'tool_call'
@@ -35,6 +38,7 @@ export type TraceEventKind =
   | 'closure'
   | 'claim'
   | 'browser_event'
+  | 'desktop_event'
   | 'queued_user_message'
   | 'peer_message'
   | 'session_phase'
@@ -907,6 +911,7 @@ export type TraceEventInput =
   | { kind: 'closure'; payload: ClosurePayload }
   | { kind: 'claim'; payload: ClaimPayload }
   | { kind: 'browser_event'; payload: BrowserEventPayload }
+  | { kind: 'desktop_event'; payload: DesktopEventPayload }
   | { kind: 'queued_user_message'; payload: QueuedUserMessagePayload }
   | { kind: 'peer_message'; payload: PeerMessagePayload }
   | { kind: 'session_phase'; payload: SessionPhasePayload };
@@ -926,6 +931,7 @@ export type TraceEvent =
   | { ts: string; seq: number; kind: 'closure'; payload: ClosurePayload }
   | { ts: string; seq: number; kind: 'claim'; payload: ClaimPayload }
   | { ts: string; seq: number; kind: 'browser_event'; payload: BrowserEventPayload }
+  | { ts: string; seq: number; kind: 'desktop_event'; payload: DesktopEventPayload }
   | { ts: string; seq: number; kind: 'queued_user_message'; payload: QueuedUserMessagePayload }
   | { ts: string; seq: number; kind: 'peer_message'; payload: PeerMessagePayload }
   | { ts: string; seq: number; kind: 'session_phase'; payload: SessionPhasePayload }
