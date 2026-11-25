@@ -88,16 +88,20 @@ export function findHighBashPattern(
 // Invariant: these module-level constants are pre-compiled once and reused
 // across every call to isChmodDangerous. They must not be mutated.
 //
-// OCTAL_MODE captures 3- or 4-digit octal strings (optional leading `0` for
-// the sticky/setuid/setgid bit). Group-write is bit 2 of the middle digit;
-// other-write is bit 2 of the last digit. `0777` is dangerous; `0755` is not.
+// OCTAL_MODE captures 1–4-digit octal strings, including leading special-bit
+// digits (1=sticky, 2=setgid, 4=setuid). Group-write is bit 2 of the
+// third-from-last digit; other-write is bit 2 of the last digit.
+// `0777` / `777` / `1777` (sticky+world-writable) / `4777` (setuid+world-writable)
+// are all dangerous; `0755` / `755` / `4755` are not.
 //
 // WRITE_WIDENING_SYMBOLIC matches symbolic mode clauses that grant write
 // access to group (`g`), other (`o`), or all (`a` / bare `+`):
 //   `+w`, `a+w`, `g+w`, `o+w`, `ug+rw`, `go+w`, `g=w`, `o=rw`, …
 // The pattern anchors on a word boundary or comma so it does not false-fire
 // on the file argument (`g+w_script.sh` is a filename, not a mode).
-const OCTAL_MODE = /\b(0?[0-7]{3})\b/g;
+// Quote-stripped before testing (see isChmodDangerous) so `chmod 'o+w' file`
+// is correctly detected.
+const OCTAL_MODE = /\b([0-7]{1,4})\b/g;
 // Who-list must contain at least one of a/g/o for a write grant to be widening.
 // A bare `+w` (empty who-list) is treated as `a+w` by POSIX and is widening.
 // `u+rw` grants only to the owner — not widening. `ug+rw` has `g` — widening.
@@ -121,27 +125,37 @@ const WRITE_WIDENING_SYMBOLIC =
  */
 export function isChmodDangerous(cmd: string): boolean {
   // Recursive flag: chmod -R … touches an unbounded subtree.
-  if (/\bchmod\b[^;|&\n]*\s(?:-[a-zA-Z]*R[a-zA-Z]*|--recursive)\b/.test(cmd)) return true;
+  if (/\bchmod\b[^;|&\n]*[\s$](?:-[a-zA-Z]*R[a-zA-Z]*|--recursive)\b/.test(cmd)) return true;
 
   // Target path under a system directory or traversing `..`.
   if (/\bchmod\b[^;|&\n]*\s(?:\/(?:bin|sbin|usr|etc|lib|boot|sys|proc|dev)\b|\.\.(?:\/|$))/.test(cmd)) return true;
 
-  // Extract the tokens after `chmod` up to the next shell separator so we
-  // examine only this command's arguments, not a chained command's args.
-  const afterChmod = cmd.match(/\bchmod\b[^;|&\n]*/)?.[0] ?? cmd;
+  // Iterate ALL chmod invocations in the command (handles chained commands
+  // like `chmod 755 a && chmod 777 b`). For each invocation:
+  //   1. Extract tokens after `chmod` up to the next shell separator.
+  //   2. Octal mode: use the last 3 digits to find group-write / other-write.
+  //      `oct.slice(-3).padStart(3, '0')` correctly handles 1-, 2-, 3-, and
+  //      4-digit octals (e.g. `7` → `007`, `77` → `077`, `777` → `777`,
+  //      `1777` → `777`, `4755` → `755`).
+  //   3. Symbolic mode: strip quotes first so `chmod 'o+w' file` is detected.
+  for (const cm of cmd.matchAll(/\bchmod\b[^;|&\n]*/g)) {
+    const afterChmod = cm[0]!;
 
-  // Octal mode: group-write (bit 2 of middle digit) or other-write (bit 2 of last digit).
-  for (const m of afterChmod.matchAll(OCTAL_MODE)) {
-    const oct = m[1]!;
-    // Strip optional leading special-mode digit (0755 → 755).
-    const digits = oct.replace(/^0/, '');
-    const groupDigit = parseInt(digits[digits.length - 2]!, 8);
-    const otherDigit = parseInt(digits[digits.length - 1]!, 8);
-    if ((groupDigit & 0o2) !== 0 || (otherDigit & 0o2) !== 0) return true;
+    // Octal mode: group-write (bit 2 of middle digit) or other-write (bit 2 of last digit).
+    for (const m of afterChmod.matchAll(OCTAL_MODE)) {
+      const oct = m[1]!;
+      // Always work from the last 3 digits so special-bit prefixes (0/1/2/4)
+      // and bare short octals (e.g. `7`) are handled uniformly.
+      const last3 = oct.slice(-3).padStart(3, '0');
+      const groupDigit = parseInt(last3[1]!, 8);
+      const otherDigit = parseInt(last3[2]!, 8);
+      if ((groupDigit & 0o2) !== 0 || (otherDigit & 0o2) !== 0) return true;
+    }
+
+    // Symbolic mode: strip quotes before testing so `chmod 'o+w' file` fires.
+    const unquoted = afterChmod.replace(/['"]/g, '');
+    if (WRITE_WIDENING_SYMBOLIC.test(unquoted)) return true;
   }
-
-  // Symbolic mode: write granted to group, other, or all.
-  if (WRITE_WIDENING_SYMBOLIC.test(afterChmod)) return true;
 
   return false;
 }
