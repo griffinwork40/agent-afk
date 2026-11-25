@@ -35,6 +35,11 @@ async function json(input: unknown, context?: Record<string, unknown>) {
 
 describe('artifact_publish schema and nesting wiring', () => {
   it('is included in CHILD_ALLOWED_TOOLS', () => {
+    // artifact_publish reaches CHILD_ALLOWED_TOOLS transitively via
+    // BUILTIN_TOOL_NAMES (nesting.ts: `[...BUILTIN_TOOL_NAMES, ...]`), where
+    // BUILTIN_TOOL_NAMES = builtinToolSchemas.map(t => t.name) (schemas.ts).
+    // It is NOT listed as an explicit trailing string in CHILD_ALLOWED_TOOLS.
+    // If this test ever fails, check builtinToolSchemas in schemas.ts first.
     expect(CHILD_ALLOWED_TOOLS).toContain('artifact_publish');
   });
 

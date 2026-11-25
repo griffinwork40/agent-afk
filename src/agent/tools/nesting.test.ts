@@ -65,6 +65,21 @@ describe('CHILD_ALLOWED_TOOLS', () => {
   });
 });
 
+describe('RECON_ALLOWED_TOOLS — no-duplicates regression', () => {
+  // Mirrors the CHILD_ALLOWED_TOOLS duplicate guard above (#5301).
+  // RECON_ALLOWED_TOOLS is composed from several spread sources and is subject
+  // to the same class of duplicate-entry error that was fixed in #5283.
+  it('contains no duplicate tool names', () => {
+    const seen = new Set<string>();
+    const duplicates: string[] = [];
+    for (const name of RECON_ALLOWED_TOOLS) {
+      if (seen.has(name)) duplicates.push(name);
+      seen.add(name);
+    }
+    expect(duplicates).toEqual([]);
+  });
+});
+
 describe('buildSkillRestrictedProvider', () => {
   it('returns a provider without throwing for a valid allowedTools list', () => {
     const provider = buildSkillRestrictedProvider(['read_file', 'grep', 'glob'], 'sonnet');
