@@ -11,7 +11,10 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { OutputEvent } from '../../agent/types/session-types.js';
 
 vi.mock('./acp.session.js', () => ({ buildAcpSession: vi.fn(), closeAcpSession: vi.fn(async () => undefined) }));
-vi.mock('../../agent/journal/reader.js', () => ({ journalExists: vi.fn(() => true) }));
+vi.mock('../../agent/journal/reader.js', () => ({
+  journalExists: vi.fn(() => true),
+  checkJournalExists: vi.fn(() => 'exists' as const),
+}));
 vi.mock('./acp.replay.js', () => ({ emitReplayUpdates: vi.fn(async () => undefined) }));
 
 import * as acpSession from './acp.session.js';

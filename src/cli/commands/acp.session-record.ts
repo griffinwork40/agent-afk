@@ -77,6 +77,9 @@ function parentBlocked(file: string): boolean {
  * True when `file` is a dangling symbolic link (the link exists but its
  * target does not). `lstatSync` sees the link itself; `statSync` follows it.
  * Returns false when `lstatSync` itself fails (e.g. the entry does not exist).
+ * This check is best-effort: the two `lstatSync`/`statSync` calls are not
+ * atomic (TOCTOU); a concurrent modification between them may cause a false
+ * positive or false negative.
  */
 function isDanglingSymlink(file: string): boolean {
   try {

@@ -107,7 +107,6 @@ async function acquireMapLock(): Promise<number> {
             if ((killErr as NodeJS.ErrnoException).code === 'ESRCH') {
               // Holder is dead — remove stale lock and retry immediately.
               try { unlinkSync(lock); } catch { /* ignore */ }
-              i--; // retry this iteration without consuming a retry count
               continue;
             }
             // EPERM: process exists but we can't signal it — treat as alive.
