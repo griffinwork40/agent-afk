@@ -1,17 +1,16 @@
 /**
- * /handoffs — list and answer pending daemon handoff questions from the REPL.
+ * /handoffs — list and answer pending daemon handoff questions from the REPL or Telegram.
  *
  * Subcommands:
  *   /handoffs                  — list all pending handoff questions
- *   /handoffs:answer <id>      — interactively answer a pending handoff
  *   /handoffs:answer <id> <v>  — answer directly with a value (text/confirm)
  *
  * Reuses the durable handoff store API (`listPendingHandoffs`, `answerHandoff`)
  * shared with the Telegram surface. No parallel store; source of truth is the
  * same file-based `getHandoffsDir()` directory.
  *
- * Answer recording writes `answerSource: 'repl'` and `responderIdentity: 'repl'`
- * to the HandoffRecord (matching the documented format in handoff-store.ts).
+ * REPL answers use `repl` for both source and identity. Telegram answers use
+ * source `telegram` and the sender's `userId` or `userId:username` when known.
  *
  * @module cli/slash/commands/handoffs
  */
@@ -201,7 +200,8 @@ export const handoffsAnswerCmd: SlashCommand = {
     // Record the answer.
     let won: boolean;
     try {
-      won = await answerHandoff(record.taskId, answer, 'repl', undefined, 'repl');
+      const { surface, responderIdentity } = ctx.invocation ?? { surface: 'repl', responderIdentity: 'repl' };
+      won = await answerHandoff(record.taskId, answer, surface, undefined, responderIdentity);
     } catch (err) {
       ctx.out.error(`Failed to record answer: ${err instanceof Error ? err.message : String(err)}`);
       return 'continue';

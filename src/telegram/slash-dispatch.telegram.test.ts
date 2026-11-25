@@ -12,6 +12,7 @@ import {
 } from './slash-dispatch.telegram.js';
 import { botCommandDescriptors, TELEGRAM_ONLY_COMMAND_DESCRIPTORS } from './bot.command-descriptors.js';
 import { dispatchTelegramSlash, type SlashRunnerDeps } from './handlers/slash.js';
+import { readHandoff, writeHandoff } from '../agent/daemon/handoff-store.js';
 import { SessionManager } from './session-manager.js';
 import { getElicitationRoute } from './elicitation-route-registry.js';
 import type { IAgentSession } from '../agent/types.js';
@@ -73,7 +74,7 @@ describe('menu registration derived from the registry', () => {
   });
 });
 
-describe('/clear interplay with the chat SessionManager', () => {
+describe('native slash dispatch with the chat SessionManager', () => {
   let sessionIdSeq = 0;
   function makeSession(): IAgentSession & { reset: ReturnType<typeof vi.fn> } {
     let sid = `sid-${++sessionIdSeq}`;
@@ -106,6 +107,21 @@ describe('/clear interplay with the chat SessionManager', () => {
     };
   }
   const ctx = (): Context => ({ reply: vi.fn(async () => ({})), sendChatAction: vi.fn(async () => true) }) as unknown as Context;
+
+  it.each([
+    [{ id: 42, username: 'alice' }, '42:alice'],
+    [{ id: 42 }, '42'],
+  ] as const)('attributes a typed handoff answer to %j', async (from, identity) => {
+    const taskId = 'q-telegram';
+    await writeHandoff({
+      taskId, sessionId: 's', question: { type: 'text', message: 'Name?' },
+      requestType: 'ask_question', createdAt: new Date().toISOString(), status: 'pending', originalCommand: 'test',
+    });
+    await dispatchTelegramSlash(deps(), Object.assign(ctx(), { from }), { chatId: 5 }, `/handoffs:answer ${taskId} Alice`);
+    expect(await readHandoff(taskId)).toMatchObject({
+      status: 'answered', answer: { value: 'Alice' }, answerSource: 'telegram', responderIdentity: identity,
+    });
+  });
 
   it('resets in place: same session object, fresh id, stats/name cleared, cwd/model kept', async () => {
     const route = { chatId: 5 };
