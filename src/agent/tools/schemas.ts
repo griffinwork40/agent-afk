@@ -82,6 +82,16 @@ import {
   browserCloseTool,
 } from './schemas.browser-tools.js';
 
+// ── Desktop computer-use tools ────────────────────────────────────────────
+// Category 'desktop' is stripped by toWireToolDef before the API boundary.
+// Tranche 1: desktop_screenshot only. The eight input tools register in
+// Tranche 3M/3W after real-machine feasibility spikes are complete.
+// desktop_screenshot is NOT in builtinToolSchemas — it is opt-in via
+// AFK_DESKTOP_ENABLED, appended by buildProviderSchemas via desktopSchemas()
+// (mirrors the AFK_READONLY_GIT_TOOL / readOnlyGitSchemas() pattern).
+import { desktopScreenshotTool } from './schemas.desktop-tools.js';
+export { desktopScreenshotTool } from './schemas.desktop-tools.js';
+
 // ── Orchestration (background jobs, patch-apply, witness) ─────────────────
 import { cancelBackgroundJobTool, patchApplyTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
 import { readWitnessTool, searchWitnessTool } from './schemas.witness.js';
@@ -135,8 +145,8 @@ import { artifactToolSchemas } from './schemas.artifact.js';
  *   read_witness, search_witness,
  *   remote_agent, web_scrape, web_request
  *
- * ---- Optional tail (indices 23..47) -----------------------------------------
- *   artifact_get, artifact_list, artifact_read,
+ * ---- Optional tail (indices 23..50) -----------------------------------------
+ *   artifact_get, artifact_list, artifact_read, artifact_publish,
  *   cancel_background_job, send_message_to_agent, get_background_job_health,
  *   send_telegram,
  *   image_generate, image_edit,
@@ -199,6 +209,8 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   browserActTool,
   browserScreenshotTool,
   browserCloseTool,
+  // desktop_screenshot: opt-in via AFK_DESKTOP_ENABLED — NOT here.
+  // Appended by buildProviderSchemas() → desktopSchemas() when enabled.
   clipboardWriteTool,
   clipboardReadTool,
   listSessionsTool,
@@ -236,4 +248,8 @@ export const ALL_TOOL_SCHEMAS: readonly AnthropicToolDef[] = [
   gitReadTool,
   // Opt-in (AFK_LSP_DIAGNOSTICS, #3904 phase 2); registered via lsp-symbols-surface.ts.
   codeSymbolsTool,
+  // Opt-in (AFK_DESKTOP_ENABLED); registered via desktop-surface.ts.
+  // Included here for closed-world classification (operator-denied group "desktop",
+  // CHILD_ALLOWED_TOOLS filter, risk-classifier) but NOT in builtinToolSchemas.
+  desktopScreenshotTool,
 ];

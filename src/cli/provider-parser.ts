@@ -5,6 +5,7 @@ import { resolveXaiConstructionAuthMode } from '../agent/providers/xai/force-mod
 import type { ModelProvider } from '../agent/provider.js';
 import { env } from '../config/env.js';
 import { BUILTIN_TOOL_NAMES } from '../agent/tools/schemas.js';
+import { desktopToolNames } from '../agent/tools/desktop-surface.js';
 import { MEMORY_TOOL_NAMES } from '../agent/memory/index.js';
 import { AWARENESS_TOOL_NAMES } from '../agent/awareness/index.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../agent/tools/handlers/exit-plan-mode.js';
@@ -102,6 +103,7 @@ export function parseProvider(
     // tool is not registered (the dispatcher just never routes to it).
     const list = [
       ...BUILTIN_TOOL_NAMES,
+      ...desktopToolNames(),
       ...MEMORY_TOOL_NAMES,
       ...AWARENESS_TOOL_NAMES,
       ...WORKSPACE_TOOL_NAMES,

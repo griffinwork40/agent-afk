@@ -41,6 +41,7 @@ import { askQuestionHandler } from './ask-question.js';
 // first invocation — see `src/browser/registry.ts`. Users who never call a
 // browser tool never load chromium or the playwright package.
 import { browserOpenHandler } from './browser-open.js';
+import { desktopScreenshotHandler } from './desktop-screenshot.js';
 import { browserObserveHandler } from './browser-observe.js';
 import { browserActHandler } from './browser-act.js';
 import { browserScreenshotHandler } from './browser-screenshot.js';
@@ -134,6 +135,7 @@ export function createBuiltinHandlers(
     ['ask_question', askQuestionHandler],
     ['wait_for', waitForHandler],
     ['browser_open', browserOpenHandler],
+    ['desktop_screenshot', desktopScreenshotHandler],
     ['browser_observe', browserObserveHandler],
     ['browser_act', browserActHandler],
     ['browser_screenshot', browserScreenshotHandler],
@@ -187,6 +189,7 @@ export {
   askQuestionHandler,
   waitForHandler,
   patchApplyHandler,
+  desktopScreenshotHandler,
   browserOpenHandler,
   browserObserveHandler,
   browserActHandler,
