@@ -85,8 +85,12 @@ export const MODEL_PRICING: ReadonlyMap<string, ModelPricing> = new Map<string, 
   ['gpt-5.6-sol', { inputPerMTok: 4.0, outputPerMTok: 20.0, cachedInputPerMTok: 0.4 }],
   ['gpt-5.6-terra', { inputPerMTok: 2.0, outputPerMTok: 12.0, cachedInputPerMTok: 0.2 }],
   ['gpt-5.6-luna', { inputPerMTok: 0.2, outputPerMTok: 1.2, cachedInputPerMTok: 0.02 }],
-  // GPT-6 family — source: developers.openai.com/api/docs/pricing, verified 2026-09-25.
+  // GPT-6.2/6.1-terra family — source: developers.openai.com/api/docs/pricing, verified 2026-11-25.
   // Standard (≤272K input) list rates only; long-context/batch/fast not modeled (see Contract above).
+  ['gpt-6.2-astra', { inputPerMTok: 8.0, outputPerMTok: 40.0, cachedInputPerMTok: 0.8 }],
+  ['gpt-6.2-sol', { inputPerMTok: 2.0, outputPerMTok: 10.0, cachedInputPerMTok: 0.2 }],
+  ['gpt-6.1-terra', { inputPerMTok: 1.0, outputPerMTok: 5.0, cachedInputPerMTok: 0.1 }],
+  // GPT-6.0 family — source: developers.openai.com/api/docs/pricing, verified 2026-09-25.
   ['gpt-6-astra', { inputPerMTok: 10.0, outputPerMTok: 50.0, cachedInputPerMTok: 1.0 }],
   ['gpt-6-sol', { inputPerMTok: 2.0, outputPerMTok: 10.0, cachedInputPerMTok: 0.2 }],
   ['gpt-6-luna', { inputPerMTok: 0.1, outputPerMTok: 0.5, cachedInputPerMTok: 0.01 }],
