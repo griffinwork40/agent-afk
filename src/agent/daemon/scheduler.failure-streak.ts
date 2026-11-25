@@ -201,7 +201,10 @@ export function applyStreakLogic(
       ...record,
       failureStreak,
       ...(failureStreak.failingSince !== undefined ? { failingSince: failureStreak.failingSince } : {}),
-      notificationDecision: notificationDecision(record, effectiveTask, hasCallback, kind),
+      // Preserve a pre-stamped notificationDecision (e.g. alert-latch suppression
+      // set by the overlap or budget latch in the scheduler) rather than overwriting
+      // it with a decision derived from effectiveTask.notifyOn.
+      notificationDecision: record.notificationDecision ?? notificationDecision(record, effectiveTask, hasCallback, kind),
     },
     effectiveTask,
     effectiveDetails,

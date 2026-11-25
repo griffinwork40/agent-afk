@@ -11,7 +11,15 @@ export type NotificationKind = 'completion' | 'failure' | 'escalation' | 're-esc
 export interface NotificationDecision {
   state: 'due' | 'not-due' | 'suppressed';
   kind: NotificationKind;
-  reason?: 'policy-never' | 'policy-failure' | 'no-callback';
+  /**
+   * Why the decision was made.
+   * - `policy-never`   — the task's own `notifyOn` is `'never'`.
+   * - `policy-failure` — the task's `notifyOn` is `'failure'` but the run did not fail.
+   * - `no-callback`    — decision is `due` but no delivery callback is registered.
+   * - `alert-latch`    — a repeat-alert latch (overlap or budget episode) suppressed
+   *                      this tick; the task's own policy may still be `always` or `failure`.
+   */
+  reason?: 'policy-never' | 'policy-failure' | 'no-callback' | 'alert-latch';
 }
 
 /** Delivery result reported by the callback; missing results must remain unknown. */
@@ -29,11 +37,29 @@ export type CompletionCallback = (
 /** Append-only settlement receipt; readers must not count it as another task run. */
 export interface NotificationDeliveryRecord extends NotificationOutcome {
   recordType: 'notification-delivery';
+  /**
+   * The `runId` from the matching run row, used to join delivery records to runs.
+   * Absent when the delivery was dispatched for a record that never went through
+   * `writeRunTelemetry` (e.g. overlap-skip or budget-skip records written directly
+   * via `writeTelemetry`), or when the run row itself has no `runId`.
+   */
   runId?: string;
   taskId: string;
   triggeredAt: string;
   settledAt: string;
   kind: NotificationKind;
+}
+
+/**
+ * Pre-stamp a latch-suppressed decision on a record so downstream telemetry
+ * writers (`applyStreakLogic`, `writeRunTelemetry`) preserve it rather than
+ * re-deriving the reason from `task.notifyOn`.
+ */
+export function stampLatchSuppressed(record: TelemetryRecord): TelemetryRecord {
+  return {
+    ...record,
+    notificationDecision: { state: 'suppressed', kind: 'completion', reason: 'alert-latch' },
+  };
 }
 
 /** Resolve policy without invoking callbacks or claiming that a due notice was delivered. */
@@ -90,12 +116,12 @@ export function dispatchCompletion(
   };
   const failed = (err: unknown): void => {
     console.error(`[daemon] onTaskComplete callback failed: ${redactInlineSecrets(errorMessage(err))}`);
-    persist({ target: effectiveDetails?.notifyChat ?? null, outcome: 'failed' });
+    persist({ target: null, outcome: 'failed' });
   };
   try {
     const result = callback(record, effectiveDetails);
     void Promise.resolve(result).then(
-      (outcome) => persist(outcome ?? { target: effectiveDetails?.notifyChat ?? null, outcome: 'unknown' }),
+      (outcome) => persist(outcome ?? { target: null, outcome: 'unknown' }),
       failed,
     );
   } catch (err) {

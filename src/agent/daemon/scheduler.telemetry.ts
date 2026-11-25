@@ -33,7 +33,9 @@ export function writeRunTelemetry(
     : {
       persistedRecord: {
         ...run,
-        notificationDecision: notificationDecision(
+        // Preserve a pre-stamped notificationDecision (e.g. alert-latch suppression)
+        // rather than overwriting it with a decision derived from task.notifyOn.
+        notificationDecision: run.notificationDecision ?? notificationDecision(
           run, task, callback !== undefined, isFailureStatus(run.status) ? 'failure' : 'completion',
         ),
       },
