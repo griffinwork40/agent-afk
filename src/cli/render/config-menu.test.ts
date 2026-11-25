@@ -85,7 +85,7 @@ class FakeIo implements MenuIo {
 
 const TWO_KEY_SPECS: ConfigKeySpec[] = [
   { path: 'temperature', tier: 'agent', type: 'number', clamp: { min: 0, max: 2 }, description: 'Sampling temperature.' },
-  { path: 'permissionMode', tier: 'human', type: 'enum', enumValues: ['default', 'plan'], description: 'Perm mode.' },
+  { path: 'permissionMode', tier: 'human', type: 'enum', enumValues: ['plan', 'bypassPermissions', 'unrestricted'], description: 'Perm mode.' },
 ];
 
 // ── Pure helpers ───────────────────────────────────────────────────────────
@@ -207,8 +207,8 @@ describe('runConfigMenu', () => {
   });
 
   it('requires an explicit confirm before writing a human-tier key (Yes → write with allowHuman)', async () => {
-    // cat=Advanced(1) → key=permissionMode(0) → enum pick "plan"(1) → confirm Yes(0) → key esc → cat esc
-    const ov = new FakeOverlays([1, 0, 1, 0, null, null]);
+    // cat=Advanced(1) → key=permissionMode(0) → enum pick "plan"(0) → confirm Yes(0) → key esc → cat esc
+    const ov = new FakeOverlays([1, 0, 0, 0, null, null]);
     const io = new FakeIo(TWO_KEY_SPECS);
 
     await runConfigMenu(ov, io);
@@ -218,7 +218,7 @@ describe('runConfigMenu', () => {
 
   it('does not write a human-tier key when the confirm is declined', async () => {
     // ... confirm No(1) instead of Yes
-    const ov = new FakeOverlays([1, 0, 1, 1, null, null]);
+    const ov = new FakeOverlays([1, 0, 0, 1, null, null]);
     const io = new FakeIo(TWO_KEY_SPECS);
 
     await runConfigMenu(ov, io);

@@ -27,9 +27,9 @@ In an interactive session, **Shift+Tab** cycles between `plan` and `bypassPermis
 
 ## What path approval covers
 
-`read_file`, `write_file`, `edit_file`, `list_directory`, `glob`, and `grep` check granted roots in `default` mode. The initial working directory is granted. For an outside path, you can allow once, allow for the session, persist a grant for later sessions, or deny. Use `/allow-dir` to grant a directory in advance; forked subagents cannot answer an interactive path prompt, so authorize access in the parent first. Noninteractive requests cannot answer a prompt.
+`read_file`, `write_file`, `edit_file`, `list_directory`, `glob`, and `grep` check granted roots in `plan` mode. The initial working directory is granted. For an outside path, you can allow once, allow for the session, persist a grant for later sessions, or deny. Use `/allow-dir` to grant a directory in advance; forked subagents cannot answer an interactive path prompt, so authorize access in the parent first. Noninteractive requests cannot answer a prompt.
 
-A separate protected credential-path floor still refuses typed read tools even in unrestricted mode. On interactive surfaces a bash restriction hook also detects certain credential-path references and interpreter one-liners; it is not an OS security boundary, and headless bash has different restrictions. Do not treat `default` mode as a shell sandbox. See [Safety](/concepts/safety) and [Tool access](/guides/tool-access).
+A separate protected credential-path floor still refuses typed read tools even in unrestricted mode. On interactive surfaces a bash restriction hook also detects certain credential-path references and interpreter one-liners; it is not an OS security boundary, and headless bash has different restrictions. Do not treat `plan` mode as a shell sandbox. See [Safety](/concepts/safety) and [Tool access](/guides/tool-access).
 
 ### Read-only exceptions to the credential floor
 
@@ -40,7 +40,7 @@ Every exception is **read-only**. Writes to `~/.ssh` and `~/.afk/config` are blo
 Add your own protected paths with `AFK_READ_DENYLIST` (colon-separated absolute paths; a leading `~/` is expanded). Operator entries are matched before the exceptions, so `AFK_READ_DENYLIST=~/.afk/config/mcp.json` re-protects the registry if yours holds inline secrets, and `AFK_READ_DENYLIST=~/.ssh` re-denies every `~/.ssh` exception. Built-in entries always apply and cannot be removed.
 
 <Callout type="warn">
-Unrestricted mode grants broad file access. For work on untrusted code, use a disposable environment or isolated worktree, and set `permissionMode` to `default` if you need path prompts. Built-in credential protections do not replace an OS sandbox.
+Unrestricted mode grants broad file access. For work on untrusted code, use a disposable environment or isolated worktree, and set `permissionMode` to `plan` if you need path prompts. Built-in credential protections do not replace an OS sandbox.
 </Callout>
 
 ## Hook controls are separate
