@@ -19,6 +19,15 @@ interface WebProviderOptions {
   fastModeController?: FastModeController;
 }
 
+// No modelRouting: the web surface always constructs AnthropicDirectProvider as
+// its primary provider. The injectedProviderWiring fallback factory handles
+// model-family switching for child agents (gpt-*, xai-*), but the top-level
+// session provider is always Anthropic-direct regardless of the model string.
+// Routing the top-level web session through parseProvider (like the daemon or
+// REPL) would require a credential-resolution path the web server does not have
+// at session-create time. This gap is recorded in the surface capability census
+// (surface-capability-census.test.ts) under the 'web' surface as an intentional
+// omission.
 /** Keep the existing primary path when no fallback is configured or a provider is pinned. */
 export function webProviderWiring(opts: WebProviderOptions) {
   const shared = {
@@ -37,6 +46,9 @@ export function webProviderWiring(opts: WebProviderOptions) {
     familyOf: providerForModel,
     build: (model): ModelProvider => {
       const family = providerForModel(model);
+      // primary.name is 'anthropic-direct'; providerForModel returns that same
+      // string for every Anthropic model, so Anthropic requests reuse the shared
+      // primary instance rather than constructing a second provider.
       if (family === primary.name) return primary;
       const authMode = family === 'xai' || family === 'xai-oauth'
         ? resolveXaiConstructionAuthMode(family, family === 'xai-oauth') : undefined;

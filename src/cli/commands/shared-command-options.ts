@@ -39,11 +39,6 @@ export interface SharedChatOptionOverrides {
    * Interactive notes the config-file precedence; chat omits it.
    */
   worktreeBaseDescriptionSuffix?: string;
-  /**
-   * Override description for --dangerously-skip-permissions.
-   * Interactive mentions the live Shift+Tab toggle; chat omits it.
-   */
-  dangerouslySkipPermissionsDescription?: string;
 }
 
 const THEME_BASE =
@@ -51,9 +46,6 @@ const THEME_BASE =
 
 const WORKTREE_BASE_BASE =
   "Base git ref for the worktree created by --worktree. Default: the remote's default branch (origin/main), fetched fresh. Pass HEAD to base on your local checkout instead. Also: AFK_WORKTREE_BASE";
-
-const DSP_BASE =
-  'Force bypass mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation';
 
 /**
  * Register the options shared by `afk chat` and `afk interactive` onto `cmd`.
@@ -76,9 +68,6 @@ export function applySharedChatOptions(
       'otherwise auto-named. On clean exit (no uncommitted changes) the worktree and branch ' +
       'are auto-removed; on dirty exit the worktree is preserved.',
     worktreeBaseDescriptionSuffix = '.',
-    dangerouslySkipPermissionsDescription =
-      DSP_BASE +
-      ' (permissionMode=bypassPermissions). Disable persistently with `afk config set permissionMode default`. Does not affect ask_question.',
   } = overrides;
 
   return cmd
@@ -125,6 +114,5 @@ export function applySharedChatOptions(
         }
         return value;
       },
-    )
-    .option('--dangerously-skip-permissions', dangerouslySkipPermissionsDescription);
+    );
 }

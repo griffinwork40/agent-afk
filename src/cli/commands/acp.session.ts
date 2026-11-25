@@ -24,8 +24,6 @@ import { AcpSessionResources, onceAcpShutdown } from './acp.session.resources.js
 export interface AcpSessionOptions {
   model: AgentModelInput;
   maxTurns: number;
-  /** D8: skip the approval bridge only. Every ACP session runs in bypassPermissions. */
-  dangerouslySkipPermissions?: boolean;
   cwd?: string;
   /** Inject into the provider, not AgentConfig, because this provider is prebuilt. */
   canUseTool?: CanUseTool;

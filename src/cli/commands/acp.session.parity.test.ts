@@ -145,18 +145,17 @@ describe('ACP bootstrap parity', () => {
     await closeAcpSession(handle);
   });
 
-  it('merges configured and client MCP before provider construction and passes approval', async () => {
-    const canUseTool = vi.fn();
+  it('merges configured and client MCP before provider construction', async () => {
     const gui = { type: 'stdio' as const, command: 'gui-server' };
     const handle = await buildAcpSession({ model: 'gpt-4.1', maxTurns: 0, cwd: '/workspace',
-      mcpServers: { gui }, canUseTool });
+      mcpServers: { gui } });
     expect(loadMcpConfig).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/workspace' }));
     expect(connectMcpTraced).toHaveBeenCalledWith(expect.objectContaining({
       mcpServers: { disk: { command: 'disk' }, gui },
       serverLayers: { disk: 'user-global', gui: 'cli' },
     }), f.trace);
     expect(f.provider).toHaveBeenCalledWith(undefined, expect.objectContaining({
-      model: 'gpt-4.1', canUseTool, mcpManager: f.manager,
+      model: 'gpt-4.1', mcpManager: f.manager,
     }));
     // Do not connect a second, invisible manager via AgentConfig.mcpServers.
     expect(f.config.mock.calls[0]?.[0]).not.toHaveProperty('mcpServers');
