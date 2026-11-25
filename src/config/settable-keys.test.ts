@@ -151,7 +151,9 @@ describe('coerceConfigValue', () => {
     const spec = getConfigKeySpec('permissionMode')!;
     expect(spec.tier).toBe('human');
     expect(coerceConfigValue(spec, 'bypassPermissions')).toEqual({ ok: true, value: 'bypassPermissions' });
-    expect(coerceConfigValue(spec, 'unrestricted')).toEqual({ ok: true, value: 'unrestricted' });
+    // 'unrestricted' is a user-facing alias; coerceConfigValue must normalize it to
+    // 'bypassPermissions' so the canonical value is what gets written to disk.
+    expect(coerceConfigValue(spec, 'unrestricted')).toEqual({ ok: true, value: 'bypassPermissions' });
     expect(coerceConfigValue(spec, 'default').ok).toBe(false); // removed from enumValues
     expect(coerceConfigValue(spec, 'plan')).toEqual({ ok: true, value: 'plan' });
     expect(coerceConfigValue(spec, 'autonomous').ok).toBe(false);

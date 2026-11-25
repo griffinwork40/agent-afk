@@ -237,6 +237,17 @@ export interface ConfigKeySpec {
   readonly tier: ConfigKeyTier;
   readonly type: ConfigKeyType;
   readonly enumValues?: readonly string[];
+  /**
+   * Optional alias map for enum normalization. When a raw value matches a key
+   * in this map, `coerceConfigValue` returns the mapped canonical value instead
+   * of the raw one. The raw alias must also appear in `enumValues` so the
+   * membership check passes before normalization runs.
+   *
+   * Example: `{ unrestricted: 'bypassPermissions' }` lets a user type
+   * `afk config set permissionMode unrestricted` and have the canonical
+   * `'bypassPermissions'` written to disk.
+   */
+  readonly enumNormalize?: Readonly<Record<string, string>>;
   /** For numeric keys: clamp the accepted range (and require integer). */
   readonly clamp?: { readonly min: number; readonly max: number; readonly integer?: boolean };
   readonly description: string;
@@ -289,7 +300,7 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   // bypassPermissions — path containment + the approval prompt OFF. Human-tier:
   // the agent must NOT be able to escalate its own permissions (set bypass) via
   // config_set; only the human CLI (`afk config set permissionMode <mode>`) can.
-  { path: 'permissionMode', tier: 'human', type: 'enum', enumValues: ['plan', 'bypassPermissions', 'unrestricted'], description: 'Session permission mode for afk chat/interactive (human-tier: privilege-escalation vector). Unset → unrestricted (new-install default). "unrestricted" is the user-facing name for bypassPermissions.' },
+  { path: 'permissionMode', tier: 'human', type: 'enum', enumValues: ['plan', 'bypassPermissions', 'unrestricted'], enumNormalize: { unrestricted: 'bypassPermissions' }, description: 'Session permission mode for afk chat/interactive (human-tier: privilege-escalation vector). Unset → unrestricted (new-install default). "unrestricted" is the user-facing name for bypassPermissions; it is normalized to "bypassPermissions" on write.' },
   // enableShellHooks is the TRUST GATE that activates shell hooks at load time
   // (config-loader userGlobalEnabled). Even though the agent cannot define `hooks`,
   // it must not be able to flip the activation gate on its own config — human-only.
@@ -373,7 +384,8 @@ export function coerceConfigValue(spec: ConfigKeySpec, raw: unknown): ConfigCoer
     }
     case 'enum': {
       if (typeof raw === 'string' && spec.enumValues?.includes(raw)) {
-        return { ok: true, value: raw };
+        const normalized = spec.enumNormalize?.[raw] ?? raw;
+        return { ok: true, value: normalized };
       }
       return { ok: false, error: `${spec.path} expects one of: ${spec.enumValues?.join(', ')}` };
     }
