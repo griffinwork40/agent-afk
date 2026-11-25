@@ -44,7 +44,7 @@ describe('loadHosts — permissionMode validation', () => {
     expect(hosts['myhost']!.permissionMode).toBeUndefined();
     expect(warnSpy).toHaveBeenCalledOnce();
     expect(warnSpy.mock.calls[0]![0]).toContain('"yolo"');
-    expect(warnSpy.mock.calls[0]![0]).toContain('Valid modes:');
+    expect(warnSpy.mock.calls[0]![0]).toContain('Valid config modes:');
   });
 
   it('drops a valid-SDK-but-not-config permissionMode with a "not accepted in hosts.json" warning', async () => {
@@ -53,8 +53,8 @@ describe('loadHosts — permissionMode validation', () => {
     expect(hosts['myhost']!.permissionMode).toBeUndefined();
     expect(warnSpy).toHaveBeenCalledOnce();
     expect(warnSpy.mock.calls[0]![0]).toContain('"acceptEdits"');
-    expect(warnSpy.mock.calls[0]![0]).toContain('not accepted in hosts.json');
-    expect(warnSpy.mock.calls[0]![0]).toContain('Valid modes: plan, bypassPermissions');
+    expect(warnSpy.mock.calls[0]![0]).toContain('not accepted in afk.config.json');
+    expect(warnSpy.mock.calls[0]![0]).toContain('Valid config modes: plan, bypassPermissions');
   });
 
   it('drops removed permissionMode "autonomous" with a removal warning', async () => {

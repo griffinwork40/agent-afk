@@ -20,6 +20,7 @@
  */
 export type PermissionMode = 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk' | 'auto';
 
+// SYNC: keep in sync with src/agent/types/sdk-types.ts (VALID_PERMISSION_MODES); enforced by src/utils/permission-mode.test.ts.
 /**
  * Valid permissionMode values. Must stay in sync with the `PermissionMode`
  * union in `src/agent/types/sdk-types.ts`.
@@ -66,4 +67,75 @@ export function classifyPermissionMode(value: string): 'valid' | 'removed' | 'un
   if (isPermissionMode(value)) return 'valid';
   if (REMOVED_PERMISSION_MODES.has(value)) return 'removed';
   return 'unknown';
+}
+
+// ---------------------------------------------------------------------------
+// Warn-once helpers (Foundation layer so src/remote/ can import without
+// pulling in src/cli/). src/cli/config/permission-mode-warning.ts re-exports
+// these and adds defer/flush support for the REPL startup screen.
+// ---------------------------------------------------------------------------
+
+const warnedRemovedModes = new Set<string>();
+const warnedUnknownModes = new Set<string>();
+const warnedNotConfigurableModes = new Set<string>();
+let deferredPermissionModeWarnings: string[] | null = null;
+
+/** Test-only reset of the warn-once tracker and deferral buffer. Internal API. */
+export function _resetPermissionModeWarnCache(): void {
+  warnedRemovedModes.clear();
+  warnedUnknownModes.clear();
+  warnedNotConfigurableModes.clear();
+  deferredPermissionModeWarnings = null;
+}
+
+/** Start buffering warnings instead of writing to stderr. Idempotent. */
+export function deferPermissionModeWarnings(): void {
+  deferredPermissionModeWarnings ??= [];
+}
+
+/** Print buffered warnings and end deferral. A second flush is a no-op. */
+export function flushDeferredPermissionModeWarnings(): void {
+  const pending = deferredPermissionModeWarnings ?? [];
+  deferredPermissionModeWarnings = null;
+  // eslint-disable-next-line no-console -- one-shot operator UX warning
+  for (const msg of pending) console.warn(msg);
+}
+
+export function warnPermissionModeRemoval(mode: RemovedPermissionMode): void {
+  if (warnedRemovedModes.has(mode)) return;
+  warnedRemovedModes.add(mode);
+  const message =
+    `[afk] permissionMode "${mode}" was removed. The session will run in bypassPermissions. Set "permissionMode": "plan" for a read-only session.`;
+  if (deferredPermissionModeWarnings !== null) {
+    deferredPermissionModeWarnings.push(message);
+  } else {
+    // eslint-disable-next-line no-console -- one-shot operator UX warning
+    console.warn(message);
+  }
+}
+
+export function warnPermissionModeNotConfigurable(value: string): void {
+  if (warnedNotConfigurableModes.has(value)) return;
+  warnedNotConfigurableModes.add(value);
+  const message =
+    `[afk] permissionMode "${value}" is a valid mode for --permission-mode but is not accepted in afk.config.json. Valid config modes: plan, bypassPermissions.`;
+  if (deferredPermissionModeWarnings !== null) {
+    deferredPermissionModeWarnings.push(message);
+  } else {
+    // eslint-disable-next-line no-console -- one-shot operator UX warning
+    console.warn(message);
+  }
+}
+
+export function warnPermissionModeUnknown(value: string): void {
+  if (warnedUnknownModes.has(value)) return;
+  warnedUnknownModes.add(value);
+  const message =
+    `[afk] permissionMode "${value}" is not recognised and will be ignored. Valid config modes: plan, bypassPermissions. For other modes use --permission-mode.`;
+  if (deferredPermissionModeWarnings !== null) {
+    deferredPermissionModeWarnings.push(message);
+  } else {
+    // eslint-disable-next-line no-console -- one-shot operator UX warning
+    console.warn(message);
+  }
 }

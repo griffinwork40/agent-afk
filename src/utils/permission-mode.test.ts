@@ -9,7 +9,23 @@
 
 import { describe, it, expect } from 'vitest';
 import { VALID_PERMISSION_MODES } from '../agent/types/sdk-types.js';
-import { VALID_PERMISSION_MODE_SET, CONFIG_PERMISSION_MODES } from './permission-mode.js';
+import { VALID_PERMISSION_MODE_SET, CONFIG_PERMISSION_MODES, classifyPermissionMode } from './permission-mode.js';
+
+describe('classifyPermissionMode', () => {
+  it.each([
+    ['plan', 'valid'],
+    ['bypassPermissions', 'valid'],
+    ['acceptEdits', 'valid'],
+    ['dontAsk', 'valid'],
+    ['auto', 'valid'],
+    ['default', 'removed'],
+    ['autonomous', 'removed'],
+    ['garbage', 'unknown'],
+    ['', 'unknown'],
+  ] as const)('classifyPermissionMode(%j) → %j', (input, expected) => {
+    expect(classifyPermissionMode(input)).toBe(expected);
+  });
+});
 
 describe('permission-mode sync guard', () => {
   it('VALID_PERMISSION_MODE_SET matches VALID_PERMISSION_MODES exactly', () => {

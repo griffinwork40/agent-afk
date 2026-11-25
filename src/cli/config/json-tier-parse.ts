@@ -94,7 +94,7 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
     config.systemPrompt = json.systemPrompt;
   }
 
-  if (typeof json.permissionMode === 'string') {
+  if (typeof json.permissionMode === 'string' && json.permissionMode.length > 0) {
     // Validate against the known modes; ignore garbage so a typo can't
     // silently land the session in an unexpected (or dangerous) mode.
     // Config files accept only plan and bypassPermissions — the same set

@@ -17,7 +17,14 @@
 import { promises as fs } from 'node:fs';
 import { getRemoteHostsPath } from '../paths.js';
 import type { PermissionMode } from '../agent/types/sdk-types.js';
-import { classifyPermissionMode, isConfigPermissionMode } from '../utils/permission-mode.js';
+import {
+  classifyPermissionMode,
+  isConfigPermissionMode,
+  warnPermissionModeRemoval,
+  warnPermissionModeNotConfigurable,
+  warnPermissionModeUnknown,
+} from '../utils/permission-mode.js';
+import type { RemovedPermissionMode } from '../utils/permission-mode.js';
 
 export interface RemoteHost {
   name: string;
@@ -78,16 +85,13 @@ export async function loadHosts(path: string = getRemoteHostsPath()): Promise<Re
       if (kind === 'valid' && isConfigPermissionMode(pm)) {
         host.permissionMode = pm as PermissionMode;
       } else if (kind === 'removed') {
-        // eslint-disable-next-line no-console -- one-shot operator UX warning
-        console.warn(`[afk] hosts.json: host "${name}" has permissionMode "${pm}" which was removed. The host will run without a pinned mode. Set "permissionMode": "plan" for a read-only session.`);
+        warnPermissionModeRemoval(pm as RemovedPermissionMode);
         // field is dropped; host continues to load without a pinned mode
       } else if (kind === 'valid') {
-        // eslint-disable-next-line no-console -- one-shot operator UX warning
-        console.warn(`[afk] hosts.json: host "${name}" has permissionMode "${pm}" which is valid for --permission-mode but not accepted in hosts.json. Valid modes: plan, bypassPermissions.`);
+        warnPermissionModeNotConfigurable(pm);
         // field is dropped; host continues to load without a pinned mode
       } else {
-        // eslint-disable-next-line no-console -- one-shot operator UX warning
-        console.warn(`[afk] hosts.json: host "${name}" has unrecognised permissionMode "${pm}" and will be ignored. Valid modes: plan, bypassPermissions.`);
+        warnPermissionModeUnknown(pm);
         // field is dropped; host continues to load without a pinned mode
       }
     }

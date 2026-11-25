@@ -114,7 +114,7 @@ describe('parseJsonConfigFile — permissionMode', () => {
     expect(result!.config.permissionMode).toBeUndefined();
     expect(warnSpy).toHaveBeenCalledOnce();
     expect(warnSpy.mock.calls[0]![0]).toContain('"typo"');
-    expect(warnSpy.mock.calls[0]![0]).toContain('Valid modes:');
+    expect(warnSpy.mock.calls[0]![0]).toContain('Valid config modes:');
   });
 
   it('unknown permissionMode warning fires only once per value', () => {
