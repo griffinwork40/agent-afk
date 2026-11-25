@@ -63,7 +63,7 @@ export function isPatchApplyDryRun(e: ToolEventMin): boolean {
     if (parsed === null || typeof parsed !== 'object') return false;
     const p = parsed as Record<string, unknown>;
     if (p['dry_run'] === true) return true;
-    if (Array.isArray(p['changes']) && p['changes'].length === 0) return true;
+    if (p['changes_empty'] === true) return true;
     return false;
   } catch {
     return false;
