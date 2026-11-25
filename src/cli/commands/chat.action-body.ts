@@ -75,7 +75,6 @@ export interface ChatActionOptions {
   post?: string;
   postPr?: string;
   permissionMode?: PermissionMode;
-  dangerouslySkipPermissions?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +326,6 @@ export async function runChatAction(
       ...modelOpts!,
       worktreeCwd, traceWriter: trace?.writer, mcpManager: mcpManagerRef, resumeConfig,
       permissionMode: options.permissionMode ?? cliConfig.permissionMode,
-      dangerouslySkipPermissions: options.dangerouslySkipPermissions,
       maxTurns: parseInt(options.maxTurns, 10),
       temperature: cliConfig.temperature, baseUrl: cliConfig.baseUrl,
       openaiBaseUrl: cliConfig.openaiBaseUrl,

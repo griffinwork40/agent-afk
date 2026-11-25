@@ -29,6 +29,23 @@ const osReadOnlyMembers = new Set([
 function nodeBuiltin(id: string, importer: string): unknown {
   // Normalise bare specifier (e.g. 'fs') to its node: form for the lookup.
   const canonical = id.startsWith('node:') ? id : `node:${id}`;
+  // node: subpaths (e.g. 'node:fs/promises', 'node:path/posix'): strip the
+  // subpath to find the parent module's policy, then apply it. A subpath of a
+  // pure built-in is itself pure; a subpath of a stubbed built-in is stubbed.
+  // Note: node:path.resolve reads the host working directory even though the
+  // sandbox's process.cwd() returns a fake — callers that use the real
+  // path.resolve get host paths, not sandbox-relative ones.
+  const slashIdx = canonical.indexOf('/', 'node:'.length);
+  if (slashIdx !== -1) {
+    const parent = canonical.slice(0, slashIdx);
+    if (pureBuiltins.has(parent)) return realRequire(canonical);
+    // Stubbed parent: return the same failing proxy for the subpath.
+    return new Proxy({} as Record<string, unknown>, {
+      get: (_target, member: string | symbol) => member === '__esModule' ? true : () => {
+        throw new Error(`Census sandbox: ${importer} called ${canonical}.${String(member)}; real ${canonical} access is not allowed.`);
+      },
+    });
+  }
   if (pureBuiltins.has(canonical)) return realRequire(canonical);
   if (canonical === 'node:os') {
     const realOs = realRequire('node:os') as Record<string, unknown>;

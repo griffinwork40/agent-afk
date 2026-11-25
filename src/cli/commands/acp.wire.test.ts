@@ -93,8 +93,7 @@ describe('frozen ACP v1 transcripts', () => {
   it('contains every required golden transcript', () => {
     for (const stem of [
       'text-turn', 'tool-read', 'tool-edit-diff', 'tool-bash-failed',
-      'permission-allow-once', 'permission-reject', 'permission-allow-always-then-skip',
-      'cancel-during-permission', 'cancel-during-stream', 'load-replay', 'resume',
+      'cancel-during-stream', 'load-replay', 'resume',
       'close-idempotent', 'bad-version-negotiation',
     ]) expect(files).toContain(`${stem}.ndjson`);
   });

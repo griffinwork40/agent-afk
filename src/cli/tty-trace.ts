@@ -75,6 +75,8 @@ let _disabled = false;
 let _fs: FsOps = nodeFs;
 let _resizeTimer: ReturnType<typeof setTimeout> | null = null;
 let _pendingResize: [number, 'r', string] | null = null;
+let _pauseDepth = 0;
+let _pauseMarked = false;
 
 // TextDecoder with fatal:false so incomplete multibyte sequences produce U+FFFD
 // rather than throwing — safe for tee-d chunks that split a codepoint boundary.
@@ -121,7 +123,10 @@ function _decode(chunk: Uint8Array | string): string {
 function _recordOutput(chunk: Uint8Array | string): void {
   if (_fd === null || _disabled) return;
   _flushResize();
+  // Decode even while paused so the decoder's multibyte state stays consistent
+  // with the bytes the terminal actually received; the decoded text is dropped.
   const data = _decode(chunk);
+  if (_pauseDepth > 0) return;
   if (data.length === 0) return;
   _writeLine(JSON.stringify([_elapsed(), 'o', data]));
 }
@@ -142,7 +147,7 @@ function _flushResize(): void {
 
 /** Coalesce resize storms: synchronous disk writes otherwise block the REPL. */
 function _recordResize(): void {
-  if (_fd === null || _disabled) return;
+  if (_fd === null || _disabled || _pauseDepth > 0) return;
   _clearResize();
   _pendingResize = [_elapsed(), 'r', `${getTerminalWidth()}x${getTerminalHeight()}`];
   _resizeTimer = setTimeout(_flushResize, 50);
@@ -173,6 +178,42 @@ function _wrapWrite(original: WriteFn): WriteFn {
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
+
+/**
+ * Suspend cast recording (nesting-safe). Terminal output is still written
+ * through unchanged; only the cast file omits it while paused. The first pause
+ * per install writes a visible `paused` marker event into the cast. Calls are
+ * counted, so each pause must be matched by a resume and only the outermost
+ * resume restarts recording. No-op when no recorder is installed or it is
+ * disabled. Never throws.
+ */
+export function pauseTtyTrace(): void {
+  try {
+    if (_saved === null || _disabled || _fd === null) return;
+    _flushResize();
+    _pauseDepth++;
+    if (!_pauseMarked) {
+      _pauseMarked = true;
+      _writeLine(JSON.stringify([_elapsed(), 'o', '\r\n[afk tty-trace: output omitted for a private view]\r\n']));
+    }
+  } catch {
+    // Recording must never break the REPL.
+  }
+}
+
+/**
+ * Undo one `pauseTtyTrace` call. Recording resumes only when the outermost
+ * pause is released. Extra resumes are ignored. No-op when no recorder is
+ * installed. Never throws.
+ */
+export function resumeTtyTrace(): void {
+  try {
+    if (_saved === null || _pauseDepth === 0) return;
+    _pauseDepth--;
+  } catch {
+    // Recording must never break the REPL.
+  }
+}
 
 /**
  * Install the TTY recorder. No-op when:
@@ -270,6 +311,8 @@ export function uninstallTtyTrace(): void {
   process.stderr.write = _saved.stderrWrite;
   process.stdout.off('resize', _recordResize);
   _saved = null;
+  _pauseDepth = 0;
+  _pauseMarked = false;
 
   if (_fd !== null) {
     try { _fs.closeSync(_fd); } catch { /* best-effort */ }

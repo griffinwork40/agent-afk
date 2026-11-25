@@ -308,6 +308,15 @@ export class TurnStreamRunner {
       this.turns.withdraw(send);
       throw err;
     }
+    const initError = this.deps.stateManager.getInitializationError?.();
+    if (initError !== undefined) {
+      // The provider never started (e.g. no usable credential). Report the
+      // init error as this send's terminal `error` event, so a host that only
+      // sends or streams learns why, instead of a stream that ends silently.
+      this.turns.withdraw(send);
+      yield { type: 'error', error: initError };
+      return;
+    }
     if (send.cancelled) {
       // Interrupted, or the conversation ended, before it started: nothing
       // reached the provider, so there is no turn to record. The consumer
