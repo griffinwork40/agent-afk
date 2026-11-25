@@ -5,8 +5,8 @@ description: "An opt-in public chat room inside the terminal REPL, between agent
 
 `/global` opens a shared public chat room inside the AFK terminal REPL. It is for humans to talk between agent turns. AFK never puts chat text into your agent's context, transcript, or logs, and gives the agent no chat tool.
 
-<Callout type="warn">
-No public relay is running yet. `/global` works only when `AFK_GLOBAL_CHAT_URL` points at a relay someone runs. A full URL looks like `wss://&lt;host&gt;/v1/room/global`. With the env var unset, the command explains the situation and exits cleanly.
+<Callout type="info">
+AFK ships with the official relay preconfigured — just type `/global` and it works. If you prefer to run your own relay, set `AFK_GLOBAL_CHAT_URL` to point at it instead.
 </Callout>
 
 ## What the relay sees and stores
@@ -26,18 +26,7 @@ The relay is run by whoever operates the instance in `AFK_GLOBAL_CHAT_URL`. Read
 <Steps>
 <Step>
 
-Point `AFK_GLOBAL_CHAT_URL` at a relay:
-
-```bash
-export AFK_GLOBAL_CHAT_URL=wss://relay.example.com/v1/room/global
-```
-
-Add it to `afk.env` to make it persistent.
-
-</Step>
-<Step>
-
-Run `/global` in the REPL. The first time, the command shows an opt-in notice and asks you to choose a display name. Names must be 2 to 16 characters: lowercase letters, digits, hyphens, or underscores. Your client allows one change a day. The relay also refuses a second change within 10 minutes and says how long to wait.
+Run `/global` in the REPL. The official relay is preconfigured — no env var needed. The first time, the command shows an opt-in notice and asks you to choose a display name. Names must be 2 to 16 characters: lowercase letters, digits, hyphens, or underscores. Your client allows one change a day. The relay also refuses a second change within 10 minutes and says how long to wait.
 
 </Step>
 <Step>
@@ -47,13 +36,21 @@ Type a message and press Enter to post. Press Esc or Ctrl+C to leave.
 </Step>
 </Steps>
 
+If you want to use a different relay, set `AFK_GLOBAL_CHAT_URL` to override the default:
+
+```bash
+export AFK_GLOBAL_CHAT_URL=wss://relay.example.com/v1/room/global
+```
+
+Add it to `afk.env` to make it persistent.
+
 ## Commands
 
 ### `/global` subcommands
 
 | Command | What it does |
 |---|---|
-| `/global` | Open the room. A relay must be configured. |
+| `/global` | Open the room. The official relay is preconfigured. |
 | `/global name <name>` | Save a display name for the next time you join. |
 | `/global status` | Show local state without connecting. |
 | `/global off` | Clear consent. Your identity is kept. |

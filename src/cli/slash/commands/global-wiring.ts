@@ -30,9 +30,11 @@ import { pauseTtyTrace, resumeTtyTrace } from '../../tty-trace.js';
 import { createGlobalCommand, type GlobalCommandDeps } from './global.js';
 import type { SlashCommand } from '../types.js';
 
+const DEFAULT_RELAY_URL = 'wss://afk-global-chat-relay.griffinwork40.workers.dev/v1/room/global';
+
 function buildDeps(): GlobalCommandDeps {
   return {
-    get relayUrl() { return env.AFK_GLOBAL_CHAT_URL ?? undefined; },
+    get relayUrl() { return env.AFK_GLOBAL_CHAT_URL ?? DEFAULT_RELAY_URL; },
     createIdentityStore: () => new FileIdentityStore(),
     createMuteStore: () => new FileMuteStore(),
     createClient: ({ url, identityStore }) =>
