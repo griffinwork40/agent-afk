@@ -111,7 +111,7 @@ describe('/global command', () => {
     await h2.cmd.handler(h2.ctx, 'status');
     expect(h2.all()).toContain('off');
     expect(h2.all()).toContain('none yet');
-    expect(h2.all()).toContain('not configured');
+    expect(h2.all()).toContain('none (set AFK_GLOBAL_CHAT_URL)');
   });
 
   it('off clears consent and keeps the identity', async () => {

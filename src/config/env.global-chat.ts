@@ -17,13 +17,14 @@ export const GLOBAL_CHAT_ENV_REGISTRY = [
   {
     name: 'AFK_GLOBAL_CHAT_URL',
     description:
-      'WebSocket URL of the global-chat relay server. Required to use the /global ' +
-      'command. When unset the /global command explains that no relay is configured ' +
-      'and exits cleanly -- no connection is attempted. Example: ' +
-      'wss://relay.example.com/global',
+      'WebSocket URL of the global-chat relay server. When unset, /global falls ' +
+      'back to the official AFK relay at ' +
+      'wss://afk-global-chat-relay.griffinwork40.workers.dev/v1/room/global. ' +
+      'Set this to point /global at a different relay instead.',
     type: 'string',
     required: false,
-    example: 'wss://relay.example.com/global',
+    default: 'wss://afk-global-chat-relay.griffinwork40.workers.dev/v1/room/global',
+    example: 'wss://relay.example.com/v1/room/global',
     category: 'misc',
   },
 ] as const satisfies readonly EnvVarMeta[];
