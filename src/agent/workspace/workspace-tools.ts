@@ -397,6 +397,13 @@ function parsePublishInput(input: unknown): ParsedPublishInput {
       : undefined;
 
   const artifactIdRaw = raw['artifact_id'];
+  if (artifactIdRaw !== undefined && artifactIdRaw !== null) {
+    if (typeof artifactIdRaw !== 'string' || !ARTIFACT_ID_PATTERN.test(artifactIdRaw)) {
+      throw new Error(
+        `workspace_publish: artifact_id must match /^art_[0-9a-f]{32}$/ (got ${JSON.stringify(artifactIdRaw)})`,
+      );
+    }
+  }
   const artifact_id =
     typeof artifactIdRaw === 'string' && ARTIFACT_ID_PATTERN.test(artifactIdRaw)
       ? artifactIdRaw

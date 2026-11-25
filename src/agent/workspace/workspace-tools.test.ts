@@ -283,7 +283,7 @@ describe('createWorkspaceHandlers', () => {
     expect(parsed.entries[0]!.artifact_id).toBe(validArtifactId);
   });
 
-  it('malformed artifact_id is silently ignored (field stored as null)', async () => {
+  it('malformed artifact_id (bad hex chars) returns isError', async () => {
     const handlers = createWorkspaceHandlers(store, sessionId, agentId);
     const publish = handlers.get('workspace_publish')!;
 
@@ -292,13 +292,15 @@ describe('createWorkspaceHandlers', () => {
       { type: 'finding', content: 'Has bad id.', artifact_id: 'art_ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ' },
       DUMMY_SIGNAL,
     );
-    expect(result.isError).toBeFalsy();
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/artifact_id must match/);
 
+    // No entry should have been stored
     const entries = store.queryAll(sessionId);
-    expect(entries[0]!.artifact_id).toBeNull();
+    expect(entries).toHaveLength(0);
   });
 
-  it('malformed artifact_id (wrong prefix) is silently ignored', async () => {
+  it('malformed artifact_id (wrong prefix) returns isError', async () => {
     const handlers = createWorkspaceHandlers(store, sessionId, agentId);
     const publish = handlers.get('workspace_publish')!;
 
@@ -306,9 +308,11 @@ describe('createWorkspaceHandlers', () => {
       { type: 'finding', content: 'Bad prefix.', artifact_id: 'artifact_' + 'a'.repeat(32) },
       DUMMY_SIGNAL,
     );
-    expect(result.isError).toBeFalsy();
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/artifact_id must match/);
+
     const entries = store.queryAll(sessionId);
-    expect(entries[0]!.artifact_id).toBeNull();
+    expect(entries).toHaveLength(0);
   });
 
   it('publish without artifact_id stores null', async () => {
