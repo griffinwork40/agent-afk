@@ -35,7 +35,7 @@ import type { RunTurnInput } from '../types.js';
 import type { RetryTierContext } from './retry-context.js';
 import { adoptFreshClient } from './live-client.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
-import { clearKeychainCache } from '../../../auth/keychain.js';
+import { clearTokenCache } from '../../../auth/keychain.js';
 
 /**
  * Delay before the cache-bypass second refresh attempt, in milliseconds.
@@ -152,9 +152,6 @@ export async function* turnWithAuthRetry(
   );
 
   if (replayAuth401 && !isClosed()) {
-    // Clear the in-process keychain cache so the next forceClientRefresh reads
-    // the live store rather than the potentially-stale cached token.
-    clearKeychainCache();
     // Brief delay: give a concurrent keychain write-back time to complete.
     await new Promise<void>((resolve) => setTimeout(resolve, CACHE_BYPASS_DELAY_MS));
 
@@ -169,8 +166,20 @@ export async function* turnWithAuthRetry(
       return;
     }
 
+    // Clear only the token value cache — not the DoS backoff guard
+    // (_readBackoffUntil). clearKeychainCache/_resetKeychainReadCache zero the
+    // backoff too, which would re-enable rapid-fire keychain subprocess reads
+    // inside a retry loop where a prior timeout may already have armed it.
+    clearTokenCache();
+
     const refreshed2 = await adoptFreshClient(ctx, runInput);
     if (refreshed2) {
+      // Prepend the first replay's non-error events before the second replay's
+      // events. Those tool/content rounds already executed and their results are
+      // in runInput.messages; the second replay continues after them. Without
+      // this, the UI hides executed operations and recordToolOutput loses their
+      // Done-evidence records.
+      const replay1NonErrorEvents = replayEvents.filter((e) => e.type !== 'error');
       const replay2Events: ProviderEvent[] = [];
       for await (const event of runTurn(runInput)) {
         replay2Events.push(event);
@@ -185,6 +194,9 @@ export async function* turnWithAuthRetry(
           cacheBypass: true,
         },
       });
+      for (const event of replay1NonErrorEvents) {
+        yield event;
+      }
       for (const event of replay2Events) {
         yield event;
       }

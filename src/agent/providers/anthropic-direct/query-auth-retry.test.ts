@@ -16,12 +16,12 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-// Top-level mock for clearKeychainCache — used by the cache-bypass second-refresh tests.
+// Top-level mock for clearTokenCache — used by the cache-bypass second-refresh tests.
 // Must be at module scope (not inside a describe) so Vitest hoists it correctly.
 const clearKeychainCacheMock = vi.hoisted(() => vi.fn());
 vi.mock('../../auth/keychain.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../auth/keychain.js')>();
-  return { ...original, clearKeychainCache: clearKeychainCacheMock };
+  return { ...original, clearTokenCache: clearKeychainCacheMock };
 });
 import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
@@ -920,7 +920,7 @@ describe('AnthropicDirectProvider — cache-bypass second refresh on replay-401'
 
     const events = await collect(query);
 
-    // clearKeychainCache must have been called once (the cache-bypass path).
+    // clearTokenCache must have been called once (the cache-bypass path).
     expect(clearKeychainCacheMock).toHaveBeenCalledTimes(1);
 
     // The trace must record the second attempt with cacheBypass:true and outcome:'replayed'.
@@ -998,7 +998,7 @@ describe('AnthropicDirectProvider — cache-bypass second refresh on replay-401'
 
     await collect(query);
 
-    // clearKeychainCache must NOT have been called: a 403 on replay is not a cache race.
+    // clearTokenCache must NOT have been called: a 403 on replay is not a cache race.
     expect(clearKeychainCacheMock).not.toHaveBeenCalled();
   });
 });

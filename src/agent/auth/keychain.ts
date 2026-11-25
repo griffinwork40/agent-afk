@@ -85,6 +85,22 @@ export function clearKeychainCache(): void {
 }
 
 /**
+ * Invalidate only the token read cache (`_readCacheValue` / `_readCacheExpiresAt`)
+ * without touching the DoS backoff guard (`_readBackoffUntil`).
+ *
+ * Use this inside auth-retry paths where the caller needs a fresh live-store
+ * read on the next call but must not re-enable rapid-fire keychain subprocess
+ * invocations. `clearKeychainCache` / `_resetKeychainReadCache` zero the backoff
+ * too — that is correct for tests (hermetic state) and for external write-back
+ * callers (backoff is no longer warranted), but it creates a DoS window inside a
+ * retry loop where timeouts may already have armed the guard.
+ */
+export function clearTokenCache(): void {
+  _readCacheValue = undefined;
+  _readCacheExpiresAt = 0;
+}
+
+/**
  * Read the Claude Code OAuth access token from its native credential store.
  *
  * Sources, by platform:
