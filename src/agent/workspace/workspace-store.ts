@@ -105,7 +105,6 @@ CREATE TABLE IF NOT EXISTS workspace_entries (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ws_session_seq ON workspace_entries(session_id, seq);
-CREATE INDEX IF NOT EXISTS idx_ws_artifact_id ON workspace_entries(artifact_id) WHERE artifact_id IS NOT NULL;
 
 -- FTS5 options are fixed when the virtual table is created. If WorkspaceStore
 -- gains persistent-database callers, option changes require a migration that
@@ -171,6 +170,10 @@ export class WorkspaceStore {
     if (!cols.includes('artifact_id')) {
       this.db.exec('ALTER TABLE workspace_entries ADD COLUMN artifact_id TEXT;');
     }
+    // Create the partial index after ensuring the column exists (safe no-op if already present)
+    this.db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_ws_artifact_id ON workspace_entries(artifact_id) WHERE artifact_id IS NOT NULL;`,
+    );
   }
 
   /**
@@ -182,6 +185,9 @@ export class WorkspaceStore {
    * path (subscriptions use pure in-memory JS filter checks).
    */
   publish(entry: WorkspacePublishInput): number {
+    if (entry.artifact_id !== undefined && !/^art_[0-9a-f]{32}$/.test(entry.artifact_id)) {
+      throw new Error(`Invalid artifact_id format: must match art_<32 hex chars>, got "${entry.artifact_id}"`);
+    }
     let insertedEntry: WorkspaceEntry | undefined;
     const txn = this.db.transaction(() => {
       const nextSeq = this.nextSeq(entry.session_id);
