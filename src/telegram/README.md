@@ -315,11 +315,11 @@ running inside the daemon for this session.
 
 ### Answer handling
 
-After the operator answers, the daemon resolves the pending elicitation locally.
-The answer is **not** written back to the ledger — the HMAC-signed write-back
-channel (`afk-ledger-channel.ts`) was removed in #5165/#5189. The agent receives
-the answer directly through the in-process resolver; no `elicitation_response`
-record is appended.
+After the operator answers, the daemon resolves the pending elicitation locally
+but discards the result — the REPL does not receive the answer. Restoring this
+path requires `ensureSessionKey` and `makeLedgerChannelHandler` (tracked in
+#5189). No test currently covers this intercept path; coverage is tracked in
+#5189.
 
 ### Security boundary
 
