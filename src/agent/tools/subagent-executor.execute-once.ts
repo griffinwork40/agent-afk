@@ -290,6 +290,8 @@ export async function executeOnce(
     ...(budgetRelease !== undefined ? { budgetRelease, promotionTookBudget } : {}),
     onPromoted: () => markChainPromoted(handle),
     projectKey: projectKeyForCwd(currentCwd ?? ctx.cwd),
+    // childCwd: surface worktree/cwd-override path in failure payloads (#5022).
+    ...(childConfig.cwd !== undefined ? { childCwd: childConfig.cwd } : {}),
   });
   if (!promotionTookBudget.value) budgetRelease?.();
   annotateChainResult(result, chain, plan !== undefined, handle); // D6: chain metadata + line on capped/continuation results (structured only on a promotion payload)

@@ -42,6 +42,7 @@ function mkTools(overrides: Partial<RuntimeTools> = {}): RuntimeTools {
   return {
     enabled: ['bash', 'read_file', 'write_file'],
     mcpServers: [],
+    failedServers: [],
     ...overrides,
   };
 }

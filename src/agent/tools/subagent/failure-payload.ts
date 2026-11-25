@@ -93,7 +93,8 @@ function shapePartialOutput(
 /**
  * Build the structured JSON payload returned to the parent model on the
  * failure path. Intentionally small: status + short error + optional schema
- * error string + optional (size-capped) partial output + subagent id.
+ * error string + optional (size-capped) partial output + subagent id +
+ * optional worktree context (cwd, branch, headSha, dirtyCount).
  *
  * Excludes by design: prompts, full subagent assistant messages, file
  * contents, tool inputs/outputs, credentials, stack traces.
@@ -104,6 +105,42 @@ export interface StructuredFailurePayload {
   schemaError?: string;
   partialOutput?: unknown;
   subagent_id: string;
+  /**
+   * Working directory of the failed child, when it was dispatched with an
+   * explicit `cwd` (worktree-isolated or cwd-override runs). Absent for
+   * children sharing the parent's cwd. Lets the parent rediscover the
+   * worktree without listing all worktrees.
+   */
+  cwd?: string;
+  /**
+   * Git branch name of the child's worktree at failure time, when available.
+   * Absent when the child had no cwd, the cwd is not a git repo, or the
+   * branch could not be determined (detached HEAD, git not found, etc.).
+   */
+  branch?: string;
+  /**
+   * HEAD commit SHA of the child's worktree at failure time (40-char hex),
+   * when available. Same availability conditions as {@link branch}.
+   */
+  headSha?: string;
+  /**
+   * Number of dirty (modified/untracked) files in the child's worktree at
+   * failure time, when available. Useful for quick triage: 0 means the
+   * worktree is clean and can be removed; >0 means work may need recovery.
+   */
+  dirtyCount?: number;
+}
+
+/**
+ * Snapshot of a child's worktree git state at failure time.
+ * All fields are optional — the caller supplies only what it can read
+ * cheaply without blocking.
+ */
+export interface WorktreeContext {
+  cwd: string;
+  branch?: string;
+  headSha?: string;
+  dirtyCount?: number;
 }
 
 export function buildFailurePayload(args: {
@@ -112,6 +149,7 @@ export function buildFailurePayload(args: {
   schemaErrorMessage?: string;
   partialOutput?: unknown;
   subagentId: string;
+  worktreeContext?: WorktreeContext;
 }): StructuredFailurePayload {
   const payload: StructuredFailurePayload = {
     status: args.status,
@@ -124,6 +162,13 @@ export function buildFailurePayload(args: {
   const shaped = shapePartialOutput(args.partialOutput);
   if (shaped !== undefined) {
     payload.partialOutput = shaped;
+  }
+  if (args.worktreeContext !== undefined) {
+    const wt = args.worktreeContext;
+    payload.cwd = wt.cwd;
+    if (wt.branch !== undefined) payload.branch = wt.branch;
+    if (wt.headSha !== undefined) payload.headSha = wt.headSha;
+    if (wt.dirtyCount !== undefined) payload.dirtyCount = wt.dirtyCount;
   }
   return payload;
 }
