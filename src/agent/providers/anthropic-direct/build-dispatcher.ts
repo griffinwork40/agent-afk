@@ -269,7 +269,7 @@ export function buildDispatcher(
   permissionMode: string,
   opts?: BuildDispatcherOptions,
 ): SessionToolDispatcher {
-  const handlers = createBuiltinHandlers(permissionMode, opts?.cwd);
+  const handlers = createBuiltinHandlers(permissionMode, opts?.cwd, deps.surface);
   registerStoreHandlers(handlers, deps, opts);
   if (opts?.runtimeStateSource) {
     handlers.set('get_runtime_state', createGetRuntimeStateHandler(opts.runtimeStateSource));

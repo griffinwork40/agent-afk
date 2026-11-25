@@ -15,6 +15,7 @@
 
 import { env } from '../../../config/env.js';
 import { isDesktopEnabled } from '../desktop-surface.js';
+import { checkDesktopSurfaceEligibility } from '../desktop-surface-eligibility.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { resolveNativeBackend } from '../../../desktop/platform.js';
 import { DesktopBackendError } from '../../../desktop/types.js';
@@ -32,6 +33,14 @@ export interface DesktopHandlerOptions {
    * the gate explicitly by passing or not passing this option).
    */
   getBackend?: () => Promise<DesktopBackend>;
+  /**
+   * Session surface (e.g. `'cli'`, `'repl'`, `'daemon'`, `'telegram'`).
+   * Threaded from `BuildDispatcherDeps.surface` via `createBuiltinHandlers`.
+   * When set, desktop tools are refused on ineligible surfaces (daemon,
+   * telegram, subagent). When absent, eligibility is not checked — preserving
+   * the existing behavior for call sites that have not been updated.
+   */
+  surface?: string;
 }
 
 /** Successful result of `acquireDesktopBackend()`. */
@@ -80,7 +89,16 @@ export async function acquireDesktopBackend(
     };
   }
 
-  // 2. Test injection path: skip the enabled gate and use the injected backend.
+  // 2. Surface eligibility: refuse on daemon, telegram, and subagent surfaces.
+  // Checked before the test-injection path so the surface gate cannot be
+  // bypassed by injecting a backend in production — but test suites that do
+  // NOT pass a surface are unaffected (surface === undefined → allowed).
+  const surfaceErr = checkDesktopSurfaceEligibility(opts.surface);
+  if (surfaceErr !== null) {
+    return { ok: false, isError: true, content: surfaceErr };
+  }
+
+  // 3. Test injection path: skip the enabled gate and use the injected backend.
   if (opts.getBackend) {
     try {
       const backend = await opts.getBackend();
@@ -90,12 +108,12 @@ export async function acquireDesktopBackend(
     }
   }
 
-  // 3. Capability gate: refuse when AFK_DESKTOP_ENABLED is not set.
+  // 4. Capability gate: refuse when AFK_DESKTOP_ENABLED is not set.
   if (!isDesktopEnabled()) {
     return { ok: false, isError: true, content: DESKTOP_SETUP_INSTRUCTIONS };
   }
 
-  // 4. Resolve the native backend for this platform.
+  // 5. Resolve the native backend for this platform.
   let backend: DesktopBackend;
   try {
     backend = await resolveNativeBackend();

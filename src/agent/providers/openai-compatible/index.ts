@@ -355,7 +355,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     permissionMode: string,
     opts: BuildDispatcherOpts,
   ): SessionToolDispatcher {
-    const handlers = createBuiltinHandlers(permissionMode, opts.cwd);
+    const handlers = createBuiltinHandlers(permissionMode, opts.cwd, this.providerOpts.surface ?? 'cli');
     const memoryHandlers = guardChildHotWrites(createMemoryHandlers((this._memoryStore ??= makeDefaultMemoryStore()), undefined, this.providerOpts.surface ?? 'cli'), isForkedChildSession(this.providerOpts.readOnlyState, opts));
     for (const [name, handler] of memoryHandlers) {
       if (this.providerOpts.readOnlyMemory === true && name !== 'memory_search') continue;

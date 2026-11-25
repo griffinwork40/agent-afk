@@ -41,7 +41,7 @@ import { askQuestionHandler } from './ask-question.js';
 // first invocation — see `src/browser/registry.ts`. Users who never call a
 // browser tool never load chromium or the playwright package.
 import { browserOpenHandler } from './browser-open.js';
-import { desktopScreenshotHandler } from './desktop-screenshot.js';
+import { desktopScreenshotHandler, createDesktopScreenshotHandler } from './desktop-screenshot.js';
 import { browserObserveHandler } from './browser-observe.js';
 import { browserActHandler } from './browser-act.js';
 import { browserScreenshotHandler } from './browser-screenshot.js';
@@ -85,6 +85,7 @@ import { createCodeSymbolsHandler, LSP_SYMBOLS_TOOL_NAME } from '../lsp-symbols-
 export function createBuiltinHandlers(
   permissionMode?: string,
   cwd?: string,
+  surface?: string,
 ): Map<string, ToolHandler> {
   const bash = permissionMode !== undefined
     ? createBashHandler(permissionMode, cwd)
@@ -135,7 +136,7 @@ export function createBuiltinHandlers(
     ['ask_question', askQuestionHandler],
     ['wait_for', waitForHandler],
     ['browser_open', browserOpenHandler],
-    ['desktop_screenshot', desktopScreenshotHandler],
+    ['desktop_screenshot', surface !== undefined ? createDesktopScreenshotHandler({ surface }) : desktopScreenshotHandler],
     ['browser_observe', browserObserveHandler],
     ['browser_act', browserActHandler],
     ['browser_screenshot', browserScreenshotHandler],
