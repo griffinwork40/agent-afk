@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { toolTitle } from './acp.tool-kind.js';
-import { buildPendingStart } from './acp.permission.policy.js';
+import { buildPendingStart } from './__test-utils__/acp-build-pending-start.js';
 import { buildReplayUpdates } from './acp.replay.js';
 import { DETAIL_CHARS, oneLine } from './acp.tool-title.js';
 

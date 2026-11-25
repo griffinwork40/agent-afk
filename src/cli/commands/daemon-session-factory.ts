@@ -123,8 +123,17 @@ export function buildDaemonSessionFactory(
       managerParentModel: opts.model,
       defaultSubagentModel: getDefaultSubagentModel(opts.model),
       resolveApiKeyForModel: getApiKeyForModel,
+      // No sessionPrompt / sessionOverlay: daemon tasks receive no session-level
+      // system prompt and no operator overlay. The session is bootstrapped from
+      // the scheduled task config alone; a system prompt would require a cwd
+      // at factory-build time, which is not available until the per-task config
+      // arrives. Scheduled tasks that need a system prompt set it explicitly in
+      // their sessionConfig. See also: spawnDaemonSession in session-spawn.ts,
+      // which wires the per-tick cwd but similarly omits a base prompt.
       // Daemon tasks carry no base prompt: compose nodes get '' (preserved by
       // wireExecutors) and forked children fall back to the handoff contract.
+      // No childOverlay: without a session-level overlay there is nothing to
+      // forward to child agents, so operatorOverlay is not passed to wireExecutors.
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       // Use the per-session config.cwd (set by session-spawn.ts to the resolved

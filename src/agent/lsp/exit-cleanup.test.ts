@@ -58,8 +58,9 @@ describe('LSP spawn-time exit guardian', () => {
         // Node ≥22 rmSync does not retry an initial rmdir EBUSY; async rm does,
         // with approximately linear backoff (computed bound ~27.5 s for maxRetries: 10,
         // retryDelay: 500 ms under a linear schedule; exact schedule is not documented).
-        // The test timeout is set generously to accommodate the full retry budget
-        // plus the spawnSync (≤15 s) and poll (≤5 s) phases above.
+        // The test timeout is set to accommodate the full retry budget (~27.5 s)
+        // plus the spawnSync (≤15 s) and poll (≤5 s) phases above (≈47.5 s total,
+        // leaving ~12.5 s headroom against the 60 s limit).
         await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
       }
     }, 60_000,
