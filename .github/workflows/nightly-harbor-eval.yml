@@ -72,12 +72,13 @@ jobs:
           HARBOR_HASH=$(python -m pip download --no-deps 'harbor==0.23.0' \
             -d "$RUNNER_TEMP/harbor-dl" -q \
             && python -m pip hash "$RUNNER_TEMP/harbor-dl"/harbor-*.whl \
-            | grep sha256 | awk '{print $1}')
+            | grep '^--hash=sha256:' | awk '{print $1}')
           EXPECTED="--hash=sha256:8747400dbb2a5e2298e1338e17e88eba38433c0433fd700f34d1a9021bba5c37"
           if [ "$HARBOR_HASH" != "$EXPECTED" ]; then
             echo "::error::harbor==0.23.0 wheel hash mismatch: got $HARBOR_HASH" >&2
             exit 1
           fi
+          python -m pip install "$RUNNER_TEMP/harbor-dl"/harbor-*.whl
           python -m pip install -r bench/harbor/requirements-harness.txt
           python -m pip install pytest
           python -m pytest bench/harbor/ -q
