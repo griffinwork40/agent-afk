@@ -29,9 +29,12 @@ describe('verbFamily', () => {
     'curl --data a=1 https://api.example.com/x',
     'git push --force origin main',
     'git reset --hard HEAD~1',
-    'chmod 600 key',
   ])('follows the risk classifier for flag-driven danger: %s', (cmd) => {
     expect(families(cmd)[0]?.[1]).toBe('danger');
+  });
+
+  it('uses the default family for owner-safe chmod', () => {
+    expect(families('chmod 600 key')).toEqual([['chmod', 'default']]);
   });
 
   it('a plain read-only network call stays network, not danger', () => {
