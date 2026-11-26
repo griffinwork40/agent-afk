@@ -150,7 +150,9 @@ describe('worktree handler — create', () => {
       // resolve the default base (#760), then `rev-parse <base>` for meta's
       // baseSha. Real git answers both with the same commit — emulate that.
       // `--git-common-dir` is also a rev-parse, so it must not be shadowed.
-      if (call.args.includes('rev-parse') && !call.args.includes('--git-common-dir')) {
+      // `--verify refs/heads/...` is the branch-exists check (#4875) — return
+      // empty stdout so the branch is treated as absent (no collision).
+      if (call.args.includes('rev-parse') && !call.args.includes('--git-common-dir') && !call.args.includes('--verify')) {
         return { stdout: 'base-sha-123\n', stderr: '' };
       }
       return undefined;
@@ -249,7 +251,9 @@ describe('worktree handler — create', () => {
         const addPath = call.args[call.args.indexOf('-b') + 2];
         return fs.mkdir(addPath, { recursive: true }).then(() => ({ stdout: '', stderr: '' }));
       }
-      if (call.args.includes('rev-parse') && !call.args.includes('--git-common-dir')) {
+      // `--verify refs/heads/...` is the branch-exists check (#4875) — return
+      // empty stdout so the branch is treated as absent (no collision).
+      if (call.args.includes('rev-parse') && !call.args.includes('--git-common-dir') && !call.args.includes('--verify')) {
         return { stdout: 'base-sha\n', stderr: '' };
       }
       return undefined;
@@ -264,6 +268,41 @@ describe('worktree handler — create', () => {
     expect(parsed.branch).toMatch(/taken-[0-9a-f]{4}$/);
     // The suffixed path must be inside .afk-worktrees/.
     expect(parsed.path.startsWith(afkRoot + sep)).toBe(true);
+  });
+
+  // #4875: create must auto-suffix when the branch ref already exists (left by a
+  // prior remove) even if no worktree is currently checked out at that path.
+  it('auto-suffixes when the branch ref already exists but no worktree is checked out (#4875)', async () => {
+    const slug = 'stale-branch';
+    const wtPath = join(afkRoot, `${slug}-ab12`);
+    const fixedSuffix = 'ab12';
+    const mock = makeMock(standardResponder(block(repoRoot), (call) => {
+      // Porcelain: only the main worktree — no existing checked-out worktree at slug.
+      if (call.args.includes('list') && call.args.includes('--porcelain')) {
+        return { stdout: block(repoRoot), stderr: '' };
+      }
+      // rev-parse --verify refs/heads/afk/<slug>: branch exists (non-zero exit would mean absent).
+      if (call.args.includes('rev-parse') && call.args.includes('--verify') && call.args.some((a) => a.endsWith(`refs/heads/afk/${slug}`))) {
+        return { stdout: 'deadbeef\n', stderr: '' };
+      }
+      // rev-parse --verify refs/heads/afk/<slug>-ab12: branch does NOT exist.
+      if (call.args.includes('rev-parse') && call.args.includes('--verify') && call.args.some((a) => a.endsWith(`refs/heads/afk/${slug}-${fixedSuffix}`))) {
+        throw new Error('fatal: Needed a single revision');
+      }
+      if (call.args.includes('add')) {
+        return fs.mkdir(wtPath, { recursive: true }).then(() => ({ stdout: '', stderr: '' }));
+      }
+      if (call.args.includes('rev-parse') && !call.args.includes('--git-common-dir') && !call.args.includes('--verify')) {
+        return { stdout: 'base-sha\n', stderr: '' };
+      }
+      return undefined;
+    }));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock, generateSuffix: () => fixedSuffix });
+    const result = await handler({ action: 'create', name: slug }, SIGNAL);
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(String(result.content)) as { path: string; branch: string };
+    expect(parsed.branch).toBe(`afk/${slug}-${fixedSuffix}`);
+    expect(parsed.path).toBe(wtPath);
   });
 
   // #1516: when BOTH the original and auto-suffixed paths are taken, surface an error.
@@ -466,6 +505,22 @@ describe('worktree handler — keep / release', () => {
     expect(result.isError).toBeUndefined();
     const unlockCall = mock.calls.find((c) => c.args.includes('unlock'));
     expect(unlockCall?.args).toEqual(['-C', repoRoot, 'worktree', 'unlock', wtPath]);
+  });
+
+  // #4875: release on a worktree that is not locked must succeed (idempotent).
+  // The requested end-state (unlocked) already holds — no git call needed.
+  it('release on an already-unlocked worktree returns success with a note (#4875)', async () => {
+    const wtPath = join(afkRoot, 'not-locked');
+    // Porcelain does NOT include 'locked' for this entry.
+    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath)}\n`));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'release', path: 'not-locked' }, SIGNAL);
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(String(result.content)) as { locked: boolean; note: string };
+    expect(parsed.locked).toBe(false);
+    expect(parsed.note).toMatch(/already unlocked/i);
+    // Must NOT call git worktree unlock — the worktree isn't locked.
+    expect(mock.calls.some((c) => c.args.includes('unlock'))).toBe(false);
   });
 });
 
