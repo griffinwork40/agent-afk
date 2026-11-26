@@ -453,7 +453,7 @@ export async function runForkedSkillToResult(
     // under a labelled delimiter so a SKILL.md body that greps its arguments
     // (e.g. a fork skill whose handler anchors on a keyword like "approved")
     // still matches.
-    const anchor = `Run the ${label} skill now, following the instructions in your system prompt.`;
+    const anchor = `You are now executing the ${label} skill. Its instructions are in your system prompt. Start the work directly with your tools; do not call the \`skill\` tool for ${label}.`;
     const userMessage =
       args && args.length > 0 ? `${anchor}\n\nSkill arguments:\n${args}` : anchor;
     const result = await handle.runToResult(userMessage);
