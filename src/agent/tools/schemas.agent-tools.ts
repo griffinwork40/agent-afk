@@ -125,11 +125,13 @@ export const agentTool: AnthropicToolDef = {
           'at dispatch time — a non-existent path surfaces as an error on the ' +
           "child's first cwd-relative tool call. Does not auto-propagate to " +
           'further nested subagents — each `agent` call must specify `cwd` ' +
-          'explicitly to operate in a worktree. To NOT set a cwd, omit the field ' +
-          'entirely; a blank value is treated as omitted, never as a path. A ' +
-          'filesystem root, your home directory, or an ancestor of it is refused; ' +
-          'when the child only needs to READ files outside its tree, keep cwd and ' +
-          'add readRoots instead of relocating cwd.',
+          'explicitly to operate in a worktree. Must be absolute (no relative ' +
+          'paths) and must not contain `..` segments. A filesystem root, your ' +
+          'home directory, or an ancestor of it is refused; when the child only ' +
+          'needs to READ files outside its tree, keep cwd and add readRoots ' +
+          'instead of relocating cwd.',
+          // Note: blank/null cwd is normalised to absent at the parse layer;
+          // no need to document the behaviour in the description.
       },
       writeRoots: {
         type: 'array',
