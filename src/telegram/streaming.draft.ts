@@ -88,9 +88,13 @@ export async function sendOrEditDraft(
     state.draftId = generateDraftId();
   }
 
-  // The very first call (!isDraftMode) always bypasses the throttle so it
-  // always reaches the API. Subsequent calls are throttled at DRAFT_THROTTLE_MS.
-  if (!force && state.isDraftMode && now - state.lastDraftAt < DRAFT_THROTTLE_MS) {
+  // Throttle gate: suppress calls that arrive faster than DRAFT_THROTTLE_MS.
+  // Use lastDraftAt > 0 as the sentinel (not isDraftMode) so calls are also
+  // suppressed after a 429 retry exhaustion — which stamps lastDraftAt but
+  // leaves isDraftMode=false — preventing a burst against the rate-limit budget
+  // immediately after recovery.  The very first call (lastDraftAt === 0) always
+  // bypasses the gate so it always reaches the API.
+  if (!force && state.lastDraftAt > 0 && now - state.lastDraftAt < DRAFT_THROTTLE_MS) {
     return;
   }
 
