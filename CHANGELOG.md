@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [6.4.0] - 2026-11-26
+
 ### Added
 - desktop_screenshot behind AFK_DESKTOP_ENABLED (computer use, tranche 1) (#5185) (06f405be7)
 
