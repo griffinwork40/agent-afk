@@ -22,7 +22,9 @@ Sources read on the runner after Harbor finishes, both treated as untrusted:
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 from pathlib import Path
 
 # Ordered most specific first; the first category with a matching pattern wins.
@@ -81,7 +83,23 @@ VOCABULARY = frozenset(name for name, _ in CATEGORIES) | frozenset(FALLBACKS)
 
 _EXIT_RE = re.compile(r"\ACommand failed \(exit (-?\d{1,3})\)")
 _OPTION_RE = re.compile(r"error: unknown option '(--[a-z][a-z-]{0,40})'")
-_STREAM_CAP = 4 * 1024 * 1024  # read at most the last 4 MiB of the stream log
+_STREAM_CAP = 4 * 1024 * 1024   # read at most the last 4 MiB of the stream log
+_RESULT_CAP = 8 * 1024 * 1024   # read at most 8 MiB of result.json
+
+# Valid shell exit status: 0-255.  0 is not a non-zero exit so it is never
+# produced by _EXIT_RE (which only appears in exception messages from failed
+# commands), but _safe must accept exactly this range when re-validating
+# a stored value from an old record.
+_EXIT_MIN, _EXIT_MAX = 0, 255
+
+
+def _is_regular_file(path: Path) -> bool:
+    """True only when path exists, is a regular file, and is NOT a symlink."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode) and not stat.S_ISLNK(st.st_mode)
 
 
 def _plain_lines(text: str) -> list[str]:
@@ -101,13 +119,30 @@ def _harbor_output(message: str) -> str:
 
 
 def _stream_text(path: Path) -> tuple[str, bool, bool]:
-    """(matchable text, saw any JSON event, saw an error event) from the tee'd log."""
+    """(matchable text, saw any JSON event, saw an error event) from the tee'd log.
+
+    If the path is not a regular non-symlink file, returns empty results rather
+    than blocking on a FIFO or following a symlink.
+    """
+    if not _is_regular_file(path):
+        return "", False, False
     try:
-        with path.open("rb") as stream:
-            stream.seek(0, 2)
-            start = max(0, stream.tell() - _STREAM_CAP)
-            stream.seek(start)
-            raw = stream.read().decode("utf-8", errors="replace")
+        # O_NONBLOCK prevents blocking on a FIFO that somehow passes lstat
+        # (a race).  On platforms that do not support it the flag is 0.
+        flags = getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(path, os.O_RDONLY | flags)
+        try:
+            with os.fdopen(fd, "rb") as stream:
+                stream.seek(0, 2)
+                start = max(0, stream.tell() - _STREAM_CAP)
+                stream.seek(start)
+                raw = stream.read(_STREAM_CAP).decode("utf-8", errors="replace")
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
     except OSError:
         return "", False, False
     if start:
@@ -138,7 +173,10 @@ def classify_trial(trial_dir: Path, exception_info: dict) -> dict:
     message = exception_info.get("exception_message")
     message = message if isinstance(message, str) else ""
     match = _EXIT_RE.match(message)
-    exit_code = int(match.group(1)) if match else None
+    raw_code = int(match.group(1)) if match else None
+    # Accept only valid shell exit status range; exit 0 is not a failure exit.
+    exit_code = (raw_code if (raw_code is not None
+                              and _EXIT_MIN < raw_code <= _EXIT_MAX) else None)
     stream_text, events, errored = _stream_text(trial_dir / "agent" / "afk-stream.txt")
     text = _harbor_output(message) + "\n" + stream_text
     reason: dict = {"category": None, "exit_code": exit_code}
@@ -164,16 +202,60 @@ def classify_trial(trial_dir: Path, exception_info: dict) -> dict:
 
 
 def _safe(reason: dict) -> dict:
-    """Final gate: drop anything not from the closed vocabulary."""
+    """Final gate: drop anything not from the closed vocabulary.
+
+    Never raises regardless of the shape of the input dict values.
+    """
+    if not isinstance(reason, dict):
+        return {"category": "unclassified", "exit_code": None}
     category = reason.get("category")
-    out = {"category": category if category in VOCABULARY else "unclassified"}
+    # Guard against list/dict/bool/None/int being passed as category.
+    out = {"category": (category if isinstance(category, str) and category in VOCABULARY
+                        else "unclassified")}
     code = reason.get("exit_code")
-    out["exit_code"] = code if type(code) is int and -999 <= code <= 999 else None
-    if reason.get("phase") in ("setup", "run"):
-        out["phase"] = reason["phase"]
-    if reason.get("option") in KNOWN_OPTIONS:
-        out["option"] = reason["option"]
+    # Accept only plain int in the valid shell exit-status range (0-255).
+    out["exit_code"] = (code if type(code) is int and _EXIT_MIN <= code <= _EXIT_MAX
+                        else None)
+    phase = reason.get("phase")
+    if isinstance(phase, str) and phase in ("setup", "run"):
+        out["phase"] = phase
+    option = reason.get("option")
+    if isinstance(option, str) and option in KNOWN_OPTIONS:
+        out["option"] = option
     return out
+
+
+def _read_result_json(path: Path) -> dict | None:
+    """Read and parse a result.json safely: regular-file-only, size-capped.
+
+    Returns None on any error or if the path is not a safe regular file.
+    """
+    if not _is_regular_file(path):
+        return None
+    try:
+        flags = getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(path, os.O_RDONLY | flags)
+        try:
+            with os.fdopen(fd, "rb") as f:
+                raw = f.read(_RESULT_CAP)
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+    except OSError:
+        return None
+    if len(raw) >= _RESULT_CAP:
+        # File is at or over cap: may be truncated mid-JSON or intentionally oversized.
+        return None
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
 
 
 def exit_reasons(job_dir: Path, expected: list[str]) -> dict:
@@ -190,7 +272,9 @@ def exit_reasons(job_dir: Path, expected: list[str]) -> dict:
     for path in paths:
         name = None
         try:
-            data = json.loads(path.read_text())
+            data = _read_result_json(path)
+            if data is None:
+                continue
             name = data.get("task_name")
             info = data.get("exception_info")
             if name not in expected or name in reasons or not isinstance(info, dict):
@@ -210,15 +294,30 @@ def exit_reasons(job_dir: Path, expected: list[str]) -> dict:
 
 
 def annotate(record: dict, job_dir: Path) -> dict:
-    """Add tasks[name]["exit_reason"] in place; additive, never touches validity."""
-    for name, reason in exit_reasons(job_dir, list(record["tasks"])).items():
-        record["tasks"][name]["exit_reason"] = reason
+    """Add tasks[name]["exit_reason"] in place; additive, never touches validity.
+
+    Never raises: on any unexpected record shape it leaves the record unchanged.
+    """
+    try:
+        tasks = record["tasks"]
+        if not isinstance(tasks, dict):
+            return record
+        for name, reason in exit_reasons(job_dir, list(tasks)).items():
+            tasks[name]["exit_reason"] = reason
+    except Exception:  # noqa: BLE001
+        pass
     return record
 
 
 def describe(task: dict) -> str:
-    """Summary-table text for one task; old records without the field still work."""
-    error = task.get("error") or "\u2014"
+    """Summary-table text for one task; old records without the field still work.
+
+    Never raises regardless of the shape of `task` or its nested values.
+    """
+    if not isinstance(task, dict):
+        return "\u2014"
+    raw_error = task.get("error")
+    error = raw_error if isinstance(raw_error, str) and raw_error else "\u2014"
     reason = task.get("exit_reason")
     if not isinstance(reason, dict):
         return error
