@@ -24,6 +24,12 @@ vi.mock('../../telegram/notify-routing.js', async (importOriginal) => ({
   loadChatAliases: () => ({ ops: -100200, rogue: -100999 }),
 }));
 
+const telegramFileConfig = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+vi.mock('../config.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../config.js')>(),
+  loadTelegramConfig: () => telegramFileConfig.current,
+}));
+
 vi.mock('../../agent/operator-notify.js', async (importOriginal) => {
   const { operatorNotify: notify } = await importOriginal<typeof import('../../agent/operator-notify.js')>();
   return { operatorNotify: vi.fn(notify) };
@@ -46,6 +52,7 @@ beforeEach(() => {
   vi.stubEnv('AFK_TELEGRAM_ALLOWED_CHAT_IDS', '101,102,-100200');
   vi.stubEnv('AFK_ALLOW_PROJECT_MCP', '0');
   vi.mocked(operatorNotify).mockClear();
+  telegramFileConfig.current = {};
   fetchStub.mockReset().mockImplementation(async () => new Response('{}'));
   vi.stubGlobal('fetch', fetchStub);
 });
@@ -181,6 +188,53 @@ describe('cron question Telegram delivery', () => {
     expect(sendMessage).toHaveBeenCalledOnce();
     await vi.waitFor(() => expectQuestion(confirm, -100200, confirmKeyboard));
     expect(telegramMessages()[0]).not.toHaveProperty('message_thread_id');
+  });
+
+  it('co-hosted broadcast: each configured target gets the button question once; thread only on primary', async () => {
+    vi.stubEnv('AFK_TELEGRAM_NOTIFY_MODE', 'broadcast');
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 42 });
+    const bot = { telegram: { sendMessage } } as unknown as Telegraf;
+    const { onTaskComplete } = await runTask(confirm, 'always', undefined, bot);
+    expect(sendMessage.mock.calls.map((c) => c[0])).toEqual([101, 102, -100200]);
+    for (const [chatId, , extra] of sendMessage.mock.calls as Array<[number, string, Record<string, unknown>]>) {
+      expect(extra['reply_markup']).toMatchObject({ inline_keyboard: confirmKeyboard });
+      if (chatId === 101) expect(extra['message_thread_id']).toBe(12);
+      else expect(extra).not.toHaveProperty('message_thread_id');
+    }
+    expect(onTaskComplete).not.toHaveBeenCalled();
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it('co-hosted broadcast: a failed bot send falls back to raw push with buttons for that target only', async () => {
+    vi.stubEnv('AFK_TELEGRAM_NOTIFY_MODE', 'broadcast');
+    const sendMessage = vi.fn(async (chatId: number, _text: string, _extra?: unknown) => {
+      if (chatId === 102) throw new Error('send failed');
+      return { message_id: 42 };
+    });
+    const bot = { telegram: { sendMessage } } as unknown as Telegraf;
+    await runTask(choice, 'failure', undefined, bot);
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    await vi.waitFor(() => expectQuestion(choice, 102, choiceKeyboard));
+    expect(telegramMessages()[0]).not.toHaveProperty('message_thread_id');
+  });
+
+  it('custom mode without a bot: one raw push with buttons per custom target', async () => {
+    telegramFileConfig.current = { notify: { mode: 'custom', targets: [102, -100300, 102] } };
+    await runTask(confirm, 'failure');
+    await vi.waitFor(() => expect(telegramMessages()).toHaveLength(2));
+    expect(telegramMessages().map((m) => m['chat_id'])).toEqual([102, -100300]);
+    for (const m of telegramMessages()) expect(m['reply_markup']).toEqual({ inline_keyboard: confirmKeyboard });
+  });
+
+  it('co-hosted broadcast + allowlisted notifyChat: only the override chat is asked', async () => {
+    vi.stubEnv('AFK_TELEGRAM_NOTIFY_MODE', 'broadcast');
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 42 });
+    const bot = { telegram: { sendMessage } } as unknown as Telegraf;
+    await runTask(confirm, 'always', 'ops', bot);
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(sendMessage).toHaveBeenCalledWith(-100200, expect.stringContaining(confirm.message),
+      expect.not.objectContaining({ message_thread_id: expect.anything() }));
+    expect(fetchStub).not.toHaveBeenCalled();
   });
 
   it('re-notifies a pending question at startup to its allowlisted notifyChat', async () => {

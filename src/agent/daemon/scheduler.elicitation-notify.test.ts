@@ -50,6 +50,7 @@ vi.mock('../default-hook-registry.js', () => ({
 import {
   formatCronElicitationMessage,
   makeCronElicitationHandler,
+  resolveCronQuestionTargets,
 } from './scheduler.elicitation-notify.js';
 import { CronScheduler, type TelemetryRecord, type TaskCompletionDetails } from './scheduler.js';
 import { elicitationRouter } from '../elicitation-router.js';
@@ -342,6 +343,7 @@ describe('CronScheduler cron elicitation notify', () => {
   });
 
   it('sessionstart trigger also gets the cron handler', async () => {
+    vi.stubEnv('AFK_TELEGRAM_ALLOWED_CHAT_IDS', '4242');
     const s = makeScheduler(true);
     const t: ScheduledTask = {
       taskId: 'elicit-ss',
@@ -355,6 +357,225 @@ describe('CronScheduler cron elicitation notify', () => {
     await s.stop();
     const files = readdirSync(handoffsDir).filter((f) => f.endsWith('.json'));
     expect(files).toHaveLength(1);
-    expect(operatorNotify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('elicit-ss'), expect.anything());
+    expect(operatorNotify).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('elicit-ss'),
+      expect.objectContaining({ target: 4242 }),
+    );
+    vi.unstubAllEnvs();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Spec 1: completion suppressed only on success; failure must still notify
+  // ---------------------------------------------------------------------------
+
+  it('Spec1: successful run with handoff suppresses completion notification', async () => {
+    // The handoff owns the user-visible notice; no additional completion push.
+    // onTaskComplete is the notification callback — when suppressed, it is NOT
+    // called. The telemetry record is the source of truth for the decision.
+    const s = makeScheduler(true);
+    s.register(task());
+    const rec = await s.tick('elicit-task');
+    await s.stop();
+    expect(rec.status).toBe('success');
+    expect(rec.notificationDecision?.state).toBe('suppressed');
+    expect(rec.notificationDecision?.kind).toBe('completion');
+    expect(rec.notificationDecision?.reason).toBe('handoff-pending');
+  });
+
+  it('Spec1: failed run with handoff does NOT suppress failure notification', async () => {
+    // Task wrote a handoff on elicitation but then errored — operator must be
+    // notified of the failure regardless of the pending question.
+    interceptInstallForSession();
+    const getKey = () => capturedElicitationKey;
+
+    // Create a session that triggers elicitation then throws.
+    const failingSession = {
+      sendMessage: async (_cmd: string) => {
+        const ac = new AbortController();
+        const sessionKey = getKey();
+        await elicitationRouter.route(
+          { serverName: 'agent', origin: 'agent', message: 'Need approval', type: 'confirm' },
+          { signal: ac.signal, ...(sessionKey !== undefined ? { sessionKey } : {}) },
+        );
+        throw new Error('simulated task failure after elicitation');
+      },
+      close: async () => {},
+      sessionId: 'fail-session',
+      cwd: dir,
+    } as unknown as AgentSession;
+
+    const factory: Factory = (() => failingSession) as Factory;
+    const s = new CronScheduler({
+      telemetryPath,
+      handoffsDir,
+      budgetGate: async () => ({ skip: false }),
+      sessionFactory: factory,
+    });
+    s.register(task({ taskId: 'fail-after-elicit' }));
+    const rec = await s.tick('fail-after-elicit');
+    await s.stop();
+
+    expect(rec.status).toBe('error');
+    // Failure notification must NOT be suppressed by the handoff
+    expect(rec.notificationDecision).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec 2: targets are resolved BEFORE delivery; each target gets the rich
+// question via the bot, with a per-target raw-push fallback carrying the same
+// answer buttons. An explicit override is the only target.
+// ---------------------------------------------------------------------------
+
+describe('makeCronElicitationHandler target routing', () => {
+  let handoffsDir: string;
+  const signal = new AbortController().signal;
+  const confirmReq: ElicitationRequest = { serverName: 'agent', origin: 'agent', message: 'Deploy now?', type: 'confirm' };
+  const confirmKeyboard = {
+    inline_keyboard: [[
+      { text: 'Yes', callback_data: 'afk:h:1:route-task' },
+      { text: 'No', callback_data: 'afk:h:0:route-task' },
+    ]],
+  };
+
+  beforeEach(() => {
+    handoffsDir = mkdtempSync(join(tmpdir(), 'afk-elicit-route-'));
+    vi.mocked(operatorNotify).mockReset().mockImplementation(async (_text, opts) => {
+      const target = opts?.target;
+      return [{ ok: true, chatId: typeof target === 'number' ? target : 0 }] as never;
+    });
+  });
+
+  afterEach(() => {
+    rmSync(handoffsDir, { recursive: true, force: true });
+  });
+
+  /** Fake Telegraf whose sendMessage fails for the given chat ids. */
+  function fakeBot(failFor: readonly number[] = []) {
+    let nextId = 100;
+    const sendMessage = vi.fn(async (chatId: number, _text: string, _extra?: Record<string, unknown>) => {
+      if (failFor.includes(chatId)) throw new Error(`send to ${chatId} failed`);
+      nextId += 1;
+      return { message_id: nextId, chat: { id: chatId } };
+    });
+    return { bot: { telegram: { sendMessage } } as unknown as import('telegraf').Telegraf, sendMessage };
+  }
+
+  function handler(extra: Partial<Parameters<typeof makeCronElicitationHandler>[0]>) {
+    return makeCronElicitationHandler({
+      taskId: 'route-task',
+      originalCommand: '/run',
+      cronExpression: '* * * * *',
+      handoffsDir,
+      ...extra,
+    });
+  }
+
+  it('resolveCronQuestionTargets: override wins without consulting defaults; defaults are de-duplicated', () => {
+    const defaults = vi.fn(() => [101, 102, 101, 0]);
+    expect(resolveCronQuestionTargets(-100200, defaults)).toEqual([-100200]);
+    expect(defaults).not.toHaveBeenCalled();
+    expect(resolveCronQuestionTargets(undefined, defaults)).toEqual([101, 102]);
+  });
+
+  it('broadcast/custom defaults: every target gets the rich question with buttons exactly once', async () => {
+    const { bot, sendMessage } = fakeBot();
+    await handler({
+      bot,
+      primaryChatId: 101,
+      primaryThreadId: 7,
+      resolveDefaultTargets: () => [101, 102, -100200],
+    })(confirmReq, { signal });
+
+    expect(sendMessage.mock.calls.map((c) => c[0])).toEqual([101, 102, -100200]);
+    for (const [chatId, , extra] of sendMessage.mock.calls as unknown as Array<[number, string, Record<string, unknown>]>) {
+      expect(extra['reply_markup']).toMatchObject(confirmKeyboard);
+      // Thread id is specific to the primary chat only.
+      if (chatId === 101) expect(extra['message_thread_id']).toBe(7);
+      else expect(extra).not.toHaveProperty('message_thread_id');
+    }
+    expect(operatorNotify).not.toHaveBeenCalled();
+  });
+
+  it('explicit override delivers ONLY to that target (no configured-default leak)', async () => {
+    const { bot, sendMessage } = fakeBot();
+    const defaults = vi.fn(() => [101, 102]);
+    await handler({
+      bot,
+      overrideChatId: -100200,
+      primaryChatId: 101,
+      primaryThreadId: 7,
+      resolveDefaultTargets: defaults,
+    })(confirmReq, { signal });
+
+    expect(defaults).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(sendMessage.mock.calls[0]?.[0]).toBe(-100200);
+    expect(sendMessage.mock.calls[0]?.[2]).not.toHaveProperty('message_thread_id');
+    expect(operatorNotify).not.toHaveBeenCalled();
+  });
+
+  it('explicit override falls back to raw push for that target only, with buttons', async () => {
+    const { bot } = fakeBot([-100200]);
+    await handler({
+      bot,
+      overrideChatId: -100200,
+      primaryChatId: 101,
+      resolveDefaultTargets: () => [101, 102],
+    })(confirmReq, { signal });
+
+    expect(operatorNotify).toHaveBeenCalledOnce();
+    expect(vi.mocked(operatorNotify).mock.calls[0]?.[1]).toEqual({ target: -100200, replyMarkup: confirmKeyboard });
+  });
+
+  it('per-target fallback: only the failed target is re-sent via raw push, with buttons and its own thread', async () => {
+    const { bot, sendMessage } = fakeBot([101, -100200]);
+    await handler({
+      bot,
+      primaryChatId: 101,
+      primaryThreadId: 7,
+      resolveDefaultTargets: () => [101, 102, -100200],
+    })(confirmReq, { signal });
+
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    const pushes = vi.mocked(operatorNotify).mock.calls.map((c) => c[1]);
+    expect(pushes).toEqual([
+      { target: 101, messageThreadId: 7, replyMarkup: confirmKeyboard },
+      { target: -100200, replyMarkup: confirmKeyboard },
+    ]);
+  });
+
+  it('a primaryChatId outside the configured targets is never contacted', async () => {
+    const { bot, sendMessage } = fakeBot();
+    await handler({
+      bot,
+      primaryChatId: 999,
+      primaryThreadId: 7,
+      resolveDefaultTargets: () => [101],
+    })(confirmReq, { signal });
+
+    expect(sendMessage.mock.calls.map((c) => c[0])).toEqual([101]);
+    expect(sendMessage.mock.calls[0]?.[2]).not.toHaveProperty('message_thread_id');
+  });
+
+  it('without a bot, each target gets its own raw push with buttons', async () => {
+    await handler({ resolveDefaultTargets: () => [101, 102] })(confirmReq, { signal });
+    expect(vi.mocked(operatorNotify).mock.calls.map((c) => c[1])).toEqual([
+      { target: 101, replyMarkup: confirmKeyboard },
+      { target: 102, replyMarkup: confirmKeyboard },
+    ]);
+  });
+
+  it('logs (does not throw) when Telegram is unconfigured or delivery fails; handoff stays pending', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(operatorNotify).mockResolvedValue(null);
+    const result = await handler({ resolveDefaultTargets: () => [101] })(confirmReq, { signal });
+    expect(result).toEqual({ action: 'decline' });
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('delivery failed'), 1, 1, 'route-task');
+    errSpy.mockClear();
+    await handler({ resolveDefaultTargets: () => [] })(confirmReq, { signal });
+    expect(operatorNotify).toHaveBeenCalledOnce();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('no Telegram target'), 'route-task');
+    errSpy.mockRestore();
   });
 });

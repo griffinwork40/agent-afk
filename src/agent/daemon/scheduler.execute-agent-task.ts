@@ -121,10 +121,16 @@ export async function executeAgentTask(
   const fallbackFields: ModelFallbackFields = {};
   ctx.idleDetector.increment();
   try {
+    // wroteHandoff tracks whether the FINAL attempt wrote a durable question.
+    // It is reset at the start of every attempt so a handoff written by an
+    // earlier, retried attempt cannot suppress the final attempt's notice.
     let wroteHandoff = false;
-    const outcome = await runWithTaskRetry(() => runAgentAttempt(ctx, task, trigger, fallbackFields, () => {
-      wroteHandoff = true;
-    }), {
+    const outcome = await runWithTaskRetry(() => {
+      wroteHandoff = false; // reset each attempt so retry starts clean
+      return runAgentAttempt(ctx, task, trigger, fallbackFields, () => {
+        wroteHandoff = true;
+      });
+    }, {
       ...policy,
       signal: ctx.shutdownSignal ?? new AbortController().signal,
       ...(ctx.isCancelled !== undefined ? { isCancelled: ctx.isCancelled } : {}),
@@ -140,11 +146,16 @@ export async function executeAgentTask(
       } : {}),
     });
     const attemptsField = policy.maxAttempts > 1 ? { attempts: outcome.attempts } : {};
-    // The durable question owns the run's notice, even if the turn later fails.
-    const notificationFields = wroteHandoff ? {
+    // A durable handoff question owns the run's completion notice: when the
+    // agent asked a question and the task completed successfully, the handoff
+    // is the user-facing artifact — suppress the redundant completion push.
+    // Failure notifications are NEVER suppressed by a handoff: the operator
+    // must know the task errored out regardless of any pending question, so
+    // they can decide whether to answer or investigate.
+    const notificationFields = (wroteHandoff && outcome.ok) ? {
       notificationDecision: {
         state: 'suppressed' as const,
-        kind: outcome.ok ? 'completion' as const : 'failure' as const,
+        kind: 'completion' as const,
         reason: task.notifyOn === 'never' ? 'policy-never' as const : 'handoff-pending' as const,
       },
     } : {};
@@ -244,26 +255,22 @@ async function runAgentAttempt(
       }));
       handlerInstalled = true;
     } else {
-      // An explicit override must pass the injected allowlist resolver.
-      // Without an override or a co-hosted bot, the raw push resolves defaults.
-      const resolvedChatId = ctx.options.resolveNotifyChat?.(task.notifyChat, task.taskId)
-        ?? (ctx.options.bot !== undefined ? ctx.options.primaryChatId : undefined);
-      // resolvedThreadId is intentionally only set for the primary chat: per-chat
-      // thread IDs are specific to a single chat and cannot be safely forwarded
-      // to a different (notifyChat-resolved) chat without risking a wrong-thread
-      // delivery. Non-primary chats get no thread override (#3637).
-      const resolvedThreadId = resolvedChatId === ctx.options.primaryChatId
-        ? ctx.options.primaryThreadId
-        : undefined;
+      // Targets are resolved inside the handler BEFORE any send: an explicit
+      // notifyChat override (alias-resolved + allowlisted here) is the sole
+      // target; otherwise configured notify routing (primary/broadcast/custom).
+      // The bot's primaryChatId is never a target by itself — it only scopes
+      // primaryThreadId to that chat when it is also a resolved target (#3637).
+      const overrideChatId = ctx.options.resolveNotifyChat?.(task.notifyChat, task.taskId);
       elicitationRouter.installForSession(elicitationKey, makeCronElicitationHandler({
         taskId: task.taskId,
         originalCommand: redactInlineSecrets(task.command),
         resumeContext: resumeContextFromTask(task),
         cronExpression: task.cronExpression,
         ...(ctx.handoffsDir !== undefined ? { handoffsDir: ctx.handoffsDir } : {}),
-        bot: ctx.options.bot,
-        chatId: resolvedChatId,
-        threadId: resolvedChatId !== undefined ? resolvedThreadId : undefined,
+        ...(ctx.options.bot !== undefined ? { bot: ctx.options.bot } : {}),
+        ...(overrideChatId !== undefined ? { overrideChatId } : {}),
+        ...(ctx.options.primaryChatId !== undefined ? { primaryChatId: ctx.options.primaryChatId } : {}),
+        ...(ctx.options.primaryThreadId !== undefined ? { primaryThreadId: ctx.options.primaryThreadId } : {}),
         onHandoffWritten,
       }));
       handlerInstalled = true;

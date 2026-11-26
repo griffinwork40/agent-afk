@@ -7,6 +7,7 @@ import { serializeRequest } from './elicitation-serialize.js';
 import { operatorNotify } from '../operator-notify.js';
 import type { Telegraf } from 'telegraf';
 import { sendHandoffQuestion } from '../../telegram/handoff-answer.js';
+import { resolveConfiguredNotifyTargets } from '../../telegram/notify-routing.js';
 
 function truncate(text: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit)}…(truncated)` : text;
@@ -34,12 +35,37 @@ interface CronElicitationHandlerOpts {
   handoffsDir?: string;
   cronExpression?: string;
   resumeContext?: HandoffResumeContext;
+  /** Co-hosted Telegraf instance; when present each target gets the rich question first. */
   bot?: Telegraf;
-  /** Resolved/allowlisted override or a trusted primary chat; omitted for default push routing. */
-  chatId?: number;
-  threadId?: number;
+  /**
+   * The task's explicit `notifyChat`, already alias-resolved AND allowlisted by
+   * the caller. When set it is the ONLY delivery target; configured defaults
+   * are not consulted. Omit to use configured notify routing.
+   */
+  overrideChatId?: number;
+  /**
+   * The co-hosted bot's primary chat. Used ONLY to map `primaryThreadId` onto
+   * that chat when it is also a resolved target — never as a target itself.
+   */
+  primaryChatId?: number;
+  primaryThreadId?: number;
+  /** Configured default targets (primary/broadcast/custom). Injectable for tests. */
+  resolveDefaultTargets?: () => readonly number[];
   /** Signal the run to omit the completion notice once a durable question exists. */
   onHandoffWritten?: () => void;
+}
+
+/**
+ * Resolve the cron question's delivery targets BEFORE any send: the
+ * allowlisted override alone, else the configured notify routing. De-duplicated
+ * so no chat ever receives the question twice.
+ */
+export function resolveCronQuestionTargets(
+  overrideChatId: number | undefined,
+  resolveDefaultTargets: () => readonly number[] = resolveConfiguredNotifyTargets,
+): number[] {
+  const raw = overrideChatId !== undefined ? [overrideChatId] : resolveDefaultTargets();
+  return [...new Set(raw.filter((id) => Number.isFinite(id) && id !== 0))];
 }
 
 /** Persist before notifying, then decline without waiting for a human answer. */
@@ -60,24 +86,17 @@ export function makeCronElicitationHandler(opts: CronElicitationHandlerOpts): El
     try {
       await writeHandoff(record, opts.handoffsDir);
     } catch (err) {
-      console.error(`[cron-elicitation] failed to write handoff for task ${opts.taskId}:`, errorMessage(err));
+      console.error('[cron-elicitation] failed to write handoff for task %s: %s', opts.taskId, errorMessage(err));
       return { action: 'decline' };
     }
 
     opts.onHandoffWritten?.();
     if (record.notifyOn === 'never') return { action: 'decline' };
 
-    if (opts.bot !== undefined && opts.chatId !== undefined) {
-      // Also handles co-hosted text replies. The sender normally reports a
-      // failed send as { ok: false }, not as a rejected promise.
-      const sent = await sendHandoffQuestion({
-        bot: opts.bot,
-        record,
-        chatId: opts.chatId,
-        handoffsDir: opts.handoffsDir,
-        ...(opts.threadId !== undefined ? { threadId: opts.threadId } : {}),
-      }).catch(() => undefined);
-      if (sent?.ok) return { action: 'decline' };
+    const targets = resolveCronQuestionTargets(opts.overrideChatId, opts.resolveDefaultTargets);
+    if (targets.length === 0) {
+      console.error('[cron-elicitation] no Telegram target for task %s; handoff remains pending', opts.taskId);
+      return { action: 'decline' };
     }
 
     const replyMarkup = buildHandoffReplyMarkup(request.type ?? 'text', opts.taskId, request.choices);
@@ -86,13 +105,38 @@ export function makeCronElicitationHandler(opts: CronElicitationHandlerOpts): El
       ? `\nOptions: ${truncate(request.choices.join(', '), 300)}`
       : '';
     const hint = replyMarkup ? '' : '\nSee /handoffs for the pending question.';
-    const results = await operatorNotify(message + choices + hint, {
-      target: opts.chatId,
-      messageThreadId: opts.threadId,
-      replyMarkup,
-    }).catch(() => undefined);
-    if (results === undefined || results?.some((result) => !result.ok)) {
-      console.error(`[cron-elicitation] Telegram delivery failed for task ${opts.taskId}; handoff remains pending`);
+    const fallbackText = message + choices + hint;
+
+    // Each resolved target is delivered independently: rich bot send first
+    // (when co-hosted), then a raw push WITH the same answer buttons to that
+    // target only if the bot send failed. One target's failure never re-sends
+    // to another target, and no chat outside `targets` is ever contacted.
+    let failed = 0;
+    for (const chatId of targets) {
+      const threadId = chatId === opts.primaryChatId ? opts.primaryThreadId : undefined;
+      if (opts.bot !== undefined) {
+        // The sender normally reports a failed send as { ok: false }.
+        const sent = await sendHandoffQuestion({
+          bot: opts.bot,
+          record,
+          chatId,
+          handoffsDir: opts.handoffsDir,
+          ...(threadId !== undefined ? { threadId } : {}),
+        }).catch(() => undefined);
+        if (sent?.ok) continue;
+      }
+      const results = await operatorNotify(fallbackText, {
+        target: chatId,
+        ...(threadId !== undefined ? { messageThreadId: threadId } : {}),
+        ...(replyMarkup !== undefined ? { replyMarkup } : {}),
+      }).catch(() => undefined);
+      if (results == null || results.length === 0 || results.some((result) => !result.ok)) failed += 1;
+    }
+    if (failed > 0) {
+      console.error(
+        '[cron-elicitation] Telegram delivery failed for %d of %d target(s) for task %s; handoff remains pending',
+        failed, targets.length, opts.taskId,
+      );
     }
     return { action: 'decline' };
   };
