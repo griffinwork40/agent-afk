@@ -1,4 +1,4 @@
-import { Room, countDistinctKeys } from '../../src/global-chat/relay/room.js';
+import { Room } from '../../src/global-chat/relay/room.js';
 import { SqliteRelayStore } from './sqlite-store.js';
 import type { RelayContext, RelayPlatform, RelaySocket } from './platform.js';
 import type { ConnRecord, RelayConfig, RoomEffect } from '../../src/global-chat/relay/room-types.js';
@@ -205,7 +205,6 @@ export class ChatRoom {
     for (const frame of effect.toSender) {
       try { senderWs.send(JSON.stringify(frame)); } catch { /* closing socket */ }
     }
-    const before = countDistinctKeys(this.buildAllConns());
     const toClose = new Set(effect.toClose);
     for (const ws of this.sockets()) {
       const rec = this.record(ws);
