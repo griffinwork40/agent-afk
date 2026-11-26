@@ -3,8 +3,9 @@
  * of read-only execution. Tables retain their original order and raw view. */
 import type { RiskVerdict } from './risk-classifier.js';
 import type { MutationVerdict } from './command-classifier.js';
-import { findHighBashPattern } from './risk-classifier.bash-boundary.js';
+import { findHighBashPattern, matchesAtWordStart } from './risk-classifier.bash-boundary.js';
 import { isSafeAtCommandPosition } from './risk-classifier.bash-safe.js';
+import { classifyRmRisk } from './risk-classifier.rm-predicate.js';
 
 // ---------------------------------------------------------------------------
 // Bash rule tables
@@ -204,7 +205,37 @@ export function classifyCommandRisk(
   // glued to a preceding word character (`platform `, `retrieval `), which
   // can never start a shell word — see risk-classifier.bash-boundary.ts.
   const high = findHighBashPattern(cmd, BASH_HIGH);
-  if (high !== undefined) return { level: 'high', reason: `bash-pattern: matched '${high}'`, category: 'bash-destructive' };
+  if (high !== undefined) {
+    // Secondary predicate for plain `rm` (#5292): `rm -rf` (index 0) stays
+    // unconditionally HIGH. Only the plain `'rm '` token (index 1) is eligible
+    // for downgrade — when classifyRmRisk determines the arguments target only
+    // declared-ephemeral locations with no recursive/structural flags, it
+    // returns 'medium' so routine daemon temp-file cleanup is auto-allowed.
+    if (high === 'rm ') {
+      const rmLevel = classifyRmRisk(cmd);
+      if (rmLevel === 'medium') {
+        // Item 1: even though rm itself is ephemeral-safe, check whether the
+        // command also contains another BASH_HIGH pattern (e.g. chmod, eval).
+        // Skip indices 0 ('rm -rf') and 1 ('rm ') which already fired.
+        //
+        // Single-pass scan: matchesAtWordStart for each literal table entry
+        // (indices 2+). Avoids SEPARATOR_EVASION re-matching the same rm token
+        // which would falsely return high for a plain ephemeral rm.
+        //
+        // A tail-rescan pass is not needed here: classifyRmRisk returns 'medium'
+        // only when hasShellSeparator() is false (no ;, |, &, or \n present),
+        // so there is no shell-separator position to rescan after. Any command
+        // containing a shell separator already returns 'high' from classifyRmRisk.
+        for (const p of BASH_HIGH.slice(2)) {
+          if (matchesAtWordStart(cmd, p)) {
+            return { level: 'high', reason: `bash-pattern: matched '${p}'`, category: 'bash-destructive' };
+          }
+        }
+        return { level: 'medium', reason: `bash-pattern: matched '${high}' (ephemeral-safe)`, category: 'bash-mutating' };
+      }
+    }
+    return { level: 'high', reason: `bash-pattern: matched '${high}'`, category: 'bash-destructive' };
+  }
   for (const p of BASH_MEDIUM) {
     if (cmd.includes(p)) return { level: 'medium', reason: `bash-pattern: matched '${p}'`, category: 'bash-mutating' };
   }
