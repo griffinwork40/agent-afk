@@ -82,7 +82,7 @@ export class SubagentExecutor implements SubagentControl {
    * fall back to the static def.
    */
   describeAgentTool(): AnthropicToolDef {
-    return buildAgentToolDef(this.ctx.agentRegistry, this.ctx.parentModel);
+    return buildAgentToolDef(this.ctx.agentRegistry, this.ctx.parentModel, this.ctx.backgroundRegistry !== undefined);
   }
 
   /**

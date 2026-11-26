@@ -31,6 +31,12 @@
  * Built once per provider construction — the registry and slot bindings are
  * session-static.
  *
+ * When `hasBackgroundRegistry` is false (forked child sessions that have no
+ * `BackgroundAgentRegistry` wired), `buildAgentToolDef` omits the `mode`
+ * parameter and strips the "Foreground vs. background" paragraph from the
+ * description so the model is never offered a capability it cannot use
+ * (#4876).
+ *
  * @module agent/agents/tool-def
  */
 
@@ -127,22 +133,41 @@ export function buildAgentModelParamDescription(parentModel?: AgentModelInput): 
  * @param parentModel - Parent session model; forwarded to
  *   {@link buildAgentModelParamDescription} so the "inherit parent" default
  *   resolves correctly for non-Anthropic parents.
+ * @param hasBackgroundRegistry - Whether the session has a BackgroundAgentRegistry
+ *   wired. When false (forked child sessions), the `mode` parameter and the
+ *   "Foreground vs. background" description paragraph are omitted so the model
+ *   is never offered a capability that would fail at runtime (#4876).
+ *   Defaults to true so top-level sessions keep the full surface unchanged.
  */
 export function buildAgentToolDef(
   registry: AgentRegistry | undefined,
   parentModel?: AgentModelInput,
+  hasBackgroundRegistry = true,
 ): AnthropicToolDef {
   const modelDesc = buildAgentModelParamDescription(parentModel);
   const baseProps = agentTool.input_schema.properties as Record<string, object>;
 
+  // Strip mode + background paragraph when the session has no registry.
+  // The paragraph starts at "Foreground vs. background:" and ends at the
+  // double-newline that closes it ("...in the same turn.\n\n").
+  const BG_PARA_RE = /\nForeground vs\. background:.*?in the same turn\.\n\n/s;
+  const description = hasBackgroundRegistry
+    ? (agentTool.description ?? '')
+    : (agentTool.description ?? '').replace(BG_PARA_RE, '\n\n');
+
+  // Omit `mode` from properties when no background registry is wired.
+  const { mode: _mode, ...propsWithoutMode } = baseProps as Record<string, object> & { mode?: object };
+  const filteredBaseProps = hasBackgroundRegistry ? baseProps : propsWithoutMode;
+
   if (registry === undefined || registry.size === 0) {
     return {
       ...agentTool,
+      description,
       input_schema: {
         ...agentTool.input_schema,
         properties: {
-          ...baseProps,
-          model: { ...(baseProps['model'] ?? {}), description: modelDesc },
+          ...filteredBaseProps,
+          model: { ...(filteredBaseProps['model'] ?? {}), description: modelDesc },
         },
       },
     };
@@ -150,12 +175,12 @@ export function buildAgentToolDef(
 
   return {
     ...agentTool,
-    description: (agentTool.description ?? '') + AGENT_TYPE_STATIC_SUFFIX,
+    description: description + AGENT_TYPE_STATIC_SUFFIX,
     input_schema: {
       ...agentTool.input_schema,
       properties: {
-        ...baseProps,
-        model: { ...(baseProps['model'] ?? {}), description: modelDesc },
+        ...filteredBaseProps,
+        model: { ...(filteredBaseProps['model'] ?? {}), description: modelDesc },
         agent_type: {
           type: 'string',
           description:

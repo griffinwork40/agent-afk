@@ -87,6 +87,67 @@ describe('buildAgentToolDef', () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildAgentToolDef — hasBackgroundRegistry=false (#4876)
+// ---------------------------------------------------------------------------
+
+describe('buildAgentToolDef — no background registry (#4876)', () => {
+  it('omits the mode parameter when hasBackgroundRegistry=false', () => {
+    const def = buildAgentToolDef(undefined, undefined, false);
+    expect(def.input_schema.properties).not.toHaveProperty('mode');
+  });
+
+  it('keeps the mode parameter when hasBackgroundRegistry=true (default)', () => {
+    const def = buildAgentToolDef(undefined, undefined, true);
+    expect(def.input_schema.properties).toHaveProperty('mode');
+  });
+
+  it('strips the background paragraph from description when hasBackgroundRegistry=false', () => {
+    const def = buildAgentToolDef(undefined, undefined, false);
+    expect(def.description).not.toContain('Foreground vs. background:');
+    expect(def.description).not.toContain('mode="background"');
+    expect(def.description).not.toContain('fire-and-forget');
+  });
+
+  it('keeps the background paragraph when hasBackgroundRegistry=true (default)', () => {
+    const def = buildAgentToolDef(undefined, undefined, true);
+    expect(def.description).toContain('Foreground vs. background:');
+    expect(def.description).toContain('mode="background"');
+  });
+
+  it('still includes all non-background properties when hasBackgroundRegistry=false', () => {
+    const def = buildAgentToolDef(undefined, undefined, false);
+    const props = def.input_schema.properties as Record<string, unknown>;
+    expect(props).toHaveProperty('prompt');
+    expect(props).toHaveProperty('model');
+    expect(props).toHaveProperty('max_turns');
+    expect(props).toHaveProperty('isolation');
+    expect(props).toHaveProperty('cwd');
+  });
+
+  it('description is still coherent (Do not use / prefer compose paragraphs intact) when hasBackgroundRegistry=false', () => {
+    const def = buildAgentToolDef(undefined, undefined, false);
+    expect(def.description).toContain('Do not use this tool for:');
+    expect(def.description).toContain('prefer `compose`');
+  });
+
+  it('does not mutate the static agentTool when hasBackgroundRegistry=false', () => {
+    const before = agentTool.description;
+    const beforeProps = Object.keys(agentTool.input_schema.properties ?? {});
+    buildAgentToolDef(undefined, undefined, false);
+    expect(agentTool.description).toBe(before);
+    expect(Object.keys(agentTool.input_schema.properties ?? {})).toEqual(beforeProps);
+  });
+
+  it('omits mode and strips background paragraph with non-empty registry and hasBackgroundRegistry=false', () => {
+    const def = buildAgentToolDef(registryOf('research-agent'), undefined, false);
+    expect(def.input_schema.properties).not.toHaveProperty('mode');
+    expect(def.description).not.toContain('Foreground vs. background:');
+    // agent_type still present (registry is non-empty)
+    expect(def.input_schema.properties).toHaveProperty('agent_type');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildAgentModelParamDescription — dynamic model param description (#4509)
 // ---------------------------------------------------------------------------
 
