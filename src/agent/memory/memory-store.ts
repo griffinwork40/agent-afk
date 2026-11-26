@@ -31,6 +31,7 @@ import { join } from 'path';
 import { getMemoryDir, getFacetCacheDir } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
 import { factsToResults, sanitizeFtsQuery } from './memory-store.fts.js';
+import { searchFactsImpl } from './memory-store.search.js';
 import { queryUnaccessed, queryAccessStats } from './memory-store.access.js';
 import { SCHEMA_VERSION, SCHEMA_SQL, runMigrations } from './memory-store.schema.js';
 import { configureSqliteConnection } from '../storage/sqlite.js';
@@ -105,8 +106,19 @@ export interface HotUsage {
 
 export class MemoryStore {
   private readonly dir: string;
-  private readonly db: BetterSqlite3.Database;
+  private readonly db: BetterSqlite3.Database | null;
   private readonly facetFts: FacetFtsStore;
+
+  /**
+   * When non-null, the store is operating in degraded (read/write disabled)
+   * mode because the on-disk schema is newer than this build supports. Memory
+   * operations silently no-op; callers can surface this warning to the user.
+   *
+   * The most common cause: another afk process (a newer build) migrated
+   * memory.db while this session was running. Restarting this session will
+   * pick up the new build and restore full memory access.
+   */
+  readonly schemaVersionWarning: string | null;
 
   constructor(memoryDir?: string, facetCacheDir?: string, opts?: { skipFacetBackfill?: boolean }) {
     this.dir = memoryDir ?? getMemoryDir();
@@ -127,37 +139,52 @@ export class MemoryStore {
       }
     }
 
-    this.db = new Database(join(this.dir, DB_FILE));
+    const rawDb = new Database(join(this.dir, DB_FILE));
     // configureSqliteConnection sets busy_timeout (5 000 ms) BEFORE the WAL
     // switch so it covers all the schema work below, and bounds the WAL
     // switch's cold-open SQLITE_BUSY retry loop (agent/storage/sqlite.ts).
-    configureSqliteConnection(this.db);
+    configureSqliteConnection(rawDb);
 
     // Schema versioning guard — prevents silent corruption when the schema
     // evolves across agent-afk versions.
-    const existingVersion = this.db.pragma('user_version', { simple: true }) as number;
+    const existingVersion = rawDb.pragma('user_version', { simple: true }) as number;
     if (existingVersion === 0) {
       // Fresh database: apply schema then stamp the version.
-      this.db.exec(SCHEMA_SQL);
-      this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
+      rawDb.exec(SCHEMA_SQL);
+      rawDb.pragma(`user_version = ${SCHEMA_VERSION}`);
     } else if (existingVersion === SCHEMA_VERSION) {
       // Expected version — no migration needed.
     } else if (existingVersion < SCHEMA_VERSION) {
-      runMigrations(this.db, existingVersion);
+      runMigrations(rawDb, existingVersion);
     } else {
       // existingVersion > SCHEMA_VERSION: DB was written by a newer build.
-      this.db.close();
-      throw new Error(
-        `memory.db schema version ${existingVersion} is newer than this build supports (${SCHEMA_VERSION}). ` +
-          `Upgrade agent-afk to a version that understands schema v${existingVersion}.`,
-      );
+      // Degrade gracefully instead of throwing — a hard throw here kills every
+      // subagent fork in a long-lived session that cannot upgrade itself. Close
+      // the DB handle and operate with memory disabled so the session can keep
+      // running and delegating work.
+      rawDb.close();
+      this.db = null;
+      this.schemaVersionWarning =
+        `memory.db schema version ${existingVersion} is newer than this build supports ` +
+        `(${SCHEMA_VERSION}). Another afk process upgraded memory.db — restart this ` +
+        `session to pick up the new build. Memory reads and writes are disabled until then.`;
+      debugLog('memory-store:', this.schemaVersionWarning);
+      return;
     }
+
+    this.db = rawDb;
+    this.schemaVersionWarning = null;
 
     // INSERT OR IGNORE preserves the first observed tracking time across
     // concurrent opens and restarts; never infer it from a release date.
     this.db.prepare(`INSERT OR IGNORE INTO memory_metadata (key, value)
       VALUES ('tracking_started_at', ?)`).run(new Date().toISOString());
     this.replayWAL();
+  }
+
+  /** True when this store is operating in degraded mode (schema too new). */
+  get isDegraded(): boolean {
+    return this.db === null;
   }
 
   // ── Hot memory ──────────────────────────────────────────────
@@ -240,6 +267,7 @@ export class MemoryStore {
   // ── Facts ───────────────────────────────────────────────────
 
   storeFact(fact: NewFact): number {
+    if (!this.db) return -1;
     const now = new Date().toISOString();
     // Trust boundary: agent-authored content is stored verbatim. This is a
     // local-only store; do not surface this content to other agents/users
@@ -271,6 +299,7 @@ export class MemoryStore {
    * the row was ignored (duplicate).
    */
   storeEpisodeFact(fact: NewFact): number {
+    if (!this.db) return -1;
     return storeEpisodeFactImpl(this.db, fact);
   }
 
@@ -280,10 +309,12 @@ export class MemoryStore {
     category?: string,
     evidence?: string | null,
   ): number {
+    if (!this.db) return -1;
     return supersededFactImpl(this.db, this.dir, factId, newContent, category, evidence);
   }
 
   removeFact(factId: number): boolean {
+    if (!this.db) return false;
     const result = this.db.prepare('DELETE FROM facts WHERE id = ?').run(factId);
     return result.changes > 0;
   }
@@ -292,6 +323,7 @@ export class MemoryStore {
    * HOT.md injection is a separate flat file, not a retrieval of archive facts.
    */
   getFact(factId: number): Fact | null {
+    if (!this.db) return null;
     const row = this.db.prepare('SELECT * FROM facts WHERE id = ?').get(factId);
     return (row as Fact) ?? null;
   }
@@ -302,11 +334,13 @@ export class MemoryStore {
    * deleted. Use as a dry-run signal for a future GC sweep.
    */
   getUnaccessed(minAgeDays?: number): Fact[] {
+    if (!this.db) return [];
     return queryUnaccessed(this.db, minAgeDays);
   }
 
   /** Returns aggregate access-count statistics for the fact archive. */
   getAccessStats(): AccessStats {
+    if (!this.db) return { total: 0, neverAccessed: 0, accessed: 0, totalAccessEvents: 0, maxAccessCount: 0 };
     return queryAccessStats(this.db);
   }
 
@@ -319,6 +353,7 @@ export class MemoryStore {
    * relevance ranking would be discarded anyway.
    */
   getEpisodes(limit = 200): Fact[] {
+    if (!this.db) return [];
     const sql = `
       SELECT * FROM facts
       WHERE category = 'episode'
@@ -331,86 +366,15 @@ export class MemoryStore {
   }
 
   searchFacts(query: string, opts?: SearchOpts): Fact[] {
-    const limit = opts?.limit ?? 10;
-    const conditions: string[] = ['facts_fts MATCH ?'];
-    const params: unknown[] = [query];
-
-    if (opts?.category) {
-      conditions.push('f.category = ?');
-      params.push(opts.category);
-    }
-    if (opts?.since) {
-      conditions.push('f.created_at >= ?');
-      params.push(opts.since);
-    }
-    if (opts?.source_surface) {
-      conditions.push('f.source_surface = ?');
-      params.push(opts.source_surface);
-    }
-    conditions.push('f.superseded_by IS NULL');
-
-    const sql = `
-      SELECT f.*, facts_fts.rank
-      FROM facts f
-      JOIN facts_fts ON facts_fts.rowid = f.id
-      WHERE ${conditions.join(' AND ')}
-      ORDER BY facts_fts.rank
-      LIMIT ?
-    `;
-    params.push(limit);
-
-    const rows = this.db.prepare(sql).all(...params) as (Fact & { rank: number })[];
-
-    // Activate access tracking: increment access_count and set last_accessed on
-    // every fact returned by a search. Runs as a single bulk UPDATE so the
-    // round-trip cost is O(1) rather than O(n). Wrapped in a try/catch so a
-    // transient write failure never surfaces to the caller — reads degrading
-    // gracefully is always preferable to throwing here.
-    if (rows.length > 0) {
-      const now = new Date().toISOString();
-      const ids = rows.map((r) => r.id);
-      const placeholders = ids.map(() => '?').join(', ');
-      try {
-        const accesses = this.db
-          .prepare(
-            `UPDATE facts
-               SET access_count = access_count + 1,
-                   last_accessed = ?
-             WHERE id IN (${placeholders})
-             RETURNING id, access_count, last_accessed`,
-          )
-          .all(now, ...ids) as Pick<Fact, 'id' | 'access_count' | 'last_accessed'>[];
-        // RETURNING captures the committed increment, including concurrent recalls.
-        // Never report an access before the write succeeds, or reorder FTS results.
-        const byId = new Map(accesses.map((access) => [access.id, access]));
-        // Contract: a row absent from RETURNING was deleted mid-flight (WAL
-        // concurrent delete). Drop it — returning stale pre-UPDATE metadata for
-        // a fact that no longer exists is more confusing than omitting it.
-        const survived = rows.filter((row) => byId.has(row.id));
-        if (survived.length === 0) {
-          debugLog('memory-store: all recalled rows were deleted mid-flight; returning empty.');
-          return [];
-        }
-        if (survived.length < rows.length) {
-          debugLog(
-            `memory-store: ${rows.length - survived.length} of ${rows.length} recalled rows were deleted mid-flight; omitting them.`,
-          );
-        }
-        for (const row of survived) Object.assign(row, byId.get(row.id));
-        return survived.map(({ rank: _rank, ...fact }) => fact as Fact);
-      } catch (err) {
-        debugLog('memory-store: access tracking update failed (non-fatal):', String(err));
-      }
-    }
-
-    // Strip the FTS5 `rank` column — it is a query-time artifact and must not
-    // leak into the public Fact[] return type.
-    return rows.map(({ rank: _rank, ...fact }) => fact as Fact);
+    if (!this.db) return [];
+    // Implementation lives in memory-store.search.ts (line-ceiling split).
+    return searchFactsImpl(this.db, query, opts);
   }
 
   // ── Sessions ────────────────────────────────────────────────
 
   startSession(session: NewSession): void {
+    if (!this.db) return;
     const now = new Date().toISOString();
     appendWAL(this.dir, {
       type: 'session_start',
@@ -430,6 +394,7 @@ export class MemoryStore {
     tokenCount?: number,
     costUsd?: number,
   ): void {
+    if (!this.db) return;
     const now = new Date().toISOString();
     appendWAL(this.dir, {
       type: 'session_end',
@@ -444,11 +409,13 @@ export class MemoryStore {
   }
 
   getSession(sessionId: string): SessionRecord | null {
+    if (!this.db) return null;
     const row = this.db.prepare('SELECT * FROM sessions WHERE session_id = ?').get(sessionId);
     return (row as SessionRecord) ?? null;
   }
 
   recentSessions(limit: number = 5): SessionRecord[] {
+    if (!this.db) return [];
     return this.db.prepare(
       'SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?',
     ).all(limit) as SessionRecord[];
@@ -552,11 +519,12 @@ export class MemoryStore {
   // ── WAL recovery ────────────────────────────────────────────
 
   replayWAL(): number {
+    if (!this.db) return 0;
     return replayWALImpl(this.db, this.dir);
   }
 
   close(): void {
     this.facetFts.close();
-    this.db.close();
+    this.db?.close();
   }
 }

@@ -132,7 +132,18 @@ function filenameToIso(filename: string): string {
 export class TranscriptIndex {
   private readonly indexDir: string;
   private readonly transcriptsDir: string;
-  private readonly db: BetterSqlite3.Database;
+  private readonly db: BetterSqlite3.Database | null;
+
+  /**
+   * When non-null, the index is operating in degraded mode because the on-disk
+   * schema is newer than this build supports. Reindex and search calls are
+   * no-ops; callers can surface this warning to the user.
+   *
+   * The most common cause: another afk process (a newer build) migrated the
+   * transcript index DB while this session was running. Restarting this session
+   * will pick up the new build and restore full transcript search access.
+   */
+  readonly schemaVersionWarning: string | null;
 
   constructor(indexDir?: string, transcriptsDir?: string) {
     this.indexDir = indexDir ?? join(getAfkStateDir(), INDEX_DIR_NAME);
@@ -144,7 +155,7 @@ export class TranscriptIndex {
     mkdirSync(this.indexDir, { recursive: true, mode: 0o700 });
 
     const dbPath = join(this.indexDir, DB_FILE);
-    this.db = new Database(dbPath);
+    const rawDb = new Database(dbPath);
     // Defense-in-depth beyond the 0o700 dir: tighten the DB file itself to 0o600
     // so the duplicated transcript content matches the confidentiality of the
     // source transcripts (also 0o600) even if the file is later copied out of the
@@ -161,21 +172,36 @@ export class TranscriptIndex {
     // Invariant: busy_timeout must be set before any schema or data operation
     // so contended reads wait rather than fail immediately. WAL mode is set
     // next so concurrent readers don't block the writer.
-    this.db.pragma('busy_timeout = 5000');
-    this.db.pragma('journal_mode = WAL');
+    rawDb.pragma('busy_timeout = 5000');
+    rawDb.pragma('journal_mode = WAL');
 
-    const existingVersion = this.db.pragma('user_version', { simple: true }) as number;
+    const existingVersion = rawDb.pragma('user_version', { simple: true }) as number;
     if (existingVersion === 0) {
-      this.db.exec(SCHEMA_SQL);
-      this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
+      rawDb.exec(SCHEMA_SQL);
+      rawDb.pragma(`user_version = ${SCHEMA_VERSION}`);
     } else if (existingVersion > SCHEMA_VERSION) {
-      this.db.close();
-      throw new Error(
-        `transcript index schema v${existingVersion} is newer than this build supports (v${SCHEMA_VERSION}). ` +
-          `Upgrade agent-afk or delete ${join(this.indexDir, DB_FILE)} to rebuild.`,
-      );
+      // Degrade gracefully instead of throwing — a hard throw here would kill
+      // every subagent fork in a long-lived session that cannot upgrade itself.
+      // Close the DB handle and operate with transcript search disabled so the
+      // session can keep running and delegating work.
+      rawDb.close();
+      this.db = null;
+      this.schemaVersionWarning =
+        `transcript index schema v${existingVersion} is newer than this build supports ` +
+        `(v${SCHEMA_VERSION}). Another afk process upgraded the transcript index — restart ` +
+        `this session to pick up the new build. Transcript search is disabled until then.`;
+      debugLog('transcript-index:', this.schemaVersionWarning);
+      return;
     }
     // existingVersion === SCHEMA_VERSION: no migration needed (v1 only for now).
+
+    this.db = rawDb;
+    this.schemaVersionWarning = null;
+  }
+
+  /** True when this index is operating in degraded mode (schema too new). */
+  get isDegraded(): boolean {
+    return this.db === null;
   }
 
   /**
@@ -196,6 +222,7 @@ export class TranscriptIndex {
    * @returns counts of indexed and skipped (unreadable) transcript files
    */
   reindex(): ReindexResult {
+    if (!this.db) return { indexed: 0, skipped: 0 };
     if (!existsSync(this.transcriptsDir)) {
       debugLog('transcript-index: transcripts dir does not exist, nothing to index');
       return { indexed: 0, skipped: 0 };
@@ -210,10 +237,11 @@ export class TranscriptIndex {
     //   2. INSERT new rows from disk (no ON CONFLICT needed — the table is empty)
     //   3. Rebuild the FTS index from the updated content table
     // All inside one transaction for atomicity.
-    const doReindex = this.db.transaction(() => {
-      this.db.exec(`DELETE FROM transcripts;`);
+    const db = this.db;
+    const doReindex = db.transaction(() => {
+      db.exec(`DELETE FROM transcripts;`);
 
-      const insert = this.db.prepare<[string, string, string]>(`
+      const insert = db.prepare<[string, string, string]>(`
         INSERT INTO transcripts (filename, session_at, content)
         VALUES (?, ?, ?)
       `);
@@ -236,7 +264,7 @@ export class TranscriptIndex {
       }
 
       // Rebuild the FTS index from the now-populated content table.
-      this.db.exec(`INSERT INTO transcripts_fts(transcripts_fts) VALUES('rebuild');`);
+      db.exec(`INSERT INTO transcripts_fts(transcripts_fts) VALUES('rebuild');`);
       return { indexed, skipped };
     });
 
@@ -278,6 +306,7 @@ export class TranscriptIndex {
       LIMIT ?
     `;
 
+    if (!this.db) return [];
     let rows: Array<{ filename: string; session_at: string; snippet: string; rank: number }>;
     try {
       rows = this.db.prepare(sql).all(query, limit) as typeof rows;
@@ -304,12 +333,13 @@ export class TranscriptIndex {
    * Useful for telling users to run `afk transcript reindex` first.
    */
   count(): number {
+    if (!this.db) return 0;
     const row = this.db.prepare('SELECT COUNT(*) as n FROM transcripts').get() as { n: number };
     return row.n;
   }
 
   close(): void {
-    this.db.close();
+    this.db?.close();
   }
 }
 

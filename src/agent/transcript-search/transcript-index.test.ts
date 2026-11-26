@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, statSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import Database from 'better-sqlite3';
 import { TranscriptIndex, withTranscriptIndex } from './transcript-index.js';
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
@@ -431,6 +432,73 @@ describe('FTS5 query safety', () => {
     } finally {
       idx.close();
     }
+  });
+});
+
+describe('graceful degradation — schema newer than build (#4834)', () => {
+  let degradedIndexDir: string;
+
+  beforeEach(() => {
+    degradedIndexDir = join(
+      testDir,
+      `degraded-index-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(degradedIndexDir, { recursive: true, mode: 0o700 });
+    // Seed the index DB with a future schema version.
+    const seed = new Database(join(degradedIndexDir, 'index.db'));
+    seed.pragma('user_version = 9999');
+    seed.close();
+  });
+
+  it('does not throw on construction — returns a degraded index', () => {
+    expect(() => new TranscriptIndex(degradedIndexDir, transcriptsDir)).not.toThrow();
+  });
+
+  it('sets isDegraded true and schemaVersionWarning to a non-null string', () => {
+    const idx = new TranscriptIndex(degradedIndexDir, transcriptsDir);
+    try {
+      expect(idx.isDegraded).toBe(true);
+      expect(typeof idx.schemaVersionWarning).toBe('string');
+      expect(idx.schemaVersionWarning).toMatch(/restart this session/);
+      expect(idx.schemaVersionWarning).toMatch(/9999/);
+    } finally {
+      idx.close();
+    }
+  });
+
+  it('reindex returns {indexed:0, skipped:0} in degraded mode', () => {
+    writeTranscript('2026-06-15T10-45-52-728Z.md', TRANSCRIPT_A);
+    const idx = new TranscriptIndex(degradedIndexDir, transcriptsDir);
+    try {
+      expect(idx.reindex()).toEqual({ indexed: 0, skipped: 0 });
+    } finally {
+      idx.close();
+    }
+  });
+
+  it('search returns [] in degraded mode', () => {
+    writeTranscript('2026-06-15T10-45-52-728Z.md', TRANSCRIPT_A);
+    const idx = new TranscriptIndex(degradedIndexDir, transcriptsDir);
+    try {
+      idx.reindex();
+      expect(idx.search('Telegram')).toEqual([]);
+    } finally {
+      idx.close();
+    }
+  });
+
+  it('count returns 0 in degraded mode', () => {
+    const idx = new TranscriptIndex(degradedIndexDir, transcriptsDir);
+    try {
+      expect(idx.count()).toBe(0);
+    } finally {
+      idx.close();
+    }
+  });
+
+  it('close does not throw in degraded mode', () => {
+    const idx = new TranscriptIndex(degradedIndexDir, transcriptsDir);
+    expect(() => idx.close()).not.toThrow();
   });
 });
 
