@@ -33,3 +33,50 @@ describe('classifyCommandRisk -- compound rm + other BASH_HIGH pattern (Item 1)'
     ).toBe('high');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec item 4 — separator-evasion shapes keep HIGH after ephemeral rm
+// (#5330 regression)
+//
+// classifyRmRisk returns 'medium' only when hasShellSeparator() is false
+// (no ;, |, &, or \n). Any compound command — including separator-evasion
+// shapes like `eval<TAB>` or `eval"$x"` — contains a semicolon before the
+// eval token and therefore hits the separator rule in classifyRmRisk, which
+// returns 'high' before the downgrade path is ever considered.
+// ---------------------------------------------------------------------------
+describe('classifyCommandRisk -- separator-evasion after ephemeral rm (Item 4)', () => {
+  it('ephemeral rm then eval<TAB> keeps HIGH (semicolon triggers separator rule)', () => {
+    expect(
+      classifyCommandRisk('rm /tmp/a; eval\t"$CMD"', noMutation, noTokenize).level,
+    ).toBe('high');
+  });
+
+  it('ephemeral rm then eval"$x" (no space) keeps HIGH (quote separator evasion)', () => {
+    expect(
+      classifyCommandRisk('rm /tmp/a; eval"$CMD"', noMutation, noTokenize).level,
+    ).toBe('high');
+  });
+
+  it('ephemeral rm then RM<TAB> (uppercase rm, tab) keeps HIGH', () => {
+    // RM (uppercase) with tab separator is covered by SEPARATOR_EVASION.
+    expect(
+      classifyCommandRisk('rm /tmp/a; RM\t/etc/hosts', noMutation, noTokenize).level,
+    ).toBe('high');
+  });
+
+  it('ephemeral rm then grm (GNU rm prefix) keeps HIGH', () => {
+    // grm is in BASH_HIGH at index 80 — Pass A matchesAtWordStart catches it.
+    expect(
+      classifyCommandRisk('rm /tmp/a; grm /etc/hosts', noMutation, noTokenize).level,
+    ).toBe('high');
+  });
+
+  // Baseline: compound rm (separator present) is HIGH regardless of the
+  // second segment — classifyRmRisk returns 'high' for any command containing
+  // a shell separator, so the downgrade path is never reached.
+  it('compound rm (rm /tmp/a; echo done) is HIGH (conservative compound policy)', () => {
+    expect(
+      classifyCommandRisk('rm /tmp/a; echo done', noMutation, noTokenize).level,
+    ).toBe('high');
+  });
+});

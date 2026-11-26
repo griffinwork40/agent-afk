@@ -215,11 +215,17 @@ export function classifyCommandRisk(
       const rmLevel = classifyRmRisk(cmd);
       if (rmLevel === 'medium') {
         // Item 1: even though rm itself is ephemeral-safe, check whether the
-        // compound command also contains another BASH_HIGH pattern (e.g. chmod,
-        // eval). Skip indices 0 ('rm -rf') and 1 ('rm ') which already fired.
-        // Use matchesAtWordStart directly (not findHighBashPattern) to avoid
-        // SEPARATOR_EVASION re-matching the same rm token and falsely returning
-        // high for a plain ephemeral rm.
+        // command also contains another BASH_HIGH pattern (e.g. chmod, eval).
+        // Skip indices 0 ('rm -rf') and 1 ('rm ') which already fired.
+        //
+        // Single-pass scan: matchesAtWordStart for each literal table entry
+        // (indices 2+). Avoids SEPARATOR_EVASION re-matching the same rm token
+        // which would falsely return high for a plain ephemeral rm.
+        //
+        // A tail-rescan pass is not needed here: classifyRmRisk returns 'medium'
+        // only when hasShellSeparator() is false (no ;, |, &, or \n present),
+        // so there is no shell-separator position to rescan after. Any command
+        // containing a shell separator already returns 'high' from classifyRmRisk.
         for (const p of BASH_HIGH.slice(2)) {
           if (matchesAtWordStart(cmd, p)) {
             return { level: 'high', reason: `bash-pattern: matched '${p}'`, category: 'bash-destructive' };
