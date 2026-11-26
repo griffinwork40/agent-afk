@@ -242,6 +242,18 @@ describe('classifyRisk — chmod secondary predicate (#5293)', () => {
     expect(classifyRisk('bash', { command: 'chmod 700 dir' }, ctx)).not.toBe('high');
   });
 
+  it.each(['go=u', 'g+u', 'o=g', 'a=u', '=u', 'g=u-w', 'u+x,g=u', 'g-w+u', 'ug=rw'])('chmod %s file → high (possibly grants group/other write)', (mode) => {
+    expect(classifyRisk('bash', { command: `chmod ${mode} file` }, ctx)).toBe('high');
+  });
+
+  it.each(['u=g', 'u+g', 'g-u', 'go-w', 'u+x,g-w'])('chmod %s file → NOT high', (mode) => {
+    expect(classifyRisk('bash', { command: `chmod ${mode} file` }, ctx)).not.toBe('high');
+  });
+
+  it.each(['chmod --reference=/etc/foo file', 'chmod --reference /etc/foo file', 'chmod file --reference=foo', 'chmod 2>err.log 777 file'])('%s → high (unknown or ambiguous mode)', (command) => {
+    expect(classifyRisk('bash', { command }, ctx)).toBe('high');
+  });
+
   // ── blocked (high) ────────────────────────────────────────────────────────
   it('chmod 777 file → high (world-writable octal)', () => {
     expect(classifyRisk('bash', { command: 'chmod 777 file' }, ctx)).toBe('high');
@@ -306,6 +318,240 @@ describe('classifyRisk — chmod secondary predicate (#5293)', () => {
 
   it('gchmod +x x → high (gchmod always blocked regardless of mode)', () => {
     expect(classifyRisk('bash', { command: 'gchmod +x x' }, ctx)).toBe('high');
+  });
+});
+
+// ---- chmod PR #5329 findings -----------------------------------------------
+// Five valid findings confirmed by probes. Each describe block maps 1:1 to a
+// numbered finding. Safe-case regressions are included in every block.
+// Invariant: existing #5293 tests above must continue to pass unchanged.
+
+// F1: Comma-separated clause lists — `u+x,g+w`, `g,o+rw` etc.
+// POSIX chmod accepts a comma-separated list of independent clauses, e.g.
+// `u+x,g+w` means "add x for user AND add w for group". Each clause is
+// tested independently. Invalid or unrecognized syntax is treated conservatively.
+// Before this fix, WRITE_WIDENING_SYMBOLIC only matched continuous who-lists
+// (no comma), so `chmod u,g+w file` was not classified high.
+describe('classifyRisk — chmod #5329 F1: comma-separated clause lists', () => {
+  // ── blocked (high) ────────────────────────────────────────────────────────
+  it('chmod u,g+w file → high (g+w clause after comma is widening)', () => {
+    expect(classifyRisk('bash', { command: 'chmod u,g+w file' }, ctx)).toBe('high');
+  });
+
+  it('chmod u,o+w file → high (o+w clause after comma is widening)', () => {
+    expect(classifyRisk('bash', { command: 'chmod u,o+w file' }, ctx)).toBe('high');
+  });
+
+  it('chmod g,o+rw file → high (g+rw clause is widening)', () => {
+    expect(classifyRisk('bash', { command: 'chmod g,o+rw file' }, ctx)).toBe('high');
+  });
+
+  it('chmod u,g,o+w file → high (g+w clause after comma is widening)', () => {
+    expect(classifyRisk('bash', { command: 'chmod u,g,o+w file' }, ctx)).toBe('high');
+  });
+
+  it('chmod u,a+w file → high (a+w clause after comma is widening)', () => {
+    expect(classifyRisk('bash', { command: 'chmod u,a+w file' }, ctx)).toBe('high');
+  });
+
+  it('chmod u,g=w file → high (g=w clause after comma is widening)', () => {
+    expect(classifyRisk('bash', { command: 'chmod u,g=w file' }, ctx)).toBe('high');
+  });
+
+  it('chmod u,o=rw file → high (o=rw clause after comma is widening)', () => {
+    expect(classifyRisk('bash', { command: 'chmod u,o=rw file' }, ctx)).toBe('high');
+  });
+
+  // ── allowed (not high) — existing safe cases must still pass ──────────────
+  it('chmod u+w file → NOT high (user-only write, no comma, no g/o/a)', () => {
+    expect(classifyRisk('bash', { command: 'chmod u+w file' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod u+x file → NOT high (user-only execute)', () => {
+    expect(classifyRisk('bash', { command: 'chmod u+x file' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod 755 file → NOT high (no group/other write bit)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 755 file' }, ctx)).not.toBe('high');
+  });
+});
+
+// F2: Dynamic/unresolved mode argument — shell variable or substitution in
+// mode position. At classify time the runtime value is unknown; it may resolve
+// to `777` or `o+w`. Conservative: treat as high.
+describe('classifyRisk — chmod #5329 F2: dynamic/unresolved mode argument', () => {
+  // ── blocked (high) ────────────────────────────────────────────────────────
+  it('chmod $MODE file → high (unresolved $VAR mode)', () => {
+    expect(classifyRisk('bash', { command: 'chmod $MODE file' }, ctx)).toBe('high');
+  });
+
+  it('chmod ${PERMS} file → high (unresolved ${VAR} mode)', () => {
+    expect(classifyRisk('bash', { command: 'chmod ${PERMS} file' }, ctx)).toBe('high');
+  });
+
+  it('chmod $(get_mode) file → high (unresolved $(cmd) mode)', () => {
+    expect(classifyRisk('bash', { command: 'chmod $(get_mode) file' }, ctx)).toBe('high');
+  });
+
+  it('chmod `get_mode` file → high (unresolved backtick mode)', () => {
+    expect(classifyRisk('bash', { command: 'chmod `get_mode` file' }, ctx)).toBe('high');
+  });
+
+  it('chmod $1 file → high (unresolved positional parameter mode)', () => {
+    expect(classifyRisk('bash', { command: 'chmod $1 file' }, ctx)).toBe('high');
+  });
+
+  it('chmod "${MODE}" file → high (quoted unresolved variable mode)', () => {
+    expect(classifyRisk('bash', { command: 'chmod "${MODE}" file' }, ctx)).toBe('high');
+  });
+
+  // ── allowed (not high) — literal modes must still classify correctly ───────
+  it('chmod 755 file → NOT high (literal octal, no write bits)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 755 file' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod +x script.sh → NOT high (literal symbolic execute)', () => {
+    expect(classifyRisk('bash', { command: 'chmod +x script.sh' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod u+x script.sh → NOT high (literal user-only execute)', () => {
+    expect(classifyRisk('bash', { command: 'chmod u+x script.sh' }, ctx)).not.toBe('high');
+  });
+});
+
+// F3: Quoted system-directory target — `chmod 755 "/etc/shadow"` and
+// `chmod +x '../secret'`. Before this fix, the system-directory and path-
+// traversal regexes only matched bare (unquoted) paths. Shell allows quoting
+// any part of a path; we must strip surrounding quotes before testing.
+describe('classifyRisk — chmod #5329 F3: quoted system-directory / path-traversal target', () => {
+  // ── blocked (high) ────────────────────────────────────────────────────────
+  it('chmod 755 "/etc/shadow" → high (double-quoted /etc target)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 755 "/etc/shadow"' }, ctx)).toBe('high');
+  });
+
+  it("chmod 755 '/etc/shadow' → high (single-quoted /etc target)", () => {
+    expect(classifyRisk('bash', { command: "chmod 755 '/etc/shadow'" }, ctx)).toBe('high');
+  });
+
+  it('chmod +x "../secret" → high (double-quoted path traversal)', () => {
+    expect(classifyRisk('bash', { command: 'chmod +x "../secret"' }, ctx)).toBe('high');
+  });
+
+  it("chmod +x '../secret' → high (single-quoted path traversal)", () => {
+    expect(classifyRisk('bash', { command: "chmod +x '../secret'" }, ctx)).toBe('high');
+  });
+
+  it('chmod 755 "/usr/local/bin/tool" → high (quoted /usr target)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 755 "/usr/local/bin/tool"' }, ctx)).toBe('high');
+  });
+
+  it('chmod 755 "/bin/sh" → high (quoted /bin target)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 755 "/bin/sh"' }, ctx)).toBe('high');
+  });
+
+  // ── allowed (not high) — quoted safe targets must not false-fire ──────────
+  it('chmod +x "./script.sh" → NOT high (quoted relative safe path)', () => {
+    expect(classifyRisk('bash', { command: 'chmod +x "./script.sh"' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod 755 "build/output" → NOT high (quoted relative safe path)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 755 "build/output"' }, ctx)).not.toBe('high');
+  });
+});
+
+// F4: IFS-expanded -R flag — `chmod ${IFS}-R file`, `chmod $IFS-R dir`,
+// `chmod -${R} dir`. Before this fix, the recursive regex required `[\s$]`
+// immediately before `-R`, catching `$-R` but not `${IFS}-R` or `-${R}`.
+// Conservative: any shell-expansion token adjacent to or inside a `-R` flag
+// is treated as recursive.
+describe('classifyRisk — chmod #5329 F4: IFS-expanded / variable-in-flag -R', () => {
+  // ── blocked (high) ────────────────────────────────────────────────────────
+  it('chmod ${IFS}-R 755 dir → high (IFS-expanded separator before -R)', () => {
+    expect(classifyRisk('bash', { command: 'chmod ${IFS}-R 755 dir' }, ctx)).toBe('high');
+  });
+
+  it('chmod $IFS-R 755 dir → high ($IFS separator before -R)', () => {
+    expect(classifyRisk('bash', { command: 'chmod $IFS-R 755 dir' }, ctx)).toBe('high');
+  });
+
+  it('chmod -${R} 755 dir → high (variable inside flag -${R})', () => {
+    expect(classifyRisk('bash', { command: 'chmod -${R} 755 dir' }, ctx)).toBe('high');
+  });
+
+  it('chmod -$R 755 dir → high (variable inside flag -$R)', () => {
+    expect(classifyRisk('bash', { command: 'chmod -$R 755 dir' }, ctx)).toBe('high');
+  });
+
+  // ── allowed (not high) — non-recursive safe cases ─────────────────────────
+  it('chmod +x script.sh → NOT high (no recursive flag)', () => {
+    expect(classifyRisk('bash', { command: 'chmod +x script.sh' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod 755 file → NOT high (no recursive flag)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 755 file' }, ctx)).not.toBe('high');
+  });
+});
+
+// F5: Redirect descriptors and filenames must not be misidentified as mode
+// tokens. `chmod 2>err.log 755 file` has fd `2` before `>err.log`; OCTAL_MODE
+// previously matched `2` and wrongly classified it as an octal write bit.
+// Redirects before the mode are ambiguous and treated conservatively.
+// Similarly, `chmod 755 file 1>/dev/null` has `1` as an fd, not a mode digit.
+describe('classifyRisk — chmod #5329 F5: redirect descriptors / filenames not mistaken for mode', () => {
+  // ── allowed (not high) — safe chmod with redirect ─────────────────────────
+  it('chmod 755 file 2>err.log → NOT high (fd 2 before > is not an octal mode)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 755 file 2>err.log' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod 755 file 1>/dev/null → NOT high (fd 1 before > is not an octal mode)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 755 file 1>/dev/null' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod +x script.sh 2>/dev/null → NOT high (fd redirect, execute-only mode)', () => {
+    expect(classifyRisk('bash', { command: 'chmod +x script.sh 2>/dev/null' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod 644 file >>output.log → NOT high (append redirect, no write bits)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 644 file >>output.log' }, ctx)).not.toBe('high');
+  });
+
+  // ── blocked (high) — dangerous chmod WITH redirect must still be caught ───
+  it('chmod 777 file 2>err.log → high (world-writable octal despite redirect)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 777 file 2>err.log' }, ctx)).toBe('high');
+  });
+
+  it('chmod g+w file 2>/dev/null → high (group-write symbolic despite redirect)', () => {
+    expect(classifyRisk('bash', { command: 'chmod g+w file 2>/dev/null' }, ctx)).toBe('high');
+  });
+
+  it('chmod 666 file >>output.log → high (world-writable octal with append redirect)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 666 file >>output.log' }, ctx)).toBe('high');
+  });
+
+  // ── spaced redirect (`2> /dev/null`) and bare trailing fd digit ───────────
+  // These forms are NOT stripped by a simple `\d*>` pattern. Mode extraction
+  // by position (first non-flag token) handles all of them correctly.
+  it('chmod 644 file 2> /dev/null → NOT high (spaced redirect, fd 2 not a mode)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 644 file 2> /dev/null' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod 755 file 2> /dev/null → NOT high (spaced redirect, safe mode)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 755 file 2> /dev/null' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod 644 file 2 → NOT high (bare trailing digit, not a mode)', () => {
+    // A bare `2` after the filename would be misidentified as an octal mode
+    // (bit 1 set -> group write) if all tokens were scanned. Mode extraction
+    // by position takes `644` as the mode and ignores the trailing `2`.
+    expect(classifyRisk('bash', { command: 'chmod 644 file 2' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod 755 file 2>&1 → NOT high (fd redirect 2>&1, safe mode)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 755 file 2>&1' }, ctx)).not.toBe('high');
+  });
+
+  it('chmod 777 file 2> /dev/null → high (world-writable despite spaced redirect)', () => {
+    expect(classifyRisk('bash', { command: 'chmod 777 file 2> /dev/null' }, ctx)).toBe('high');
   });
 });
 
