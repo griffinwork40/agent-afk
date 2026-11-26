@@ -82,6 +82,30 @@ function resolveTranscriber(e: typeof env): ReturnType<typeof createTranscriber>
   return createTranscriber(e, { checkEgress: checkEgressTarget });
 }
 
+/**
+ * Resolve the tag-only chat set from config + env, and log a notice when it
+ * is non-empty. Extracted from main() to keep that function within the
+ * 200-line ceiling.
+ *
+ * afk.config.json `telegram.tagOnlyChats` wins; the
+ * AFK_TELEGRAM_TAG_ONLY_CHAT_IDS env var is the fallback. Mirrors the inbound
+ * allowlist resolution path.
+ */
+function resolveTagOnlyChats(
+  configTagOnly: number[] | undefined,
+  envVar: string | undefined,
+): Set<number> {
+  const tagOnlyChats =
+    configTagOnly && configTagOnly.length > 0
+      ? new Set<number>(configTagOnly)
+      : parseAllowedChatIds(envVar, console.warn);
+  if (tagOnlyChats.size > 0) {
+    console.log(palette.info(`🏷️  Tag-only chats: ${tagOnlyChats.size} chat ID(s) — bot responds only when addressed (reply/@mention)`));
+    console.log(palette.warning('   ⚠️  Set Telegram privacy mode OFF for this bot (@BotFather → /setprivacy → Disable) or non-addressed group messages never reach it.'));
+  }
+  return tagOnlyChats;
+}
+
 export async function main(): Promise<void> {
   // Version the daemon is running as, captured once. Compared against the
   // on-disk version each tick by the drift watchdog.
@@ -168,20 +192,11 @@ export async function main(): Promise<void> {
   console.log(palette.info(`📡 Model: ${config.model} · Provider: ${providerName}`));
   console.log(palette.info(`🔒 Allowlist: ${allowedChatIds.size} chat ID(s)`));
 
-  // Opt-in "tag-only" response policy: chats where the bot answers only when
-  // addressed (reply to the bot, @mention, or text_mention resolving to the
-  // bot). afk.config.json `telegram.tagOnlyChats` wins; the
-  // AFK_TELEGRAM_TAG_ONLY_CHAT_IDS env var is the fallback. Mirrors the inbound
-  // allowlist resolution path.
-  const configTagOnly = loadTelegramConfig().tagOnlyChats;
-  const tagOnlyChats =
-    configTagOnly && configTagOnly.length > 0
-      ? new Set<number>(configTagOnly)
-      : parseAllowedChatIds(env.AFK_TELEGRAM_TAG_ONLY_CHAT_IDS, console.warn);
-  if (tagOnlyChats.size > 0) {
-    console.log(palette.info(`🏷️  Tag-only chats: ${tagOnlyChats.size} chat ID(s) — bot responds only when addressed (reply/@mention)`));
-    console.log(palette.warning('   ⚠️  Set Telegram privacy mode OFF for this bot (@BotFather → /setprivacy → Disable) or non-addressed group messages never reach it.'));
-  }
+  // Opt-in "tag-only" response policy — see resolveTagOnlyChats() for details.
+  const tagOnlyChats = resolveTagOnlyChats(
+    loadTelegramConfig().tagOnlyChats,
+    env.AFK_TELEGRAM_TAG_ONLY_CHAT_IDS,
+  );
 
   const sharedMemoryStore = new MemoryStore();
   const sharedStateStore = new StateStore(getStateDatabasePath());
