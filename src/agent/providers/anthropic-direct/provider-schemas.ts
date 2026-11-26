@@ -85,7 +85,12 @@ export function buildProviderSchemas(opts: AnthropicDirectProviderOptions): Anth
   // the fewest cached tokens. The executor supplies the `agent` tool def so
   // a named-agent registry can advertise its types; optional chaining lets
   // test stubs without describeAgentTool fall back to the static schema.
-  if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
+  if (opts.subagentExecutor) {
+    // describeAgentTool() returns null when the allowlist is empty (scoped child
+    // that must not dispatch any nested agents) — omit the tool entirely (#4873).
+    const agentToolDef = opts.subagentExecutor.describeAgentTool?.() ?? agentTool;
+    if (agentToolDef !== null) schemas.push(agentToolDef);
+  }
   if (opts.skillExecutor) schemas.push(skillTool);
   if (opts.composeExecutor) schemas.push(opts.subagentExecutor?.describeComposeTool?.() ?? composeTool);
   // Custom (consumer-registered) tool schemas are appended last so their

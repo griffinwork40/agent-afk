@@ -123,14 +123,26 @@ export function buildAgentModelParamDescription(parentModel?: AgentModelInput): 
  * {@link buildAgentTypeListing}) so that description differences between
  * sessions with different agent sets do not break the prefix cache.
  *
+ * When `nestedAgentAllowlist` is supplied (a scoped child agent):
+ * - If the allowlist is **empty**, the `agent_type` property is omitted
+ *   entirely (the caller should omit the `agent` tool altogether; this
+ *   function is a no-op safety net for that case).
+ * - If the allowlist is **non-empty**, `agent_type` gains an `enum`
+ *   constraint listing only the permitted types so the model cannot even
+ *   form an out-of-scope dispatch (#4873).
+ *
  * @param registry - Named agent registry for the session (may be empty/absent).
  * @param parentModel - Parent session model; forwarded to
  *   {@link buildAgentModelParamDescription} so the "inherit parent" default
  *   resolves correctly for non-Anthropic parents.
+ * @param nestedAgentAllowlist - When set, restricts `agent_type` to only the
+ *   listed names (scoped child agent). An empty array means no dispatch is
+ *   permitted.
  */
 export function buildAgentToolDef(
   registry: AgentRegistry | undefined,
   parentModel?: AgentModelInput,
+  nestedAgentAllowlist?: readonly string[],
 ): AnthropicToolDef {
   const modelDesc = buildAgentModelParamDescription(parentModel);
   const baseProps = agentTool.input_schema.properties as Record<string, object>;
@@ -148,6 +160,46 @@ export function buildAgentToolDef(
     };
   }
 
+  // Scoped child: allowlist is set but empty → no agent_type (tool should not
+  // be advertised at all, but guard here defensively).
+  if (nestedAgentAllowlist !== undefined && nestedAgentAllowlist.length === 0) {
+    return {
+      ...agentTool,
+      input_schema: {
+        ...agentTool.input_schema,
+        properties: {
+          ...baseProps,
+          model: { ...(baseProps['model'] ?? {}), description: modelDesc },
+        },
+      },
+    };
+  }
+
+  // Build the agent_type property, optionally constrained to allowed types.
+  const agentTypeBaseDesc =
+    nestedAgentAllowlist !== undefined
+      ? `Named agent type to dispatch. This scoped agent may ONLY dispatch one of: ` +
+        `${nestedAgentAllowlist.join(', ')}. ` +
+        `A bare dispatch with no agent_type is not permitted here — ` +
+        `set agent_type to one of the allowed types, or complete the task with your own tools. ` +
+        `The type supplies the child's system prompt, tool allowlist ` +
+        `(mechanically enforced), and default model/tool-round budget. Explicit \`model\`, ` +
+        `\`max_turns\`, and \`max_tool_use_iterations\` on this call override the type's ` +
+        `defaults. Unknown types fail with the available list. Alias: \`subagent_type\`.`
+      : `Named agent type to dispatch — one of the "Available agent types" listed in the ` +
+        `system prompt. The type supplies the child's system prompt, tool allowlist ` +
+        `(mechanically enforced), and default model/tool-round budget. Explicit \`model\`, ` +
+        `\`max_turns\`, and \`max_tool_use_iterations\` on this call override the type's ` +
+        `defaults. Unknown types fail with the available list. Alias: \`subagent_type\`.`;
+
+  const agentTypeProp: Record<string, unknown> = {
+    type: 'string',
+    description: agentTypeBaseDesc,
+  };
+  if (nestedAgentAllowlist !== undefined && nestedAgentAllowlist.length > 0) {
+    agentTypeProp['enum'] = [...nestedAgentAllowlist];
+  }
+
   return {
     ...agentTool,
     description: (agentTool.description ?? '') + AGENT_TYPE_STATIC_SUFFIX,
@@ -156,15 +208,7 @@ export function buildAgentToolDef(
       properties: {
         ...baseProps,
         model: { ...(baseProps['model'] ?? {}), description: modelDesc },
-        agent_type: {
-          type: 'string',
-          description:
-            'Named agent type to dispatch — one of the "Available agent types" listed in the ' +
-            'system prompt. The type supplies the child\'s system prompt, tool allowlist ' +
-            '(mechanically enforced), and default model/tool-round budget. Explicit `model`, ' +
-            '`max_turns`, and `max_tool_use_iterations` on this call override the type\'s ' +
-            'defaults. Unknown types fail with the available list. Alias: `subagent_type`.',
-        },
+        agent_type: agentTypeProp,
       },
     },
   };
@@ -240,11 +284,32 @@ export function buildComposeTool(parentModel?: AgentModelInput): AnthropicToolDe
  * This is the counterpart to {@link buildAgentToolDef}: the tool description
  * stays static, while this block carries the session-specific listing into the
  * already-volatile region of the system prompt (after `# Environment`).
+ *
+ * When `nestedAgentAllowlist` is supplied, only the listed names are included
+ * in the block. An empty allowlist returns an empty string (the `agent` tool
+ * should not be advertised at all in that case) (#4873).
+ *
+ * @param registry - Named agent registry for the session (may be empty/absent).
+ * @param nestedAgentAllowlist - When set, restricts the listing to only these
+ *   names. An empty array returns an empty string.
  */
-export function buildAgentTypeListing(registry: AgentRegistry | undefined): string {
+export function buildAgentTypeListing(
+  registry: AgentRegistry | undefined,
+  nestedAgentAllowlist?: readonly string[],
+): string {
   if (registry === undefined || registry.size === 0) return '';
 
-  const lines = [...registry.values()].map((agent) => {
+  // Scoped child: empty allowlist → no listing (agent tool omitted entirely).
+  if (nestedAgentAllowlist !== undefined && nestedAgentAllowlist.length === 0) return '';
+
+  // When an allowlist is provided, filter to only the permitted types.
+  const entries = nestedAgentAllowlist !== undefined
+    ? [...registry.values()].filter((agent) => nestedAgentAllowlist.includes(agent.name))
+    : [...registry.values()];
+
+  if (entries.length === 0) return '';
+
+  const lines = entries.map((agent) => {
     const def = agent.definition;
     const meta: string[] = [];
     if (def.maxToolUseIterations) meta.push(`budget: ${def.maxToolUseIterations} rounds`);

@@ -80,9 +80,18 @@ export class SubagentExecutor implements SubagentControl {
    * rather than the tool description, preserving prefix-cache stability (#4217).
    * Providers call this via optional chaining so stubbed executors in tests
    * fall back to the static def.
+   *
+   * When `ctx.nestedAgentAllowlist` is set (a scoped child), the tool def is
+   * filtered to only the permitted types — or returns `null` for an empty
+   * allowlist (providers must omit the `agent` tool entirely in that case) (#4873).
    */
-  describeAgentTool(): AnthropicToolDef {
-    return buildAgentToolDef(this.ctx.agentRegistry, this.ctx.parentModel);
+  describeAgentTool(): AnthropicToolDef | null {
+    // Empty allowlist: child is not permitted to dispatch any nested agents.
+    // Return null so providers skip the `agent` tool entirely.
+    if (this.ctx.nestedAgentAllowlist !== undefined && this.ctx.nestedAgentAllowlist.length === 0) {
+      return null;
+    }
+    return buildAgentToolDef(this.ctx.agentRegistry, this.ctx.parentModel, this.ctx.nestedAgentAllowlist);
   }
 
   /**
@@ -104,9 +113,13 @@ export class SubagentExecutor implements SubagentControl {
    * byte-identical across sessions, while this string carries the
    * session-specific listing into the already-volatile tail of the system
    * prompt after the `# Environment` block (#4217).
+   *
+   * When `ctx.nestedAgentAllowlist` is set (a scoped child), the listing is
+   * filtered to only the permitted types — or returns empty string for an
+   * empty allowlist (the `agent` tool is omitted entirely in that case) (#4873).
    */
   describeAgentTypeListing(): string {
-    return buildAgentTypeListing(this.ctx.agentRegistry);
+    return buildAgentTypeListing(this.ctx.agentRegistry, this.ctx.nestedAgentAllowlist);
   }
 
   /**

@@ -440,10 +440,10 @@ describe('SubagentExecutor named-agent dispatch', () => {
       const def = executor.describeAgentTool();
       // Since #4509 buildAgentToolDef always patches the model.description with live slot bindings,
       // so it returns a new object rather than the static agentTool reference.
-      expect(def.name).toBe(agentTool.name);
-      expect(def.description).toBe(agentTool.description);
+      expect(def!.name).toBe(agentTool.name);
+      expect(def!.description).toBe(agentTool.description);
       // The input_schema is a superset: model.description is dynamic, all other props are identical.
-      expect(def.input_schema.type).toBe(agentTool.input_schema.type);
+      expect(def!.input_schema.type).toBe(agentTool.input_schema.type);
     });
 
     it('description is static even when a registry is wired (#4217)', () => {
@@ -451,12 +451,28 @@ describe('SubagentExecutor named-agent dispatch', () => {
       // that listing moves to the system-prompt tail via describeAgentTypeListing().
       const executor = makeExecutor();
       const def = executor.describeAgentTool();
-      expect(def.description).not.toContain('research-agent');
-      expect(def.description).not.toContain('git-investigator');
+      expect(def!.description).not.toContain('research-agent');
+      expect(def!.description).not.toContain('git-investigator');
       // The description still refers the model to the system prompt.
-      expect(def.description).toContain('system prompt');
+      expect(def!.description).toContain('system prompt');
       // The agent_type property is still wired into the schema.
-      expect(def.input_schema.properties).toHaveProperty('agent_type');
+      expect(def!.input_schema.properties).toHaveProperty('agent_type');
+    });
+
+    // #4873: scoped child agents must have an appropriately constrained tool def.
+    it('returns null for empty allowlist (agent tool must be omitted entirely)', () => {
+      const executor = makeExecutor({ nestedAgentAllowlist: [] });
+      expect(executor.describeAgentTool()).toBeNull();
+    });
+
+    it('constrains agent_type to enum of allowed types when allowlist is non-empty', () => {
+      const executor = makeExecutor({ nestedAgentAllowlist: ['git-investigator'] });
+      const def = executor.describeAgentTool();
+      expect(def).not.toBeNull();
+      const agentTypeProp = def!.input_schema.properties?.['agent_type'] as
+        | { enum?: string[]; description?: string }
+        | undefined;
+      expect(agentTypeProp?.enum).toEqual(['git-investigator']);
     });
   });
 
@@ -472,6 +488,19 @@ describe('SubagentExecutor named-agent dispatch', () => {
     it('returns empty string when no registry is wired', () => {
       const executor = makeExecutor({ agentRegistry: undefined });
       expect(executor.describeAgentTypeListing()).toBe('');
+    });
+
+    // #4873: scoped child agents must only see the types they are permitted to dispatch.
+    it('returns empty string when allowlist is empty (no dispatch permitted)', () => {
+      const executor = makeExecutor({ nestedAgentAllowlist: [] });
+      expect(executor.describeAgentTypeListing()).toBe('');
+    });
+
+    it('filters listing to only allowed types when allowlist is non-empty', () => {
+      const executor = makeExecutor({ nestedAgentAllowlist: ['git-investigator'] });
+      const listing = executor.describeAgentTypeListing();
+      expect(listing).toContain('git-investigator');
+      expect(listing).not.toContain('research-agent');
     });
   });
 });

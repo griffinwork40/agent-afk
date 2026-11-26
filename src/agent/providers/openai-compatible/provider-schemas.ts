@@ -21,7 +21,12 @@ export function buildProviderSchemas(opts: OpenAICompatibleProviderOptions): Ant
   }
   schemas.push(getRuntimeStateTool);
   // Nesting remains after memory/state/awareness for prefix-cache stability (#4217).
-  if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
+  if (opts.subagentExecutor) {
+    // describeAgentTool() returns null when the allowlist is empty (scoped child
+    // that must not dispatch any nested agents) — omit the tool entirely (#4873).
+    const agentToolDef = opts.subagentExecutor.describeAgentTool?.() ?? agentTool;
+    if (agentToolDef !== null) schemas.push(agentToolDef);
+  }
   if (opts.skillExecutor) schemas.push(skillTool);
   if (opts.composeExecutor) schemas.push(opts.subagentExecutor?.describeComposeTool?.() ?? composeTool);
   // Builtins win over custom collisions; never send duplicate wire tool names.
