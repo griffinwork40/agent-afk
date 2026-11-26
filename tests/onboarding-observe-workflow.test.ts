@@ -94,10 +94,10 @@ describe('observe.mjs runtime behaviour', () => {
     const logPath = path.join(tmpDir, 'run', 'obs.log');
     const result = spawnSync(node, [observePath, logPath, shellArg], {
       env: { ...process.env },
-      timeout: 30_000,
+      timeout: 90_000, // 30s was too tight for macOS CI runners (issue #5340)
       encoding: 'utf8',
     });
-    expect(result.status, `stderr: ${result.stderr}`).toBe(0);
+    expect(result.status, `stderr: ${result.stderr} signal: ${result.signal}`).toBe(0);
     expect(existsSync(logPath), 'log file should be created').toBe(true);
     expect(existsSync(`${logPath}.summary.md`), 'summary file should be created').toBe(true);
     const summary = readFileSync(`${logPath}.summary.md`, 'utf8');
