@@ -12,6 +12,14 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- desktop_screenshot behind AFK_DESKTOP_ENABLED (computer use, tranche 1) (#5185) (06f405be7)
+
+### Fixed
+- pass permission allowlist to all Telegram provider families (07cdf28b8)
+- scope child prompts to granted tools and depth (#5309, #5310, #5311, #5312, #5313) (#5317) (5c36e7db2)
+- key credential-floor hint on matched presence and clarify doc wording (6e340960b)
+
 ## [6.3.0] - 2026-11-25
 
 ### Added
