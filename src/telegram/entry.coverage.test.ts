@@ -328,6 +328,101 @@ describe('entry.ts — main() happy path', () => {
     expect(exitSpy).toHaveBeenCalledWith(0);
   });
 
+  test('process.on keeps both listeners after first signal fires', async () => {
+    // Invariant: process.once would remove the listener on first delivery,
+    // leaving a repeated SIGTERM with default action (process kill) during
+    // pending teardown. process.on must keep both handlers alive until finally.
+    const { main } = await import('./entry.js');
+    const running = main();
+    await vi.waitFor(() => expect(mockBotStart).toHaveBeenCalledTimes(1));
+
+    const beforeSIGINT = process.listenerCount('SIGINT');
+    const beforeSIGTERM = process.listenerCount('SIGTERM');
+
+    // Emit SIGTERM — with process.once this would remove the SIGTERM listener.
+    process.emit('SIGTERM');
+
+    // Both counts must be unchanged: handlers are still registered.
+    expect(process.listenerCount('SIGINT')).toBe(beforeSIGINT);
+    expect(process.listenerCount('SIGTERM')).toBe(beforeSIGTERM);
+
+    await running;
+
+    // After teardown, finally must have removed both.
+    expect(process.listenerCount('SIGINT')).toBe(beforeSIGINT - 1);
+    expect(process.listenerCount('SIGTERM')).toBe(beforeSIGTERM - 1);
+  });
+
+  test('repeated same signal during teardown is absorbed by stopping guard', async () => {
+    // A second SIGTERM while bot.stop() is in flight must not start a second
+    // shutdown (bot.stop called once) and must not kill the process (handler
+    // still registered via process.on).
+    let releaseTeardown!: () => void;
+    const teardownGate = new Promise<void>((res) => { releaseTeardown = res; });
+    mockBotStop.mockReset().mockImplementation(async () => {
+      finishPolling();
+      await teardownGate;
+    });
+
+    const { main } = await import('./entry.js');
+    const running = main();
+    await vi.waitFor(() => expect(mockBotStart).toHaveBeenCalledTimes(1));
+
+    process.emit('SIGTERM');                                     // first: starts shutdown
+    await vi.waitFor(() => expect(mockBotStop).toHaveBeenCalledTimes(1));
+
+    process.emit('SIGTERM');                                     // second: stopping guard absorbs it
+    expect(mockBotStop).toHaveBeenCalledTimes(1);               // still exactly one call
+
+    releaseTeardown();
+    await running;
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(exitSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('second signal during cleanup does not overwrite shutdownPromise; main() waits for teardown gate', async () => {
+    // ??= keeps shutdownPromise pointing at the original pending promise when a
+    // second signal fires while teardown is still running. Without it, the
+    // stopping-guard's immediate return (a resolved Promise<void>) would
+    // overwrite the pending one, making `await shutdownPromise` a no-op and
+    // letting finally remove listeners before bot.stop() finishes.
+
+    let releaseTeardown!: () => void;
+    const teardownGate = new Promise<void>((res) => { releaseTeardown = res; });
+
+    mockBotStop.mockReset().mockImplementation(async () => {
+      finishPolling();    // schedules microtask: `await polling` resolves
+      await teardownGate; // holds cleanup pending
+    });
+
+    const { main } = await import('./entry.js');
+    const running = main();
+    await vi.waitFor(() => expect(mockBotStart).toHaveBeenCalledTimes(1));
+
+    // Emit both signals synchronously: SIGTERM's onSignal() completes its
+    // assignment before SIGINT's onSignal() runs (process.emit is synchronous).
+    process.emit('SIGTERM');
+    process.emit('SIGINT');
+
+    await vi.waitFor(() => expect(mockBotStop).toHaveBeenCalledTimes(1));
+    // stopping guard absorbed SIGINT — bot.stop() called exactly once.
+    expect(mockBotStop).toHaveBeenCalledTimes(1);
+
+    // setImmediate drains the microtask queue and one full I/O tick.
+    // If `await undefined` was a no-op (bug), process.exit would have already
+    // fired before this point.
+    let mainResolved = false;
+    const raceHandle = running.then(() => { mainResolved = true; });
+    await new Promise<void>((res) => setImmediate(res));
+    expect(mainResolved).toBe(false);
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    releaseTeardown();
+    await raceHandle;
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(exitSpy).toHaveBeenCalledTimes(1);
+  });
+
   test('threads AFK_THINKING / AFK_EFFORT into TelegramBot constructor', async () => {
     // Arrange: return env-sourced thinking and effort from the shared-helpers mock.
     const helpers = await import('../cli/shared-helpers.js');

@@ -235,6 +235,8 @@ export async function main(): Promise<void> {
   const statsInterval = startStatsTicker({ bot, spawnedVersion: daemonVersion });
 
   let stopping = false;
+  let shutdownPromise: Promise<void> | undefined;
+
   const shutdown = async (exitCode: number) => {
     if (stopping) return;
     stopping = true;
@@ -249,15 +251,20 @@ export async function main(): Promise<void> {
       process.exit(exitCode);
     }
   };
-  const onSignal = () => { void shutdown(0); };
+  // ??= ensures a concurrent second signal never overwrites shutdownPromise.
+  // shutdown() returns a Promise<void> (async always does), but the stopping
+  // guard makes it resolve immediately on re-entry — ??= keeps the original
+  // pending promise so `await shutdownPromise` in finally waits for cleanup.
+  const onSignal = () => { shutdownPromise ??= shutdown(0); };
 
   installCrashHandlers();
 
-  // Invariant: signal handlers are registered BEFORE bot.start() so a
-  // SIGTERM arriving during async startup still runs a clean shutdown.
-  // `shutdown` is shared by both signals and unexpected polling termination.
-  process.once('SIGINT', onSignal);
-  process.once('SIGTERM', onSignal);
+  // Invariant: handlers registered BEFORE bot.start() so a signal arriving
+  // during async startup still runs a clean shutdown. process.on (not once)
+  // keeps the listener alive for a repeated signal during pending teardown;
+  // both are removed in finally after shutdown completes.
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
 
   let started = false;
   try {
@@ -273,6 +280,7 @@ export async function main(): Promise<void> {
     console.error(palette.error('❌ ' + message + String(error)));
     await shutdown(1);
   } finally {
+    await shutdownPromise;
     process.removeListener('SIGINT', onSignal);
     process.removeListener('SIGTERM', onSignal);
   }
