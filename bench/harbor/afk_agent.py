@@ -113,12 +113,18 @@ class AfkAgent(BaseInstalledAgent):
     # classified as AfkBudgetCapError rather than the generic
     # NonZeroAgentExitCodeError.  nightly_report.build_record then keeps
     # valid_for_comparison=True (same exemption as AgentTimeoutError).
+    #
+    # Specific patterns are listed first so that a first-match matcher
+    # always selects the most-derived class.  If the base list contained a
+    # catch-all NonZeroAgentExitCodeError pattern and AfkBudgetCapError were
+    # appended after it, the catch-all would win and the subclass would never
+    # be raised.
     ERROR_PATTERNS = [
-        *BaseInstalledAgent.ERROR_PATTERNS,
         ErrorPattern(
             r"Session stopped: cost ceiling reached",
             AfkBudgetCapError,
         ),
+        *BaseInstalledAgent.ERROR_PATTERNS,
     ]
 
     @staticmethod
