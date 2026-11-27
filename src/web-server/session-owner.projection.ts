@@ -138,7 +138,7 @@ export function projectJournalMessages(
           const content = clip(block.content.map((p) => p.type === 'text' ? p.text : `[${p.type}]`).join('\n'), MAX_TOOL_INPUT_LEN);
           const toolName = tools.get(block.toolUseId);
           records.push(block.isError
-            ? { kind: 'tool_error', content, ...(toolName ? { toolName } : {}) }
+            ? { kind: 'tool_error', toolUseId: block.toolUseId, content, ...(toolName ? { toolName } : {}) }
             : { kind: 'tool_result', toolUseId: block.toolUseId, content, ...(durationOf(toolDurations, block.toolUseId)), ...(toolName ? { toolName } : {}) });
           break;
         }
