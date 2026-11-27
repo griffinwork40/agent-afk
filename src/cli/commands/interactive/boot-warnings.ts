@@ -10,6 +10,8 @@
  */
 
 import { palette } from '../../palette.js';
+import { contentBand } from '../../render/measure.js';
+import { getTerminalWidth } from '../../terminal-size.js';
 import { flushDeferredAfkMdSizeWarnings } from '../../config/afk-md-tier.js';
 import { flushDeferredPermissionModeWarnings } from '../../config/permission-mode-warning.js';
 
@@ -26,8 +28,11 @@ import { flushDeferredPermissionModeWarnings } from '../../config/permission-mod
  * `preArmAnchorRow`, so these lines must pass through a wrapped stream write.
  */
 export function drainBootWarnings(warnings: string[]): void {
+  // Content centering (AFK_CENTER_CONTENT): prepend the left margin so
+  // boot warnings align with the centered welcome banner above them.
+  const { margin: centerPad } = contentBand(getTerminalWidth());
   for (const w of warnings) {
-    console.warn(palette.warning(`  ${w}`));
+    console.warn(centerPad + palette.warning(`  ${w}`));
   }
   warnings.length = 0;
   // Config warnings deferred by `index.ts` across the pre-parse
