@@ -115,9 +115,12 @@ function onSigterm(): void {
 
 function trackChild(child: ChildProcess): void {
   children.add(child);
+  // Declared before `forget` so `forget` can reference it. Assigned after
+  // (POSIX-only path below). On win32 this remains undefined and is never read.
+  let onExit: (() => void) | undefined;
   const forget = () => {
     children.delete(child);
-    child.removeListener('exit', forget);
+    if (onExit !== undefined) child.removeListener('exit', onExit);
     child.removeListener('error', forget);
   };
   // On POSIX the server leads its own process group (detached: true). When the
@@ -126,13 +129,14 @@ function trackChild(child: ChildProcess): void {
   // already removed the child from `children`. Kill the group now, before
   // forgetting, so helpers don't outlive their root (#4309 item 1).
   if (process.platform !== 'win32') {
-    child.once('exit', () => {
+    onExit = () => {
       const pid = child.pid;
       if (pid !== undefined && pid > 1) {
         try { process.kill(-pid, 'SIGKILL'); } catch { /* group already gone */ }
       }
       forget();
-    });
+    };
+    child.once('exit', onExit);
   } else {
     child.once('exit', forget);
   }

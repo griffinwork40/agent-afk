@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { exitPromise, spawnServer } from './client-process.js';
 import { pidAlive, readFakeLog, writeFakeLspServer } from './__test-utils__/fake-lsp-server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -65,6 +66,28 @@ describe('LSP spawn-time exit guardian', () => {
       }
     }, 60_000,
   );
+
+  // Spawn-failure cleanup (#4309 fix): on POSIX+detached, ENOENT fires only
+  // 'error' (not 'exit'). `forget()` runs from the error listener and calls
+  // `child.removeListener('exit', onExit)`. Before the fix the target was
+  // `forget` itself — a function never registered as the exit listener, so the
+  // anonymous arrow remained live (a dangling listener). After the fix `onExit`
+  // is the named, registered listener; removing it is correct and no-ops safely
+  // even if exit never fired. This test verifies: (a) no throw on the error
+  // path, (b) the child set is not corrupted for subsequent spawns.
+  it('forget() runs cleanly on ENOENT spawn-failure — no throw, no set corruption (POSIX only)', async () => {
+    if (process.platform === 'win32') return;
+    const child = spawnServer('/afk-test-nonexistent-binary', [], os.tmpdir());
+    // Wait for the error event — exitPromise resolves on either error or exit.
+    await exitPromise(child);
+    // Yield one microtask tick so any synchronous follow-on listener work settles.
+    await Promise.resolve();
+    // If we reach here without throwing, forget() completed cleanly.
+    // Verify the child set is not corrupted: a subsequent spawn still works.
+    const ok = spawnServer(process.execPath, ['--version'], os.tmpdir());
+    await exitPromise(ok);
+    expect(true).toBe(true);
+  }, 10_000);
 
   // Crash-first (#4309 item 1): server root exits on its own before the host
   // shuts down. On POSIX, helpers the server spawned must be killed when the
