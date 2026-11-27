@@ -559,6 +559,10 @@ export class SessionToolDispatcher implements ToolDispatcher {
       traceWriter: this.traceWriter,
       isRegisteredTool: (name) => _isRegisteredTool(name, cDeps),
       denialReason: (name, reason) => _denialReason(name, reason, cDeps),
+      // Cross-turn repeat-failure suppression (#4476 item 3): thread the
+      // session-scoped ledger reader so runPreDispatchGates can consult prior
+      // error observations spanning multiple turns.
+      toolCallLedger: this._toolCallLedger,
     };
   }
 

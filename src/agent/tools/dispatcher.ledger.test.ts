@@ -170,4 +170,38 @@ describe('SessionToolDispatcher — ToolCallLedger wiring (#4476)', () => {
       rs.map((r) => ({ content: r.content, isError: r.isError === true }));
     expect(strip(await broken.executeBatch(batch))).toEqual(strip(await baseline.executeBatch(batch)));
   });
+
+  it('cross-turn repeat-failure suppression fires after CROSS_TURN threshold (#4476 item 3)', async () => {
+    // History: the per-turn RepeatFailureGuard (threshold 3) fires within a
+    // single dispatcher and resets between dispatchers (turns). To test the
+    // CROSS-TURN suppressor, we share one ledger wiring across N dispatchers,
+    // each representing one turn. Each turn's dispatcher records one fresh error
+    // in the shared ledger; the cross-turn gate fires when the cumulative error
+    // count across turns reaches CROSS_TURN_REPEAT_FAILURE_THRESHOLD.
+    const { CROSS_TURN_REPEAT_FAILURE_THRESHOLD } = await import('./dispatcher.pre-dispatch-gates.js');
+    const wiring = new ToolCallLedgerWiring(new ToolCallLedger(10));
+    const failingCall = call('fail_tool', { cross: 'turn' });
+
+    // Execute `threshold` times — each in its own dispatcher (= its own
+    // per-turn RepeatFailureGuard). Each records exactly one error in the shared
+    // ledger. After `threshold` rounds the ledger holds `threshold` error entries.
+    // The gate fires on the NEXT (threshold + 1th) call when it looks up and
+    // sees at least `threshold` prior errors.
+    for (let i = 0; i < CROSS_TURN_REPEAT_FAILURE_THRESHOLD; i++) {
+      const d = makeDispatcher(wiring);
+      const result = await d.execute(failingCall);
+      expect(result.isError).toBe(true);
+      // Must NOT be the cross-turn suppressor message yet.
+      expect(result.content).not.toMatch(/cross-turn repeat-failure/i);
+    }
+
+    // The (threshold + 1)th call: the ledger already holds `threshold` errors,
+    // so the cross-turn gate fires and blocks execution.
+    const d = makeDispatcher(wiring);
+    const suppressed = await d.execute(failingCall);
+    expect(suppressed.isError).toBe(true);
+    expect(suppressed.failureClass).toBe('repeat-failure');
+    expect(suppressed.content).toMatch(/cross-turn repeat-failure/i);
+    expect(suppressed.content).toMatch(new RegExp(String(CROSS_TURN_REPEAT_FAILURE_THRESHOLD)));
+  });
 });
