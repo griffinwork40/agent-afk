@@ -108,7 +108,7 @@ export class MemoryStore {
   private readonly db: BetterSqlite3.Database;
   private readonly facetFts: FacetFtsStore;
 
-  constructor(memoryDir?: string, facetCacheDir?: string, opts?: { skipFacetBackfill?: boolean }) {
+  constructor(memoryDir?: string, facetCacheDir?: string) {
     this.dir = memoryDir ?? getMemoryDir();
     mkdirSync(this.dir, { recursive: true });
     mkdirSync(join(this.dir, PROCEDURES_DIR), { recursive: true });
@@ -116,16 +116,7 @@ export class MemoryStore {
     // Open the facet FTS sidecar DB. This is a separate SQLite database that
     // indexes session facet fields for type:'session' search results.
     this.facetFts = new FacetFtsStore(this.dir);
-    // Backfill existing facet cache files on first open (or when the cache dir
-    // is newer than the sidecar DB) so prior sessions are searchable immediately.
-    // Skip when opts.skipFacetBackfill is true (e.g. session-end-hook only
-    // needs to index one fresh facet, not scan all existing cache files).
-    if (!opts?.skipFacetBackfill) {
-      const resolvedCacheDir = facetCacheDir ?? getFacetCacheDir();
-      if (this.facetFts.needsBackfill(this.dir, resolvedCacheDir)) {
-        this.facetFts.backfill(resolvedCacheDir);
-      }
-    }
+    this.facetFts.backfill(facetCacheDir ?? getFacetCacheDir());
 
     this.db = new Database(join(this.dir, DB_FILE));
     // configureSqliteConnection sets busy_timeout (5 000 ms) BEFORE the WAL
@@ -470,16 +461,7 @@ export class MemoryStore {
 
   // ── Facet FTS (session recall) ───────────────────────────────
 
-  /**
-   * Index a session facet for `type: 'session'` search results.
-   *
-   * Contract: idempotent — re-indexing an already-indexed session_id is a
-   * no-op (INSERT OR IGNORE). Callers invoke this at facet-write time so the
-   * index stays current without a backfill pass.
-   *
-   * The `raw` argument is the facet object as written to the cache dir.
-   * Extraction logic lives in memory-store.facet-index.ts (line-ceiling split).
-   */
+  /** Index or replace a cached facet for `type: 'session'` search results. */
   indexFacet(raw: unknown): void {
     indexFacetIntoStore(this.facetFts, raw);
   }
@@ -529,17 +511,13 @@ export class MemoryStore {
       // and return [] so a facet-index problem never breaks fact recall.
       // FacetFtsStore.search() applies sanitizeFtsQuery internally.
       //
-      // Session results are fetched with a reserved sub-limit so they cannot
-      // be starved when facts alone fill the budget. We reserve up to
-      // Math.ceil(limit / 3) slots (capped at 3) for session results, then
-      // fill the rest with facts+procs. This guarantees that when session
-      // results exist and match the query, at least some appear in the output.
-      const sessionSlots = Math.min(3, Math.ceil(limit / 3));
+      // Reserve roughly a third for sessions under competition. When facts
+      // and procedures leave slots empty, let more sessions fill them.
+      const sessionSlots = Math.max(Math.ceil(limit / 3), limit - results.length);
       const sessionResults = this.facetFts.search(query, sessionSlots);
 
       if (sessionResults.length > 0) {
-        // Interleave: take up to (limit - sessionSlots) from facts+procs,
-        // then append session results, then slice to limit.
+        // Leave all unused session slots available to facts and procedures.
         const nonSessionBudget = limit - sessionResults.length;
         const trimmed = results.slice(0, nonSessionBudget);
         return [...trimmed, ...sessionResults].slice(0, limit);

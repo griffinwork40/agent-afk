@@ -986,4 +986,20 @@ describe('search() — session results survive when facts fill the limit', () =>
     // Total must not exceed the requested limit.
     expect(results.length).toBeLessThanOrEqual(10);
   });
+
+  it('scales the session lane without crowding out facts', () => {
+    for (let i = 0; i < 24; i++) {
+      sessionStore.storeFact({
+        category: 'learning', content: `webhook learning fact ${i}`, source_surface: 'test',
+      });
+      sessionStore.indexFacet({ session_id: `sess-slot-${i}`, brief_summary: 'webhook relay' });
+    }
+
+    for (const [limit, sessionCount] of [[2, 1], [6, 2], [18, 6]] as const) {
+      const results = sessionStore.search('webhook', { limit });
+      expect(results.filter((r) => r.type === 'session')).toHaveLength(sessionCount);
+      expect(results.filter((r) => r.type === 'fact')).toHaveLength(limit - sessionCount);
+    }
+    expect(sessionStore.search('relay', { limit: 18 })).toHaveLength(18);
+  });
 });

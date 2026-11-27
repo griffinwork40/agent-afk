@@ -6,6 +6,11 @@
  * yield-probe is fired asynchronously for top-level sessions.
  */
 import { describe, expect, it, vi } from 'vitest';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { getSessionsDir } from '../../paths.js';
+import { createMemoryHandlers } from '../memory/memory-tools.js';
+import { MemoryStore } from '../memory/memory-store.js';
 import type { SessionEndContext } from '../hooks.js';
 import { createFacetSessionEndHook } from './session-end-hook.js';
 
@@ -38,6 +43,43 @@ describe('createFacetSessionEndHook', () => {
 
     expect(mockDerive).toHaveBeenCalledTimes(1);
     expect(mockDerive).toHaveBeenCalledWith('top-level');
+  });
+
+  it('recalls a later user turn through memory_search without exposing the indexed turn', async () => {
+    const sessionId = 'live-rich-recall';
+    const startTime = '2024-04-03T02:01:00.000Z';
+    const cwd = join('workspace', 'live-project');
+    const secret = 'redactioncanary0123456789';
+    const sessionDir = getSessionsDir();
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, `${sessionId}.json`), JSON.stringify({
+      cwd,
+      turns: [
+        { user: `${'long '.repeat(4000)}openingtail` },
+        { user: `[skill-routing: active]\n- syntheticpreamble\nInvestigate glockenspiel; TEST_API_KEY=${secret}`,
+          assistant: 'assistantcanary' },
+      ],
+    }));
+    mockDerive.mockReturnValue({
+      session_id: sessionId, start_time: startTime, brief_summary: 'Initial request',
+    } as ReturnType<typeof getOrDeriveFacet>);
+    createFacetSessionEndHook()(endCtx({ sessionId, cwd }));
+
+    const store = new MemoryStore();
+    try {
+      const search = createMemoryHandlers(store).get('memory_search');
+      const response = await search?.({ query: 'glockenspiel' }, new AbortController().signal);
+      const [result] = JSON.parse(response?.content ?? '[]');
+      expect(result).toMatchObject({ type: 'session', source_session: sessionId, created_at: startTime });
+      expect(result.content).toContain(`Cwd: ${cwd}`);
+      expect(result.content).not.toContain('glockenspiel');
+      expect(result.content).toMatch(/Pass session ID "live-rich-recall" to get_facet.*\.$/);
+      for (const query of [secret, 'openingtail', 'assistantcanary', 'syntheticpreamble']) {
+        expect(store.search(query)).toEqual([]);
+      }
+    } finally {
+      store.close();
+    }
   });
 
   it('fires the yield probe after deriving the facet', () => {

@@ -1,3 +1,4 @@
+// Contract: session-end facet work is best-effort and skips subagents.
 /**
  * SessionEnd hook that derives and caches a facet for the completed session,
  * then enriches it with session yield tracking data (#2016).
@@ -32,7 +33,9 @@ import { getOrDeriveFacet } from './store.js';
 import { writeFacetYield } from './yield-probe.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
 import { execFileAsync } from '../../utils/exec-file.js';
-import { MemoryStore } from '../memory/memory-store.js';
+import { getMemoryDir } from '../../paths.js';
+import { FacetFtsStore } from '../memory/facet-fts-store.js';
+import { indexFacetIntoStore } from '../memory/memory-store.facet-index.js';
 
 export function createFacetSessionEndHook(): HookHandler {
   return (context) => {
@@ -59,9 +62,12 @@ export function createFacetSessionEndHook(): HookHandler {
     // Phase 1b: index the facet into the facet FTS store for memory_search
     // type:'session' results. Best-effort — failures must never block teardown.
     try {
-      const memStore = new MemoryStore(undefined, undefined, { skipFacetBackfill: true });
-      memStore.indexFacet(facet);
-      memStore.close();
+      const store = new FacetFtsStore(getMemoryDir(), true);
+      try {
+        indexFacetIntoStore(store, facet, { sidecarId: sessionId, cwd: context.cwd });
+      } finally {
+        store.close();
+      }
     } catch {
       // Swallow: FTS index failures are additive, never critical.
     }

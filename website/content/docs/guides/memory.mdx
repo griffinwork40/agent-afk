@@ -90,7 +90,11 @@ postgres NOT sqlite
 pnpm*
 ```
 
-Superseded facts are excluded from ordinary recall. Procedure searches use case-insensitive substring matching of query terms, not FTS5 operators. A category filter restricts results to facts and excludes procedures.
+Superseded facts are excluded from ordinary recall. Procedure searches use case-insensitive substring matching of query terms, not FTS5 operators. A category filter restricts results to facts and excludes procedures and sessions.
+
+Without a category filter, search also finds past sessions by terms from user turns and recorded session metadata, such as working directories, branches, file paths, and PR links. When both lanes match, sessions get roughly a third of the result slots; if facts and procedures leave slots empty, more sessions can appear. A session result shows the original start time and working directory when known. Use its session ID with `get_facet` to inspect the structured summary if the session files still exist.
+
+The local search index keeps bounded excerpts of user turns with best-effort secret redaction. Those excerpts can remain searchable after the underlying session files are swept (30 days by default). When rebuilding the index without those files, only the cached facet is available.
 
 ## Evidence gate and stale citations
 
