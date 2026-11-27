@@ -201,7 +201,7 @@ export function applyStreakLogic(
       ...record,
       failureStreak,
       ...(failureStreak.failingSince !== undefined ? { failingSince: failureStreak.failingSince } : {}),
-      notificationDecision: notificationDecision(record, effectiveTask, hasCallback, kind),
+      notificationDecision: record.notificationDecision ?? notificationDecision(record, effectiveTask, hasCallback, kind),
     },
     effectiveTask,
     effectiveDetails,

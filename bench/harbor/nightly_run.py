@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tomllib
 
+from bench.harbor.exit_reason import annotate
 from bench.harbor.nightly_report import build_record
 
 
@@ -64,6 +65,8 @@ def main():
                     run_url=f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
                     event=os.environ['GITHUB_EVENT_NAME'])
     record = build_record(args.output / 'nightly', spec, metadata)
+    # Closed-vocabulary reason only; never agent output (bench/harbor/exit_reason.py).
+    annotate(record, args.output / 'nightly')
     if completed.returncode:
         record['valid_for_comparison'] = False
         record['harness_error'] = 'HarborNonZeroExit'

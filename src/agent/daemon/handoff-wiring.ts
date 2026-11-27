@@ -236,6 +236,7 @@ export async function recoverPendingHandoffs(
   handoffsDir?: string,
   queueDir?: string,
   bot?: Telegraf,
+  resolveNotifyChat?: (notifyChat: number | string | undefined, taskId: string) => number | undefined,
 ): Promise<RecoveryResult> {
   const result: RecoveryResult = { renotified: 0, expired: 0 };
 
@@ -266,6 +267,8 @@ export async function recoverPendingHandoffs(
       }
       continue;
     }
+
+    if (record.notifyOn === 'never') continue;
 
     // Re-notify the operator. When a bot instance is available and the record
     // has a stored route, re-send a rich interactive question. Otherwise fall
@@ -304,7 +307,9 @@ export async function recoverPendingHandoffs(
         if (!replyMarkup) {
           parts.push(`\nReply to this task's next run to provide your answer.`);
         }
-        void operatorNotify(parts.join('\n'), { replyMarkup }).catch(() => undefined);
+        // Revalidate the persisted override against today's allowlist.
+        const target = resolveNotifyChat?.(record.notifyChat, record.taskId);
+        void operatorNotify(parts.join('\n'), { replyMarkup, target }).catch(() => undefined);
       }
       result.renotified += 1;
     } catch {
@@ -391,7 +396,7 @@ const truncateLabel = truncateTelegramLabel;
  * The returned shape matches Telegram's InlineKeyboardMarkup interface and
  * is forwarded verbatim as `replyMarkup` in pushIfConfigured.
  */
-function buildHandoffReplyMarkup(
+export function buildHandoffReplyMarkup(
   qType: string,
   taskId: string,
   choices?: readonly string[],

@@ -11,6 +11,7 @@ import { MODEL_ALIASES_HINT } from '../agent/session/model-slots.js';
 import { handleSessions, handleNew, handleSwitchCallback } from './handlers/sessions.js';
 import { registerDelegatingCommands } from './bot.delegating-commands.js';
 import { botCommandDescriptors } from './bot.command-descriptors.js';
+import { launchTelegramPolling } from './bot.polling.js';
 import type { AgentModelInput } from '../agent/types.js';
 import { handleFarmCallback } from './handlers/farm-callbacks.js';
 import { MessageHandler } from './handlers/message.js';
@@ -289,7 +290,7 @@ export class TelegramBot {
   /**
    * Start the bot
    */
-  async start(): Promise<void> {
+  async start(): Promise<{ polling: Promise<void> }> {
     if (this.running) {
       throw new Error('Bot is already running');
     }
@@ -337,19 +338,23 @@ export class TelegramBot {
     // ALLOWED_UPDATE_TYPES includes everything Telegram delivers by default plus
     // 'message_reaction' (and 'message_reaction_count') which must be requested
     // explicitly; omitting them silences the reaction handler registered above.
-    await this.bot.launch({ allowedUpdates: [...ALLOWED_UPDATE_TYPES] });
-
-    // Register commands with Telegram so they appear in the UI
-    this.log('Registering bot commands...');
-    await this.bot.telegram.setMyCommands(await botCommandDescriptors());
-
+    const { ready, polling } = launchTelegramPolling(this.bot, { allowedUpdates: [...ALLOWED_UPDATE_TYPES] });
+    await ready;
     this.running = true;
+
+    // A signal can now stop polling even while command registration is pending.
+    this.log('Registering bot commands...');
+    await Promise.race([
+      botCommandDescriptors().then(commands => this.bot.telegram.setMyCommands(commands)),
+      polling.then(() => { throw new Error('Telegram polling ended during startup'); }),
+    ]);
     this.log('Bot started successfully');
 
     // Invariant: SIGINT/SIGTERM handlers are NOT registered here. Signal
     // ownership lives in the process entrypoint (entry.ts) so that resources
     // it created (sharedMemoryStore, statsInterval) are correctly torn down.
     // Adding handlers here would cause a double-shutdown sequence.
+    return { polling };
   }
 
   /**
@@ -363,14 +368,6 @@ export class TelegramBot {
     this.log('Stopping bot...');
     this.running = false;
 
-    this.log('Uninstalling elicitation handler...'); elicitationRouter.uninstall();
-
-    this.log('Stopping session watches...');
-    await this.watchManager.stopAll();
-
-    this.log('Closing sessions...');
-    await this.sessionManager.closeAll();
-
     this.log('Stopping bot polling...');
     try {
       this.bot.stop();
@@ -378,6 +375,14 @@ export class TelegramBot {
       // Ignore errors if bot wasn't fully started
       this.log('Error stopping bot (may not have been started):', error);
     }
+
+    this.log('Uninstalling elicitation handler...'); elicitationRouter.uninstall();
+
+    this.log('Stopping session watches...');
+    await this.watchManager.stopAll();
+
+    this.log('Closing sessions...');
+    await this.sessionManager.closeAll();
 
     this.log('Bot stopped');
   }
