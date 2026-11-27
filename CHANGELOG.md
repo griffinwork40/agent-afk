@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [6.4.1] - 2026-11-27
+
 ### Fixed
 - center pre-compositor startup lines under AFK_CENTER_CONTENT (#5372) (5042eda19)
 - attribute typed handoff answers to the sender (#5337) (a05da4dc1)
