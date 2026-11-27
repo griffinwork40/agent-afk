@@ -47,6 +47,14 @@ const WGET: ArgvSpec = {
   requireAny: set('--spider'),
 };
 
+/**
+ * npm read-only subcommands allowed for polling. Only `view` (alias `info`,
+ * `show`) is included — it fetches registry metadata without writing anything.
+ * `npm view <pkg>@<version> version` is the canonical form for waiting until
+ * a package version appears on the registry after `npm publish`.
+ */
+const NPM_READ_ONLY_SUBS = new Set(['view', 'info', 'show']);
+
 /** find primaries that delete, write a file, or execute a program. */
 const FIND_WRITE_PRIMARY = /^-(?:delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/;
 
@@ -83,6 +91,14 @@ export function segmentArgvReason(tokens: readonly string[]): string | undefined
       return argvAllowed(argv, WGET) ? undefined : 'wget is only allowed as a --spider probe';
     case 'find':
       return argv.some((t) => FIND_WRITE_PRIMARY.test(t)) ? 'find action that writes or executes' : undefined;
+    case 'npm': {
+      // Only allow `npm view` (aliases: info, show) for registry metadata reads.
+      // `npm view <pkg>@<version> version` is the canonical publish-poll form.
+      const sub = argv[0];
+      return sub !== undefined && NPM_READ_ONLY_SUBS.has(sub)
+        ? undefined
+        : 'npm subcommand is not on the read-only polling allowlist (only view/info/show are allowed)';
+    }
     default:
       return undefined;
   }

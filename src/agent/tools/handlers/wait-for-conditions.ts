@@ -49,6 +49,10 @@ export interface CommandCondition {
   type: 'command';
   command: string;
   cwd?: string;
+  /** Condition is met when the command exits 0 AND stdout contains this substring. */
+  stdout_contains?: string;
+  /** Condition is met when the command exits 0 AND stdout (trimmed) equals this string exactly. */
+  stdout_equals?: string;
 }
 
 /** Result of a single condition evaluation. */
@@ -259,13 +263,13 @@ export function evaluateCommand(cond: CommandCondition): WaitResult {
     };
   }
 
+  let stdout: Buffer;
   try {
-    execSync(cond.command, {
+    stdout = execSync(cond.command, {
       cwd: cond.cwd,
       stdio: 'pipe',
       timeout: 30_000,
-    });
-    return { met: true, detail: `command exited 0`, data: { command: cond.command } };
+    }) ?? Buffer.alloc(0);
   } catch (err) {
     // L-2: Detect execSync timeout (killed: true + signal: 'SIGTERM') and report
     // it distinctly so callers know the command ran but was too slow, not that
@@ -285,4 +289,26 @@ export function evaluateCommand(cond: CommandCondition): WaitResult {
       data: { command: cond.command, exitCode: status },
     };
   }
+
+  // Output condition checks — evaluated in Node after the allowlisted command runs.
+  // Both stdout_contains and stdout_equals operate on the decoded stdout string.
+  if (cond.stdout_contains !== undefined || cond.stdout_equals !== undefined) {
+    const out = stdout.toString('utf8');
+    if (cond.stdout_contains !== undefined && !out.includes(cond.stdout_contains)) {
+      return {
+        met: false,
+        detail: `command exited 0 but stdout does not contain "${cond.stdout_contains}"`,
+        data: { command: cond.command, exitCode: 0 },
+      };
+    }
+    if (cond.stdout_equals !== undefined && out.trim() !== cond.stdout_equals) {
+      return {
+        met: false,
+        detail: `command exited 0 but stdout (trimmed) does not equal "${cond.stdout_equals}"`,
+        data: { command: cond.command, exitCode: 0 },
+      };
+    }
+  }
+
+  return { met: true, detail: `command exited 0`, data: { command: cond.command } };
 }

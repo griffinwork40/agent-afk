@@ -1,7 +1,7 @@
 import { classifyRisk } from '../../risk-classifier.js';
 import { tokenizeSegments } from '../readonly-bash.tokenizer.js';
 import { analyzeCommand, type CommandAnalysis } from '../../command-classifier.js';
-import { hasUnquotedBackgroundOp, pollArgvReason } from './wait-for-poll-allowlist.js';
+import { hasUnquotedBackgroundOp, pollArgvReason, segmentArgvReason } from './wait-for-poll-allowlist.js';
 
 // Invariant: this supplement belongs ONLY to wait_for. The bash tool's risk
 // tables and approval policy must not change when a polling builtin is added.
@@ -32,6 +32,16 @@ export function pollSyntaxReason(command: string, analysis: CommandAnalysis = an
   return pollMutationReason(command, analysis);
 }
 
+/**
+ * Commands whose first token is in this set are admitted by the per-family
+ * argv allowlist in `wait-for-poll-allowlist.ts` rather than by the bash risk
+ * classifier. When `segmentArgvReason` returns `undefined` for such a segment
+ * the segment is considered read-only.
+ *
+ * Currently: `npm` — only `view`/`info`/`show` subcommands are allowed there.
+ */
+const ARGV_ALLOWLIST_FAMILIES = new Set(['npm']);
+
 /** Small, fail-closed addition to the existing risk classifier, not a shell interpreter. */
 export function isReadOnlyPoll(command: string, cwd: string): boolean {
   const segments = tokenizeSegments(command);
@@ -40,6 +50,12 @@ export function isReadOnlyPoll(command: string, cwd: string): boolean {
     const name = tokens[0];
     if (name === undefined) return false;
     if (READ_ONLY.has(name)) return name !== '[' || tokens.at(-1) === ']';
+    // #4828: Commands in ARGV_ALLOWLIST_FAMILIES are gated by per-family argv
+    // rules in wait-for-poll-allowlist.ts (e.g. `npm view/info/show` only).
+    // segmentArgvReason returning undefined means the segment is read-only.
+    if (ARGV_ALLOWLIST_FAMILIES.has(name.split('/').pop() ?? name)) {
+      return segmentArgvReason(tokens) === undefined;
+    }
     // One classifyRisk call per pipeline segment, not per command string. Each
     // segment is a distinct command whose leading word must be independently
     // safe-listed. This is intentional: the migration doc's "one shared
