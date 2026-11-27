@@ -263,6 +263,22 @@ export interface ScheduledTaskConfig {
    * also automatically disabled so it never fires again.
    */
   expiresAt?: string;
+  /**
+   * Optional model override for this task. When set, the spawned agent session
+   * uses this model instead of the daemon default or global default.
+   * Resolved as: task.model → daemon default → global default.
+   * Applies to `executor: 'agent'` tasks only; shell/builtin tasks ignore it.
+   */
+  model?: string;
+  /**
+   * Optional per-run cost ceiling in USD for this task. When set, the agent
+   * session aborts when cumulative cost reaches this limit — the same
+   * mechanism as `AFK_MAX_BUDGET_USD` / `--max-budget-usd` but scoped to
+   * one scheduled task. Prevents a single runaway task from consuming the
+   * daemon's whole budget envelope.
+   * Applies to `executor: 'agent'` tasks only.
+   */
+  maxBudgetUsd?: number;
   /** ISO 8601 creation timestamp. */
   createdAt: string;
   /** ISO 8601 last-update timestamp. */
@@ -479,7 +495,9 @@ export function getSchedule(id: string, path?: string): ScheduledTaskConfig | un
 }
 
 /** Patchable fields for `updateSchedule`. Excludes `id` and `createdAt`. */
-export type SchedulePatch = Partial<Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt' | 'cwd' | 'runAt' | 'expiresAt' | 'failureStreakThreshold'>> & {
+export type SchedulePatch = Partial<Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt' | 'cwd' | 'runAt' | 'expiresAt' | 'failureStreakThreshold' | 'maxBudgetUsd'>> & {
+  /** Set or clear the per-task budget ceiling. Pass `null` to clear. */
+  maxBudgetUsd?: number | null;
   /** Set or clear the per-task streak threshold. Pass null to clear (fall back to default 3). */
   failureStreakThreshold?: number | null;
   /** Set a new directory path, or pass `null`/`""` to clear the existing one. */
@@ -533,6 +551,8 @@ export function updateSchedule(
       ...(patch.maxAttempts !== undefined ? { maxAttempts: patch.maxAttempts } : {}),
       ...(patch.retryDelayMs !== undefined ? { retryDelayMs: patch.retryDelayMs } : {}),
       ...(patch.failureStreakThreshold !== undefined && patch.failureStreakThreshold !== null ? { failureStreakThreshold: patch.failureStreakThreshold } : {}),
+      ...(patch.model !== undefined ? { model: patch.model } : {}),
+      ...(patch.maxBudgetUsd !== undefined && patch.maxBudgetUsd !== null ? { maxBudgetUsd: patch.maxBudgetUsd } : {}),
       ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
       ...(patch.cwd !== undefined && patch.cwd !== null ? { cwd: patch.cwd } : {}),
       ...(patch.runAt !== undefined && patch.runAt !== null ? { runAt: patch.runAt } : {}),
@@ -547,6 +567,8 @@ export function updateSchedule(
     if (patch.expiresAt === null) delete updated.expiresAt;
     // failureStreakThreshold: null means "clear" — fall back to default.
     if (patch.failureStreakThreshold === null) delete updated.failureStreakThreshold;
+    // maxBudgetUsd: null means "clear" — fall back to daemon/global default.
+    if (patch.maxBudgetUsd === null) delete updated.maxBudgetUsd;
     schedules[idx] = updated;
     saveSchedules(schedules, storePath);
     return updated;
@@ -623,5 +645,7 @@ export function toScheduledTask(config: ScheduledTaskConfig): ScheduledTask {
     ...(config.cwd !== undefined ? { cwd: expandCwd(config.cwd) } : {}),
     ...(config.runAt !== undefined ? { runAt: config.runAt } : {}),
     ...(config.expiresAt !== undefined ? { expiresAt: config.expiresAt } : {}),
+    ...(config.model !== undefined ? { model: config.model } : {}),
+    ...(config.maxBudgetUsd !== undefined ? { maxBudgetUsd: config.maxBudgetUsd } : {}),
   };
 }

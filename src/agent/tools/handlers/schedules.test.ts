@@ -1175,3 +1175,131 @@ describe('schedule handlers — ISO date validation at tool layer (#3585)', () =
     expect(result.content).toMatch(/expiresAt must be a valid ISO 8601/);
   });
 });
+
+describe('schedule handlers — model and maxBudgetUsd fields (#4832)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedules-handler-model-budget-'));
+    vi.stubEnv('AFK_HOME', tmpDir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // ── create_schedule ─────────────────────────────────────────────────────────
+
+  it('create_schedule persists model and maxBudgetUsd, list_schedules shows them', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Model Budget Task', command: '/r', cron: '0 2 * * *', model: 'claude-haiku-4-5', maxBudgetUsd: 2.5 },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    // Persisted to store
+    const stored = loadSchedules()[0];
+    expect(stored?.model).toBe('claude-haiku-4-5');
+    expect(stored?.maxBudgetUsd).toBe(2.5);
+    // Surfaced by list_schedules
+    const list = JSON.parse((await listSchedulesHandler({}, fakeSignal)).content as string) as Array<Record<string, unknown>>;
+    expect(list[0]).toMatchObject({ model: 'claude-haiku-4-5', maxBudgetUsd: 2.5 });
+  });
+
+  it('create_schedule without model/maxBudgetUsd omits them from list output', async () => {
+    await createScheduleHandler(
+      { name: 'Plain Task', command: '/r', cron: '0 2 * * *' },
+      fakeSignal,
+    );
+    const list = JSON.parse((await listSchedulesHandler({}, fakeSignal)).content as string) as Array<Record<string, unknown>>;
+    expect(list[0]?.model).toBeUndefined();
+    expect(list[0]?.maxBudgetUsd).toBeUndefined();
+  });
+
+  it('create_schedule accepts maxBudgetUsd: 0 (hard-stop sentinel)', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Zero Budget', command: '/r', cron: '0 2 * * *', maxBudgetUsd: 0 },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    expect(loadSchedules()[0]?.maxBudgetUsd).toBe(0);
+  });
+
+  it.each([
+    [{ model: 123 }, /model/],
+    [{ maxBudgetUsd: -1 }, /maxBudgetUsd/],
+    [{ maxBudgetUsd: 'five' }, /maxBudgetUsd/],
+    [{ maxBudgetUsd: Infinity }, /maxBudgetUsd/],
+  ])('create_schedule rejects invalid %o', async (extra, pattern) => {
+    const result = await createScheduleHandler(
+      { name: 'Bad Fields', command: '/r', cron: '0 2 * * *', ...extra },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(pattern);
+    expect(loadSchedules()).toHaveLength(0);
+  });
+
+  // ── toScheduledTask ─────────────────────────────────────────────────────────
+
+  it('toScheduledTask threads model and maxBudgetUsd from config to ScheduledTask', async () => {
+    await createScheduleHandler(
+      { name: 'Wire Task', command: '/w', cron: '0 3 * * *', model: 'claude-sonnet-4-6', maxBudgetUsd: 3 },
+      fakeSignal,
+    );
+    const { toScheduledTask } = await import('../../daemon/schedule-store.js');
+    const config = loadSchedules()[0]!;
+    const task = toScheduledTask(config);
+    expect(task.model).toBe('claude-sonnet-4-6');
+    expect(task.maxBudgetUsd).toBe(3);
+  });
+
+  // ── update_schedule ─────────────────────────────────────────────────────────
+
+  it('update_schedule sets model and maxBudgetUsd on existing schedule', async () => {
+    await createScheduleHandler(
+      { name: 'Updatable', command: '/u', cron: '0 4 * * *' },
+      fakeSignal,
+    );
+    const result = await updateScheduleHandler(
+      { taskId: 'updatable', model: 'claude-haiku-4-5', maxBudgetUsd: 1.0 },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    const list = JSON.parse((await listSchedulesHandler({}, fakeSignal)).content as string) as Array<Record<string, unknown>>;
+    expect(list[0]).toMatchObject({ model: 'claude-haiku-4-5', maxBudgetUsd: 1.0 });
+  });
+
+  it('update_schedule clears maxBudgetUsd when passed null', async () => {
+    await createScheduleHandler(
+      { name: 'Clear Budget', command: '/u', cron: '0 4 * * *', maxBudgetUsd: 5 },
+      fakeSignal,
+    );
+    expect(loadSchedules()[0]?.maxBudgetUsd).toBe(5);
+    const result = await updateScheduleHandler(
+      { taskId: 'clear-budget', maxBudgetUsd: null },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    expect(loadSchedules()[0]?.maxBudgetUsd).toBeUndefined();
+  });
+
+  it.each([
+    [{ model: 42 }, /model/],
+    [{ maxBudgetUsd: -0.5 }, /maxBudgetUsd/],
+    [{ maxBudgetUsd: NaN }, /maxBudgetUsd/],
+  ])('update_schedule rejects invalid %o before writing', async (extra, pattern) => {
+    await createScheduleHandler(
+      { name: 'Guard Task', command: '/g', cron: '0 5 * * *', maxBudgetUsd: 3 },
+      fakeSignal,
+    );
+    const result = await updateScheduleHandler(
+      { taskId: 'guard-task', ...extra },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(pattern);
+    // Original value must be unchanged
+    expect(loadSchedules()[0]?.maxBudgetUsd).toBe(3);
+  });
+});

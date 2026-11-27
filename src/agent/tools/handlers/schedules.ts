@@ -35,6 +35,12 @@ import { readTelemetryHistory } from '../../daemon/telemetry-reader.js';
 import { parseTaskRetryFields } from '../../daemon/task-retry.js';
 import { isValidIsoDate } from '../../../utils/iso-date.js';
 import { datePinnedCronWarning } from '../../daemon/schedule-cron-warning.js';
+import {
+  parseCreateModel,
+  parseCreateMaxBudgetUsd,
+  parseUpdateModel,
+  parseUpdateMaxBudgetUsd,
+} from './schedules.model-budget.js';
 
 export type { DaemonSyncResult };
 
@@ -120,6 +126,11 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
     resolvedCwd = cwdResult.resolved;
   }
 
+  const modelResult = parseCreateModel(obj['model']);
+  if (!modelResult.ok) return { content: modelResult.content, isError: true };
+  const budgetResult2 = parseCreateMaxBudgetUsd(obj['maxBudgetUsd']);
+  if (!budgetResult2.ok) return { content: budgetResult2.content, isError: true };
+
   const config = addSchedule({
     name: obj['name'] as string,
     command: obj['command'] as string,
@@ -133,6 +144,8 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
     ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
     ...(resolvedRunAt !== undefined ? { runAt: resolvedRunAt } : {}),
     ...(resolvedExpiresAt !== undefined ? { expiresAt: resolvedExpiresAt } : {}),
+    ...(modelResult.value !== undefined ? { model: modelResult.value } : {}),
+    ...(budgetResult2.value !== undefined ? { maxBudgetUsd: budgetResult2.value } : {}),
     ...retry.value,
     ...streak.value,
     enabled: typeof obj['enabled'] === 'boolean' ? obj['enabled'] : true,
@@ -291,6 +304,11 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
     }
   }
 
+  const updateModelResult = parseUpdateModel(obj['model']);
+  if (!updateModelResult.ok) return { content: updateModelResult.content, isError: true };
+  const updateBudgetResult = parseUpdateMaxBudgetUsd(obj['maxBudgetUsd']);
+  if (!updateBudgetResult.ok) return { content: updateBudgetResult.content, isError: true };
+
   // Build the patch from supplied fields only
   type Patch = Parameters<typeof updateSchedule>[1];
   const patch: Patch = {};
@@ -305,6 +323,8 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
   if (resolvedCwd !== undefined) patch.cwd = resolvedCwd;
   if (patchRunAt !== undefined) patch.runAt = patchRunAt;
   if (patchExpiresAt !== undefined) patch.expiresAt = patchExpiresAt;
+  if (updateModelResult.value !== undefined) patch.model = updateModelResult.value;
+  if (updateBudgetResult.value !== undefined) patch.maxBudgetUsd = updateBudgetResult.value;
   Object.assign(patch, retry.value, streak.value);
 
   const updated = updateSchedule(taskId, patch);
