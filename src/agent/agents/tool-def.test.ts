@@ -273,4 +273,86 @@ describe('buildAgentTypeListing', () => {
       listing.indexOf('</available-agent-types>'),
     );
   });
+
+  // #4873: scoped child agents must only see the types they are permitted to dispatch.
+  describe('nestedAgentAllowlist filtering (#4873)', () => {
+    it('returns empty string when allowlist is empty (no dispatch permitted)', () => {
+      const listing = buildAgentTypeListing(registryOf('research-agent', 'git-investigator'), []);
+      expect(listing).toBe('');
+    });
+
+    it('filters listing to only allowed types when allowlist is non-empty', () => {
+      const listing = buildAgentTypeListing(
+        registryOf('research-agent', 'git-investigator', 'Explore'),
+        ['git-investigator'],
+      );
+      expect(listing).toContain('git-investigator');
+      expect(listing).not.toContain('research-agent');
+      expect(listing).not.toContain('Explore');
+    });
+
+    it('returns empty string when allowlist names no types in the registry', () => {
+      const listing = buildAgentTypeListing(
+        registryOf('research-agent'),
+        ['nonexistent-agent'],
+      );
+      expect(listing).toBe('');
+    });
+
+    it('unfiltered listing is unchanged when allowlist is undefined', () => {
+      const withoutAllowlist = buildAgentTypeListing(registryOf('research-agent', 'git-investigator'));
+      const withUndefined = buildAgentTypeListing(registryOf('research-agent', 'git-investigator'), undefined);
+      expect(withoutAllowlist).toBe(withUndefined);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildAgentToolDef — nestedAgentAllowlist (#4873)
+// ---------------------------------------------------------------------------
+
+describe('buildAgentToolDef with nestedAgentAllowlist (#4873)', () => {
+  it('returns null-equivalent: no agent_type for empty allowlist', () => {
+    // Empty allowlist: agent tool should still be a valid def (providers gate on null
+    // from describeAgentTool, but buildAgentToolDef itself omits agent_type property).
+    const def = buildAgentToolDef(registryOf('research-agent', 'git-investigator'), undefined, []);
+    expect(def.input_schema.properties).not.toHaveProperty('agent_type');
+  });
+
+  it('adds agent_type enum constrained to allowed types when allowlist is non-empty', () => {
+    const def = buildAgentToolDef(
+      registryOf('research-agent', 'git-investigator', 'Explore'),
+      undefined,
+      ['git-investigator'],
+    );
+    const agentTypeProp = def.input_schema.properties?.['agent_type'] as
+      | { enum?: string[]; description?: string }
+      | undefined;
+    expect(agentTypeProp).toBeDefined();
+    expect(agentTypeProp?.enum).toEqual(['git-investigator']);
+    expect(agentTypeProp?.enum).not.toContain('research-agent');
+    expect(agentTypeProp?.enum).not.toContain('Explore');
+  });
+
+  it('agent_type description mentions the allowed types when scoped', () => {
+    const def = buildAgentToolDef(
+      registryOf('research-agent', 'git-investigator'),
+      undefined,
+      ['git-investigator'],
+    );
+    const agentTypeProp = def.input_schema.properties?.['agent_type'] as
+      | { description?: string }
+      | undefined;
+    expect(agentTypeProp?.description).toContain('git-investigator');
+    expect(agentTypeProp?.description).toContain('ONLY dispatch');
+  });
+
+  it('agent_type has no enum when allowlist is undefined (unscoped)', () => {
+    const def = buildAgentToolDef(registryOf('research-agent', 'git-investigator'), undefined, undefined);
+    const agentTypeProp = def.input_schema.properties?.['agent_type'] as
+      | { enum?: string[] }
+      | undefined;
+    expect(agentTypeProp).toBeDefined();
+    expect(agentTypeProp?.enum).toBeUndefined();
+  });
 });
