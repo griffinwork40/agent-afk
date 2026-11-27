@@ -748,7 +748,7 @@ You do the thing.
     expect(mockRunToResult).toHaveBeenCalledOnce();
     const userMessage = mockRunToResult.mock.calls[0]?.[0] as string;
 
-    const anchor = `Run the ${skillName} skill now, following the instructions in your system prompt.`;
+    const anchor = `You are now executing the ${skillName} skill. Its instructions are in your system prompt. Start the work directly with your tools; do not call the \`skill\` tool for ${skillName}.`;
     expect(userMessage).toContain(anchor);
     expect(userMessage).toContain(args);
     expect(userMessage.indexOf(anchor)).toBeLessThan(userMessage.indexOf(args));
@@ -766,7 +766,7 @@ You do the thing.
     expect(mockRunToResult).toHaveBeenCalledOnce();
     const userMessage = mockRunToResult.mock.calls[0]?.[0] as string;
 
-    const anchor = `Run the ${skillName} skill now, following the instructions in your system prompt.`;
+    const anchor = `You are now executing the ${skillName} skill. Its instructions are in your system prompt. Start the work directly with your tools; do not call the \`skill\` tool for ${skillName}.`;
     expect(userMessage).toBe(anchor);
   });
 });

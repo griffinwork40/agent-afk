@@ -991,7 +991,7 @@ describe('SkillExecutor', () => {
 
       await executor.execute(makeCall({ name: 'fork-no-args' }));
 
-      expect(mockRunToResult).toHaveBeenCalledWith('Run the fork-no-args skill now, following the instructions in your system prompt.');
+      expect(mockRunToResult).toHaveBeenCalledWith('You are now executing the fork-no-args skill. Its instructions are in your system prompt. Start the work directly with your tools; do not call the `skill` tool for fork-no-args.');
     });
 
     it('should pass arguments as user message when provided', async () => {
@@ -1037,10 +1037,10 @@ describe('SkillExecutor', () => {
       // the args must survive verbatim for SKILL.md bodies that grep them.
       const sent = mockRunToResult.mock.calls[0]?.[0] as string;
       expect(sent).toContain(
-        'Run the fork-with-args skill now, following the instructions in your system prompt.',
+        'You are now executing the fork-with-args skill. Its instructions are in your system prompt. Start the work directly with your tools; do not call the `skill` tool for fork-with-args.',
       );
       expect(sent).toContain('my custom args');
-      expect(sent.indexOf('Run the fork-with-args skill')).toBeLessThan(
+      expect(sent.indexOf('You are now executing the fork-with-args skill')).toBeLessThan(
         sent.indexOf('my custom args'),
       );
     });
@@ -3201,7 +3201,7 @@ describe('SkillExecutor', () => {
       await executor.execute(makeCall({ name: 'plugin-no-args' }));
 
       expect(mockRunToResult).toHaveBeenCalledWith(
-        'Run the plugin-no-args skill now, following the instructions in your system prompt.',
+        'You are now executing the plugin-no-args skill. Its instructions are in your system prompt. Start the work directly with your tools; do not call the `skill` tool for plugin-no-args.',
       );
     });
   });
