@@ -436,7 +436,10 @@ describe('SubagentExecutor named-agent dispatch', () => {
 
   describe('describeAgentTool', () => {
     it('returns a def structurally equivalent to the static def when no registry is wired', () => {
-      const executor = makeExecutor({ agentRegistry: undefined });
+      // Wire a background registry so hasBackgroundRegistry=true: this test is about agentRegistry
+      // absence, not background-registry absence. The #4876 no-background path is covered in
+      // tool-def.test.ts.
+      const executor = makeExecutor({ agentRegistry: undefined, backgroundRegistry: {} as never });
       const def = executor.describeAgentTool();
       // Since #4509 buildAgentToolDef always patches the model.description with live slot bindings,
       // so it returns a new object rather than the static agentTool reference.
