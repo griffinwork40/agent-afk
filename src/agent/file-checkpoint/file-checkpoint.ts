@@ -43,8 +43,8 @@ interface SnapshotMetadata {
 export function decodePathKey(key: string): string {
   return Buffer.from(key, 'base64url').toString('utf8');
 }
-/** @deprecated Only unversioned legacy snapshots use an in-band sentinel. */
-export const NEW_FILE_SENTINEL = '__afk_new_file__\n';
+/** Only unversioned legacy snapshots use an in-band sentinel (not exported). */
+const NEW_FILE_SENTINEL = '__afk_new_file__\n';
 
 function turnDirectory(sessionId: string, turnId: string, stateDir?: string): string {
   return stateDir ? join(stateDir, 'file-checkpoints', sessionId, turnId)

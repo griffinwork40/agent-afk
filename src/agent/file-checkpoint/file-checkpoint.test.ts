@@ -17,9 +17,11 @@ import path from 'path';
 import {
   createFileCheckpointRegistry,
   listTurnSnapshots,
-  NEW_FILE_SENTINEL,
   decodePathKey,
 } from './file-checkpoint.js';
+
+/** Legacy in-band sentinel value — kept here for backward-compat test coverage. */
+const NEW_FILE_SENTINEL = '__afk_new_file__\n';
 import { rewindFiles } from './rewind-files.js';
 
 // ---------------------------------------------------------------------------
