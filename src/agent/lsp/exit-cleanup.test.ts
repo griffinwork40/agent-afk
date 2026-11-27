@@ -65,4 +65,51 @@ describe('LSP spawn-time exit guardian', () => {
       }
     }, 60_000,
   );
+
+  // Crash-first (#4309 item 1): server root exits on its own before the host
+  // shuts down. On POSIX, helpers the server spawned must be killed when the
+  // root's exit event fires, not deferred to the host's own exit handler
+  // (which would skip them because `forget()` already removed the child).
+  it('kills helpers when the server root crashes before the host exits (POSIX only)',
+    async function () {
+      if (process.platform === 'win32') return;
+      const root = mkdtempSync(path.join(os.tmpdir(), 'afk-lsp-exit-'));
+      const log = path.join(root, 'log.jsonl');
+      const server = path.join(root, 'server.cjs');
+      const host = path.join(root, 'host.mts');
+      // Server exits immediately after spawning grandchild; host keeps running briefly.
+      writeFakeLspServer(server, { logFile: log, spawnGrandchild: true, exitAfterGrandchild: true });
+      const pids: number[] = [];
+      try {
+        writeFileSync(host, [
+          `import { getLspPool } from ${moduleUrl('pool.ts')};`,
+          `import { TYPESCRIPT_SERVER_DEFINITION } from ${moduleUrl('typescript-default.ts')};`,
+          `import { readFileSync } from 'node:fs';`,
+          `const pool = getLspPool();`,
+          // The server crashes during start; ignore the resulting LspClientError.
+          `pool.acquire({ definition: TYPESCRIPT_SERVER_DEFINITION, command: process.execPath, args: [${JSON.stringify(server)}], source: 'override' }, ${JSON.stringify(root)}).catch(() => {});`,
+          // Wait until the grandchild pid has been logged, then exit.
+          `while (true) { try { if (readFileSync(${JSON.stringify(log)}, 'utf8').includes('grandchild')) break; } catch {} await new Promise(r => setTimeout(r, 10)); }`,
+          // Brief pause so the root's exit event fires inside the host process.
+          `await new Promise(r => setTimeout(r, 50));`,
+          `process.exit(0);`,
+        ].join('\n'));
+        const result = spawnSync(process.execPath, ['--import', 'tsx/esm', host], {
+          encoding: 'utf8', timeout: 15_000,
+        });
+        for (const entry of readFakeLog(log)) {
+          if (entry.spawn) pids.push(entry.spawn);
+          if (entry.grandchild) pids.push(entry.grandchild);
+        }
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.status, result.stderr).toBe(0);
+        expect(pids).toHaveLength(2);
+        // The grandchild must be dead: killed by the group kill on root exit.
+        await expect.poll(() => !pidAlive(pids[1]!), { timeout: 5000 }).toBe(true);
+      } finally {
+        for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
+        await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+      }
+    }, 60_000,
+  );
 });

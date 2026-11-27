@@ -120,7 +120,22 @@ function trackChild(child: ChildProcess): void {
     child.removeListener('exit', forget);
     child.removeListener('error', forget);
   };
-  child.once('exit', forget);
+  // On POSIX the server leads its own process group (detached: true). When the
+  // root exits on its own (crash-first), helpers it spawned stay in that group
+  // but are orphaned: the guardian's exit handler skips them because `forget`
+  // already removed the child from `children`. Kill the group now, before
+  // forgetting, so helpers don't outlive their root (#4309 item 1).
+  if (process.platform !== 'win32') {
+    child.once('exit', () => {
+      const pid = child.pid;
+      if (pid !== undefined && pid > 1) {
+        try { process.kill(-pid, 'SIGKILL'); } catch { /* group already gone */ }
+      }
+      forget();
+    });
+  } else {
+    child.once('exit', forget);
+  }
   child.once('error', forget);
   if (!guardianInstalled) {
     guardianInstalled = true;
