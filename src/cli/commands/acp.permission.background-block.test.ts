@@ -11,6 +11,10 @@
  *     during an active turn — the grant is not prematurely revoked by the gate.
  *   - A child ask that is pending when `endTurn` fires is denied
  *     `no_active_turn`.
+ *   - A child covered by an `allow_always` grant is allowed even when
+ *     `turnActive` returns false — `grantCovers()` returns `allow()` before the
+ *     `turnLive()` check, so the executor is the sole guard for background
+ *     children on the ACP surface.
  *
  * Executor-level blocking (the structural half of the safety net) is tested in
  * `src/agent/tools/subagent-executor.test.ts`
@@ -174,5 +178,46 @@ describe('ACP surface: grant isolation at the gate layer (endTurn + child write)
     const drain = t.gate.endTurn?.();
     expect(await childP).toMatchObject({ behavior: 'deny', message: 'Permission denied: no_active_turn' });
     await drain;
+  });
+
+  // Contract: grantCovers() returns allow() before turnLive() is checked
+  // (acp.permission.ts decide(), lines ~215 vs ~223). A child covered by an
+  // allow_always grant is therefore allowed even when turnActive returns false.
+  // The executor — not the permission gate — is the sole structural guard that
+  // prevents background children from reaching this path on the ACP surface
+  // (no backgroundRegistry wired → runBackgroundBranch returns isError before
+  // any child is registered or touches any grant).
+  it('child with allow_always grant is allowed even when turnActive returns false (executor is sole guard)', async () => {
+    // Wire turnActive: () => false from the start. The parent call is unaffected
+    // because decide() only checks turnLive() on the child branch; parent calls
+    // go through askClient directly.
+    const t = setup(() => false);
+
+    // Step 1: parent earns allow_always for write_file (turnActive does not
+    // block the parent — the turnLive() check only applies to children).
+    const wp = t.gate.canUseTool(
+      'write_file',
+      { file_path: path.join(cwd, 'a.txt'), content: '' },
+      opts('w-grant'),
+    );
+    await flush();
+    t.requests[0]!.resolve(pick('allow_always'));
+    expect(await wp).toEqual({ behavior: 'allow' });
+
+    // Step 2: child call for a granted tool while turnActive returns false.
+    // grantCovers() fires before turnLive(), so the grant wins and the call is
+    // allowed. No new request is sent — the grant covered it without asking.
+    // This documents that the permission gate does NOT enforce turn-liveness for
+    // already-granted tools; the ACP executor's structural block (no registry)
+    // is what actually prevents background children from reaching this path.
+    const child = t.gate.forChild!({ route: 'agent', depth: 1, cwd });
+    const r = await child(
+      'write_file',
+      { file_path: path.join(cwd, 'c.txt'), content: '' },
+      opts('cw-grant'),
+    );
+    expect(r).toEqual({ behavior: 'allow' });
+    // Only the original grant request was sent; the child call needed no new ask.
+    expect(t.requests).toHaveLength(1);
   });
 });
