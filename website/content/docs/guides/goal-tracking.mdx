@@ -51,11 +51,12 @@ Only one goal is stored per scope. Use a goal for a sustained refactor, a resear
 | `/goal pause` | Change an active goal to paused |
 | `/goal resume` | Change a paused goal to active |
 | `/goal done` or `/goal complete` | Complete an active goal |
-| `/goal clear` | Delete the scoped goal |
+| `/goal clear` | Delete the scoped goal (archived for undo) |
+| `/goal undo` | Restore the previously displaced goal |
 
 Paused and completed goals are not injected into new sessions. Resume a paused goal before completing it. A completed goal cannot be resumed; set a new goal if work continues. Commands that do not fit the current status leave it unchanged and report that no transition occurred.
 
-Clearing has no undo. Completing keeps the objective and its timestamps available for inspection.
+Clearing and replacing archive the displaced goal for a single-level undo (`/goal undo`). Completing keeps the objective and its timestamps available for inspection.
 
 ### Example: interrupt and resume a refactor
 

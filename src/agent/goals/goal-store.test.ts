@@ -188,6 +188,80 @@ describe('clearGoal', () => {
   });
 });
 
+// ── Archive & undo ───────────────────────────────────────────────────────────
+
+describe('archivePrev (via setGoal)', () => {
+  it('archives the displaced goal when setGoal replaces an existing one', () => {
+    mod.setGoal('original');
+    mod.setGoal('replacement');
+    expect(mod.getGoal()?.text).toBe('replacement');
+    expect(mod.getArchivedGoal()?.text).toBe('original');
+  });
+
+  it('does not create an archive when setting the first goal', () => {
+    mod.setGoal('first');
+    expect(mod.getArchivedGoal()).toBeNull();
+  });
+
+  it('overwrites the archive on consecutive replacements (single slot)', () => {
+    mod.setGoal('first');
+    mod.setGoal('second');
+    mod.setGoal('third');
+    // Archive holds the most recently displaced goal, not the first
+    expect(mod.getArchivedGoal()?.text).toBe('second');
+  });
+});
+
+describe('archivePrev (via clearGoal)', () => {
+  it('archives the goal before clearing', () => {
+    mod.setGoal('to be cleared');
+    mod.clearGoal();
+    expect(mod.getGoal()).toBeNull();
+    expect(mod.getArchivedGoal()?.text).toBe('to be cleared');
+  });
+
+  it('does not create an archive when clearing with no goal', () => {
+    mod.clearGoal();
+    expect(mod.getArchivedGoal()).toBeNull();
+  });
+});
+
+describe('restoreGoal', () => {
+  it('restores the archived goal and clears the archive slot', () => {
+    mod.setGoal('original');
+    mod.setGoal('replacement');
+    const restored = mod.restoreGoal();
+    expect(restored?.text).toBe('original');
+    expect(mod.getGoal()?.text).toBe('original');
+    // Archive slot is consumed
+    expect(mod.getArchivedGoal()).toBeNull();
+  });
+
+  it('returns null when no archive exists', () => {
+    expect(mod.restoreGoal()).toBeNull();
+  });
+
+  it('restores after a clear', () => {
+    mod.setGoal('cleared goal');
+    mod.clearGoal();
+    const restored = mod.restoreGoal();
+    expect(restored?.text).toBe('cleared goal');
+    expect(mod.getGoal()?.text).toBe('cleared goal');
+  });
+
+  it('respects project key scoping', () => {
+    const pk = 'proj.undo-test-aabbccdd';
+    mod.setGoal('scoped original', undefined, pk);
+    mod.setGoal('scoped replacement', undefined, pk);
+    // Global archive is empty
+    expect(mod.getArchivedGoal()).toBeNull();
+    // Project-scoped archive has the displaced goal
+    const restored = mod.restoreGoal(pk);
+    expect(restored?.text).toBe('scoped original');
+    expect(mod.getGoal(pk)?.text).toBe('scoped original');
+  });
+});
+
 // ── Edge cases ────────────────────────────────────────────────────────────────
 
 describe('full lifecycle', () => {
