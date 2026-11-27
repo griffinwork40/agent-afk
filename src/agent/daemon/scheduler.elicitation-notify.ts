@@ -1,10 +1,9 @@
 import { pickResumeFields, type HandoffResumeContext } from './handoff-resume-context.js';
 import { writeHandoff, type HandoffRecord } from './handoff-store.js';
-import { buildHandoffReplyMarkup } from '../../telegram/handoff-reply-markup.js';
+import { pushHandoffQuestion } from './handoff-notify.js';
 import { errorMessage } from '../../utils/errors.js';
 import type { ElicitationHandler } from '../elicitation-router.js';
 import { serializeRequest } from './elicitation-serialize.js';
-import { operatorNotify } from '../operator-notify.js';
 import type { Telegraf } from 'telegraf';
 import { sendHandoffQuestion } from '../../telegram/handoff-answer.js';
 import { resolveConfiguredNotifyTargets } from '../../telegram/notify-routing.js';
@@ -13,7 +12,7 @@ function truncate(text: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit)}…(truncated)` : text;
 }
 
-/** Bound all fields so the raw push sends one message per target. */
+/** Bound the header fields independently of the answer instructions. */
 export function formatCronElicitationMessage(
   taskId: string,
   command: string,
@@ -100,16 +99,10 @@ export function makeCronElicitationHandler(opts: CronElicitationHandlerOpts): El
       return { action: 'decline' };
     }
 
-    const replyMarkup = buildHandoffReplyMarkup(request.type ?? 'text', record, request.choices);
     const message = formatCronElicitationMessage(opts.taskId, opts.originalCommand, opts.cronExpression, request.message);
-    const choices = !replyMarkup && Array.isArray(request.choices) && request.choices.length > 0
-      ? `\nOptions: ${truncate(request.choices.join(', '), 300)}`
-      : '';
-    const hint = replyMarkup ? '' : '\nSee /handoffs for the pending question.';
-    const fallbackText = message + choices + hint;
 
     // Each resolved target is delivered independently: rich bot send first
-    // (when co-hosted), then a raw push WITH the same answer buttons to that
+    // (when co-hosted), then a raw interactive push to that
     // target only if the bot send failed. One target's failure never re-sends
     // to another target, and no chat outside `targets` is ever contacted.
     let failed = 0;
@@ -126,12 +119,12 @@ export function makeCronElicitationHandler(opts: CronElicitationHandlerOpts): El
         }).catch(() => undefined);
         if (sent?.ok) continue;
       }
-      const results = await operatorNotify(fallbackText, {
+      const sent = await pushHandoffQuestion(record, message, {
         target: chatId,
-        ...(threadId !== undefined ? { messageThreadId: threadId } : {}),
-        ...(replyMarkup !== undefined ? { replyMarkup } : {}),
-      }).catch(() => undefined);
-      if (results == null || results.length === 0 || results.some((result) => !result.ok)) failed += 1;
+        messageThreadId: threadId,
+        handoffsDir: opts.handoffsDir,
+      }).catch(() => false);
+      if (!sent) failed += 1;
     }
     if (failed > 0) {
       console.error(

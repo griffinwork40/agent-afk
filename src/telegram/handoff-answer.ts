@@ -10,6 +10,7 @@ import {
 } from '../agent/daemon/handoff-store.js';
 import { parseHandoffCallback, HANDOFF_CALLBACK_PREFIX } from './handoff-callback-data.js';
 import { buildHandoffReplyMarkup } from './handoff-reply-markup.js';
+import { acceptsHandoffTextReply, QUESTION_NOT_OPEN, rememberTextHandoff } from './handoff-text-reply.js';
 import { escapeHtml } from './formatter.js';
 import { escapeRegExp } from '../utils/regexp.js';
 import { errorMessage } from '../utils/errors.js';
@@ -41,15 +42,7 @@ export interface SendHandoffResult {
   messageId?: number;
 }
 
-/**
- * In-memory map of Telegram message_id to taskId.
- * Used to match reply-to-message text answers to the correct handoff.
- * Populated when a text/number question is sent, cleared on answer or restart.
- *
- * Invariant: this map is ephemeral — it is rebuilt from the durable store
- * on bot restart via recoverPendingHandoffs → sendHandoffQuestion.
- */
-const pendingTextHandoffs = new Map<number, string>();
+export { clearPendingTextHandoff, matchReplyToHandoff } from './handoff-text-reply.js';
 
 // ---------------------------------------------------------------------------
 // Send a handoff question to Telegram
@@ -69,7 +62,7 @@ function truncateQuestion(text: string): string {
  *
  * - confirm: Yes/No inline buttons
  * - choice: one button per option
- * - text/number/multi_choice: plain message (operator replies to answer)
+ * - text/number/multi_choice: ForceReply opens the reply box
  *
  * Updates the HandoffRecord on disk with `route` and `telegramMessageId`
  * so restart recovery can re-target the correct chat and match replies.
@@ -97,7 +90,7 @@ export async function sendHandoffQuestion(opts: SendHandoffOpts): Promise<SendHa
   try {
     const allowCustom = Boolean(question['allowCustom']);
     const replyMarkup = buildHandoffReplyMarkup(qType, record, choices);
-    const acceptsTextReply = qType !== 'confirm' && (qType !== 'choice' || allowCustom);
+    const acceptsTextReply = acceptsHandoffTextReply(question);
     if (qType === 'choice') {
       if (allowCustom) {
         displayText += '\n\n<i>Or reply to this message with a custom answer</i>';
@@ -124,10 +117,11 @@ export async function sendHandoffQuestion(opts: SendHandoffOpts): Promise<SendHa
       ...threadOpts,
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     });
-    if (acceptsTextReply) pendingTextHandoffs.set(sent.message_id, record.taskId);
     const route = { chatId, ...(threadId ? { threadId } : {}) };
+    const questionId = record.questionId ?? null;
+    if (acceptsTextReply) rememberTextHandoff(chatId, sent.message_id, { taskId: record.taskId, questionId, threadId });
     // Best effort: restart recovery can fall back to its default route.
-    await updateHandoffMessage(record.taskId, record.questionId ?? null, route, sent.message_id, handoffsDir)
+    await updateHandoffMessage(record.taskId, questionId, route, sent.message_id, handoffsDir)
       .catch(() => {});
     return { ok: true, messageId: sent.message_id };
   } catch (err) {
@@ -218,150 +212,10 @@ export function registerHandoffAnswerHandlers(bot: Telegraf): void {
   });
 }
 
-/**
- * Check if an incoming text message is a reply to a pending handoff question.
- *
- * Call from the message handler's text processing path. Returns true if the
- * message was consumed as a handoff answer (caller should skip normal routing).
- *
- * @param bot - The Telegraf bot instance (for editing the original message).
- * @param chatId - The chat the message arrived in.
- * @param replyToMessageId - The message_id of the message being replied to.
- * @param text - The operator's reply text.
- * @param handoffsDir - Override for the handoffs directory (testing).
- * @param fromUser - Optional Telegram sender identity for provenance recording.
- * @returns true if the reply was matched and consumed as a handoff answer.
- */
-export async function matchReplyToHandoff(
-  bot: Telegraf,
-  chatId: number,
-  replyToMessageId: number,
-  text: string,
-  handoffsDir?: string,
-  fromUser?: { id: number; username?: string },
-): Promise<boolean> {
-  const taskId = pendingTextHandoffs.get(replyToMessageId);
-  if (!taskId) return false;
-
-  const record = await readHandoff(taskId, handoffsDir);
-  if (!record || record.status !== 'pending') {
-    pendingTextHandoffs.delete(replyToMessageId);
-    return false;
-  }
-
-  const trimmed = text.trim();
-  if (trimmed === '') return false;
-
-  const qType = (record.question['type'] as string | undefined) ?? 'text';
-  let answer: unknown;
-
-  if (qType === 'number') {
-    const n = Number(trimmed);
-    if (!isFinite(n)) {
-      await bot.telegram.sendMessage(
-        chatId,
-        'Please reply with a valid number.',
-        { reply_parameters: { message_id: replyToMessageId } },
-      ).catch(() => {});
-      return true; // consumed, but ask again
-    }
-    const min = record.question['min'] as number | undefined;
-    const max = record.question['max'] as number | undefined;
-    if (min !== undefined && n < min) {
-      await bot.telegram.sendMessage(
-        chatId,
-        `Please reply with a number >= ${min}.`,
-        { reply_parameters: { message_id: replyToMessageId } },
-      ).catch(() => {});
-      return true;
-    }
-    if (max !== undefined && n > max) {
-      await bot.telegram.sendMessage(
-        chatId,
-        `Please reply with a number <= ${max}.`,
-        { reply_parameters: { message_id: replyToMessageId } },
-      ).catch(() => {});
-      return true;
-    }
-    answer = { value: n };
-  } else if (qType === 'choice' && record.question['allowCustom']) {
-    // Free-form custom answer for a choice question with allowCustom enabled.
-    answer = { value: null, custom_value: trimmed };
-  } else if (qType === 'multi_choice') {
-    const choices = Array.isArray(record.question['choices'])
-      ? record.question['choices'] as string[]
-      : [];
-    const parts = trimmed.split(',').map(s => s.trim());
-    const isNumericList = parts.every(p => {
-      const idx = parseInt(p, 10);
-      return Number.isInteger(idx) && String(idx) === p && idx >= 1 && idx <= choices.length;
-    });
-    if (!isNumericList) {
-      if (record.question['allowCustom']) {
-        answer = { value: null, custom_value: trimmed };
-      } else {
-        await bot.telegram.sendMessage(
-          chatId,
-          `Please reply with comma-separated numbers between 1 and ${choices.length}.`,
-          { reply_parameters: { message_id: replyToMessageId } },
-        ).catch(() => {});
-        return true;
-      }
-    } else {
-      answer = { value: parts.map(p => choices[parseInt(p, 10) - 1]!) };
-    }
-  } else {
-    // text (default)
-    answer = { value: trimmed };
-  }
-
-  const responderIdentity = fromUser !== undefined
-    ? (fromUser.username ? `${fromUser.id}:${fromUser.username}` : String(fromUser.id))
-    : undefined;
-  const won = await answerHandoff(taskId, answer, 'telegram', handoffsDir, responderIdentity).catch(() => false);
-  pendingTextHandoffs.delete(replyToMessageId);
-
-  if (won) {
-    const answerLabel = qType === 'number'
-      ? String((answer as { value: number }).value)
-      : trimmed.length > 50 ? `${trimmed.slice(0, 50)}...` : trimmed;
-    await bot.telegram.editMessageText(
-      chatId,
-      replyToMessageId,
-      undefined,
-      `Answered: ${answerLabel}`,
-    ).catch(() => {});
-  } else {
-    await bot.telegram.editMessageText(
-      chatId, replyToMessageId, undefined,
-      'This question was already answered from another surface.',
-    ).catch(() => {});
-  }
-  return true;
-}
-
-// ---------------------------------------------------------------------------
-// Internals
-// ---------------------------------------------------------------------------
-
-const QUESTION_NOT_OPEN = 'This question is no longer open.';
-
 /** Edit a callback-query message and explicitly remove its inline keyboard. */
 async function editClosedMessage(
   ctx: { editMessageText: (text: string, extra?: Record<string, unknown>) => Promise<unknown> },
   text: string,
 ): Promise<void> {
   await ctx.editMessageText(text, { reply_markup: { inline_keyboard: [] } }).catch(() => {});
-}
-
-/**
- * Clear the pending text handoff entry for a given taskId.
- * Called when a handoff expires or is answered via another surface.
- */
-export function clearPendingTextHandoff(taskId: string): void {
-  for (const [msgId, tid] of pendingTextHandoffs) {
-    if (tid === taskId) {
-      pendingTextHandoffs.delete(msgId);
-    }
-  }
 }

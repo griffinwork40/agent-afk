@@ -135,7 +135,7 @@ describe('sendHandoffQuestion', () => {
     expect(buttons).toHaveLength(3);
   });
 
-  it('sends a text question as plain message and registers for reply-to', async () => {
+  it('sends a text question with ForceReply and registers for reply-to', async () => {
     const bot = mockBot();
     const record = await writeHandoff(makeRecord({
       question: { message: 'What is the password?', type: 'text' },
@@ -145,8 +145,7 @@ describe('sendHandoffQuestion', () => {
     expect(result.ok).toBe(true);
 
     const call = (bot.telegram.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    // No reply_markup for text questions
-    expect(call[2]).not.toHaveProperty('reply_markup');
+    expect(call[2].reply_markup).toEqual({ force_reply: true });
     expect(call[1]).toContain('Reply to this message');
   });
 
@@ -202,7 +201,7 @@ describe('sendHandoffQuestion', () => {
     expect(updated.telegramMessageId).toBe(42);
   });
 
-  it('persistRouteAndMessageId: skips write when record transitions to answered before persist', async () => {
+  it('tracks a late delivery without clobbering a concurrent answer', async () => {
     const bot = mockBot();
     const record = await writeHandoff(makeRecord(), handoffsDir);
 
@@ -216,13 +215,11 @@ describe('sendHandoffQuestion', () => {
 
     await sendHandoffQuestion({ bot, record, chatId: 99999, handoffsDir });
 
-    // The record on disk must reflect the answer, not the stale pending+route overwrite.
-    const onDisk = await readHandoff(record.taskId, handoffsDir);
-    expect(onDisk).not.toBeNull();
-    expect(onDisk!.status).toBe('answered');
-    // route and telegramMessageId must NOT have been written (would require status=pending)
-    expect(onDisk!.route).toBeUndefined();
-    expect(onDisk!.telegramMessageId).toBeUndefined();
+    expect(await readHandoff(record.taskId, handoffsDir)).toMatchObject({
+      status: 'answered',
+      answer: { value: true },
+      telegramCopies: [{ chatId: 99999, messageId: 42, questionId: record.questionId }],
+    });
   });
 
   it('does not attach metadata from an in-flight send to a replacement question', async () => {
@@ -287,6 +284,7 @@ describe('matchReplyToHandoff', () => {
     expect(updated.status).toBe('answered');
     expect(updated.answer).toEqual({ value: 'Alice' });
     expect(updated.answerSource).toBe('telegram');
+    expect(bot.telegram.editMessageText).toHaveBeenCalledWith(12345, 42, undefined, 'Answered: Alice');
   });
 
   it('validates number replies', async () => {

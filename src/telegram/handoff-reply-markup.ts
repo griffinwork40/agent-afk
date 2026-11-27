@@ -1,14 +1,17 @@
-import type { InlineKeyboardMarkup } from 'telegraf/types';
+import type { ForceReply, InlineKeyboardMarkup } from 'telegraf/types';
 import type { HandoffRecord } from '../agent/daemon/handoff-store.js';
 import { truncateTelegramLabel } from '../utils/truncate-telegram-label.js';
 import { buildHandoffCallback } from './handoff-callback-data.js';
 
-/** Build the same confirm/choice keyboard for raw pushes and Telegraf sends. */
+/** Shared inline controls for buttons and ForceReply for typed questions. */
 export function buildHandoffReplyMarkup(
   qType: string,
   record: Pick<HandoffRecord, 'taskId' | 'questionId'>,
   choices?: readonly string[],
-): InlineKeyboardMarkup | undefined {
+): InlineKeyboardMarkup | ForceReply | undefined {
+  if (qType === 'text' || qType === 'number' || qType === 'multi_choice') {
+    return { force_reply: true };
+  }
   try {
     if (qType === 'confirm') {
       return {

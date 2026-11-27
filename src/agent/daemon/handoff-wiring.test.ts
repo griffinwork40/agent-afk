@@ -42,7 +42,8 @@ function aborted(): AbortSignal {
 }
 
 // Suppress operator notifications — we are testing the store, not the transport.
-vi.mock('../operator-notify.js', () => ({
+vi.mock('../operator-notify.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../operator-notify.js')>(),
   operatorNotify: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -176,7 +177,7 @@ describe('makeDaemonElicitationHandler', () => {
     expect(kb[1][0].text).toBe('Blue');
   });
 
-  it('sends text question without inline keyboard', async () => {
+  it('sends text question with ForceReply', async () => {
     const { operatorNotify } = await import('../operator-notify.js');
     const mockPush = operatorNotify as ReturnType<typeof vi.fn>;
     mockPush.mockClear();
@@ -190,8 +191,7 @@ describe('makeDaemonElicitationHandler', () => {
     await handler(makeRequest({ type: 'text' }), { signal: notAborted() });
 
     const [, opts] = mockPush.mock.calls[0]!;
-    // text type should not have inline keyboard
-    expect(opts?.replyMarkup).toBeUndefined();
+    expect(opts?.replyMarkup).toEqual({ force_reply: true });
   });
 
   it('uses empty string for sessionId when not provided', async () => {
@@ -333,7 +333,7 @@ describe('recoverPendingHandoffs', () => {
     expect(kb[1][0].callback_data).toBeDefined();
   });
 
-  it('re-sends text reminder without inline keyboard (no bot)', async () => {
+  it('re-sends text reminder with ForceReply (no bot)', async () => {
     const { operatorNotify } = await import('../operator-notify.js');
     const mockPush = operatorNotify as ReturnType<typeof vi.fn>;
     mockPush.mockClear();
@@ -353,7 +353,7 @@ describe('recoverPendingHandoffs', () => {
 
     expect(mockPush).toHaveBeenCalledTimes(1);
     const [, opts] = mockPush.mock.calls[0]!;
-    expect(opts?.replyMarkup).toBeUndefined();
+    expect(opts?.replyMarkup).toEqual({ force_reply: true });
   });
 
   it('handles multiple pending handoffs', async () => {
