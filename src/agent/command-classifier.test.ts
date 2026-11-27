@@ -79,15 +79,20 @@ describe('shared command analysis', () => {
   });
 
   it('memoizes each distinct hook masking view without invoking mutation', () => {
+    // Fix #4827: both destructive and release-boundary maskers now pass
+    // stripLiterals=true so that quoted arguments to read-only commands
+    // (grep, rg, echo) are stripped before pattern matching. As a result,
+    // echo 'git reset --hard; npm publish' — where the guarded phrases are
+    // inside a single-quoted echo argument — does not fire either gate.
     const mask = vi.spyOn(masking, 'maskHookCommandData');
     const mutation = vi.spyOn(mutationRules, 'classifyCommandMutation');
     const result = analyzeCommand("echo 'git reset --hard; npm publish'");
-    expect(result.destructive.map(({ id }) => id)).toEqual(['git-reset-hard']);
+    expect(result.destructive.map(({ id }) => id)).toEqual([]);
     expect(result.releaseBoundary).toEqual([]);
     expect(result.destructive).toBe(result.destructive);
     expect(result.releaseBoundary).toBe(result.releaseBoundary);
     expect(mask).toHaveBeenCalledTimes(2);
-    expect(mask.mock.calls.map((call) => call[1])).toEqual([undefined, true]);
+    expect(mask.mock.calls.map((call) => call[1])).toEqual([true, true]);
     expect(mutation).not.toHaveBeenCalled();
   });
 

@@ -251,7 +251,14 @@ export function maskHookCommandData(command: string, stripLiterals = false): str
     const tokens = tokenizeSegments(masked2);
     const literalSearch = words(masked2) && tokens.length === 1 &&
       ['echo', 'grep', 'rg'].includes(tokens[0]?.[0] ?? '');
-    output.push(stripLiterals && literalSearch ? masked2.replace(/'[^']*'/g, '') : masked2);
+    // Strip both single-quoted and double-quoted (no-substitution) literals
+    // so that `grep -n "npm publish" file.txt` and `grep -n 'git reset --hard'
+    // file.txt` are not falsely flagged by the release-boundary / safe-destruct
+    // pattern scan. Double-quoted strings with $, `, or \ substitutions are
+    // kept visible so an executable payload is never silently dropped.
+    output.push(stripLiterals && literalSearch
+      ? masked2.replace(/'[^']*'|"[^"$`\\]*"/g, '')
+      : masked2);
   }
   return output.join('\n');
 }

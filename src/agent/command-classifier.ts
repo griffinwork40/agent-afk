@@ -57,7 +57,7 @@ export function analyzeCommand(command: string): CommandAnalysis {
   // Declared before `analysis` so the reading order matches the dependency order.
   let destructiveView: string | undefined;
   let releaseView: string | undefined;
-  const maskedDestructive = (): string => destructiveView ??= maskHookCommandData(command);
+  const maskedDestructive = (): string => destructiveView ??= maskHookCommandData(command, true);
   const maskedRelease = (): string => releaseView ??= maskHookCommandData(command, true);
   const analysis: CommandAnalysis = {
     get segments() { return tokensFor(command); },
