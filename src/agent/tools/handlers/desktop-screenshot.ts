@@ -177,6 +177,10 @@ export function createDesktopScreenshotHandler(opts: DesktopScreenshotHandlerOpt
     const ts = Date.now();
     const sidecarPath = join(screenshotsDir, `desktop_screenshot_${ts}-${randomUUID()}.png`);
 
+    // Start timer before hardening so duration_ms reflects the full user-visible
+    // latency, including directory creation and ACL setup on first capture.
+    const t0 = Date.now();
+
     // Invariant: harden before every capture, including pre-existing directories.
     // Do not cache this: another process may have widened the mode or ACL.
     try {
@@ -201,8 +205,6 @@ export function createDesktopScreenshotHandler(opts: DesktopScreenshotHandlerOpt
       ...(parsed.region ? { region: parsed.region } : {}),
       signal,
     };
-
-    const t0 = Date.now();
     try {
       const result = await backend.screenshot(backendInput, sidecarPath);
       const durationMs = Date.now() - t0;

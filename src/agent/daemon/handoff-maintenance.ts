@@ -49,6 +49,8 @@ export interface HandoffMaintenanceOpts {
   handoffsDir?: string;
   /** Telegraf instance for rich re-notification on startup, when co-hosted. */
   bot?: Telegraf;
+  /** Revalidate a persisted notifyChat override before startup re-notification. */
+  resolveNotifyChat?: Parameters<typeof recoverPendingHandoffs>[3];
   /**
    * Run at most one queued task from `resumeDir`. The scheduler binds this to
    * `executePullTick` so resumes share its idle/mutex/overlap guards.
@@ -106,7 +108,7 @@ function log(msg: string): void {
  */
 export async function runStartupRecovery(opts: HandoffMaintenanceOpts, resumeDir: string): Promise<void> {
   try {
-    const r = await recoverPendingHandoffs(opts.handoffsDir, opts.queueDir, opts.bot);
+    const r = await recoverPendingHandoffs(opts.handoffsDir, opts.queueDir, opts.bot, opts.resolveNotifyChat);
     if (r.renotified > 0 || r.expired > 0) log(`re-notified ${r.renotified}, expired ${r.expired}`);
   } catch (err) {
     log(`recovery failed: ${errorMessage(err)}`);

@@ -1,6 +1,6 @@
 /**
  * Text-layout and display-effect env vars: the prose/text measure, content
- * centering, and the smoke-text reveal. A contiguous slice of `ENV_REGISTRY`.
+ * and centering. A contiguous slice of `ENV_REGISTRY`.
  *
  * Extracted from `env.ts` to keep that file within the 350-code-line ceiling,
  * following the `env.browser.ts` precedent (#2206). `env.ts` spreads this
@@ -56,19 +56,6 @@ export const DISPLAY_ENV_REGISTRY = [
       'centered by prepending a left margin equal to Math.floor((terminalWidth - contentMeasure) / 2). ' +
       'No-op when the terminal is at or below the content measure — the common 80–100 column case. ' +
       'Default off (empty string). Opt-in: set AFK_CENTER_CONTENT=1 to enable.',
-    type: 'boolean',
-    required: false,
-    default: '',
-    example: '1',
-    category: 'display',
-  },
-  {
-    name: 'AFK_SMOKE_TEXT',
-    description:
-      'When set to "1" (or true/yes/on), streamed assistant prose in the interactive REPL condenses out of ' +
-      'faint smoke (speck, then haze, then a dim letter, then the real letter) instead of popping in. ' +
-      'Needs a 256-color or truecolor terminal. It stays off for NO_COLOR, non-TTY output, AFK_PLAIN_OUTPUT, ' +
-      'Telegram, the daemon, and AFK_REDUCED_MOTION=1, and it skips code fences and tables. Default off. Set AFK_SMOKE_TEXT=0 or unset it to disable.',
     type: 'boolean',
     required: false,
     default: '',

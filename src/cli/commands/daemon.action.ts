@@ -208,13 +208,11 @@ export async function runDaemonAction(options: DaemonActionOptions): Promise<voi
   });
 
   try {
-    // Note: bot/primaryChatId/primaryThreadId are intentionally absent here.
-    // The standalone `afk daemon` process has no Telegraf bot instance; the rich
-    // sendHandoffQuestion path (scheduler.elicitation-notify.ts) is only reachable
-    // when startDaemon is called programmatically with a pre-constructed bot
-    // (e.g. by the Telegram bot surface). Cron-task elicitations in standalone
-    // daemon mode fall back to onHandoffWritten → onTaskComplete → pushIfConfigured.
-    // See #3243 item 2.
+    // The standalone daemon has no Telegraf instance. A persisted cron question
+    // replaces the completion push: always/failure send one raw Telegram message
+    // per target, with buttons for confirm/choice; never leaves it in /handoffs.
+    // The send uses the allowlisted notifyChat override or configured defaults.
+    // The separate bot process handles the buttons via the shared handoff store.
     const handle = await startDaemon({
       port,
       host,

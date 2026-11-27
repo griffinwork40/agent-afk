@@ -233,6 +233,8 @@ export interface UiSurface {
 
 /** What the handler sees when invoked. */
 export interface SlashContext {
+  /** Origin of this invocation, independent of where the session started. */
+  invocation?: { surface: 'telegram' | 'repl'; responderIdentity?: string };
   /** Explicit surface support. Absent on legacy contexts during migration. */
   capabilities?: ReadonlySet<SurfaceCapability>;
   /** Surface adapters own presentation and cancellation; handlers use JSON-safe messages. */

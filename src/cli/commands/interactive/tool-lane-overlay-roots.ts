@@ -32,7 +32,6 @@ import {
 import type { buildChildMap, getGlyphs } from './tool-lane-render.js';
 import { formatFlatRootCompletion } from './tool-lane-overlay-completion.js';
 import type { ToolLaneFlash } from './tool-lane-flash.js';
-import type { ElementFade } from '../../smoke-fade.js';
 
 // Local aliases for the return-type shapes used in helper signatures.
 // `typeof` on a type-import is valid in TypeScript (erased at emit).
@@ -73,7 +72,6 @@ export function renderNestingWithChildren(
   lines: string[],
   g: Glyphs,
   cols: number,
-  fade: ElementFade | null,
 ): void {
   const clamp = (line: string): string => truncateDisplayWidth(line, cols);
 
@@ -94,7 +92,7 @@ export function renderNestingWithChildren(
     lines.push(clamp(palette.activeAgent(g.turnRoot) + entry.prefix + childFailureBadge(entry.failedChildCount)));
   }
 
-  renderOverlayChildren(children, childMap, lines, cols, undefined, g, undefined, fade);
+  renderOverlayChildren(children, childMap, lines, cols, undefined, g, undefined);
 
   // Render the thinking-tail AFTER the children so the subagent's in-flight
   // narration sits below its tool calls, not between the Agent prefix and its

@@ -109,4 +109,29 @@ describe('afk config CLI', () => {
     await run('env', 'unset', 'AFK_EFFORT');
     expect(readFileSync(envFile, 'utf-8')).not.toContain('AFK_EFFORT');
   });
+
+  // ── Protected env keys (#5286) ──────────────────────────────────────────────
+  // The human CLI must accept all registered env vars, including protected ones.
+  // The agent config_set tool continues to refuse them (see config-ops.test.ts).
+
+  it('config env set allows a protected key (AFK_GLOBAL_CHAT_URL) from the CLI', async () => {
+    await run('env', 'set', 'AFK_GLOBAL_CHAT_URL', 'wss://example.workers.dev/v1/room/global');
+    expect(process.exitCode).toBe(0);
+    expect(readFileSync(envFile, 'utf-8')).toContain(
+      'AFK_GLOBAL_CHAT_URL=wss://example.workers.dev/v1/room/global',
+    );
+  });
+
+  it('config env unset allows a protected key (AFK_GLOBAL_CHAT_URL) from the CLI', async () => {
+    await run('env', 'set', 'AFK_GLOBAL_CHAT_URL', 'wss://example.workers.dev/v1/room/global');
+    await run('env', 'unset', 'AFK_GLOBAL_CHAT_URL');
+    expect(process.exitCode).toBe(0);
+    expect(readFileSync(envFile, 'utf-8')).not.toContain('AFK_GLOBAL_CHAT_URL');
+  });
+
+  it('config env set allows other protected keys (AFK_SYSTEM_PROMPT) from the CLI', async () => {
+    await run('env', 'set', 'AFK_SYSTEM_PROMPT', 'be concise');
+    expect(process.exitCode).toBe(0);
+    expect(readFileSync(envFile, 'utf-8')).toContain('AFK_SYSTEM_PROMPT=be concise');
+  });
 });

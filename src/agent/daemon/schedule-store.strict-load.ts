@@ -99,6 +99,20 @@ export function loadSchedulesForWrite(
     throw new UnreadableSchedulesError(storePath, `file is not valid JSON (${errorMessage(err)})`);
   }
   if (!Array.isArray(parsed)) {
+    // Object-wrapper format: a future AFK may write { version: N, tasks: [...] }.
+    // Detect this before the generic "not a JSON array" fallback so the operator
+    // sees "upgrade afk" rather than a confusing type-mismatch message.
+    if (parsed !== null && typeof parsed === 'object') {
+      const obj = parsed as Record<string, unknown>;
+      const fileVersion = typeof obj['version'] === 'number' ? obj['version'] : undefined;
+      if (fileVersion !== undefined && fileVersion > currentSchemaVersion) {
+        throw new UnreadableSchedulesError(
+          storePath,
+          `file declares schema version ${fileVersion} but this build only understands ` +
+            `version ${currentSchemaVersion}. Upgrade afk to load this file.`,
+        );
+      }
+    }
     const kind = parsed === null ? 'null' : typeof parsed;
     throw new UnreadableSchedulesError(storePath, `file is not a JSON array (found ${kind})`);
   }
