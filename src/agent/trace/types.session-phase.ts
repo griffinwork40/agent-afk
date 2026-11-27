@@ -386,6 +386,20 @@ export interface SessionPhasePayload {
    * Present on all `*_done` variants; absent on `*_start` variants.
    */
   durationMs?: number;
+  /**
+   * Milliseconds of `durationMs` spent waiting for a human response —
+   * i.e. inside `ask_question`, `exit_plan_mode`, or `clipboard`
+   * elicitation calls. Present on `loop_end` only when at least one
+   * elicitation call occurred this turn; absent otherwise. The difference
+   * `durationMs - awaitingUserMs - pausedMs` is the active working time.
+   */
+  awaitingUserMs?: number;
+  /**
+   * Milliseconds of `durationMs` spent in an operator-pause or provider-
+   * backoff park. Present on `loop_end` only when at least one park
+   * occurred this turn; absent otherwise.
+   */
+  pausedMs?: number;
   /** Phase-specific diagnostic context (e.g. MCP server count on connect). */
   metadata?: Record<string, string | number | boolean>;
   /**

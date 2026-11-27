@@ -129,6 +129,7 @@ export const askQuestionHandler: ToolHandler = async (input, signal, context) =>
     ...(obj['allow_custom'] !== undefined && { allowCustom: Boolean(obj['allow_custom']) }),
   };
 
+  const elicitationStart = Date.now();
   const result = await elicitationRouter.route(request, {
     signal,
     // Marks this session's presence file as blocked-on-human for the duration of
@@ -141,6 +142,7 @@ export const askQuestionHandler: ToolHandler = async (input, signal, context) =>
     // the shared global slot, eliminating the concurrent-task race condition.
     ...(context?.sessionId !== undefined ? { sessionKey: context.sessionId } : {}),
   });
+  context?.turnTrace?.addAwaitingUser(Date.now() - elicitationStart);
   // Contract: only `decline` (no handler installed) and `cancel` (user
   // interrupted) are surfaced to the agent as tool errors. `accept` and
   // `skip` are both successful outcomes — `skip` is the deliberate

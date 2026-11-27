@@ -226,6 +226,15 @@ export interface ToolDispatcher {
    * See `SessionToolDispatcher.setAllowAll` for the canonical implementation.
    */
   setAllowAll?(allow: boolean): void;
+  /**
+   * Optional per-turn witness bracket. Called by the provider loop with the
+   * active `TurnTrace` immediately after construction (and cleared with
+   * `undefined` in the loop's `finally`), so elicitation handlers can
+   * record awaiting-user time via {@link TurnTrace.addAwaitingUser}.
+   * Dispatchers that do not need this telemetry can omit it.
+   * See `SessionToolDispatcher.setTurnTrace` for the canonical implementation.
+   */
+  setTurnTrace?(trace: import('../shared/turn-trace.js').TurnTrace | undefined): void;
 }
 
 /**

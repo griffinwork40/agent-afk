@@ -408,6 +408,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     const checkpointId = this.checkpoint.begin(this.toolDispatcher, userMessageId);
 
     const trace = new TurnTrace(controller.signal, this.traceWriter, 'openai-compatible');
+    this.toolDispatcher?.setTurnTrace?.(trace);
     this.fastTier.beginTurn(this.currentModel);
     try {
       // Pass `this` — which implements TurnDriverContext — so every mutable
@@ -420,6 +421,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
         this._authDeps,
       ), this.toolDispatcher, checkpointId);
     } finally {
+      this.toolDispatcher?.setTurnTrace?.(undefined);
       trace.finish(Date.now() - turnStartTime);
       this.checkpoint.end(this.toolDispatcher);
     }
