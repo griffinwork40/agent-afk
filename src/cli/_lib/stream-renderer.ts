@@ -52,7 +52,6 @@ import { makeDedupingLineWriter } from './dedup-line-writer.js';
 import { registerOverlaySlots, checkPauseAnnotations, subscribeToResize } from './stream-renderer-lifecycle.js';
 import { checkProgressBannerStaleness } from './stream-renderer-dead-zone.js';
 import { makeOrchestratorCtx } from './stream-renderer-contexts.js';
-import { armSmokeEffects, THOUGHT_SUMMARY_SLOT, type SmokeEffects } from './stream-renderer-smoke.js';
 import { processEvent, type ProcessCtx } from './stream-renderer-process.js';
 import { disposeRenderer, type DisposeCtx } from './stream-renderer-dispose.js';
 import { SkillIdentityState } from './skill-identity-state.js';
@@ -163,8 +162,6 @@ export class StreamRenderer {
   private disposed = false;
   /** Flash tracker for 150ms glyph pulses on tool completion. Null until arm(). */
   private toolLaneFlash: ToolLaneFlash | null = null;
-  /** AFK_SMOKE_TEXT machine-status fades (tool rows, thought summary); null when off. */
-  private smoke: SmokeEffects | null = null;
   private pauseTickInterval: ReturnType<typeof setInterval> | null = null;
   /** ResizeBus unsubscriber — re-derives the overlay at the new terminal width on resize. */
   private resizeUnsub: (() => void) | null = null;
@@ -357,7 +354,6 @@ export class StreamRenderer {
     // status stack was redundant with the tool-lane Agent rows, which already
     // surface every running subagent with elapsed time, nesting, and labels.
     this.overlayComposer = new OverlayComposer(compositor, [
-      THOUGHT_SUMMARY_SLOT, // held `◆ thought for Xs` while it fades (smoke only); above the next phase
       'thinking-live',
       'markdown-pending',
       'tool-lane',
@@ -390,8 +386,6 @@ export class StreamRenderer {
       this.toolLaneFlash = new ToolLaneFlash(() => this.deferFlush('tool-lane'));
       this.toolLane.flash = this.toolLaneFlash;
     }
-    this.smoke = armSmokeEffects({ compositor, overlayComposer: this.overlayComposer, toolLane: this.toolLane, reducedMotion: this.reducedMotion, deferFlush: (slot) => this.deferFlush(slot) });
-
     // Reduced-motion suppresses the spinner ticker at the source. State-transition
     // repaints remain active — only the high-frequency 12.5 Hz animation is gated.
     compositor.setSpinner({ enabled: !this.reducedMotion, rotateVerbEveryMs: 3500 });
@@ -569,7 +563,6 @@ export class StreamRenderer {
       childActivity: this.childActivity,
       ...(this.isTTY ? { stageTracker: this.stageTracker } : {}),
       ...(this.activeSkillName ? { activeSkillName: this.activeSkillName } : {}),
-      ...(this.smoke ? { thoughtHold: this.smoke.thoughtHold } : {}),
     });
   }
 
@@ -611,9 +604,6 @@ export class StreamRenderer {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    // Commit a held thought summary FIRST, before the coordinator drains
-    // (its commits belong below it) and while the compositor is still armed.
-    this.smoke?.dispose();
     // Reset the preview-diff ref to a no-op so the disposed turn's toolLane
     // reference is released and the hook cannot write into a stale lane.
     if (this.addPreviewDiffRef) this.addPreviewDiffRef.current = () => {};

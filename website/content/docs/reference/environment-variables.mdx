@@ -275,7 +275,6 @@ All environment variables recognized by `agent-afk` are listed here, grouped by 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
 | `AFK_CENTER_CONTENT` | boolean | When set to "1" (or any truthy value), content surfaces (tool-lane overlay, scrollback blocks, input line, spinner, and OODA stage rail) are horizontally centered by prepending a left margin equal to Math.floor((terminalWidth - contentMeasure) / 2). No-op when the terminal is at or below the content measure — the common 80–100 column case. Default off (empty string). Opt-in: set AFK_CENTER_CONTENT=1 to enable. | `` |
-| `AFK_SMOKE_TEXT` | boolean | When set to "1" (or true/yes/on), streamed assistant prose in the interactive REPL condenses out of faint smoke (speck, then haze, then a dim letter, then the real letter) instead of popping in. Needs a 256-color or truecolor terminal. It stays off for NO_COLOR, non-TTY output, AFK_PLAIN_OUTPUT, Telegram, the daemon, and AFK_REDUCED_MOTION=1, and it skips code fences and tables. Default off. Set AFK_SMOKE_TEXT=0 or unset it to disable. | `` |
 | `AFK_STREAM_BUFFER_MS` | number | Input buffer window for TUI streaming in milliseconds. When set to a positive value, incoming tokens are micro-batched before parsing and rendering, producing smoother visual output. The first token after idle always passes through immediately (leading-edge). 0 = disabled (every token is parsed individually). Reasonable range: 8-50. | `0` |
 
 ## Miscellaneous
