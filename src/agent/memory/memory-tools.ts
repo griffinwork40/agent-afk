@@ -308,6 +308,12 @@ export function createMemoryHandlers(
           source_surface: surface ?? 'cli',
           evidence,
         });
+        if (id === -1) {
+          return {
+            content: store.schemaVersionWarning ?? 'memory store is degraded — fact not persisted',
+            isError: true,
+          };
+        }
         const result: Record<string, unknown> = { id, action: 'set', target: 'fact' };
         if (evidenceGateEnabled() && requiresEvidence(category) && !evidence) {
           result['warning'] = UNCITED_CODEBASE_FACT_WARNING;
@@ -337,6 +343,12 @@ export function createMemoryHandlers(
           parsed.category ?? undefined,
           freshEvidence,
         );
+        if (newId === -1) {
+          return {
+            content: store.schemaVersionWarning ?? 'memory store is degraded — fact not persisted',
+            isError: true,
+          };
+        }
         const result: Record<string, unknown> = {
           id: newId,
           action: 'supersede',
