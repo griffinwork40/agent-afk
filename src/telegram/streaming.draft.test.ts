@@ -224,6 +224,31 @@ describe('sendOrEditDraft — 429 retry', () => {
     // Must not throw.
     await expect(sendOrEditDraft(state, ctx, 100, 'text')).resolves.toBeUndefined();
   });
+
+  it('non-429 error on first call stamps lastDraftAt so the throttle gate blocks the next call', async () => {
+    const { ctx, callApi } = makeCtx();
+    const state: DraftState = makeDraftState();
+
+    // First call fails with a non-429 error.
+    callApi.mockRejectedValue(new TelegramError({
+      error_code: 403,
+      description: 'Forbidden: bot was blocked by the user',
+    }));
+    await sendOrEditDraft(state, ctx, 100, 'first');
+
+    // lastDraftAt must be stamped (> 0) even though the call failed — the
+    // throttle gate is keyed on lastDraftAt > 0, not isDraftMode.
+    expect(state.lastDraftAt).toBeGreaterThan(0);
+
+    // The next call (within DRAFT_THROTTLE_MS) must be suppressed by the gate.
+    callApi.mockResolvedValue({});
+    // Regenerate draftId since it was cleared by the error handler.
+    // sendOrEditDraft re-generates it internally, so just call it again.
+    await sendOrEditDraft(state, ctx, 100, 'second');
+
+    // callApi was called only once (the first failing call); the second was throttled.
+    expect(callApi).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

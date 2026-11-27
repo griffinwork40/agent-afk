@@ -204,9 +204,12 @@ async function callDraftApi(
         state.draftId = null;
       }
     } else {
-      // Non-429 errors (e.g. chat type mismatch): clear draftId and do not
-      // set isDraftMode. The turn must not fail on a cosmetic draft update.
+      // Non-429 errors (e.g. chat type mismatch): clear draftId and stamp
+      // lastDraftAt so the throttle gate (keyed on lastDraftAt > 0) blocks the
+      // immediate next call — without this, a first-call non-429 failure left
+      // lastDraftAt === 0 and the next call bypassed the throttle entirely.
       state.draftId = null;
+      state.lastDraftAt = Date.now();
     }
   }
 }
