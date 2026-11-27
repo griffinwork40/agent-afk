@@ -873,10 +873,9 @@ jobs:
             echo "::error::harbor==0.23.0 wheel hash mismatch: got $ACTUAL_SHA expected $EXPECTED_SHA" >&2
             exit 1
           fi
-          # Install the already-verified local wheel directly (no re-fetch from PyPI)
-          python -m pip install \
-            --find-links "$RUNNER_TEMP/harbor-dl" --no-index \
-            -r bench/harbor/requirements-harness.txt
+          # Install the already-verified local wheel directly; transitive deps
+          # are fetched from PyPI (harbor-dl contains only the harbor wheel).
+          python -m pip install "$RUNNER_TEMP/harbor-dl"/harbor-*.whl
           python -m pip install pytest
 
       - name: Run bench/harbor pytest suite
