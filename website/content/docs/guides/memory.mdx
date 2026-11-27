@@ -92,6 +92,25 @@ pnpm*
 
 Superseded facts are excluded from ordinary recall. Procedure searches use case-insensitive substring matching of query terms, not FTS5 operators. A category filter restricts results to facts and excludes procedures.
 
+## Find what happened in an earlier session
+
+Ask in plain language:
+
+```text
+Check previous sessions for context on the billing webhook retry bug, and tell me which stores you checked.
+```
+
+The agent normally searches memory at most once per session for general context. An explicit request to look at earlier sessions lifts that limit, and the agent works from the cheapest source to the most detailed, stopping at the first one that answers:
+
+1. `memory_search` with a few different phrasings. Without a category filter it also returns matching past sessions as results of type `session`, each with a `source_session` id. The match is on words, not meaning, so one miss is not conclusive.
+2. `get_facet` with that id, for the session's structured summary.
+3. `search_witness`, when memory finds nothing, to match trace metadata across recent sessions.
+4. `read_journal`, on a session it has already identified, when exact wording, tool arguments, or tool output matter.
+
+It then reports which of these it checked and which came back empty. Session files and witness traces are removed after a retention window, so older sessions can be found only through memory and through what they left in the repository. Treat anything recalled as a lead to verify, and treat an empty result as "no record found", not as proof that something never happened.
+
+Subagents that have only `memory_search` run step 1 and hand the session ids back to the session that dispatched them.
+
 ## Evidence gate and stale citations
 
 The evidence gate is **on by default**. Set `AFK_MEMORY_EVIDENCE_GATE=0` to disable it; `1` explicitly enables it.
