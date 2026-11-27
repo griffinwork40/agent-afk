@@ -86,10 +86,15 @@ export function buildProviderSchemas(opts: AnthropicDirectProviderOptions): Anth
   // a named-agent registry can advertise its types; optional chaining lets
   // test stubs without describeAgentTool fall back to the static schema.
   if (opts.subagentExecutor) {
-    // describeAgentTool() returns null when the allowlist is empty (scoped child
-    // that must not dispatch any nested agents) — omit the tool entirely (#4873).
-    const agentToolDef = opts.subagentExecutor.describeAgentTool?.() ?? agentTool;
-    if (agentToolDef !== null) schemas.push(agentToolDef);
+    // describeAgentTool() has three return states (#4873):
+    //   undefined  — method absent (test stub); fall back to static schema.
+    //   null       — allowlist is empty (scoped child must not dispatch agents); omit entirely.
+    //   object     — registry-described schema; push as-is.
+    // `?? agentTool` must NOT be used here: nullish coalescing treats null and
+    // undefined identically, destroying the null sentinel before the guard runs.
+    const agentToolDef = opts.subagentExecutor.describeAgentTool?.();
+    if (agentToolDef === undefined) schemas.push(agentTool);
+    else if (agentToolDef !== null) schemas.push(agentToolDef);
   }
   if (opts.skillExecutor) schemas.push(skillTool);
   if (opts.composeExecutor) schemas.push(opts.subagentExecutor?.describeComposeTool?.() ?? composeTool);
