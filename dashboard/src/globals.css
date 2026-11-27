@@ -1,9 +1,21 @@
 @import "tailwindcss";
 
 /*
+ * Tailwind v4 dark-mode variant.
+ *
+ * Covers two cases so `dark:` utilities work correctly:
+ *   1. .dark class on <html> — for a future manual toggle.
+ *   2. prefers-color-scheme: dark AND no .light override — the automatic path
+ *      used now that index.html no longer hard-codes class="dark".
+ */
+@custom-variant dark (&:where(.dark, .dark *), @media (prefers-color-scheme: dark) { &:where(:not(.light, .light *)) });
+
+/*
  * Design tokens for the AFK dashboard.
  *
- * Dark-first: .dark is the default (set on <html>). Light mode is secondary.
+ * Theme: respects prefers-color-scheme; .dark class overrides to dark,
+ * .light class overrides to light. Previously dark-first (class="dark"
+ * hard-coded on <html>); now system-preference-first with class overrides.
  * Brand tokens derived from the canonical AFK theme sources:
  *   - themes/cursor/themes/agent-afk-color-theme.json (dark palette)
  *   - themes/terax/afk-dark.terax-theme (dark palette)
@@ -15,6 +27,8 @@
  *
  * shadcn/ui convention: HSL values without the hsl() wrapper, applied via
  * hsl(var(--name)) in Tailwind utilities.
+ *
+ * Also referenced by: themes/cursor, themes/terax, website/app/globals.css
  */
 
 @theme {
@@ -123,6 +137,11 @@
     --spine: 215 15% 80%;
   }
 
+  /*
+   * Dark tokens: applied when the OS prefers dark AND no explicit .dark class
+   * is set, OR when .dark is set manually (future toggle support).
+   * @media block covers the automatic case; .dark class covers the manual case.
+   */
   .dark {
     --background: 216 28% 7%;
     --foreground: 210 17% 82%;
@@ -163,6 +182,57 @@
     --cat-plan: 215 8% 53%;       /* muted grey - plan mode */
     --cat-other: 215 8% 53%;      /* muted grey - uncategorized */
     --spine: 215 15% 25%;         /* dim border for spine lines */
+  }
+}
+
+/*
+ * Automatic dark mode via OS preference.
+ * When no .dark class is present on <html>, apply dark tokens whenever
+ * the user's system is set to dark mode.  The .dark class (above) always
+ * takes precedence via specificity, so a future theme toggle can override
+ * this by adding/removing the class rather than fighting the media query.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --background: 216 28% 7%;
+    --foreground: 210 17% 82%;
+    --card: 215 21% 11%;
+    --card-foreground: 210 17% 82%;
+    --popover: 215 21% 11%;
+    --popover-foreground: 210 17% 82%;
+    --primary: 20 76% 60%;
+    --primary-foreground: 216 28% 7%;
+    --secondary: 215 15% 15%;
+    --secondary-foreground: 210 17% 82%;
+    --muted: 215 21% 11%;
+    --muted-foreground: 215 8% 53%;
+    --accent: 215 15% 15%;
+    --accent-foreground: 20 76% 60%;
+    --destructive: 3 93% 63%;
+    --destructive-foreground: 216 28% 7%;
+    --border: 215 15% 15%;
+    --input: 212 12% 21%;
+    --ring: 20 76% 60%;
+
+    --brand: 20 76% 60%;
+    --status-running: 86 67% 63%;
+    --status-done: 212 100% 68%;
+    --status-failed: 3 93% 63%;
+    --status-blocked: 39 67% 69%;
+
+    /* Topology categories */
+    --cat-read: 187 80% 58%;
+    --cat-write: 39 67% 69%;
+    --cat-shell: 48 100% 72%;
+    --cat-agent: 262 60% 68%;
+    --cat-skill: 330 60% 65%;
+    --cat-dag: 210 80% 65%;
+    --cat-mcp: 170 60% 55%;
+    --cat-web: 20 76% 60%;
+    --cat-browser: 142 60% 55%;
+    --cat-plan: 215 8% 53%;
+    --cat-other: 215 8% 53%;
+    --spine: 215 15% 25%;
   }
 }
 
