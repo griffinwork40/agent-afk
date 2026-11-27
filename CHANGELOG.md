@@ -12,6 +12,30 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [6.4.1] - 2026-11-27
+
+### Fixed
+- center pre-compositor startup lines under AFK_CENTER_CONTENT (#5372) (5042eda19)
+- attribute typed handoff answers to the sender (#5337) (a05da4dc1)
+- add toolUseId to tool_error events in events.jsonl (#5346) (be0a60fe8)
+- add desktop_screenshot test coverage and timing fix (#5343) (e4727b8ec)
+- increase spawnSync timeout for macOS CI flake (#5342) (c4816d094)
+- deliver cron questions with Telegram answer buttons (#5339) (33bf023bc)
+- complete Telegram startup while long polling runs (#5338) (a53efd815)
+
+### Changed
+- extract tag-only Telegram configuration (7e0aa71f7)
+
+## [6.4.0] - 2026-11-26
+
+### Added
+- desktop_screenshot behind AFK_DESKTOP_ENABLED (computer use, tranche 1) (#5185) (06f405be7)
+
+### Fixed
+- pass permission allowlist to all Telegram provider families (07cdf28b8)
+- scope child prompts to granted tools and depth (#5309, #5310, #5311, #5312, #5313) (#5317) (5c36e7db2)
+- key credential-floor hint on matched presence and clarify doc wording (6e340960b)
+
 ## [6.3.0] - 2026-11-25
 
 ### Added

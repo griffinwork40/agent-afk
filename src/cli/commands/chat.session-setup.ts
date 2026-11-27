@@ -258,7 +258,7 @@ export async function buildChatSession(
     ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
     ...resumeConfig,
     ...providerWiring,
-  })))), traceWriter);
+  }), undefined, worktreeCwd, sharedMemoryStore))), traceWriter);
 
   boundSession = session;
 

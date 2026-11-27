@@ -104,6 +104,13 @@ describe('expireHandoff', () => {
     expect(operatorNotify).toHaveBeenCalledTimes(1);
   });
 
+  it('still expires a never handoff without notifying the operator', async () => {
+    await writeHandoff(record('q-silent', 25 * HOUR, { notifyOn: 'never' }), handoffsDir);
+    expect(await expireHandoff('q-silent', { handoffsDir, queueDir, now: NOW })).toBe(true);
+    expect(await readHandoff('q-silent', handoffsDir)).toMatchObject({ status: 'expired' });
+    expect(operatorNotify).not.toHaveBeenCalled();
+  });
+
   it('routes the notice to the chat/thread the question was sent to', async () => {
     vi.stubEnv('AFK_TELEGRAM_ALLOWED_CHAT_IDS', '42,-100123');
     await writeHandoff(record('q-routed', 25 * HOUR, { route: { chatId: -100123, threadId: 7 } }), handoffsDir);

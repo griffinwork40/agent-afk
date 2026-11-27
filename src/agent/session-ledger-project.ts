@@ -49,7 +49,7 @@ export type LedgerPayload =
   /** A tool invocation starting. `input` is a preview, capped at source. */
   | { kind: 'tool'; toolName: string; toolUseId?: string; input: string }
   /** A failed tool result. */
-  | { kind: 'tool_error'; toolName?: string; content: string }
+  | { kind: 'tool_error'; toolUseId?: string; toolName?: string; content: string }
   /** A successful tool result (clipped). */
   | { kind: 'tool_result'; toolUseId: string; content: string; durationMs?: number; toolName?: string }
   /** Turn completed. Cost/duration/token breakdown when the provider reported them. */
@@ -155,6 +155,7 @@ export function projectOutputEvent(event: OutputEvent): LedgerPayload | null {
         if (chunk.isError === true) {
           return {
             kind: 'tool_error',
+            toolUseId: chunk.toolUseId,
             content: clip(chunk.content, MAX_TOOL_INPUT_LEN),
             ...(chunk.metadata?.['toolName'] !== undefined ? { toolName: String(chunk.metadata['toolName']) } : {}),
           };

@@ -188,6 +188,11 @@ const BROWSER_TOOLS = new Set([
   'browser_extract',
   'browser_close',
 ]);
+const DESKTOP_TOOLS = new Set([
+  // Tranche 1: screenshot only. Input tools register in Tranche 3M/3W.
+  'desktop_screenshot',
+]);
+
 const PLANNING_TOOLS = new Set([
   'TaskCreate',
   'TaskUpdate',
@@ -352,6 +357,7 @@ export function categorizeTool(name: string, input?: unknown): ToolCategory {
   if (hasCI(DAG_TOOLS, name)) return 'dag';
   if (hasCI(WEB_TOOLS, name)) return 'web';
   if (BROWSER_TOOLS.has(name)) return 'browser';
+  if (DESKTOP_TOOLS.has(name)) return 'desktop';
   if (hasCI(PLANNING_TOOLS, name)) return 'planning';
   if (SCHEDULE_TOOLS.has(name)) return 'schedule';
   return 'other';
