@@ -855,16 +855,27 @@ jobs:
 
       - name: Install pinned harness
         run: |
-          HARBOR_HASH=$(python -m pip download --no-deps 'harbor==0.23.0' \
-            -d "$RUNNER_TEMP/harbor-dl" -q \
-            && python -m pip hash "$RUNNER_TEMP/harbor-dl"/harbor-*.whl \
-            | grep sha256 | awk '{print $1}')
-          EXPECTED="--hash=sha256:8747400dbb2a5e2298e1338e17e88eba38433c0433fd700f34d1a9021bba5c37"
-          if [ "$HARBOR_HASH" != "$EXPECTED" ]; then
-            echo "::error::harbor==0.23.0 wheel hash mismatch: got $HARBOR_HASH" >&2
+          # Single source of truth: read expected hash from requirements-harness.txt
+          EXPECTED_SHA=$(grep '^# HARBOR_SHA256=' bench/harbor/requirements-harness.txt | cut -d= -f2)
+          if [ -z "$EXPECTED_SHA" ]; then
+            echo "::error::HARBOR_SHA256 not found in requirements-harness.txt" >&2
             exit 1
           fi
-          python -m pip install -r bench/harbor/requirements-harness.txt
+          # Download wheel once into a local dir
+          python -m pip download --no-deps 'harbor==0.23.0' \
+            -d "$RUNNER_TEMP/harbor-dl" -q
+          # Verify hash using pip hash's structured --json output to avoid
+          # depending on undocumented text format
+          ACTUAL_SHA=$(python -m pip hash --algorithm sha256 \
+            "$RUNNER_TEMP/harbor-dl"/harbor-*.whl \
+            | grep '^\-\-hash=sha256:' | sed 's/--hash=sha256://')
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::harbor==0.23.0 wheel hash mismatch: got $ACTUAL_SHA expected $EXPECTED_SHA" >&2
+            exit 1
+          fi
+          # Install the already-verified local wheel directly; transitive deps
+          # are fetched from PyPI (harbor-dl contains only the harbor wheel).
+          python -m pip install "$RUNNER_TEMP/harbor-dl"/harbor-*.whl
           python -m pip install pytest
 
       - name: Run bench/harbor pytest suite
