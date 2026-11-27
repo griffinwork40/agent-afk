@@ -1,147 +1,81 @@
-/**
- * Cron-task elicitation visibility (#3243 gap 1 — partial).
- *
- * When a cron or sessionstart task's agent calls `ask_question`, the
- * elicitation router has no handler installed (only pull tasks wire one via
- * `makeDaemonElicitationHandler`). The router's built-in
- * `notifyUnattendedElicitation` fires a generic Telegram push, but it has no
- * task context: it doesn't name the task, doesn't write a durable handoff
- * record, and doesn't respect the task's `notifyOn` setting.
- *
- * This module provides `makeCronElicitationHandler` — a lightweight handler
- * for cron/sessionstart tasks that:
- *
- *   1. Writes a durable `HandoffRecord` so the question survives a restart
- *      and the handoff maintenance tick (handoff-maintenance.ts, every trigger
- *      mode) can resume it with the answer via `processAnsweredHandoffs`.
- *   2. Sends a task-aware Telegram notification (names the task, respects
- *      `notifyOn` via the injected `notify` callback).
- *   3. Returns `{ action: 'decline' }` immediately — cron sessions cannot
- *      block on a synchronous answer; the operator answers later and the
- *      handoff is consumed on the next maintenance tick.
- *
- * Deliberately omits the `setLeaseState('waiting_human_input')` step used
- * by `makeDaemonElicitationHandler` for pull tasks: cron tasks have no
- * durable lease file, so there is nothing to transition.
- *
- * The `formatCronElicitationMessage` helper is also exported so the
- * scheduler can supply it as `responseText` inside a `TaskCompletionDetails`
- * object — this routes the notification through the normal `onTaskComplete`
- * path (honours `notifyOn: 'always' | 'failure' | 'never'` and
- * `notifyChat`) rather than firing a raw unconditional push.
- *
- * @module agent/daemon/scheduler.elicitation-notify
- */
-
 import { pickResumeFields, type HandoffResumeContext } from './handoff-resume-context.js';
 import { writeHandoff, type HandoffRecord } from './handoff-store.js';
+import { buildHandoffReplyMarkup } from './handoff-wiring.js';
 import { errorMessage } from '../../utils/errors.js';
-import { debugLog } from '../../utils/debug.js';
 import type { ElicitationHandler } from '../elicitation-router.js';
 import { serializeRequest } from './elicitation-serialize.js';
+import { operatorNotify } from '../operator-notify.js';
 import type { Telegraf } from 'telegraf';
 import { sendHandoffQuestion } from '../../telegram/handoff-answer.js';
+import { resolveConfiguredNotifyTargets } from '../../telegram/notify-routing.js';
 
-// Re-export so callers only need one import for the whole cron-elicitation concern.
-export type { ElicitationHandler };
+function truncate(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit)}…(truncated)` : text;
+}
 
-// ---------------------------------------------------------------------------
-// Notification message
-// ---------------------------------------------------------------------------
-
-/**
- * Plain-text notification body for a cron-task elicitation. Safe in all
- * Telegram parse modes (no markdown). Includes enough context for the
- * operator to decide how to respond without needing to look up the task.
- *
- * @param taskId   Scheduled task id (e.g. `my-deploy-task`).
- * @param command  The task command string (already secret-redacted).
- * @param cron     The cron expression, if any.
- * @param question The `message` field from the `ElicitationRequest`.
- */
+/** Bound all fields so the raw push sends one message per target. */
 export function formatCronElicitationMessage(
   taskId: string,
   command: string,
   cron: string | undefined,
   question: string,
 ): string {
-  const cronNote = cron !== undefined ? ` (cron: ${cron})` : '';
-  const cap = 300;
-  const questionHead = question.length > cap ? `${question.slice(0, cap)}\u2026(truncated)` : question;
+  const cronNote = cron !== undefined ? ` (cron: ${truncate(cron, 120)})` : '';
   return (
-    `[daemon] Cron task "${taskId}"${cronNote} needs your input and cannot continue.\n` +
-    `Command: ${command}\n` +
-    `Question: ${questionHead}\n` +
-    `The question has been saved as a handoff record. ` +
-    `Answer via Telegram and the daemon will resume the task with your answer.`
+    `[daemon] Cron task "${truncate(taskId, 128)}"${cronNote} needs your input.\n` +
+    `Command: ${truncate(command, 500)}\n` +
+    `Question: ${truncate(question, 300)}`
   );
 }
 
-// ---------------------------------------------------------------------------
-// Handler factory
-// ---------------------------------------------------------------------------
-
-/**
- * Options for {@link makeCronElicitationHandler}.
- */
-export interface CronElicitationHandlerOpts {
-  /** Scheduled task id. */
+interface CronElicitationHandlerOpts {
   taskId: string;
-  /** The task's command string (already secret-redacted by the caller). */
+  /** Secret-redacted by the caller. */
   originalCommand: string;
-  /** Override the handoffs directory (tests). Defaults to `getHandoffsDir()`. */
   handoffsDir?: string;
-  /**
-   * Called synchronously after the handoff record is written and before the
-   * handler returns. Receives the plain-text notification message so the
-   * scheduler can pass it as `responseText` inside `TaskCompletionDetails`
-   * and route it through `onTaskComplete` (honours `notifyOn`).
-   * Best-effort: a throwing callback is swallowed; the handler always returns
-   * `{ action: 'decline' }`.
-   */
-  onHandoffWritten?: (message: string) => void;
-  /** Cron expression for the task, if any (included in notification text). */
   cronExpression?: string;
-  /**
-   * Telegraf bot instance. When provided together with `chatId`, the handler
-   * sends a rich interactive handoff question (inline keyboard for
-   * confirm/choice, reply-to-message for text/number) — the same path
-   * `makeDaemonElicitationHandler` uses for pull tasks (#3243 item 2).
-   * When absent, the `onHandoffWritten` callback routes the notification
-   * through `onTaskComplete` (honours `notifyOn`/`notifyChat`).
-   */
-  bot?: Telegraf;
-  /** Target Telegram chat ID for the rich handoff question. */
-  chatId?: number;
-  /** Optional topic thread ID for supergroups. */
-  threadId?: number;
-  /**
-   * Origin context persisted on the handoff (#1416) so the resumed run keeps
-   * the task's pinned cwd, notify policy, and overlap identity.
-   */
   resumeContext?: HandoffResumeContext;
+  /** Co-hosted Telegraf instance; when present each target gets the rich question first. */
+  bot?: Telegraf;
+  /**
+   * The task's explicit `notifyChat`, already alias-resolved AND allowlisted by
+   * the caller. When set it is the ONLY delivery target; configured defaults
+   * are not consulted. Omit to use configured notify routing.
+   */
+  overrideChatId?: number;
+  /**
+   * The co-hosted bot's primary chat. Used ONLY to map `primaryThreadId` onto
+   * that chat when it is also a resolved target — never as a target itself.
+   */
+  primaryChatId?: number;
+  primaryThreadId?: number;
+  /** Configured default targets (primary/broadcast/custom). Injectable for tests. */
+  resolveDefaultTargets?: () => readonly number[];
+  /** Signal the run to omit the completion notice once a durable question exists. */
+  onHandoffWritten?: () => void;
 }
 
 /**
- * Build an `ElicitationHandler` for cron and sessionstart daemon tasks.
- *
- * The handler writes a durable handoff, fires the `onHandoffWritten` callback
- * with a task-aware notification message, then immediately returns
- * `{ action: 'decline' }`.
- *
- * Install via `elicitationRouter.install(...)` before `session.sendMessage()`
- * and uninstall in the `finally` block — the same pattern `executeAgentTask`
- * already uses for pull tasks.
+ * Resolve the cron question's delivery targets BEFORE any send: the
+ * allowlisted override alone, else the configured notify routing. De-duplicated
+ * so no chat ever receives the question twice.
  */
-export function makeCronElicitationHandler(
-  opts: CronElicitationHandlerOpts,
-): ElicitationHandler {
-  const handler: ElicitationHandler = async (request, options) => {
-    if (options.signal.aborted) return { action: 'decline' };
+export function resolveCronQuestionTargets(
+  overrideChatId: number | undefined,
+  resolveDefaultTargets: () => readonly number[] = resolveConfiguredNotifyTargets,
+): number[] {
+  const raw = overrideChatId !== undefined ? [overrideChatId] : resolveDefaultTargets();
+  return [...new Set(raw.filter((id) => Number.isFinite(id) && id !== 0))];
+}
+
+/** Persist before notifying, then decline without waiting for a human answer. */
+export function makeCronElicitationHandler(opts: CronElicitationHandlerOpts): ElicitationHandler {
+  return async (request, { signal, sessionId }) => {
+    if (signal.aborted) return { action: 'decline' };
 
     const record: HandoffRecord = {
       taskId: opts.taskId,
-      sessionId: options.sessionId ?? '',
+      sessionId: sessionId ?? '',
       question: serializeRequest(request),
       requestType: 'ask_question',
       createdAt: new Date().toISOString(),
@@ -149,74 +83,61 @@ export function makeCronElicitationHandler(
       originalCommand: opts.originalCommand,
       ...pickResumeFields(opts.resumeContext),
     };
-
-    // Step 1: persist the handoff so the operator can answer later and
-    // the maintenance tick resumes the task with the answer (#1416).
-    let handoffWritten = false;
     try {
       await writeHandoff(record, opts.handoffsDir);
-      handoffWritten = true;
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error(
-        `[cron-elicitation] failed to write handoff for task ${opts.taskId}:`,
-        errorMessage(err),
-      );
+      console.error('[cron-elicitation] failed to write handoff for task %s: %s', opts.taskId, errorMessage(err));
+      return { action: 'decline' };
     }
 
-    // Step 2: send notification — rich Telegram handoff if bot+chatId are
-    // available (#3243 item 2), otherwise fall back to the onHandoffWritten
-    // callback which routes through onTaskComplete (honours notifyOn).
-    if (handoffWritten) {
-      if (opts.bot !== undefined && opts.chatId !== undefined) {
-        // Rich interactive path: sends inline keyboards for confirm/choice and
-        // enables reply-to-message matching for text/number answers — the same
-        // path pull tasks use via makeDaemonElicitationHandler.
-        void sendHandoffQuestion({
+    opts.onHandoffWritten?.();
+    if (record.notifyOn === 'never') return { action: 'decline' };
+
+    const targets = resolveCronQuestionTargets(opts.overrideChatId, opts.resolveDefaultTargets);
+    if (targets.length === 0) {
+      console.error('[cron-elicitation] no Telegram target for task %s; handoff remains pending', opts.taskId);
+      return { action: 'decline' };
+    }
+
+    const replyMarkup = buildHandoffReplyMarkup(request.type ?? 'text', opts.taskId, request.choices);
+    const message = formatCronElicitationMessage(opts.taskId, opts.originalCommand, opts.cronExpression, request.message);
+    const choices = !replyMarkup && Array.isArray(request.choices) && request.choices.length > 0
+      ? `\nOptions: ${truncate(request.choices.join(', '), 300)}`
+      : '';
+    const hint = replyMarkup ? '' : '\nSee /handoffs for the pending question.';
+    const fallbackText = message + choices + hint;
+
+    // Each resolved target is delivered independently: rich bot send first
+    // (when co-hosted), then a raw push WITH the same answer buttons to that
+    // target only if the bot send failed. One target's failure never re-sends
+    // to another target, and no chat outside `targets` is ever contacted.
+    let failed = 0;
+    for (const chatId of targets) {
+      const threadId = chatId === opts.primaryChatId ? opts.primaryThreadId : undefined;
+      if (opts.bot !== undefined) {
+        // The sender normally reports a failed send as { ok: false }.
+        const sent = await sendHandoffQuestion({
           bot: opts.bot,
           record,
-          chatId: opts.chatId,
-          ...(opts.threadId !== undefined ? { threadId: opts.threadId } : {}),
+          chatId,
           handoffsDir: opts.handoffsDir,
-        }).catch((err) => {
-          // Log the delivery failure so it is visible in daemon logs (#3637).
-          // The handoff record on disk still exists and can be answered later;
-          // fall back to onHandoffWritten so notifyOn routing still fires.
-          // eslint-disable-next-line no-console
-          console.error(
-            `[cron-elicitation] sendHandoffQuestion failed for task ${opts.taskId}:`,
-            errorMessage(err),
-          );
-          if (opts.onHandoffWritten !== undefined) {
-            const msg = formatCronElicitationMessage(
-              opts.taskId,
-              opts.originalCommand,
-              opts.cronExpression,
-              request.message,
-            );
-            try { opts.onHandoffWritten(msg); } catch (e) { debugLog('[cron-elicitation] onHandoffWritten fallback threw:', errorMessage(e)); }
-          }
-        });
-      } else if (opts.onHandoffWritten !== undefined) {
-        // Fallback: plain-text notification routed through onTaskComplete
-        // so notifyOn / notifyChat are honoured.
-        const msg = formatCronElicitationMessage(
-          opts.taskId,
-          opts.originalCommand,
-          opts.cronExpression,
-          request.message,
-        );
-        try {
-          opts.onHandoffWritten(msg);
-        } catch {
-          // observational only — never let a notification failure break the run
-        }
+          ...(threadId !== undefined ? { threadId } : {}),
+        }).catch(() => undefined);
+        if (sent?.ok) continue;
       }
+      const results = await operatorNotify(fallbackText, {
+        target: chatId,
+        ...(threadId !== undefined ? { messageThreadId: threadId } : {}),
+        ...(replyMarkup !== undefined ? { replyMarkup } : {}),
+      }).catch(() => undefined);
+      if (results == null || results.length === 0 || results.some((result) => !result.ok)) failed += 1;
     }
-
-    // Step 3: decline immediately. Cron sessions cannot block on a
-    // synchronous answer.
+    if (failed > 0) {
+      console.error(
+        '[cron-elicitation] Telegram delivery failed for %d of %d target(s) for task %s; handoff remains pending',
+        failed, targets.length, opts.taskId,
+      );
+    }
     return { action: 'decline' };
   };
-  return handler;
 }
