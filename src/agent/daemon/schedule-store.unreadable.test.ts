@@ -191,3 +191,69 @@ describe('read-modify-write rejects entries with future _schemaVersion', () => {
     expect(existsSync(`${storePath}.lock`)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Scenario 5 (#3714): object-wrapper format written by a future AFK version
+//
+// A future AFK release that bumps the schema may write schedules.json as
+// { "version": N, "tasks": [...] } instead of a bare JSON array.
+// loadSchedulesForWrite must surface a version-specific "upgrade afk" message
+// (UnreadableSchedulesError) rather than the generic "not a JSON array" message,
+// so the operator knows to upgrade rather than repair a valid file.
+// ---------------------------------------------------------------------------
+
+describe('Scenario 5 (#3714): write path refuses future-version object-wrapper format', () => {
+  it('addSchedule throws UnreadableSchedulesError with upgrade hint for { version: 999, tasks } file', () => {
+    const futureFile = { version: 999, tasks: [{ id: 'task-a', name: 'Task A', command: '/run', cron: '0 2 * * *', enabled: true }] };
+    writeFileSync(storePath, JSON.stringify(futureFile));
+    expect(() => addSchedule({ ...BASE }, storePath)).toThrow(UnreadableSchedulesError);
+    expect(() => addSchedule({ ...BASE }, storePath)).toThrow(/upgrade afk/i);
+  });
+
+  it('addSchedule error message includes the file version number', () => {
+    const futureFile = { version: 999, tasks: [] };
+    writeFileSync(storePath, JSON.stringify(futureFile));
+    let message = '';
+    try { addSchedule({ ...BASE }, storePath); } catch (err) { message = (err as Error).message; }
+    expect(message).toContain('999');
+  });
+
+  it('addSchedule leaves the file byte-for-byte intact when refusing a future-version object-wrapper', () => {
+    const futureFile = { version: 999, tasks: [] };
+    const original = JSON.stringify(futureFile);
+    writeFileSync(storePath, original);
+    expect(() => addSchedule({ ...BASE }, storePath)).toThrow(UnreadableSchedulesError);
+    expect(readFileSync(storePath, 'utf-8')).toBe(original);
+  });
+
+  it.each([
+    ['updateSchedule', (p: string) => updateSchedule('task-a', { name: 'Renamed' }, p)],
+    ['removeSchedule', (p: string) => removeSchedule('task-a', p)],
+    ['toggleScheduleEnabled', (p: string) => toggleScheduleEnabled('task-a', false, p)],
+  ])('%s refuses a future-version object-wrapper file with upgrade hint', (_name, run) => {
+    const futureFile = { version: 999, tasks: [{ id: 'task-a', name: 'Task A', command: '/run', cron: '0 2 * * *', enabled: true }] };
+    writeFileSync(storePath, JSON.stringify(futureFile));
+    expect(() => run(storePath)).toThrow(UnreadableSchedulesError);
+    expect(() => run(storePath)).toThrow(/upgrade afk/i);
+  });
+
+  it('releases the lock after refusing a future-version object-wrapper file', () => {
+    const futureFile = { version: 999, tasks: [] };
+    writeFileSync(storePath, JSON.stringify(futureFile));
+    expect(() => addSchedule({ ...BASE }, storePath)).toThrow(UnreadableSchedulesError);
+    expect(existsSync(`${storePath}.lock`)).toBe(false);
+  });
+
+  it('a current-version object-wrapper still triggers generic "not a JSON array" (not upgrade hint)', () => {
+    // version: 1 equals SCHEDULES_SCHEMA_VERSION — not a future version, just wrong format.
+    // The store canonical format is a bare array; an object wrapper at current version
+    // is still a structural error (not a version mismatch), so the message differs.
+    const currentVersionObject = { version: 1, tasks: [] };
+    writeFileSync(storePath, JSON.stringify(currentVersionObject));
+    expect(() => addSchedule({ ...BASE }, storePath)).toThrow(UnreadableSchedulesError);
+    // Must NOT claim upgrade is needed — the version is current.
+    let message = '';
+    try { addSchedule({ ...BASE }, storePath); } catch (err) { message = (err as Error).message; }
+    expect(message).not.toMatch(/upgrade afk/i);
+  });
+});
