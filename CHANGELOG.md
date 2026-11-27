@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [6.5.0] - 2026-11-27
+
 ### Added
 - add wipe guard with single-slot undo (#5382) (1720d0d97)
 
