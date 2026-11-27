@@ -141,7 +141,27 @@ interface CreateArgs {
   signal: AbortSignal;
 }
 
-/** `create` action: confined path, collision auto-suffix (#1516), managed create + setup (#3601). */
+/**
+ * True when `branch` already exists as a local ref in `repoRoot`.
+ * Uses `git rev-parse --verify` which exits non-zero when the ref is absent,
+ * and outputs a non-empty SHA on success. We require non-empty stdout so that
+ * a mock returning `{ stdout: '', stderr: '' }` (unhandled call) is treated as
+ * absent rather than present.
+ */
+async function branchExists(
+  execFile: ExecFileFn,
+  repoRoot: string,
+  branch: string,
+): Promise<boolean> {
+  try {
+    const { stdout } = await execFile('git', ['--no-optional-locks', '-C', repoRoot, 'rev-parse', '--verify', `refs/heads/${branch}`]);
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** `create` action: confined path, collision auto-suffix (#1516, #4875), managed create + setup (#3601). */
 async function handleCreate(args: CreateArgs): Promise<ToolResult> {
   const { obj, ctx, anchor, explicitRepo, execFile, generateSuffix, signal } = args;
   if (typeof obj['name'] !== 'string' || !obj['name']) {
@@ -151,26 +171,32 @@ async function handleCreate(args: CreateArgs): Promise<ToolResult> {
   if (!slug) {
     return { content: `Invalid input: name "${obj['name']}" sanitizes to empty`, isError: true };
   }
+  const prefix = env.AFK_WORKTREE_BRANCH_PREFIX ?? 'afk/';
   const worktreePath = join(ctx.afkWorktreesRoot, slug);
   let resolvedSlug = slug;
   let worktreePathResolved = worktreePath;
   const existing = await findEntry(execFile, ctx.repoRoot, worktreePath);
-  if (existing) {
+  // Check both: worktree path already checked out, OR branch ref left behind by
+  // a prior remove (remove keeps the branch by design — #4875).
+  const pathTaken = !!existing;
+  const branchTaken = !pathTaken && await branchExists(execFile, ctx.repoRoot, `${prefix}${slug}`);
+  if (pathTaken || branchTaken) {
     // Auto-retry with a unique 4-char hex suffix rather than surfacing
     // a collision error — the common case is a stale worktree from a
-    // prior failed run on the same issue (#1516).
+    // prior failed run on the same issue (#1516), or a stale branch left
+    // behind by a prior remove (#4875).
     const suffix = generateSuffix();
     resolvedSlug = `${slug.slice(0, 80 - suffix.length - 1)}-${suffix}`;
     worktreePathResolved = join(ctx.afkWorktreesRoot, resolvedSlug);
-    const stillExists = await findEntry(execFile, ctx.repoRoot, worktreePathResolved);
-    if (stillExists) {
+    const stillPathTaken = await findEntry(execFile, ctx.repoRoot, worktreePathResolved);
+    const stillBranchTaken = !stillPathTaken && await branchExists(execFile, ctx.repoRoot, `${prefix}${resolvedSlug}`);
+    if (stillPathTaken || stillBranchTaken) {
       return {
         content: `Worktree already exists at ${worktreePath} and the auto-suffixed path ${worktreePathResolved} is also taken. Run action "list" to see all current worktrees.`,
         isError: true,
       };
     }
   }
-  const prefix = env.AFK_WORKTREE_BRANCH_PREFIX ?? 'afk/';
   const branch = `${prefix}${resolvedSlug}`;
   const baseInput = resolveCreateBaseRef(obj['base']);
   if (typeof baseInput === 'object') {
@@ -303,6 +329,11 @@ export function createWorktreeHandler(
           }
           const entry = await resolveManagedWorktree(execFile, ctx, obj['path']);
           if (typeof entry === 'string') return { content: entry, isError: true };
+          // #4875: when the worktree is not locked, git worktree unlock fails.
+          // The requested end-state (not locked) already holds — return success.
+          if (!entry.locked) {
+            return { content: JSON.stringify({ path: entry.path, locked: false, note: 'Worktree was already unlocked; no change made.' }) };
+          }
           await execFile('git', ['-C', ctx.repoRoot, 'worktree', 'unlock', entry.path]);
           return { content: JSON.stringify({ path: entry.path, locked: false }) };
         }
