@@ -433,8 +433,8 @@ describe('makeCronElicitationHandler target routing', () => {
   const confirmReq: ElicitationRequest = { serverName: 'agent', origin: 'agent', message: 'Deploy now?', type: 'confirm' };
   const confirmKeyboard = {
     inline_keyboard: [[
-      { text: 'Yes', callback_data: 'afk:h:1:route-task' },
-      { text: 'No', callback_data: 'afk:h:0:route-task' },
+      { text: 'Yes', callback_data: expect.stringMatching(/^afk:h:q:1:[0-9a-f-]{36}$/) },
+      { text: 'No', callback_data: expect.stringMatching(/^afk:h:q:0:[0-9a-f-]{36}$/) },
     ]],
   };
 

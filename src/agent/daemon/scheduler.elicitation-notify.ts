@@ -1,6 +1,6 @@
 import { pickResumeFields, type HandoffResumeContext } from './handoff-resume-context.js';
 import { writeHandoff, type HandoffRecord } from './handoff-store.js';
-import { buildHandoffReplyMarkup } from './handoff-wiring.js';
+import { buildHandoffReplyMarkup } from '../../telegram/handoff-reply-markup.js';
 import { errorMessage } from '../../utils/errors.js';
 import type { ElicitationHandler } from '../elicitation-router.js';
 import { serializeRequest } from './elicitation-serialize.js';
@@ -73,7 +73,7 @@ export function makeCronElicitationHandler(opts: CronElicitationHandlerOpts): El
   return async (request, { signal, sessionId }) => {
     if (signal.aborted) return { action: 'decline' };
 
-    const record: HandoffRecord = {
+    const draft: HandoffRecord = {
       taskId: opts.taskId,
       sessionId: sessionId ?? '',
       question: serializeRequest(request),
@@ -83,8 +83,9 @@ export function makeCronElicitationHandler(opts: CronElicitationHandlerOpts): El
       originalCommand: opts.originalCommand,
       ...pickResumeFields(opts.resumeContext),
     };
+    let record: HandoffRecord;
     try {
-      await writeHandoff(record, opts.handoffsDir);
+      record = await writeHandoff(draft, opts.handoffsDir);
     } catch (err) {
       console.error('[cron-elicitation] failed to write handoff for task %s: %s', opts.taskId, errorMessage(err));
       return { action: 'decline' };
@@ -99,7 +100,7 @@ export function makeCronElicitationHandler(opts: CronElicitationHandlerOpts): El
       return { action: 'decline' };
     }
 
-    const replyMarkup = buildHandoffReplyMarkup(request.type ?? 'text', opts.taskId, request.choices);
+    const replyMarkup = buildHandoffReplyMarkup(request.type ?? 'text', record, request.choices);
     const message = formatCronElicitationMessage(opts.taskId, opts.originalCommand, opts.cronExpression, request.message);
     const choices = !replyMarkup && Array.isArray(request.choices) && request.choices.length > 0
       ? `\nOptions: ${truncate(request.choices.join(', '), 300)}`
