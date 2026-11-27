@@ -146,9 +146,9 @@ jobs:
               --body "Live provider tests failed again: $RUN_URL"
           else
             printf 'Live provider tests are failing. See: %s\n\nThis issue is auto-managed by the `live-provider-tests` workflow.\nIt is opened on the first failure and updated with comments on subsequent failures.\nClose it once the tests are green again.' \
-              "$RUN_URL" > /tmp/issue-body.md
+              "$RUN_URL" > "$RUNNER_TEMP/issue-body.md"
             gh issue create \
               --title "$TITLE" \
               --label "$LABEL" \
-              --body-file /tmp/issue-body.md
+              --body-file "$RUNNER_TEMP/issue-body.md"
           fi
