@@ -132,4 +132,13 @@ describe('memory_update — degraded store (schema too new)', () => {
     expect(res.isError).toBe(true);
     expect(res.content).toContain('restart');
   });
+
+  it('removeFact via handler returns isError:true in degraded mode', async () => {
+    const res = await degradedUpdate(
+      { target: 'fact', action: 'remove', id: 1 },
+      signal,
+    );
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('restart');
+  });
 });

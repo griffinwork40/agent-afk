@@ -377,6 +377,12 @@ export function createMemoryHandlers(
           };
         }
         const removed = store.removeFact(parsed.id);
+        if (!removed && store.isDegraded) {
+          return {
+            content: store.schemaVersionWarning ?? 'memory store is degraded — fact not removed',
+            isError: true,
+          };
+        }
         return { content: JSON.stringify({ removed, action: 'remove', target: 'fact' }) };
       }
 
