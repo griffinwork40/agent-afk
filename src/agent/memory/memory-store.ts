@@ -113,9 +113,10 @@ export class MemoryStore {
     mkdirSync(this.dir, { recursive: true });
     mkdirSync(join(this.dir, PROCEDURES_DIR), { recursive: true });
 
-    // Open the facet FTS sidecar DB. This is a separate SQLite database that
-    // indexes session facet fields for type:'session' search results.
-    this.facetFts = new FacetFtsStore(this.dir);
+    // Open the facet FTS sidecar DB for type:'session' search results. Startup
+    // must stay cheap: a short lock wait, and backfill indexes at most one
+    // bounded batch per open (the index converges over ordinary opens).
+    this.facetFts = new FacetFtsStore(this.dir, { busyTimeoutMs: 250 });
     this.facetFts.backfill(facetCacheDir ?? getFacetCacheDir());
 
     this.db = new Database(join(this.dir, DB_FILE));
@@ -512,8 +513,12 @@ export class MemoryStore {
       // FacetFtsStore.search() applies sanitizeFtsQuery internally.
       //
       // Reserve roughly a third for sessions under competition. When facts
-      // and procedures leave slots empty, let more sessions fill them.
-      const sessionSlots = Math.max(Math.ceil(limit / 3), limit - results.length);
+      // and procedures leave slots empty, let more sessions fill them, but
+      // never every slot while a fact or procedure matched (limit 1 included).
+      const sessionSlots = Math.min(
+        Math.max(Math.ceil(limit / 3), limit - results.length),
+        results.length ? limit - 1 : limit,
+      );
       const sessionResults = this.facetFts.search(query, sessionSlots);
 
       if (sessionResults.length > 0) {

@@ -6,9 +6,10 @@
  * yield-probe is fired asynchronously for top-level sessions.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import Database from 'better-sqlite3';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getSessionsDir } from '../../paths.js';
+import { getMemoryDir, getSessionsDir } from '../../paths.js';
 import { createMemoryHandlers } from '../memory/memory-tools.js';
 import { MemoryStore } from '../memory/memory-store.js';
 import type { SessionEndContext } from '../hooks.js';
@@ -146,6 +147,36 @@ describe('createFacetSessionEndHook', () => {
 
     expect(result).toEqual({});
     expect(mockDerive).not.toHaveBeenCalled();
+  });
+
+  it('does not throw or wait when another process holds the index write lock', () => {
+    mockDerive.mockReset();
+    mockDerive.mockReturnValue({ session_id: 'locked-end', brief_summary: 'locked' } as ReturnType<typeof getOrDeriveFacet>);
+    new MemoryStore().close(); // Create the index schema.
+    const lock = new Database(join(getMemoryDir(), 'facets-fts.v3.db'));
+    lock.exec('BEGIN IMMEDIATE');
+    try {
+      const started = Date.now();
+      expect(() => createFacetSessionEndHook()(endCtx({ sessionId: 'locked-end' }))).not.toThrow();
+      expect(Date.now() - started).toBeLessThan(1000); // busy_timeout 0: skip, never wait.
+    } finally {
+      lock.exec('ROLLBACK');
+      lock.close();
+    }
+  });
+
+  it('does not throw when the index file cannot be opened', () => {
+    mockDerive.mockReset();
+    mockDerive.mockReturnValue({ session_id: 'no-index', brief_summary: 'x' } as ReturnType<typeof getOrDeriveFacet>);
+    const memoryDir = getMemoryDir();
+    mkdirSync(memoryDir, { recursive: true });
+    rmSync(join(memoryDir, 'facets-fts.v3.db'), { force: true });
+    mkdirSync(join(memoryDir, 'facets-fts.v3.db'), { recursive: true });
+    try {
+      expect(() => createFacetSessionEndHook()(endCtx({ sessionId: 'no-index' }))).not.toThrow();
+    } finally {
+      rmSync(join(memoryDir, 'facets-fts.v3.db'), { recursive: true, force: true });
+    }
   });
 
   it('swallows derivation errors without propagating', () => {

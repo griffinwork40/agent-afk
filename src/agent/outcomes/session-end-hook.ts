@@ -41,6 +41,7 @@ import { upsertVotes } from './store.js';
 import { lfReask, promptFingerprint } from './lf-reask.js';
 import type { VerifiedOutcome } from './schema.js';
 import type { Artifacts } from './schema.js';
+import { reindexSessionFacet } from '../memory/facet-fts-store.reindex.js';
 
 // ---------------------------------------------------------------------------
 // Closure reader — synchronous, reads tracePath written by the trace layer
@@ -296,6 +297,9 @@ async function _runImmediatePass(
   };
 
   upsertVotes(sessionId, votes, base, { closureReason });
+  // The facet hook indexed this session before the outcome record existed;
+  // re-index so commit subjects, changed files and PR links become searchable.
+  reindexSessionFacet(sessionId, cwd !== undefined ? { cwd } : {});
 
   // cross_session_reask: check if this NEW session should add a -1 to a
   // prior session (fire-and-forget within the already-void context)

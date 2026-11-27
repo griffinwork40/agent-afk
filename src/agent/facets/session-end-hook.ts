@@ -36,6 +36,7 @@ import { execFileAsync } from '../../utils/exec-file.js';
 import { getMemoryDir } from '../../paths.js';
 import { FacetFtsStore } from '../memory/facet-fts-store.js';
 import { indexFacetIntoStore } from '../memory/memory-store.facet-index.js';
+import { reindexSessionFacet } from '../memory/facet-fts-store.reindex.js';
 
 export function createFacetSessionEndHook(): HookHandler {
   return (context) => {
@@ -62,7 +63,7 @@ export function createFacetSessionEndHook(): HookHandler {
     // Phase 1b: index the facet into the facet FTS store for memory_search
     // type:'session' results. Best-effort — failures must never block teardown.
     try {
-      const store = new FacetFtsStore(getMemoryDir(), true);
+      const store = new FacetFtsStore(getMemoryDir(), { busyTimeoutMs: 0 });
       try {
         indexFacetIntoStore(store, facet, { sidecarId: sessionId, cwd: context.cwd });
       } finally {
@@ -79,9 +80,12 @@ export function createFacetSessionEndHook(): HookHandler {
     // Read cwd from context so git/gh run against the session's repo, not
     // process.cwd() (which is the daemon launch dir in unattended runs).
     const cwd = context.cwd;
-    void writeFacetYield(sessionId, execFileAsync, cwd).catch(() => {
-      // Swallow: gh/git failures are normal in offline or non-repo contexts.
-    });
+    // A pr_url the probe records reaches the session index by a late re-index.
+    void writeFacetYield(sessionId, execFileAsync, cwd)
+      .then(() => reindexSessionFacet(sessionId, cwd ? { cwd } : {}))
+      .catch(() => {
+        // Swallow: gh/git failures are normal in offline or non-repo contexts.
+      });
 
     return {};
   };

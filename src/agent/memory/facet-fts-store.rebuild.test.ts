@@ -15,7 +15,7 @@ function writeFixture(dir: string, id: string, data: unknown): void {
 }
 
 describe('facet FTS upgrade', () => {
-  it('rebuilds v2 rows from retained sidecars and falls back to cached facets', async () => {
+  it('builds the v3 file from retained sidecars, leaving the v2 file untouched, and falls back to cached facets', async () => {
     const memoryDir = getMemoryDir();
     const cacheDir = getFacetCacheDir();
     const sessionsDir = getSessionsDir();
@@ -86,11 +86,20 @@ describe('facet FTS upgrade', () => {
     } finally {
       store.close();
     }
-    const reopened = new Database(join(memoryDir, 'facets-fts.db'), { readonly: true });
+    // The v2 file an older binary may still use is left exactly as it was.
+    const legacy = new Database(join(memoryDir, 'facets-fts.db'), { readonly: true });
     try {
-      expect(reopened.pragma('user_version', { simple: true })).toBe(3);
+      expect(legacy.pragma('user_version', { simple: true })).toBe(2);
+      expect(legacy.prepare('SELECT brief_summary FROM facets_index').all())
+        .toEqual([{ brief_summary: 'staleindexword' }]);
     } finally {
-      reopened.close();
+      legacy.close();
+    }
+    const current = new Database(join(memoryDir, 'facets-fts.v3.db'), { readonly: true });
+    try {
+      expect(current.pragma('user_version', { simple: true })).toBe(3);
+    } finally {
+      current.close();
     }
   });
 });

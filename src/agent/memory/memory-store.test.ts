@@ -1002,4 +1002,12 @@ describe('search() — session results survive when facts fill the limit', () =>
     }
     expect(sessionStore.search('relay', { limit: 18 })).toHaveLength(18);
   });
+
+  it('keeps a matching fact at limit 1 when sessions also match', () => {
+    sessionStore.storeFact({ category: 'learning', content: 'solitary zephyr fact', source_surface: 'test' });
+    sessionStore.indexFacet({ session_id: 'sess-zephyr', brief_summary: 'zephyr session' });
+
+    expect(sessionStore.search('zephyr', { limit: 1 }).map((r) => r.type)).toEqual(['fact']);
+    expect(sessionStore.search('zephyr', { limit: 2 }).map((r) => r.type)).toEqual(['fact', 'session']);
+  });
 });

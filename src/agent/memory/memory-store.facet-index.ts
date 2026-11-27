@@ -26,12 +26,17 @@ export interface FacetIndexFields {
   start_time?: string;
   cwd?: string;
   extra_text?: string;
+  /**
+   * Which enrichment sources the projection saw: 2 = session turns, 1 = the
+   * outcome record. A row is only replaced by a projection with at least as
+   * many sources, so a late thin projection never erases a rich one.
+   */
+  sources?: number;
 }
 
 export interface FacetIndexSource {
   sidecarId: string;
   cwd?: string;
-  backfill?: boolean;
 }
 
 function object(value: unknown): Record<string, unknown> | undefined {
@@ -59,6 +64,8 @@ function userText(sidecar: Record<string, unknown> | undefined): string {
   const turns = sidecar?.['turns'];
   if (!Array.isArray(turns)) return '';
   // Reserve room for recent follow-ups even in sessions with thousands of turns.
+  // At the full 256 turns each turn gets about 47 characters (USER_TEXT_CAP /
+  // 256); turns before the last 256 are not indexed. Documented in the memory guide.
   const messages = turns.map((turn) => {
     const raw = text(object(turn)?.['user']);
     return isPreamble(raw) ? extractUserContent(raw) : raw;
@@ -93,37 +100,47 @@ function sessionStart(value: unknown, fallback: unknown): string | undefined {
   return Number.isFinite(date.valueOf()) ? date.toISOString() : undefined;
 }
 
-/** Shared projection for live writes and schema rebuilds; only these fields can enter search. */
+/**
+ * Shared projection for live writes, late re-indexes and rebuilds; only these
+ * fields can enter search. Pure apart from reading the retained session files.
+ */
+export function projectFacet(raw: unknown, source?: FacetIndexSource): FacetIndexFields | undefined {
+  const facet = object(raw);
+  const sessionId = text(facet?.['session_id']).trim();
+  if (!facet || !sessionId) return undefined;
+  const sidecar = source && readSidecar(source.sidecarId);
+  const meta = source && readSessionMeta(sessionId);
+  const outcomes = source && sidecar && storedOutcomes(sessionId);
+  const cwd = scrub(source?.cwd || text(sidecar?.['cwd']) || text(meta?.cwd), CWD_CAP);
+  const metadata = [
+    text(meta?.gitHead?.branch),
+    text(object(facet['yield_tracking'])?.['pr_url']),
+    ...(outcomes?.prs.map((pr) => pr.url) ?? []),
+    ...(outcomes?.commits.map((commit) => commit.subject) ?? []),
+    ...strings(facet['evidence_pointers']).filter((path) => path !== facet['source_session_path']),
+    ...(outcomes?.filesChanged ?? []),
+  ];
+  const metadataText = [...new Set(metadata.map((value) => scrub(value, METADATA_CAP)).filter(Boolean))]
+    .join('\n').slice(0, METADATA_CAP);
+  const decisions = facet['decisions'];
+  return {
+    session_id: sessionId,
+    brief_summary: scrub(text(facet['brief_summary']), 400),
+    underlying_goal: scrub(text(facet['underlying_goal']), 1000),
+    primary_success: scrub(text(facet['primary_success']), 160),
+    decisions: scrub(Array.isArray(decisions) ? strings(decisions).join(' ') : text(decisions), 384),
+    start_time: sessionStart(facet['start_time'], sidecar?.['startedAt'] ?? meta?.startedAt),
+    cwd,
+    extra_text: [metadataText, userText(sidecar)].filter(Boolean).join('\n'),
+    sources: (sidecar ? 2 : 0) + (outcomes ? 1 : 0),
+  };
+}
+
+/** Project and upsert one facet. Never throws: the index is additive. */
 export function indexFacetIntoStore(store: FacetFtsStore, raw: unknown, source?: FacetIndexSource): void {
   try {
-    const facet = object(raw);
-    const sessionId = text(facet?.['session_id']).trim();
-    if (!facet || !sessionId || (source?.backfill && store.isIndexed(sessionId))) return;
-    const sidecar = source && readSidecar(source.sidecarId);
-    const meta = source && readSessionMeta(sessionId);
-    const outcomes = source && sidecar && storedOutcomes(sessionId);
-    const cwd = scrub(source?.cwd || text(sidecar?.['cwd']) || text(meta?.cwd), CWD_CAP);
-    const metadata = [
-      text(meta?.gitHead?.branch),
-      text(object(facet['yield_tracking'])?.['pr_url']),
-      ...(outcomes?.prs.map((pr) => pr.url) ?? []),
-      ...(outcomes?.commits.map((commit) => commit.subject) ?? []),
-      ...strings(facet['evidence_pointers']).filter((path) => path !== facet['source_session_path']),
-      ...(outcomes?.filesChanged ?? []),
-    ];
-    const metadataText = [...new Set(metadata.map((value) => scrub(value, METADATA_CAP)).filter(Boolean))]
-      .join('\n').slice(0, METADATA_CAP);
-    const decisions = facet['decisions'];
-    store.indexFacet({
-      session_id: sessionId,
-      brief_summary: scrub(text(facet['brief_summary']), 400),
-      underlying_goal: scrub(text(facet['underlying_goal']), 1000),
-      primary_success: scrub(text(facet['primary_success']), 160),
-      decisions: scrub(Array.isArray(decisions) ? strings(decisions).join(' ') : text(decisions), 384),
-      start_time: sessionStart(facet['start_time'], sidecar?.['startedAt'] ?? meta?.startedAt),
-      cwd,
-      extra_text: [metadataText, userText(sidecar)].filter(Boolean).join('\n'),
-    }, source?.backfill);
+    const fields = projectFacet(raw, source);
+    if (fields) store.indexFacet(fields);
   } catch (err) {
     debugLog('facet-fts-store: facet projection failed (non-fatal):', String(err));
   }
