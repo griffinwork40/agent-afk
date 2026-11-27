@@ -224,6 +224,141 @@ describe('sendOrEditDraft — 429 retry', () => {
     // Must not throw.
     await expect(sendOrEditDraft(state, ctx, 100, 'text')).resolves.toBeUndefined();
   });
+
+  it('non-429 error on first call stamps lastDraftAt so the throttle gate blocks the next call', async () => {
+    const { ctx, callApi } = makeCtx();
+    const state: DraftState = makeDraftState();
+
+    // First call fails with a non-429 error.
+    callApi.mockRejectedValue(new TelegramError({
+      error_code: 403,
+      description: 'Forbidden: bot was blocked by the user',
+    }));
+    await sendOrEditDraft(state, ctx, 100, 'first');
+
+    // lastDraftAt must be stamped (> 0) even though the call failed — the
+    // throttle gate is keyed on lastDraftAt > 0, not isDraftMode.
+    expect(state.lastDraftAt).toBeGreaterThan(0);
+
+    // The next call (within DRAFT_THROTTLE_MS) must be suppressed by the gate.
+    callApi.mockResolvedValue({});
+    // Regenerate draftId since it was cleared by the error handler.
+    // sendOrEditDraft re-generates it internally, so just call it again.
+    await sendOrEditDraft(state, ctx, 100, 'second');
+
+    // callApi was called only once (the first failing call); the second was throttled.
+    expect(callApi).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sendOrEditDraft — 429 retry exhaustion throttle (PR #5328 regression guard)
+// ---------------------------------------------------------------------------
+//
+// After both attempts (first + retry) exhaust on 429, lastDraftAt is stamped
+// and isDraftMode stays false.  The throttle gate uses lastDraftAt > 0 (not
+// isDraftMode) so the immediate next call is suppressed even though
+// isDraftMode=false — preventing a burst against the 20/5 s rate-limit budget
+// right after recovery.
+
+describe('sendOrEditDraft — 429 retry exhaustion throttle', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('stamps lastDraftAt after retry exhaustion even though isDraftMode stays false', async () => {
+    const { ctx, callApi } = makeCtx();
+    const state: DraftState = makeDraftState();
+
+    callApi.mockRejectedValue(make429(1));
+
+    const p = sendOrEditDraft(state, ctx, 100, 'text');
+    await vi.advanceTimersByTimeAsync(1100);
+    await p;
+
+    expect(state.isDraftMode).toBe(false);
+    expect(state.lastDraftAt).toBeGreaterThan(0);
+  }, 15_000);
+
+  it('immediate subsequent call after retry exhaustion is suppressed (throttle gate fires on lastDraftAt, not isDraftMode)', async () => {
+    const { ctx, callApi } = makeCtx();
+    const state: DraftState = makeDraftState();
+
+    // Both attempts fail → lastDraftAt stamped, isDraftMode=false.
+    callApi.mockRejectedValue(make429(1));
+    const p = sendOrEditDraft(state, ctx, 100, 'text');
+    await vi.advanceTimersByTimeAsync(1100);
+    await p;
+
+    // callApi was called twice (first attempt + retry).
+    const callsAfterExhaustion = callApi.mock.calls.length;
+    expect(callsAfterExhaustion).toBe(2);
+    expect(state.lastDraftAt).toBeGreaterThan(0);
+    expect(state.isDraftMode).toBe(false);
+
+    // Restore to success for the next call so we can observe suppression.
+    callApi.mockResolvedValue({});
+
+    // Immediate subsequent call — no time advance — must be suppressed.
+    await sendOrEditDraft(state, ctx, 100, 'immediate-next');
+    expect(callApi).toHaveBeenCalledTimes(callsAfterExhaustion); // no new call
+  }, 15_000);
+
+  it('call after DRAFT_THROTTLE_MS window following retry exhaustion is allowed', async () => {
+    const { ctx, callApi } = makeCtx();
+    const state: DraftState = makeDraftState();
+
+    // Exhaust both attempts.
+    callApi.mockRejectedValue(make429(1));
+    const p = sendOrEditDraft(state, ctx, 100, 'text');
+    await vi.advanceTimersByTimeAsync(1100);
+    await p;
+    const callsAfterExhaustion = callApi.mock.calls.length;
+
+    // Restore to success.
+    callApi.mockResolvedValue({});
+
+    // Advance past throttle window and call again — must go through.
+    await vi.advanceTimersByTimeAsync(DRAFT_THROTTLE_MS + 1);
+    await sendOrEditDraft(state, ctx, 100, 'after-window');
+    expect(callApi).toHaveBeenCalledTimes(callsAfterExhaustion + 1);
+  }, 15_000);
+
+  it('exact throttle boundary (elapsed === DRAFT_THROTTLE_MS) passes through', async () => {
+    const { ctx, callApi } = makeCtx();
+    const state: DraftState = makeDraftState();
+
+    // First call succeeds → lastDraftAt set.
+    await sendOrEditDraft(state, ctx, 100, 'first');
+    expect(callApi).toHaveBeenCalledTimes(1);
+
+    // Advance to exactly DRAFT_THROTTLE_MS: condition is `< DRAFT_THROTTLE_MS`,
+    // which is false at equality, so the call passes through.
+    await vi.advanceTimersByTimeAsync(DRAFT_THROTTLE_MS);
+    await sendOrEditDraft(state, ctx, 100, 'boundary');
+    expect(callApi).toHaveBeenCalledTimes(2);
+  });
+
+  it('1 ms inside throttle window is suppressed', async () => {
+    const { ctx, callApi } = makeCtx();
+    const state: DraftState = makeDraftState();
+
+    await sendOrEditDraft(state, ctx, 100, 'first');
+    await vi.advanceTimersByTimeAsync(DRAFT_THROTTLE_MS - 1);
+    await sendOrEditDraft(state, ctx, 100, 'too-soon');
+    expect(callApi).toHaveBeenCalledTimes(1); // second was throttled
+  });
+
+  it('fresh first call (lastDraftAt === 0, near epoch) is never throttled', async () => {
+    const { ctx, callApi } = makeCtx();
+    // Manually construct a state that looks like it was recently stamped but
+    // is actually a brand-new turn (lastDraftAt === 0).
+    const state: DraftState = { draftId: null, lastDraftAt: 0, isDraftMode: false };
+
+    // A clock inside the throttle interval verifies the sentinel bypass.
+    vi.setSystemTime(1);
+    await sendOrEditDraft(state, ctx, 100, 'brand-new');
+    expect(callApi).toHaveBeenCalledOnce();
+  });
 });
 
 // ---------------------------------------------------------------------------
