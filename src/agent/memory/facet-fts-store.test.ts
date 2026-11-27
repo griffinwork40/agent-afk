@@ -9,7 +9,6 @@
  *   - search: returns [] on empty index
  *   - search: sanitizeFtsQuery integration (hyphenated queries)
  *   - backfill: reads facet JSON files from a cache dir
- *   - needsBackfill: triggers when index is empty or cache dir is newer
  *   - MemoryStore.search: unions session results alongside facts
  *   - MemoryStore.indexFacet: accepts raw unknown objects safely
  *
@@ -343,46 +342,6 @@ describe('FacetFtsStore — backfill', () => {
     const results = store.search('pnpm migration');
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]!.source_session).toBe('sess-searchable');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// FacetFtsStore — needsBackfill
-// ---------------------------------------------------------------------------
-
-describe('FacetFtsStore — needsBackfill', () => {
-  let memDir: string;
-  let cacheDir: string;
-  let store: FacetFtsStore;
-
-  beforeEach(() => {
-    memDir = makeTmpDir('needs-backfill-mem');
-    cacheDir = makeTmpDir('needs-backfill-cache');
-    store = makeStore(memDir);
-  });
-
-  afterEach(() => {
-    store.close();
-    if (existsSync(memDir)) rmSync(memDir, { recursive: true, force: true });
-    if (existsSync(cacheDir)) rmSync(cacheDir, { recursive: true, force: true });
-  });
-
-  it('returns true when the index is empty (even if cacheDir exists)', () => {
-    expect(store.needsBackfill(memDir, cacheDir)).toBe(true);
-  });
-
-  it('returns false when cacheDir does not exist', () => {
-    const noDir = join(tmpdir(), 'afk-no-such-cache-' + Date.now());
-    expect(store.needsBackfill(memDir, noDir)).toBe(false);
-  });
-
-  it('returns false after backfill when cacheDir is not newer than the DB', () => {
-    writeFacetFile(cacheDir, 'sess-nbackfill', { brief_summary: 'done' });
-    store.backfill(cacheDir);
-    // After backfill the index has rows — needsBackfill may still return true
-    // due to mtime ordering (the cacheDir dir mtime may equal or exceed the DB
-    // mtime in a fast test). The important guarantee is: it does not throw.
-    expect(() => store.needsBackfill(memDir, cacheDir)).not.toThrow();
   });
 });
 

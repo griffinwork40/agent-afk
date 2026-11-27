@@ -6,6 +6,12 @@
  * yield-probe is fired asynchronously for top-level sessions.
  */
 import { describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { getMemoryDir, getSessionsDir } from '../../paths.js';
+import { createMemoryHandlers } from '../memory/memory-tools.js';
+import { MemoryStore } from '../memory/memory-store.js';
 import type { SessionEndContext } from '../hooks.js';
 import { createFacetSessionEndHook } from './session-end-hook.js';
 
@@ -38,6 +44,43 @@ describe('createFacetSessionEndHook', () => {
 
     expect(mockDerive).toHaveBeenCalledTimes(1);
     expect(mockDerive).toHaveBeenCalledWith('top-level');
+  });
+
+  it('recalls a later user turn through memory_search without exposing the indexed turn', async () => {
+    const sessionId = 'live-rich-recall';
+    const startTime = '2024-04-03T02:01:00.000Z';
+    const cwd = join('workspace', 'live-project');
+    const secret = 'redactioncanary0123456789';
+    const sessionDir = getSessionsDir();
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, `${sessionId}.json`), JSON.stringify({
+      cwd,
+      turns: [
+        { user: `${'long '.repeat(4000)}openingtail` },
+        { user: `[skill-routing: active]\n- syntheticpreamble\nInvestigate glockenspiel; TEST_API_KEY=${secret}`,
+          assistant: 'assistantcanary' },
+      ],
+    }));
+    mockDerive.mockReturnValue({
+      session_id: sessionId, start_time: startTime, brief_summary: 'Initial request',
+    } as ReturnType<typeof getOrDeriveFacet>);
+    createFacetSessionEndHook()(endCtx({ sessionId, cwd }));
+
+    const store = new MemoryStore();
+    try {
+      const search = createMemoryHandlers(store).get('memory_search');
+      const response = await search?.({ query: 'glockenspiel' }, new AbortController().signal);
+      const [result] = JSON.parse(response?.content ?? '[]');
+      expect(result).toMatchObject({ type: 'session', source_session: sessionId, created_at: startTime });
+      expect(result.content).toContain(`Cwd: ${cwd}`);
+      expect(result.content).not.toContain('glockenspiel');
+      expect(result.content).toMatch(/Pass session ID "live-rich-recall" to get_facet.*\.$/);
+      for (const query of [secret, 'openingtail', 'assistantcanary', 'syntheticpreamble']) {
+        expect(store.search(query)).toEqual([]);
+      }
+    } finally {
+      store.close();
+    }
   });
 
   it('fires the yield probe after deriving the facet', () => {
@@ -104,6 +147,36 @@ describe('createFacetSessionEndHook', () => {
 
     expect(result).toEqual({});
     expect(mockDerive).not.toHaveBeenCalled();
+  });
+
+  it('does not throw or wait when another process holds the index write lock', () => {
+    mockDerive.mockReset();
+    mockDerive.mockReturnValue({ session_id: 'locked-end', brief_summary: 'locked' } as ReturnType<typeof getOrDeriveFacet>);
+    new MemoryStore().close(); // Create the index schema.
+    const lock = new Database(join(getMemoryDir(), 'facets-fts.v3.db'));
+    lock.exec('BEGIN IMMEDIATE');
+    try {
+      const started = Date.now();
+      expect(() => createFacetSessionEndHook()(endCtx({ sessionId: 'locked-end' }))).not.toThrow();
+      expect(Date.now() - started).toBeLessThan(1000); // busy_timeout 0: skip, never wait.
+    } finally {
+      lock.exec('ROLLBACK');
+      lock.close();
+    }
+  });
+
+  it('does not throw when the index file cannot be opened', () => {
+    mockDerive.mockReset();
+    mockDerive.mockReturnValue({ session_id: 'no-index', brief_summary: 'x' } as ReturnType<typeof getOrDeriveFacet>);
+    const memoryDir = getMemoryDir();
+    mkdirSync(memoryDir, { recursive: true });
+    rmSync(join(memoryDir, 'facets-fts.v3.db'), { force: true });
+    mkdirSync(join(memoryDir, 'facets-fts.v3.db'), { recursive: true });
+    try {
+      expect(() => createFacetSessionEndHook()(endCtx({ sessionId: 'no-index' }))).not.toThrow();
+    } finally {
+      rmSync(join(memoryDir, 'facets-fts.v3.db'), { recursive: true, force: true });
+    }
   });
 
   it('swallows derivation errors without propagating', () => {
