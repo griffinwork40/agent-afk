@@ -46,6 +46,8 @@ export interface Goal {
 const NAMESPACE = 'goals';
 /** Hard cap on goal text to prevent system-prompt inflation. */
 export const MAX_GOAL_CHARS = 500;
+/** Key prefix for the single-slot archive of the displaced goal. */
+const PREV_PREFIX = 'prev.';
 
 // Invariant: _store is a process-global singleton shared across all concurrent
 // sessions in this process (REPL, Telegram, daemon). This is intentional —
@@ -83,7 +85,50 @@ export function getGoal(projectKey?: string): Goal | null {
 }
 
 /**
+ * Archive the current goal (if any) to the single-slot `prev.<key>` position
+ * before a destructive mutation. Called internally by setGoal and clearGoal.
+ */
+function archivePrev(key: string): void {
+  const row = store().get(NAMESPACE, key);
+  if (!row) return;
+  store().put(NAMESPACE, `${PREV_PREFIX}${key}`, row.value);
+}
+
+/**
+ * Read the most recently displaced goal. Returns null when no archive exists.
+ *
+ * @param projectKey - StateStore key for the project goal. Defaults to
+ *   `'current'` (global fallback). Derive via `projectKeyForCwd()`.
+ */
+export function getArchivedGoal(projectKey?: string): Goal | null {
+  const key = projectKey ?? FALLBACK_KEY;
+  const row = store().get(NAMESPACE, `${PREV_PREFIX}${key}`);
+  if (!row) return null;
+  return row.value as Goal;
+}
+
+/**
+ * Restore the most recently displaced goal, replacing the current one.
+ * Deletes the archive slot after restoring. Returns the restored goal,
+ * or null when no archive exists.
+ *
+ * @param projectKey - StateStore key for the project goal. Defaults to
+ *   `'current'` (global fallback). Derive via `projectKeyForCwd()`.
+ */
+export function restoreGoal(projectKey?: string): Goal | null {
+  const key = projectKey ?? FALLBACK_KEY;
+  const prevKey = `${PREV_PREFIX}${key}`;
+  const row = store().get(NAMESPACE, prevKey);
+  if (!row) return null;
+  const archived = row.value as Goal;
+  store().put(NAMESPACE, key, archived);
+  store().del(NAMESPACE, prevKey);
+  return archived;
+}
+
+/**
  * Set a new active goal. Replaces any existing goal (active or paused).
+ * When replacing, the displaced goal is archived for one-level undo.
  *
  * @param projectKey - StateStore key for the project goal. Defaults to
  *   `'current'` (global fallback). Derive via `projectKeyForCwd()`.
@@ -93,6 +138,7 @@ export function setGoal(text: string, sessionId?: string, projectKey?: string): 
     throw new Error(`Goal text exceeds the ${MAX_GOAL_CHARS}-character limit (got ${text.length}). Shorten it and try again.`);
   }
   const key = projectKey ?? FALLBACK_KEY;
+  archivePrev(key);
   const now = new Date().toISOString();
   const goal: Goal = {
     text,
@@ -162,11 +208,13 @@ export function completeGoal(projectKey?: string): Goal | null {
 
 /**
  * Remove the current goal entirely (any status).
+ * The displaced goal is archived for one-level undo.
  *
  * @param projectKey - StateStore key for the project goal. Defaults to
  *   `'current'` (global fallback). Derive via `projectKeyForCwd()`.
  */
 export function clearGoal(projectKey?: string): boolean {
   const key = projectKey ?? FALLBACK_KEY;
+  archivePrev(key);
   return store().del(NAMESPACE, key).deleted;
 }

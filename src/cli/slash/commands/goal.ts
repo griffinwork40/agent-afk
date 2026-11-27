@@ -2,8 +2,9 @@
  * /goal — persistent cross-session objective tracking.
  *
  * Usage:
- *   /goal <text>         set a new active goal (replaces any existing)
- *   /goal set <text>     same as above (explicit verb)
+ *   /goal <text>         set a new goal (when no goal exists; use /goal set to replace)
+ *   /goal set <text>     set or replace the active goal
+ *   /goal undo           restore the previously displaced goal
  *   /goal status         show the current goal and its status
  *   /goal pause          pause the active goal
  *   /goal resume         resume a paused goal
@@ -30,6 +31,7 @@ import {
   resumeGoal,
   completeGoal,
   clearGoal,
+  restoreGoal,
 } from '../../../agent/goals/index.js';
 import { projectKeyForCwd } from '../../../agent/goals/goal-utils.js';
 import type { SlashCommand, SlashContext } from '../types.js';
@@ -55,7 +57,7 @@ function printGoal(ctx: SlashContext, projectKey: string): void {
 
 export const goalCmd: SlashCommand = {
   name: '/goal',
-  usage: '/goal [set|status|pause|resume|done|clear] ...',
+  usage: '/goal [set|undo|status|pause|resume|done|clear] ...',
   summary: 'Persistent objective that survives across sessions',
   hint: 'When you want the agent to track a durable objective across turns, compaction, and session restarts — not just a todo but the overarching goal.',
   async handler(ctx, args) {
@@ -136,10 +138,20 @@ export const goalCmd: SlashCommand = {
       case 'clear': {
         const deleted = clearGoal(projectKey);
         if (deleted) {
-          ctx.out.success('Goal cleared.');
+          ctx.out.success('Goal cleared.  /goal undo  to restore.');
           ctx.out.info(SESSION_NOTE);
         } else {
           ctx.out.info('No goal to clear.');
+        }
+        return 'continue';
+      }
+      case 'undo': {
+        const restored = restoreGoal(projectKey);
+        if (restored) {
+          ctx.out.success(`Goal restored: ${restored.text}`);
+          ctx.out.info(SESSION_NOTE);
+        } else {
+          ctx.out.warn('Nothing to undo.');
         }
         return 'continue';
       }
@@ -148,7 +160,13 @@ export const goalCmd: SlashCommand = {
         return 'continue';
       }
       default: {
-        // Bare text without a verb → treat as "set"
+        // Bare text without a verb — require explicit "set" when replacing
+        const existing = getGoal(projectKey);
+        if (existing) {
+          ctx.out.warn(`Active goal exists: ${existing.text}`);
+          ctx.out.info('Use  /goal set <text>  to replace it, or  /goal clear  first.');
+          return 'continue';
+        }
         const goal = setGoal(trimmed, ctx.stats.sessionId, projectKey);
         ctx.out.success(`Goal set: ${goal.text}`);
         ctx.out.info(SESSION_NOTE);
