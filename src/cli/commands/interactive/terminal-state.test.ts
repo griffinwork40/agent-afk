@@ -210,6 +210,44 @@ describe('parseTerminalState — bullet field mapping', () => {
     expect(v?.worthDoing).toBeUndefined();
   });
 
+  // #5302 — the `Assumptions` bullet added by #5285 to the Done directive was
+  // silently dropped: `mapBulletsToFields` had no needle for `'assumption'` in
+  // the `'done'` branch and `TerminalState` had no `assumptions` field.
+  it('done: "Assumptions:" maps to assumptions (end-to-end parse)', () => {
+    const text = [
+      '**Done**',
+      '- What was done: shipped the feature.',
+      '- Evidence: tests pass.',
+      '- What changed: parser updated.',
+      '- Deferred: none',
+      '- Assumptions: user wanted TypeScript, not JavaScript — proceeded without confirming.',
+      '- Not checked: nothing material',
+    ].join('\n');
+    const v = parseTerminalState(text);
+    expect(v?.assumptions).toBe('user wanted TypeScript, not JavaScript — proceeded without confirming.');
+    // Existing fields must still parse correctly alongside Assumptions.
+    expect(v?.whatWasDone).toBe('shipped the feature.');
+    expect(v?.evidence).toBe('tests pass.');
+    expect(v?.deferred).toBe('none');
+  });
+
+  it('done: Assumptions bullet is absent when omitted (no spurious capture)', () => {
+    const text = '**Done**\n- What was done: reviewed the code.\n- Not checked: nothing material';
+    const v = parseTerminalState(text);
+    expect(v?.assumptions).toBeUndefined();
+  });
+
+  it('done: Assumptions needle does not bleed into asking branch', () => {
+    // Asking branch has its own `assumption` needle for "Assumption it resolves".
+    // Verify the Done-branch addition has no cross-state effect.
+    const text = 'prose\n\nAsking\n- Question: proceed?\n- Assumption it resolves: deploy target\n- Once answered: will push';
+    const v = parseTerminalState(text);
+    expect(v?.kind).toBe('asking');
+    expect(v?.assumption).toBe('deploy target');
+    // `assumptions` is a Done-only field — asking branch must not populate it.
+    expect((v as unknown as Record<string, unknown>)?.assumptions).toBeUndefined();
+  });
+
   it('asking: "next" still maps to followup', () => {
     const text = `prose\n\nAsking\n- Question: keep or delete?\n- Next: I will archive it`;
     expect(parseTerminalState(text)?.followup).toBe('I will archive it');
