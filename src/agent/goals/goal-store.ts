@@ -121,6 +121,7 @@ export function restoreGoal(projectKey?: string): Goal | null {
   const row = store().get(NAMESPACE, prevKey);
   if (!row) return null;
   const archived = row.value as Goal;
+  archived.updatedAt = new Date().toISOString();
   store().put(NAMESPACE, key, archived);
   store().del(NAMESPACE, prevKey);
   return archived;

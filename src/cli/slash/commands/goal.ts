@@ -163,7 +163,7 @@ export const goalCmd: SlashCommand = {
         // Bare text without a verb — require explicit "set" when replacing
         const existing = getGoal(projectKey);
         if (existing) {
-          ctx.out.warn(`Active goal exists: ${existing.text}`);
+          ctx.out.warn(`${existing.status.charAt(0).toUpperCase() + existing.status.slice(1)} goal exists: ${existing.text}`);
           ctx.out.info('Use  /goal set <text>  to replace it, or  /goal clear  first.');
           return 'continue';
         }
