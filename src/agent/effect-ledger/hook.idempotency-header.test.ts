@@ -72,5 +72,22 @@ describe('Scenario 2 / #3714 — remote idempotency forwarding', () => {
     expect(rows[1]?.retryOf).toBe(rows[0]?.id);
   });
 
-  it.todo('extend no-clobber test to POST/PUT/PATCH — see #3714');
+  it.each(['POST', 'PUT', 'PATCH'])('blocks a second %s when the first is still pending (no-clobber)', async (method) => {
+    // A prior call with an unknown outcome should block a retry until the
+    // operator acknowledges — the same guard that fires for DELETE must also
+    // fire for POST/PUT/PATCH since all three are mutating.
+    const ctx = context({ method }, 'first-call');
+    const hooks = createEffectLedgerHooks(store);
+    // First call: writes a pending entry and returns no block.
+    const first = await hooks.pre(ctx);
+    expect(first.decision).toBeUndefined();
+    // Simulate a lost response (outcome unknown).
+    await hooks.post({ ...ctx, event: 'PostToolUseFailure', input: first.updatedInput, error: 'response lost' });
+    // Second call with the same url+method: prior entry is in 'unknown' state
+    // and has no retryAcknowledgedAt — must be blocked.
+    const resumed = createEffectLedgerHooks(new EffectStore(join(dir, 'ledger.jsonl')));
+    const second = await resumed.pre(context({ method }, 'second-call'));
+    expect(second.decision).toBe('block');
+    expect(second.reason).toMatch(/unknown/i);
+  });
 });
