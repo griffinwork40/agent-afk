@@ -12,6 +12,18 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Fixed
+- center pre-compositor startup lines under AFK_CENTER_CONTENT (#5372) (5042eda19)
+- attribute typed handoff answers to the sender (#5337) (a05da4dc1)
+- add toolUseId to tool_error events in events.jsonl (#5346) (be0a60fe8)
+- add desktop_screenshot test coverage and timing fix (#5343) (e4727b8ec)
+- increase spawnSync timeout for macOS CI flake (#5342) (c4816d094)
+- deliver cron questions with Telegram answer buttons (#5339) (33bf023bc)
+- complete Telegram startup while long polling runs (#5338) (a53efd815)
+
+### Changed
+- extract tag-only Telegram configuration (7e0aa71f7)
+
 ## [6.4.0] - 2026-11-26
 
 ### Added
