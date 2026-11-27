@@ -355,7 +355,14 @@ export async function removeManagedWorktreeGuarded(
     }
     const ahead = await managedWorktreeCommitsAhead(execFile, repoRoot, worktreePath);
     if (ahead > 0) {
-      return { removed: false, reason: 'commits-ahead', commitsAhead: ahead };
+      // Allow removal when every commit is already reachable from the upstream
+      // tracking ref (i.e. the branch was pushed or merged). The work is durable
+      // on the remote, so the checkout is safe to drop without force (#4829).
+      const unpushed = await probeUnpushedCommits(execFile, worktreePath);
+      if (unpushed) {
+        return { removed: false, reason: 'commits-ahead', commitsAhead: ahead };
+      }
+      // All commits are upstream-reachable — fall through to removal.
     }
   }
   const gitArgs = ['-C', repoRoot, 'worktree', 'remove'];

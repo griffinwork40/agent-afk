@@ -115,10 +115,53 @@ describe('removeManagedWorktreeGuarded — guards + argv', () => {
       if (call.args.includes('status')) return { stdout: '', stderr: '' };
       if (call.args.includes('rev-parse')) return { stdout: 'tip9\n', stderr: '' };
       if (call.args.includes('rev-list')) return { stdout: '3\n', stderr: '' };
+      // log @{upstream}..HEAD → non-empty means commits are NOT yet pushed
+      if (call.args.includes('log')) return { stdout: 'abc123 unpushed commit\n', stderr: '' };
       return { stdout: '', stderr: '' };
     });
     const outcome = await removeManagedWorktreeGuarded({ execFile: mock, repoRoot, worktreePath: wtPath });
     expect(outcome).toEqual({ removed: false, reason: 'commits-ahead', commitsAhead: 3 });
+  });
+
+  // #4829: when every commit ahead of base is reachable from the upstream
+  // tracking ref (branch was pushed or merged), allow removal without force.
+  it('removes a commits-ahead tree without force when all commits are pushed (#4829)', async () => {
+    const wtPath = join(repoRoot, '.afk-worktrees', 'ahead-pushed');
+    await fs.mkdir(wtPath, { recursive: true });
+    await fs.writeFile(join(wtPath, '.afk-worktree-meta.json'), JSON.stringify({ baseSha: 'base1' }));
+    const mock = makeMock((call) => {
+      if (call.args.includes('status')) return { stdout: '', stderr: '' };
+      if (call.args.includes('rev-parse')) return { stdout: 'tip9\n', stderr: '' };
+      if (call.args.includes('rev-list')) return { stdout: '2\n', stderr: '' };
+      // log @{upstream}..HEAD → empty means all commits are upstream-reachable
+      if (call.args.includes('log')) return { stdout: '', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    const outcome = await removeManagedWorktreeGuarded({ execFile: mock, repoRoot, worktreePath: wtPath });
+    expect(outcome.removed).toBe(true);
+    // Must NOT pass --force (the commits are safe on the remote)
+    const rm = mock.calls.find((c) => c.args.includes('remove'));
+    expect(rm?.args).not.toContain('--force');
+  });
+
+  // #4829: when the upstream probe fails (no tracking branch configured, git
+  // error, etc.), the guard must fail SAFE — treat the tree as having unpushed
+  // commits and refuse removal without force.
+  it('refuses a commits-ahead tree when the upstream probe fails (fail-safe, #4829)', async () => {
+    const wtPath = join(repoRoot, '.afk-worktrees', 'ahead-no-upstream');
+    await fs.mkdir(wtPath, { recursive: true });
+    await fs.writeFile(join(wtPath, '.afk-worktree-meta.json'), JSON.stringify({ baseSha: 'base1' }));
+    const mock = makeMock((call) => {
+      if (call.args.includes('status')) return { stdout: '', stderr: '' };
+      if (call.args.includes('rev-parse')) return { stdout: 'tip9\n', stderr: '' };
+      if (call.args.includes('rev-list')) return { stdout: '1\n', stderr: '' };
+      // log @{upstream}..HEAD → throws (no upstream configured)
+      if (call.args.includes('log')) throw new Error('fatal: no upstream configured for branch');
+      return { stdout: '', stderr: '' };
+    });
+    const outcome = await removeManagedWorktreeGuarded({ execFile: mock, repoRoot, worktreePath: wtPath });
+    expect(outcome).toEqual({ removed: false, reason: 'commits-ahead', commitsAhead: 1 });
+    expect(mock.calls.some((c) => c.args.includes('remove'))).toBe(false);
   });
 
   it('force removes with --force, skipping guards', async () => {
