@@ -309,6 +309,14 @@
       "category": "misc"
     },
     {
+      "name": "AFK_DESKTOP_ENABLED",
+      "description": "Enable the desktop computer-use tool group (`desktop_screenshot` and future input tools). Off by default. Set to `1` or `true` to opt in. The operator must separately grant macOS Screen Recording permission to the responsible process (typically the terminal app); no permission is automated. On Windows, requires a native interactive terminal session — WSL2 is not supported. Linux is not supported.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "misc"
+    },
+    {
       "name": "AFK_DIFF_LINES",
       "description": "Maximum number of diff lines shown in the inline diff render during write_file tool calls. Set to 0 for no cap. Non-integer values are silently ignored and the default applies.",
       "type": "number",
@@ -500,6 +508,15 @@
       "type": "string",
       "required": false,
       "example": "/tmp/whatif-narration/system-prompt.narrate.md",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_GLOBAL_CHAT_URL",
+      "description": "WebSocket URL of the global-chat relay server. When unset, /global falls back to the official AFK relay at wss://afk-global-chat-relay.griffinwork40.workers.dev/v1/room/global. Set this to point /global at a different relay instead.",
+      "type": "string",
+      "required": false,
+      "default": "wss://afk-global-chat-relay.griffinwork40.workers.dev/v1/room/global",
+      "example": "wss://relay.example.com/v1/room/global",
       "category": "misc"
     },
     {
@@ -2270,6 +2287,20 @@
       "type": "string",
       "required": false,
       "category": "process"
+    },
+    {
+      "name": "WSL_DISTRO_NAME",
+      "description": "Set by the WSL2 runtime to the name of the active Linux distribution (e.g. `Ubuntu`). Read by desktop tools to detect WSL2 and refuse with a clear message directing the user to a native Windows terminal. This var is OS-set; do not set it manually.",
+      "type": "string",
+      "required": false,
+      "category": "misc"
+    },
+    {
+      "name": "WSL_INTEROP",
+      "description": "Set by the WSL2 runtime to the socket path used for Windows interop. Read by desktop tools alongside WSL_DISTRO_NAME to detect WSL2 and refuse with a clear message. This var is OS-set; do not set it manually.",
+      "type": "string",
+      "required": false,
+      "category": "misc"
     },
     {
       "name": "XAI_API_KEY",

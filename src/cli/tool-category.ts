@@ -94,6 +94,8 @@ function categoryColor(cat: ToolCategory): ChalkInstance {
     // from coral (h=44°, ΔE 6.7 from brand) to crimson-rose (h=12°) so the
     // tool lane never echoes the brand-orange prompt prefix.
     case 'browser': return chalk.hex('#D9637A');
+    // desktop — amber-gold, evokes the physical desktop/screen.
+    case 'desktop': return palette.warning;
     case 'planning': return palette.meta;
     // Schedule — medium blue. Moved from amber (h=83°, ΔE 6.4 from
     // write) to the underused blue zone (h=271°). Distinct from subagent
@@ -121,6 +123,8 @@ const CATEGORY_GLYPH: Record<ToolCategory, string> = {
   web: '⌖',
   // globe glyph — evokes browsing; single-cell in standard monospace fonts.
   browser: '◉',
+  // monitor glyph — evokes the host desktop display.
+  desktop: '▣',
   planning: '▱',
   // calendar icon — evokes cron scheduling; single-cell in standard fonts.
   schedule: '⏲',
@@ -148,6 +152,7 @@ export const CATEGORY_HUMAN_VERB: Record<ToolCategory, string> = {
   mcp: 'Calling plugin…',
   web: 'Fetching…',
   browser: 'Browsing…',
+  desktop: 'Capturing…',
   planning: 'Planning…',
   schedule: 'Scheduling…',
   other: 'Working…',

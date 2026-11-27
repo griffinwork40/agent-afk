@@ -90,7 +90,7 @@ import type { AnthropicToolDef } from './types.js';
  *     construction time and placed after ALL builtins. They do not affect the
  *     core prefix of builtinToolSchemas itself.
  *
- * Optional tail (indices INVARIANT_CORE_COUNT..47):
+ * Optional tail (indices INVARIANT_CORE_COUNT..49):
  *   artifact_get, artifact_list, artifact_read,
  *   cancel_background_job, send_message_to_agent, get_background_job_health,
  *   send_telegram,
@@ -103,6 +103,11 @@ import type { AnthropicToolDef } from './types.js';
  *   list_sessions, send_to_session,
  *   terminal_font_size,
  *   ask_question
+ *
+ * Note: desktop_screenshot is opt-in (AFK_DESKTOP_ENABLED) and NOT in
+ * builtinToolSchemas. It is appended at provider-construction time via
+ * desktopSchemas() (mirrors the AFK_READONLY_GIT_TOOL / readOnlyGitSchemas()
+ * pattern). The default tool surface is byte-identical to pre-desktop.
  */
 // History: INVARIANT_CORE_COUNT was 23, then PR #4551 moved artifact_get,
 // artifact_list, and artifact_read into the invariant core (23→26). PR #4551

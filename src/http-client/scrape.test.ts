@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { scrapeToMarkdown } from './scrape.js';
+import { scrapeToMarkdown, binaryContentError } from './scrape.js';
 import type { RenderFn } from './types.js';
 
 /** A content-rich, server-rendered article (extracted text well over thin). */
@@ -312,6 +312,52 @@ describe('scrapeToMarkdown — content-type handling', () => {
         lookupFn: publicLookup,
       }),
     ).rejects.toThrow(/view_image/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Direct unit tests for binaryContentError
+// ---------------------------------------------------------------------------
+describe('binaryContentError', () => {
+  it('extractable branch: PDF returns extract_document hint', () => {
+    const err = binaryContentError('application/pdf');
+    expect(err.message).toMatch(/binary content \(application\/pdf\)/);
+    expect(err.message).toContain('extract_document');
+    expect(err.message).not.toContain('view_image');
+  });
+
+  it('extractable branch: ZIP returns extract_document hint', () => {
+    const err = binaryContentError('application/zip');
+    expect(err.message).toContain('extract_document');
+    expect(err.message).not.toContain('view_image');
+  });
+
+  it('supported-image branch: image/png returns view_image hint', () => {
+    const err = binaryContentError('image/png');
+    expect(err.message).toMatch(/binary content \(image\/png\)/);
+    expect(err.message).toContain('view_image');
+    expect(err.message).not.toContain('extract_document');
+  });
+
+  it('supported-image branch: image/jpeg returns view_image hint', () => {
+    const err = binaryContentError('image/jpeg');
+    expect(err.message).toContain('view_image');
+  });
+
+  it('generic branch: unsupported image type returns generic hint mentioning both tools', () => {
+    const err = binaryContentError('image/svg+xml');
+    expect(err.message).toMatch(/binary content \(image\/svg\+xml\)/);
+    expect(err.message).toContain('extract_document');
+    expect(err.message).toContain('view_image');
+    // Generic branch mentions both; must NOT use the view_image-only wording
+    expect(err.message).not.toMatch(/use view_image to inspect it instead/);
+  });
+
+  it('generic branch: audio type returns generic hint', () => {
+    const err = binaryContentError('audio/mpeg');
+    expect(err.message).toMatch(/binary content \(audio\/mpeg\)/);
+    expect(err.message).toContain('extract_document');
+    expect(err.message).toContain('view_image');
   });
 });
 

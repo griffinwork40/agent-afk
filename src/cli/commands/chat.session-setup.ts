@@ -73,7 +73,7 @@ export interface ChatSessionSetupParams {
   mcpManager: McpManager | undefined;
   resumeConfig: Record<string, unknown>;
   permissionMode: PermissionMode | undefined;
-  dangerouslySkipPermissions: boolean | undefined;
+
   maxTurns: number;
   temperature: number | undefined;
   baseUrl: string | undefined;
@@ -125,7 +125,6 @@ export async function buildChatSession(
     mcpManager,
     resumeConfig,
     permissionMode,
-    dangerouslySkipPermissions,
     maxTurns,
     temperature,
     baseUrl,
@@ -221,8 +220,7 @@ export async function buildChatSession(
 
   await ensurePluginEntrypointsLoaded();
 
-  const getChatPermissionMode = (): PermissionMode =>
-    dangerouslySkipPermissions ? 'bypassPermissions' : (permissionMode ?? 'bypassPermissions');
+  const getChatPermissionMode = (): PermissionMode => permissionMode ?? 'bypassPermissions';
 
   const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory({
     model: sessionModel,
@@ -232,11 +230,7 @@ export async function buildChatSession(
     ...withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor), continuationRegistry),
     maxTurns,
     isNonInteractive: true,
-    ...(dangerouslySkipPermissions
-      ? { permissionMode: 'bypassPermissions' as const }
-      : permissionMode !== undefined
-      ? { permissionMode }
-      : {}),
+    ...(permissionMode !== undefined ? { permissionMode } : {}),
     hookRegistry: createDefaultHookRegistry(
       (info) => { console.log(palette.info(formatSubagentCompletion(info))); },
       'cli',
@@ -264,7 +258,7 @@ export async function buildChatSession(
     ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
     ...resumeConfig,
     ...providerWiring,
-  })))), traceWriter);
+  }), undefined, worktreeCwd, sharedMemoryStore))), traceWriter);
 
   boundSession = session;
 

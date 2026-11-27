@@ -163,8 +163,10 @@ export async function expireHandoff(
   const ageHours = Math.round((now - Date.parse(expired.createdAt)) / 3_600_000);
   // eslint-disable-next-line no-console
   console.error(`[handoff-expiry] expired stale handoff for task ${taskId} (age: ${ageHours}h)`);
-  void operatorNotify(buildExpiryNotice(expired, ageHours), expiryNoticeRoute(expired.route))
-    .catch(() => undefined);
+  if (expired.notifyOn !== 'never') {
+    void operatorNotify(buildExpiryNotice(expired, ageHours), expiryNoticeRoute(expired.route))
+      .catch(() => undefined);
+  }
   return true;
 }
 

@@ -36,6 +36,7 @@ import type {
   BudgetPayload,
   ClaimPayload,
   ClosurePayload,
+  DesktopEventPayload,
   HookDecisionPayload,
   HookSummaryPayload,
   PeerMessagePayload,
@@ -117,6 +118,9 @@ export const emitClaim = (w: TraceSink | undefined, p: ClaimPayload) =>
 
 export const emitBrowserEvent = (w: TraceSink | undefined, p: BrowserEventPayload) =>
   emitTrace(w, 'browser_event', p);
+
+export const emitDesktopEvent = (w: TraceSink | undefined, p: DesktopEventPayload) =>
+  emitTrace(w, 'desktop_event', p);
 
 export const emitQueuedUserMessage = (w: TraceSink | undefined, p: QueuedUserMessagePayload) =>
   emitTrace(w, 'queued_user_message', p);

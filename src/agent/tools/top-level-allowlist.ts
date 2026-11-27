@@ -1,4 +1,5 @@
 import { BUILTIN_TOOL_NAMES } from './schemas.js';
+import { desktopToolNames } from './desktop-surface.js';
 import { MEMORY_TOOL_NAMES } from '../memory/index.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from './handlers/exit-plan-mode.js';
@@ -26,6 +27,7 @@ import { STATE_TOOL_NAMES } from '../state/state-tools.js';
 export function topLevelSurfaceAllowedTools(mcpToolWireNames: readonly string[] = []): string[] {
   return [
     ...BUILTIN_TOOL_NAMES,
+    ...desktopToolNames(),
     ...MEMORY_TOOL_NAMES,
     ...AWARENESS_TOOL_NAMES,
     ...WORKSPACE_TOOL_NAMES,

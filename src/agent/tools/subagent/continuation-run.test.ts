@@ -258,23 +258,26 @@ describe('D8 continuation through the agent executor', () => {
       return origFlush.call(this);
     });
     const { run, registry, session } = await setup();
-    // run() returns once the result is delivered; the mock flush is still held at
-    // this point because we have not called releaseFlush() yet.
-    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
-    const chainId = first.continuation!.chainId;
-    const chain = registry.get(chainId)!;
     try {
-      expect(chain.settling).toBeDefined(); // flush is still held — settling must be set
-      expect(chain.inFlight).toBe(true);
+      // run() returns once the result is delivered; the mock flush is still held at
+      // this point because we have not called releaseFlush() yet.
+      const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+      const chainId = first.continuation!.chainId;
+      const chain = registry.get(chainId)!;
+      try {
+        expect(chain.settling).toBeDefined(); // flush is still held — settling must be set
+        expect(chain.inFlight).toBe(true);
+      } finally {
+        // Release the flush so settling can complete, then issue the continuation.
+        releaseFlush();
+      }
+      const second = await run({ prompt: 'immediately', continuation_chain_id: chainId });
+      expect(second.isError, second.content).not.toBe(true);
+      expect(delayed).toBeGreaterThan(0);
+      expect(seen[1]!.resumeMessages?.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
     } finally {
-      // Release the flush so settling can complete, then issue the continuation.
-      releaseFlush();
+      await session.close();
     }
-    const second = await run({ prompt: 'immediately', continuation_chain_id: chainId });
-    expect(second.isError, second.content).not.toBe(true);
-    expect(delayed).toBeGreaterThan(0);
-    expect(seen[1]!.resumeMessages?.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
-    await session.close();
   }, 20000);
 
   it('construction failure rolls back the charge and in-flight', async () => {

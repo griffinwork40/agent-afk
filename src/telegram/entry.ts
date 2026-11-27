@@ -36,7 +36,7 @@ import { planTelegramCredential, applyTelegramCredentialPlan } from './credentia
 import { preloadClaudeKeychainOAuth, loadAnthropicCredential } from '../agent/auth/credential-resolver.js';
 import { readDiskVersion, UNKNOWN_VERSION } from './daemon-version.js';
 import { createTelegramSessionFactory } from './create-session.js';
-import { writeServiceStartupSidecar } from '../service/version-skew.js';
+import { announceTelegramStartup } from './entry.startup.js';
 import { startStatsTicker } from './stats-ticker.js';
 import { pushIfConfigured } from './push.js';
 import { installCrashNotifier } from '../utils/crash-notifier.js';
@@ -74,26 +74,36 @@ export function installCrashHandlers(): void {
 }
 
 /**
- * Write the telegram startup sidecar; warn on failure. Best-effort — never throws.
- *
- * Uses daemonVersion (from disk via readDiskVersion) rather than getVersion()
- * so the recorded value is consistent with the drift watchdog. Both resolve to
- * the same file today, but the intent is "version this binary was installed as",
- * not "version resolved at import time".
- */
-function recordTelegramStartup(daemonVersion: string): void {
-  if (!writeServiceStartupSidecar('telegram', daemonVersion)) {
-    console.warn('warn: failed to write service startup sidecar — `afk service status` may not show the running version'); // console-ok
-  }
-}
-
-/**
  * Build a transcriber from the typed env object, or return null when
  * AFK_TRANSCRIBE_API_URL is unset (opt-in; no silent paid calls by default).
  * Extracted from main() to keep that function within the 200-line ceiling.
  */
 function resolveTranscriber(e: typeof env): ReturnType<typeof createTranscriber> {
   return createTranscriber(e, { checkEgress: checkEgressTarget });
+}
+
+/**
+ * Resolve the tag-only chat set from config + env, and log a notice when it
+ * is non-empty. Extracted from main() to keep that function within the
+ * 200-line ceiling.
+ *
+ * afk.config.json `telegram.tagOnlyChats` wins; the
+ * AFK_TELEGRAM_TAG_ONLY_CHAT_IDS env var is the fallback. Mirrors the inbound
+ * allowlist resolution path.
+ */
+function resolveTagOnlyChats(
+  configTagOnly: number[] | undefined,
+  envVar: string | undefined,
+): Set<number> {
+  const tagOnlyChats =
+    configTagOnly && configTagOnly.length > 0
+      ? new Set<number>(configTagOnly)
+      : parseAllowedChatIds(envVar, console.warn);
+  if (tagOnlyChats.size > 0) {
+    console.log(palette.info(`🏷️  Tag-only chats: ${tagOnlyChats.size} chat ID(s) — bot responds only when addressed (reply/@mention)`));
+    console.log(palette.warning('   ⚠️  Set Telegram privacy mode OFF for this bot (@BotFather → /setprivacy → Disable) or non-addressed group messages never reach it.'));
+  }
+  return tagOnlyChats;
 }
 
 export async function main(): Promise<void> {
@@ -182,20 +192,11 @@ export async function main(): Promise<void> {
   console.log(palette.info(`📡 Model: ${config.model} · Provider: ${providerName}`));
   console.log(palette.info(`🔒 Allowlist: ${allowedChatIds.size} chat ID(s)`));
 
-  // Opt-in "tag-only" response policy: chats where the bot answers only when
-  // addressed (reply to the bot, @mention, or text_mention resolving to the
-  // bot). afk.config.json `telegram.tagOnlyChats` wins; the
-  // AFK_TELEGRAM_TAG_ONLY_CHAT_IDS env var is the fallback. Mirrors the inbound
-  // allowlist resolution path.
-  const configTagOnly = loadTelegramConfig().tagOnlyChats;
-  const tagOnlyChats =
-    configTagOnly && configTagOnly.length > 0
-      ? new Set<number>(configTagOnly)
-      : parseAllowedChatIds(env.AFK_TELEGRAM_TAG_ONLY_CHAT_IDS, console.warn);
-  if (tagOnlyChats.size > 0) {
-    console.log(palette.info(`🏷️  Tag-only chats: ${tagOnlyChats.size} chat ID(s) — bot responds only when addressed (reply/@mention)`));
-    console.log(palette.warning('   ⚠️  Set Telegram privacy mode OFF for this bot (@BotFather → /setprivacy → Disable) or non-addressed group messages never reach it.'));
-  }
+  // Opt-in "tag-only" response policy — see resolveTagOnlyChats() for details.
+  const tagOnlyChats = resolveTagOnlyChats(
+    loadTelegramConfig().tagOnlyChats,
+    env.AFK_TELEGRAM_TAG_ONLY_CHAT_IDS,
+  );
 
   const sharedMemoryStore = new MemoryStore();
   const sharedStateStore = new StateStore(getStateDatabasePath());
@@ -248,50 +249,54 @@ export async function main(): Promise<void> {
   // .install` (PR #477 review B1/B2). See `TelegramBot.start()`.
   const statsInterval = startStatsTicker({ bot, spawnedVersion: daemonVersion });
 
-  const shutdown = async () => {
+  let stopping = false;
+  let shutdownPromise: Promise<void> | undefined;
+
+  const shutdown = async (exitCode: number) => {
+    if (stopping) return;
+    stopping = true;
     console.log(palette.dim('\n\n🛑 Shutting down bot...'));
     clearInterval(statsInterval);
-    await bot.stop();
-    sharedMemoryStore.close();
-    sharedStateStore.close();
-    console.log(palette.success('✅ Bot stopped.'));
-    process.exit(0);
+    try {
+      await bot.stop();
+      sharedMemoryStore.close();
+      sharedStateStore.close();
+      console.log(palette.success('✅ Bot stopped.'));
+    } finally {
+      process.exit(exitCode);
+    }
   };
+  // ??= ensures a concurrent second signal never overwrites shutdownPromise.
+  // shutdown() returns a Promise<void> (async always does), but the stopping
+  // guard makes it resolve immediately on re-entry — ??= keeps the original
+  // pending promise so `await shutdownPromise` in finally waits for cleanup.
+  const onSignal = () => { shutdownPromise ??= shutdown(0); };
 
   installCrashHandlers();
 
-  // Invariant: signal handlers are registered BEFORE bot.start() so a
-  // SIGTERM arriving during async startup still runs a clean shutdown.
-  // Use `once` — shutdown calls process.exit, so a second invocation
-  // is impossible and `on` would only risk stacking handlers.
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  // Invariant: handlers registered BEFORE bot.start() so a signal arriving
+  // during async startup still runs a clean shutdown. process.on (not once)
+  // keeps the listener alive for a repeated signal during pending teardown;
+  // both are removed in finally after shutdown completes.
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
 
+  let started = false;
   try {
-    await bot.start();
-
-    // Write the startup sidecar so `afk service status` can surface the
-    // running version and warn on version skew. Skip when the version is
-    // unknown — a sidecar with UNKNOWN_VERSION would produce a spurious
-    // "version skew" warning rather than the intended "version unknown" path.
-    // See recordTelegramStartup() above for the daemonVersion rationale.
-    if (daemonVersion !== UNKNOWN_VERSION) recordTelegramStartup(daemonVersion);
-
-    console.log(palette.success('✅ Bot started successfully!'));
-    console.log(palette.heading('\n📝 Slash commands (Agent SDK):'));
-    console.log(palette.dim('  /start   - Welcome and command list'));
-    console.log(palette.dim('  /help    - Show command list'));
-    console.log(palette.dim('  /clear   - Clear conversation history'));
-    console.log(palette.dim('  /compact - Compact history (summarize older messages)'));
-    console.log(palette.dim('  /model   - Switch model (opus/sonnet/haiku/gpt-5.6-sol/...)'));
-    console.log(palette.dim('\n💬 Send any message to chat with the agent.'));
-    console.log(palette.dim('\n⏹️  Press Ctrl+C to stop the bot.'));
-
+    const { polling } = await bot.start();
+    if (stopping) return;
+    started = true;
+    announceTelegramStartup(daemonVersion);
+    await polling;
+    if (!stopping) throw new Error('Telegram polling stopped unexpectedly');
   } catch (error) {
-    clearInterval(statsInterval);
-    process.removeListener('SIGINT', shutdown);
-    process.removeListener('SIGTERM', shutdown);
-    console.error(palette.error('❌ Failed to start bot: ' + String(error)));
-    process.exit(1);
+    if (stopping) return;
+    const message = started ? 'Telegram polling failed: ' : 'Failed to start bot: ';
+    console.error(palette.error('❌ ' + message + String(error)));
+    await shutdown(1);
+  } finally {
+    await shutdownPromise;
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
   }
 }

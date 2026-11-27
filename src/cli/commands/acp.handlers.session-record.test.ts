@@ -47,7 +47,7 @@ function fakeHandle(): acpSession.AcpSessionHandle {
 
 function makeCtx(sessions: ServerContext['sessions'] = new Map()): ServerContext {
   return {
-    opts: { model: 'sonnet', maxTurns: 0, dangerouslySkipPermissions: true },
+    opts: { model: 'sonnet', maxTurns: 0 },
     peer: { request: vi.fn(), notify: vi.fn(async () => undefined) } as unknown as ServerContext['peer'],
     initialized: true, sessions, restoring: new Set(), promptWrites: new Map(), log: () => {},
   };

@@ -1000,6 +1000,11 @@ describe('classifyRisk — browser tools', () => {
     expect(classifyRisk('browser_screenshot', {}, ctx)).toBe('safe');
   });
 
+  it('desktop_screenshot → safe and read-only (explicit entry, not the unknown-tool default)', () => {
+    expect(classifyRisk('desktop_screenshot', {}, ctx)).toBe('safe');
+    expect(classifyRiskDetailed('desktop_screenshot', {}, ctx).category).toBe('read-only');
+  });
+
   it('browser_close → safe (cleanup)', () => {
     expect(classifyRisk('browser_close', {}, ctx)).toBe('safe');
   });

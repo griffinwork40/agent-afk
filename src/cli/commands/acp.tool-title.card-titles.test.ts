@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest';
 import { toolTitle } from './acp.tool-kind.js';
 import { DETAIL_CHARS, ELLIPSIS } from './acp.tool-title.js';
-import { buildPendingStart } from './acp.permission.policy.js';
+import { buildPendingStart } from './__test-utils__/acp-build-pending-start.js';
 
 const CWD = '/workspace/session';
 

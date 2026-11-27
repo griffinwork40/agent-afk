@@ -93,6 +93,56 @@ environment variable.
   work via `wl-copy`/`xclip` if a Wayland/X11 server is running (WSLg in
   Windows 11), or via `clip.exe` from within WSL2 for paste-to-Windows.
 
+## Desktop computer-use tools (native Windows only)
+
+The `desktop_screenshot` tool and future desktop input tools require a **native
+Windows interactive terminal session**. They do not work inside WSL2: the
+desktop tools call the Windows desktop APIs directly, and a WSL2 Linux process
+cannot reach the Windows interactive desktop.
+
+If you are running agent-afk inside WSL2 and invoke a desktop tool, you will
+see: *"Desktop tools require native Windows. Run afk in a native Windows
+interactive terminal, not WSL2."*
+
+> **Note (Step 0W pending):** Windows desktop support is a proposal that has
+> not been tested on real Windows hardware. The Step 0W feasibility spike
+> (see the spec) is required before making any capability claim. Whether a
+> Windows daemon or Telegram service context can reach the interactive desktop
+> is also unknown until Step 0W. Set `AFK_DESKTOP_ENABLED=1` only after
+> Step 0W confirms that your environment is supported.
+
+## Updating on native Windows
+
+Windows locks loaded native binaries (such as `better-sqlite3.node`) while any
+process that opened them is running. Running `afk update` while other afk
+processes are active will fail with an `EBUSY` error.
+
+`afk update` automatically detects blockers before calling npm and prints what
+needs to be stopped:
+
+```
+Update aborted: other afk processes may lock native binaries on Windows.
+  afk session (PID 1234) — close its terminal/session
+  telegram service — stop AFK-telegram in Windows Task Scheduler
+```
+
+**Before running `afk update` on Windows:**
+
+1. Close all open `afk` terminal sessions.
+2. Stop the Telegram bot: `afk telegram stop` (or stop the `AFK-telegram` task
+   in Windows Task Scheduler if it was installed as a service).
+3. Stop the daemon: stop its terminal window, or stop the `AFK-daemon` task in
+   Windows Task Scheduler.
+4. Run `afk update`.
+5. After the update completes, restart any services you stopped.
+
+If npm still reports `EBUSY` after stopping all known processes, another
+process may be holding the binary (for example an antivirus scanner or a
+lingering Node subprocess). Wait a moment and retry, or reboot.
+
+> **Tip:** WSL2 avoids this problem entirely — `afk update` inside WSL2 runs
+> as a normal Linux install and is never blocked by Windows file locks.
+
 ## Native Windows support (WIP)
 
 The following areas are being addressed for native Windows compatibility:
@@ -106,3 +156,4 @@ The following areas are being addressed for native Windows compatibility:
 - [x] Service layer → Windows service/Task Scheduler backend (`schtasks`)
 - [ ] Keychain/OAuth → Windows Credential Manager integration
 - [x] Unit test suite green on `windows-2022` CI (required gate, closes #703)
+- [x] Update guard → pre-flight blocker detection + EBUSY fallback message (closes #5241)

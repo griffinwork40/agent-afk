@@ -139,7 +139,7 @@ async function renderViaBrowser(
  * type — they typically send application/octet-stream or application/zip, so
  * they are caught by the zip branch of the isExtractable check.
  */
-function binaryContentError(ct: string): Error {
+export function binaryContentError(ct: string): Error {
   const isExtractable = /application\/(pdf|zip)/i.test(ct);
   // view_image supports only .png, .jpg/.jpeg, .gif, .webp — mirroring
   // the MIME_MAP in src/agent/tools/handlers/view-image.ts. Other image/*

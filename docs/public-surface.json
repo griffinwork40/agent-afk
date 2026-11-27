@@ -1043,6 +1043,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_DESKTOP_ENABLED",
+      "source": "src/config/env.desktop.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_DIFF_LINES",
       "source": "src/config/env.misc.ts"
     },
@@ -1155,6 +1160,11 @@
       "kind": "env",
       "name": "AFK_FRAMEWORK_PROMPT_FILE",
       "source": "src/config/env.whatif.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_GLOBAL_CHAT_URL",
+      "source": "src/config/env.global-chat.ts"
     },
     {
       "kind": "env",
@@ -2238,6 +2248,16 @@
     },
     {
       "kind": "env",
+      "name": "WSL_DISTRO_NAME",
+      "source": "src/config/env.desktop.ts"
+    },
+    {
+      "kind": "env",
+      "name": "WSL_INTEROP",
+      "source": "src/config/env.desktop.ts"
+    },
+    {
+      "kind": "env",
       "name": "XAI_API_KEY",
       "source": "src/config/env.auth.ts"
     },
@@ -2265,11 +2285,6 @@
       "kind": "flag",
       "name": "afk --version",
       "source": "src/cli/index.ts"
-    },
-    {
-      "kind": "flag",
-      "name": "afk acp --dangerously-skip-permissions",
-      "source": "src/cli/commands/acp.ts"
     },
     {
       "kind": "flag",
@@ -2419,11 +2434,6 @@
     {
       "kind": "flag",
       "name": "afk chat --continue",
-      "source": "src/cli/commands/shared-command-options.ts"
-    },
-    {
-      "kind": "flag",
-      "name": "afk chat --dangerously-skip-permissions",
       "source": "src/cli/commands/shared-command-options.ts"
     },
     {
@@ -3219,11 +3229,6 @@
     {
       "kind": "flag",
       "name": "afk interactive --continue",
-      "source": "src/cli/commands/shared-command-options.ts"
-    },
-    {
-      "kind": "flag",
-      "name": "afk interactive --dangerously-skip-permissions",
       "source": "src/cli/commands/shared-command-options.ts"
     },
     {
@@ -4488,6 +4493,11 @@
     },
     {
       "kind": "slash",
+      "name": "/global",
+      "source": "src/cli/slash/commands/global.ts"
+    },
+    {
+      "kind": "slash",
       "name": "/goal",
       "source": "src/cli/slash/commands/goal.ts"
     },
@@ -4820,6 +4830,11 @@
       "kind": "tool",
       "name": "create_schedule",
       "source": "src/agent/tools/schemas.schedule.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "desktop_screenshot",
+      "source": "src/agent/tools/schemas.desktop-tools.ts"
     },
     {
       "kind": "tool",

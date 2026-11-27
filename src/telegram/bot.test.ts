@@ -7,7 +7,7 @@ import { TelegramBot } from './bot';
 import { isRateLimitError, isNetworkError } from './error-utils';
 import * as skillBridge from '../agent/tools/skill-bridge.js';
 import type { IAgentSession, AgentConfig, SessionState, OutputEvent } from '../agent/types';
-import type { Context } from 'telegraf';
+import type { Context, Telegraf } from 'telegraf';
 
 // Mock agent session with streaming
 class MockAgentSession implements IAgentSession {
@@ -399,10 +399,83 @@ describe('TelegramBot', () => {
   });
 
   describe('lifecycle', () => {
+    test('finishes startup while launch remains pending', async () => {
+      const inner = (bot as unknown as { bot: Telegraf }).bot;
+      vi.spyOn(inner.telegram, 'callApi').mockImplementation(() => new Promise(() => {}));
+      const launch = vi.spyOn(inner, 'launch').mockImplementation(async () => {
+        await inner.telegram.callApi('getUpdates', { timeout: 50 });
+      });
+      const setCommands = vi.spyOn(inner.telegram, 'setMyCommands').mockResolvedValue(true);
+      const stop = vi.spyOn(inner, 'stop').mockImplementation(() => {});
+      const log = vi.spyOn(bot as unknown as { log: (...args: unknown[]) => void }, 'log');
+      const started = bot.start();
+      void started.catch(() => {});
+
+      await vi.waitFor(() => expect(setCommands).toHaveBeenCalledOnce());
+      await started;
+      expect(launch).toHaveBeenCalledOnce();
+      expect(bot.getStats().running).toBe(true);
+      expect(log).toHaveBeenCalledWith('Bot started successfully');
+      await bot.stop();
+      expect(stop).toHaveBeenCalledOnce();
+    });
+
+    test('stops the real Telegraf polling loop with a mocked API', async () => {
+      const inner = (bot as unknown as { bot: Telegraf }).bot;
+      const methods: string[] = [];
+      let pollAborted = false;
+      vi.spyOn(inner.telegram, 'callApi').mockImplementation(async (method, _payload, options) => {
+        methods.push(method);
+        const signal = options?.signal;
+        if (method === 'getUpdates' && signal) {
+          return new Promise<never>((_resolve, reject) => {
+            signal.addEventListener('abort', () => {
+              pollAborted = true;
+              reject(Object.assign(new Error('poll aborted'), { name: 'AbortError' }));
+            });
+          });
+        }
+        if (method === 'getMe') return { id: 1, username: 'testbot' } as never;
+        if (method === 'deleteWebhook' || method === 'setMyCommands') return true as never;
+        if (method === 'getUpdates') return [] as never; // Final offset sync.
+        throw new Error(`Unexpected Telegram call: ${method}`);
+      });
+
+      const { polling } = await bot.start();
+      expect(methods).toEqual(['getMe', 'deleteWebhook', 'getUpdates', 'setMyCommands']);
+      await bot.stop();
+      await polling;
+      expect(pollAborted).toBe(true);
+      expect(bot.getStats().running).toBe(false);
+    });
+
+    test.each(['getMe', 'deleteWebhook'] as const)('fails startup when %s rejects', async (method) => {
+      const inner = (bot as unknown as { bot: Telegraf }).bot;
+      const failure = new Error(`${method} failed`);
+      const api = vi.spyOn(inner.telegram, 'callApi').mockImplementation(async (name) => {
+        if (name === method) throw failure;
+        throw new Error(`Unexpected Telegram call: ${name}`);
+      });
+      if (method === 'deleteWebhook') {
+        vi.spyOn(inner.telegram, 'getMe').mockResolvedValue({
+          id: 1, is_bot: true, first_name: 'Test', username: 'testbot',
+          can_join_groups: false, can_read_all_group_messages: false, supports_inline_queries: false,
+        });
+      }
+
+      await expect(bot.start()).rejects.toBe(failure);
+      expect(api).toHaveBeenCalledTimes(1);
+      expect(inner.telegram.callApi).toBe(api);
+      expect(bot.getStats().running).toBe(false);
+    });
+
     test('should not allow starting twice', async () => {
-      // Mock Telegraf network calls reached in start()
-      (bot as any).bot.launch = vi.fn(async () => {});
-      (bot as any).bot.telegram.setMyCommands = vi.fn(async () => {});
+      const inner = (bot as unknown as { bot: Telegraf }).bot;
+      vi.spyOn(inner.telegram, 'callApi').mockImplementation(() => new Promise(() => {}));
+      vi.spyOn(inner, 'launch').mockImplementation(async () => {
+        await inner.telegram.callApi('getUpdates', { timeout: 50 });
+      });
+      vi.spyOn(inner.telegram, 'setMyCommands').mockResolvedValue(true);
 
       await bot.start();
       await expect(bot.start()).rejects.toThrow('already running');
@@ -424,10 +497,13 @@ describe('TelegramBot', () => {
         .mockImplementation(async () => {
           order.push('entrypoints');
         });
-      (bot as any).bot.launch = vi.fn(async () => {
+      const inner = (bot as unknown as { bot: Telegraf }).bot;
+      vi.spyOn(inner.telegram, 'callApi').mockImplementation(() => new Promise(() => {}));
+      vi.spyOn(inner, 'launch').mockImplementation(async () => {
         order.push('launch');
+        await inner.telegram.callApi('getUpdates', { timeout: 50 });
       });
-      (bot as any).bot.telegram.setMyCommands = vi.fn(async () => {});
+      vi.spyOn(inner.telegram, 'setMyCommands').mockResolvedValue(true);
 
       await bot.start();
       await bot.stop();

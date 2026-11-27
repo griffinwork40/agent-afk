@@ -9,7 +9,7 @@ import { readFileSync, mkdtempSync, realpathSync, rmSync, mkdirSync, writeFileSy
 import os from 'node:os';
 import path from 'node:path';
 import type { OutputEvent } from '../../agent/types/session-types.js';
-import type { AcpClientPeer, AcpPermissionOptions, SessionUpdate } from './acp.wire.js';
+import type { SessionUpdate } from './acp.wire.js';
 
 vi.mock('./acp.session.js', () => ({ buildAcpSession: vi.fn(), closeAcpSession: vi.fn() }));
 vi.mock('./acp.translate.js', () => ({
@@ -17,7 +17,6 @@ vi.mock('./acp.translate.js', () => ({
   translateOutputEvent: vi.fn((ev: { __acp?: SessionUpdate[] }) => ev.__acp ?? []),
   finishTurn: vi.fn(() => ({ updates: [], stopReason: 'end_turn' })),
 }));
-vi.mock('./acp.permission.js', () => ({ createAcpPermissionGate: vi.fn() }));
 vi.mock('./acp.session-load.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('./acp.session-load.js')>(), loadAcpSession: vi.fn(), replayHistory: vi.fn(),
 }));
@@ -25,15 +24,13 @@ vi.mock('./acp.session-load.js', async (importOriginal) => ({
 import { exitAfterServer, runAcpServer, type AcpServerOptions } from './acp.server.js';
 import * as acpSession from './acp.session.js';
 import * as translate from './acp.translate.js';
-import * as permission from './acp.permission.js';
 import * as sessionLoad from './acp.session-load.js';
 import { substitute } from './__test-utils__/acp-replay.js';
-import { isContained } from './acp.permission.paths.js';
+import { isContained } from './acp.tool-display.js';
 
 const mBuild = vi.mocked(acpSession.buildAcpSession);
 const mClose = vi.mocked(acpSession.closeAcpSession);
 const mFinish = vi.mocked(translate.finishTurn);
-const mGate = vi.mocked(permission.createAcpPermissionGate);
 const mLoad = vi.mocked(sessionLoad.loadAcpSession);
 const mReplay = vi.mocked(sessionLoad.replayHistory);
 
@@ -60,7 +57,6 @@ beforeEach(() => {
   mLoad.mockImplementation(async () => fakeHandle());
   mClose.mockResolvedValue(undefined);
   mFinish.mockImplementation(() => ({ updates: [], stopReason: 'end_turn' }));
-  mGate.mockImplementation(() => ({ canUseTool: vi.fn() as never, cancelAll: vi.fn() }));
   script = async function* () { /* empty */ };
 });
 
@@ -137,56 +133,24 @@ function loadTranscript(stem: string, cwd: string): TranscriptLine[] {
 
 vi.mock('node:crypto', async (orig) => ({ ...(await orig<typeof import('node:crypto')>()), randomUUID: () => '11111111-1111-4111-8111-111111111111' }));
 
-type Frame = Record<string, unknown>;
-interface Plan { before: SessionUpdate[]; after: SessionUpdate[]; cancel: boolean; perm?: { pending: SessionUpdate; params: unknown } }
+interface Plan { before: SessionUpdate[]; after: SessionUpdate[]; cancel: boolean }
 
-/** Split a transcript's agent frames per prompt into stream vs gate-originated parts. */
+/** Split a transcript's agent frames per prompt into stream parts. */
 function plansFor(lines: TranscriptLine[]): Plan[] {
   const plans: Plan[] = [];
   let cur: Plan | undefined;
-  let seenPerm = false;
   for (const { direction, frame } of lines) {
     if (direction === 'client_to_agent') {
-      if (frame['method'] === 'session/prompt') { cur = { before: [], after: [], cancel: false }; plans.push(cur); seenPerm = false; }
+      if (frame['method'] === 'session/prompt') { cur = { before: [], after: [], cancel: false }; plans.push(cur); }
       if (frame['method'] === 'session/cancel' && cur) cur.cancel = true;
       continue;
     }
     if (!cur) continue;
     if ('id' in frame && !('method' in frame)) { cur = undefined; continue; }
-    if (frame['method'] === 'session/request_permission') {
-      const pending = cur.before.pop()!;
-      cur.perm = { pending, params: frame['params'] };
-      seenPerm = true;
-      continue;
-    }
     const update = (frame['params'] as { update: SessionUpdate }).update;
-    const isGateProgress = seenPerm && update.sessionUpdate === 'tool_call_update'
-      && update.status === 'in_progress' && Object.keys(update).length === 3;
-    if (isGateProgress) continue;
-    (seenPerm ? cur.after : cur.before).push(update);
+    cur.before.push(update);
   }
   return plans;
-}
-
-/** Minimal A3 stand-in honouring the frozen seam: emit pending, ask, emit in_progress on allow. */
-function installFakeGate(plans: Plan[]): void {
-  mGate.mockImplementation((peer: AcpClientPeer, _sid: string, opts: AcpPermissionOptions) => {
-    const ac = new AbortController();
-    const canUseTool = async (): Promise<{ behavior: 'allow' | 'deny' }> => {
-      const perm = plans[0]!.perm!;
-      await opts.emitToolCall(perm.pending as never);
-      let reply: unknown;
-      try { reply = await peer.request('session/request_permission', perm.params, ac.signal); } catch { return { behavior: 'deny' }; }
-      const outcome = (reply as { outcome: { outcome: string; optionId?: string } }).outcome;
-      if (outcome.outcome === 'cancelled') { opts.onCancelled(); return { behavior: 'deny' }; }
-      if (outcome.optionId?.startsWith('allow')) {
-        await opts.emitToolCall({ ...(perm.pending as object), status: 'in_progress' } as never);
-        return { behavior: 'allow' };
-      }
-      return { behavior: 'deny' };
-    };
-    return { canUseTool: canUseTool as never, cancelAll: () => ac.abort() };
-  });
 }
 
 function installScript(plans: Plan[]): void {
@@ -194,10 +158,6 @@ function installScript(plans: Plan[]): void {
     const plan = plans[0]!;
     const interruptedP = waitInterrupt();
     for (const u of plan.before) yield ev([u]);
-    if (plan.perm) {
-      const opts = mBuild.mock.calls.at(-1)?.[0] ?? mLoad.mock.calls.at(-1)?.[1];
-      await opts!.canUseTool!('t', {}, { signal: new AbortController().signal } as never);
-    }
     if (plan.cancel) await interruptedP;
     for (const u of plan.after) yield ev([u]);
     plans.shift();
@@ -207,7 +167,6 @@ function installScript(plans: Plan[]): void {
 async function replay(stem: string): Promise<void> {
   const lines = loadTranscript(stem, WS);
   const plans = plansFor(lines);
-  installFakeGate(plans);
   installScript(plans);
   mReplay.mockImplementation(async (sessionId, peer) => {
     const start = lines.findIndex((l) => l.frame['method'] === 'session/load');
@@ -231,8 +190,8 @@ async function replay(stem: string): Promise<void> {
 
 describe('ACP server — golden transcripts', () => {
   for (const stem of [
-    'text-turn', 'tool-read', 'tool-edit-diff', 'tool-bash-failed', 'permission-allow-once', 'permission-reject',
-    'permission-allow-always-then-skip', 'cancel-during-permission', 'cancel-during-stream', 'load-replay', 'resume',
+    'text-turn', 'tool-read', 'tool-edit-diff', 'tool-bash-failed',
+    'cancel-during-stream', 'load-replay', 'resume',
     'close-idempotent', 'bad-version-negotiation',
   ]) {
     it(`replays ${stem}`, async () => { await replay(stem); });
@@ -275,30 +234,14 @@ describe('ACP server — initialize', () => {
 });
 
 describe('ACP server — session/new', () => {
-  it('hands the gate canUseTool, cwd, id and converted MCP config to buildAcpSession', async () => {
-    const canUseTool = vi.fn();
-    mGate.mockImplementation(() => ({ canUseTool: canUseTool as never, cancelAll: vi.fn() }));
+  it('passes cwd, id and converted MCP config to buildAcpSession', async () => {
     const mcp = [{ name: 'fs', command: '/bin/fs', args: ['-x'], env: [{ name: 'K', value: 'v' }] }];
     const { out } = await run([init, newSession(2, { cwd: path.join(WS, 'sub'), mcpServers: mcp })]);
     expect(out[1]!.result).toEqual({ sessionId: FIXTURE_ID });
-    expect(mGate).toHaveBeenCalledWith(expect.anything(), FIXTURE_ID, expect.objectContaining({ skip: false }));
     expect(mBuild).toHaveBeenCalledWith(expect.objectContaining({
-      canUseTool, cwd: path.join(WS, 'sub'), sessionId: FIXTURE_ID,
+      cwd: path.join(WS, 'sub'), sessionId: FIXTURE_ID,
       mcpServers: { fs: { type: 'stdio', command: '/bin/fs', args: ['-x'], env: { K: 'v' } } },
     }));
-  });
-  it('skips the gate entirely with --dangerously-skip-permissions', async () => {
-    await run([init, newSession()], { dangerouslySkipPermissions: true });
-    expect(mGate).not.toHaveBeenCalled();
-    expect(mBuild.mock.calls[0]![0].canUseTool).toBeUndefined();
-    expect(mBuild.mock.calls[0]![0].dangerouslySkipPermissions).toBe(true);
-    expect(mBuild.mock.calls[0]![0].childCanUseTool).toBeUndefined();
-  });
-  it('hands the gate child factory to buildAcpSession as childCanUseTool (D9)', async () => {
-    const forChild = vi.fn();
-    mGate.mockImplementation(() => ({ canUseTool: vi.fn() as never, cancelAll: vi.fn(), forChild: forChild as never }));
-    await run([init, newSession()]);
-    expect(mBuild.mock.calls[0]![0].childCanUseTool).toBe(forChild);
   });
   it('D14: accepts an existing cwd outside the server launch directory, canonicalised', async () => {
     const elsewhere = mkdtempSync(path.join(os.tmpdir(), 'acp-elsewhere-'));
@@ -309,7 +252,6 @@ describe('ACP server — session/new', () => {
       const { out } = await run([init, newSession(2, { cwd: elsewhere })]);
       expect(out[1]!.result).toEqual({ sessionId: FIXTURE_ID });
       expect(mBuild).toHaveBeenCalledWith(expect.objectContaining({ cwd: realpathSync.native(elsewhere) }));
-      expect(mGate).toHaveBeenCalledWith(expect.anything(), FIXTURE_ID, expect.objectContaining({ cwd: realpathSync.native(elsewhere) }));
     } finally { rmSync(elsewhere, { recursive: true, force: true }); }
   });
   it.each([
@@ -355,7 +297,7 @@ describe('ACP server — session/prompt', () => {
       { type: 'text', text: 'a' }, { type: 'resource_link', name: 'n', uri: 'file:///x' },
       { type: 'resource', resource: { uri: 'file:///y', text: 'body' } },
       { type: 'resource', resource: { uri: 'file:///z', blob: 'AAAA' } }] })]);
-    expect(h.frames.at(-1)).toEqual({ jsonrpc: '2.0', id: 3, result: { stopReason: 'end_turn' } });
+    expect(h.frames[h.frames.length - 1]).toEqual({ jsonrpc: '2.0', id: 3, result: { stopReason: 'end_turn' } });
     const session = (await mBuild.mock.results[0]!.value) as { session: { sendMessageStream: ReturnType<typeof vi.fn> } };
     expect(session.session.sendMessageStream).toHaveBeenCalledWith('a\nn (file:///x)\nfile:///y\nbody\nfile:///z (binary resource omitted)');
   });
@@ -396,21 +338,6 @@ describe('ACP server — session/prompt', () => {
     const { out } = await run([init, newSession(), req(3, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] })]);
     expect(out[2]!.result).toEqual({ stopReason: 'max_tokens' });
   });
-  it('wires onCancelled so a permission-originated cancel ends the turn cancelled', async () => {
-    let onCancelled!: () => void;
-    mGate.mockImplementation((_p, _s, o) => { onCancelled = o.onCancelled; return { canUseTool: vi.fn() as never, cancelAll: vi.fn() }; });
-    script = async function* () { await waitInterrupt(); };
-    const h = startServer();
-    h.send(init); h.send(newSession());
-    await h.waitFor(2);
-    h.send(req(3, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] }));
-    await new Promise((r) => setTimeout(r, 10));
-    onCancelled();
-    await h.waitFor(3);
-    expect(h.frames[2]).toEqual({ jsonrpc: '2.0', id: 3, result: { stopReason: 'cancelled' } });
-    expect(interruptSpy).toHaveBeenCalled();
-    await h.end();
-  });
 });
 
 describe('ACP server — cancel and close', () => {
@@ -434,21 +361,15 @@ describe('ACP server — cancel and close', () => {
     expect(mClose).toHaveBeenCalledTimes(1);
     await h.end();
   });
-  it('EOF cancels active turns, rejects pending peer requests and releases sessions', async () => {
-    let rejected = false;
-    mGate.mockImplementation((peer) => ({
-      canUseTool: vi.fn() as never, cancelAll: vi.fn(),
-      __ask: peer.request('session/request_permission', {}).catch(() => { rejected = true; }),
-    }) as never);
+  it('EOF cancels active turns and releases sessions', async () => {
     script = async function* () { await waitInterrupt(); };
     const h = startServer();
     h.send(init); h.send(newSession());
-    await h.waitFor(3);
+    await h.waitFor(2);
     h.send(req(3, 'session/prompt', { sessionId: FIXTURE_ID, prompt: [] }));
     await new Promise((r) => setTimeout(r, 10));
     await h.end();
-    expect(rejected).toBe(true);
-    expect(h.frames.at(-1)).toEqual({ jsonrpc: '2.0', id: 3, result: { stopReason: 'cancelled' } });
+    expect(h.frames[h.frames.length - 1]).toEqual({ jsonrpc: '2.0', id: 3, result: { stopReason: 'cancelled' } });
     expect(mClose).toHaveBeenCalledTimes(1);
   });
 });
@@ -513,7 +434,7 @@ describe('ACP server — load and resume', () => {
     expect(mLoad).toHaveBeenCalledWith({ sessionId: FIXTURE_ID, cwd: WS, mcpServers: [] }, expect.objectContaining({ mcpServers: {} }));
     expect(mClose).toHaveBeenCalledTimes(1);
   });
-  it('D15: load of a live idle id (from session/new) replays again and keeps the live handle and gate', async () => {
+  it('D15: load of a live idle id (from session/new) replays again and keeps the live handle', async () => {
     const { out } = await seq([init, newSession(),
       req(3, 'session/load', { sessionId: FIXTURE_ID, cwd: WS, mcpServers: [] }),
       req(4, 'session/load', { sessionId: FIXTURE_ID, cwd: WS, mcpServers: [] }),
@@ -525,7 +446,6 @@ describe('ACP server — load and resume', () => {
     expect(mReplay).toHaveBeenCalledWith(FIXTURE_ID, expect.anything(), WS);
     expect(mLoad).not.toHaveBeenCalled();
     expect(mBuild).toHaveBeenCalledTimes(1);
-    expect(mGate).toHaveBeenCalledTimes(1);
   });
   it('D15: load or resume while a prompt is in flight is invalid request and does not disturb the turn', async () => {
     script = async function* () { await waitInterrupt(); };
@@ -543,7 +463,7 @@ describe('ACP server — load and resume', () => {
     expect(interruptSpy).not.toHaveBeenCalled();
     expect(mReplay).not.toHaveBeenCalled();
     await h.end();
-    expect(h.frames.at(-1)).toEqual({ jsonrpc: '2.0', id: 3, result: { stopReason: 'cancelled' } });
+    expect(h.frames[h.frames.length - 1]).toEqual({ jsonrpc: '2.0', id: 3, result: { stopReason: 'cancelled' } });
   });
   it('D15: reopening a live session with another cwd or MCP list is invalid params, session kept', async () => {
     const mcp = [{ name: 'a', command: '/a', args: [], env: [] }];

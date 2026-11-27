@@ -90,6 +90,10 @@ export const PROTECTED_ENV_KEYS: ReadonlySet<string> = new Set([
   'AFK_BROWSER_ALLOWED_DOMAINS',
   'AFK_BROWSER_BLOCKED_DOMAINS',
   'AFK_BROWSER_CONFIG',
+  // Desktop computer-use capability gate + per-app consent lists.
+  // The agent must not be able to enable desktop tools on its own or
+  // modify the app allow/block lists — these are operator-only decisions.
+  'AFK_DESKTOP_ENABLED',
   // Capability / tier gates the agent must not flip on itself.
   'AFK_ALLOW_PROJECT_MCP',
   'AFK_INTERNAL',
@@ -116,6 +120,10 @@ export const PROTECTED_ENV_KEYS: ReadonlySet<string> = new Set([
   'AFK_FRAMEWORK_DIR',
   'TELEGRAM_DATA_DIR',
   'AFK_TELEGRAM_CWD',
+  // Global-chat relay endpoint -- agent must not redirect messages to an
+  // attacker-controlled relay (same rationale as the *_BASE_URL suffix rule:
+  // an endpoint redirect carries the full conversation to wherever it points).
+  'AFK_GLOBAL_CHAT_URL',
 ]);
 
 export type EnvKeyClass = 'settable' | 'secret' | 'protected' | 'non-config' | 'unknown';

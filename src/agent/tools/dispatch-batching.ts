@@ -13,6 +13,7 @@ import { builtinToolSchemas } from './schemas.js';
 import { agentTool, skillTool, composeTool } from './schemas.agent-tools.js';
 import { gitReadTool } from './schemas.git-read.js';
 import { codeSymbolsTool } from './schemas.lsp-symbols.js';
+import { desktopScreenshotTool } from './schemas.desktop-tools.js';
 import { memoryToolSchemas } from '../memory/memory-tools.js';
 import { stateToolSchemas } from '../state/state-schemas.js';
 import { getRuntimeStateTool } from '../awareness/index.js';
@@ -37,7 +38,8 @@ import type { ConcurrencyClassifier } from './types.js';
  */
 const SAFE_TOOLS: ReadonlySet<string> = new Set(
   [
-    // builtins + agent/skill/compose + opt-in git_read (#3754).
+    // builtins + agent/skill/compose + opt-in git_read (#3754) +
+    // opt-in desktop_screenshot (AFK_DESKTOP_ENABLED, desktop-surface.ts).
     ...builtinToolSchemas,
     agentTool,
     skillTool,
@@ -46,6 +48,10 @@ const SAFE_TOOLS: ReadonlySet<string> = new Set(
     // codeSymbolsTool: concurrencySafe:false — rename/code_actions(apply:true)
     // mutate files; filtered out by the .filter(s.concurrencySafe === true) below.
     codeSymbolsTool,
+    // desktop_screenshot is opt-in (not in builtinToolSchemas) but is
+    // concurrencySafe:true — include it here so the classifier is consistent
+    // with ALL_TOOL_SCHEMAS and the schema-classification test.
+    desktopScreenshotTool,
     ...memoryToolSchemas,
     ...stateToolSchemas,
     getRuntimeStateTool,
