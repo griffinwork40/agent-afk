@@ -73,14 +73,32 @@ refusing reuse to prevent overwritten captures or stale trial records. Summary
 files are atomic; the manifest is written last. Generated files remain private
 state — scrub before publishing any result.
 
+## Credential pre-flight fix (this PR)
+
+The runner's `assertCredentialPresent` previously checked only shell environment
+variables (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`), which blocked
+execution even when valid credentials existed in the macOS Keychain or
+`~/.claude/.credentials.json` (the Claude Code login store).
+
+The check now delegates to `resolveAnthropicCredential()` from
+`src/agent/auth/credential-resolver.ts`, which applies the same three-source
+precedence walk the afk binary itself uses: shell env → macOS Keychain /
+`~/.claude/.credentials.json` → `~/.afk/config/afk.env`.  The dry-run
+(`--dry-run`) now succeeds on machines that have logged in via `afk login`
+without exporting credentials to the shell.  All 56 unit tests pass; TypeScript
+and env-access audits are clean.
+
 ## Why no experiment was launched
 
-Paid model experiment calls were not authorized. The existing runner defaults to
-`sonnet` with a $3 per-arm ceiling (ten arms for the minimum five pairs), not a
-zero-cost guarantee. A configured `local` slot exists, but it is a remote
-OpenAI-compatible endpoint; a slot name alone does not establish cost or safety.
-The canonical prompt asks the root to create compose investigators without pinning
-all child models. No configuration was changed. Experiment-call spend: **$0**.
+Paid model experiment calls were not authorized in this pass. The existing runner
+defaults to `sonnet` with a $3 per-arm ceiling (ten arms for the minimum five
+pairs), not a zero-cost guarantee. A configured `local` slot exists, but it is a
+remote OpenAI-compatible endpoint; a slot name alone does not establish cost or
+safety. The canonical prompt asks the root to create compose investigators without
+pinning all child models. This pass did not verify a bounded,
+subscription/local-only configuration for the entire topology, and did not launch
+model calls to probe it. No configuration was changed.
+Experiment-call spend for this proposal: **$0**.
 
 ## Remaining acceptance criteria to close #1196
 

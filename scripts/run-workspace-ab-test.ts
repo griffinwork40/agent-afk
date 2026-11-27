@@ -26,6 +26,7 @@ import { getWorkspaceExperimentDir } from '../src/paths.js';
 import { resolve, join, dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import { errorMessage } from '../src/utils/errors.js';
+import { resolveAnthropicCredential } from '../src/agent/auth/credential-resolver.js';
 import { providerForModel } from '../src/agent/providers/index.js';
 import { EXPERIMENT_PROMPT, promptHash } from './workspace-ab/prompt.js';
 import { runArm } from './workspace-ab/run-arm.js';
@@ -144,29 +145,30 @@ function assertAfkBinExists(afkBin: string): void {
  * The check is also intentionally skipped for the `auto` sentinel — it resolves
  * dynamically at run-time and the provider is unknown at pre-flight time.
  *
- * Note: credentials stored via `afk login` / `afk.env` are loaded by the afk
- * binary at startup, not by this script.  The check here only covers variables
- * already present in the shell environment.
+ * Uses `resolveAnthropicCredential()` from `src/agent/auth/credential-resolver.ts`
+ * so the same precedence walk the afk binary itself uses is applied:
+ *   1. ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN in the shell environment.
+ *   2. macOS Keychain / `~/.claude/.credentials.json` (Claude Code login).
+ *   3. ~/.afk/config/afk.env (via dotenv at binary startup).
  */
 function assertCredentialPresent(model: string): void {
   const provider = providerForModel(model);
   // Skip the check for non-Anthropic providers — they use their own credentials.
   if (provider !== 'anthropic-direct') return;
 
-  const { ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN } = process.env;
-  if (!ANTHROPIC_API_KEY && !CLAUDE_CODE_OAUTH_TOKEN) {
-    console.error([
-      'Error: No Anthropic credential found.',
-      '',
-      'Fix (choose one):',
-      '  export ANTHROPIC_API_KEY=sk-ant-...',
-      '  afk login',
-      '  afk config set env ANTHROPIC_API_KEY <key>',
-      '',
-      'If you intended a non-Anthropic model, pass --model local or another slot.',
-    ].join('\n'));
-    process.exit(1);
-  }
+  if (resolveAnthropicCredential()) return;
+
+  console.error([
+    'Error: No Anthropic credential found.',
+    '',
+    'Fix (choose one):',
+    '  export ANTHROPIC_API_KEY=sk-ant-...',
+    '  afk login',
+    '  afk config set env ANTHROPIC_API_KEY <key>',
+    '',
+    'If you intended a non-Anthropic model, pass --model local or another slot.',
+  ].join('\n'));
+  process.exit(1);
 }
 
 // ─── Trial order ────────────────────────────────────────────────────────────
