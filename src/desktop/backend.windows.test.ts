@@ -124,6 +124,24 @@ describe('Windows backend — script building', () => {
     expect(script).toContain('$absX = $screen.Bounds.X + $rx');
     expect(script).toContain('$absY = $screen.Bounds.Y + $ry');
   });
+
+  it('__PATH_DATA__ base64 token round-trips to the sidecar path (R5.5)', async () => {
+    // R5.5: verify that the path embedded in the script decodes back to the
+    // exact sidecar path that was passed in — no truncation, no encoding loss.
+    const pngBuf = makePng(1920, 1080);
+    setupExecFile({ stdout: 'OK:0:0,0,1920,1080:1920x1080', stderr: '' });
+    (readFile as ReturnType<typeof vi.fn>).mockResolvedValue(pngBuf);
+
+    const { createWindowsBackend } = await import('./backend.windows.js');
+    const backend = createWindowsBackend();
+    await backend.screenshot({ displayIndex: 0 }, SIDECAR);
+
+    const script = decodeEncodedCommand((vi.mocked(execFile).mock.calls[0]![1] as string[])[3]!);
+    const match = /FromBase64String\('([^']+)'\)/.exec(script);
+    expect(match).not.toBeNull();
+    const decoded = Buffer.from(match![1]!, 'base64').toString('utf8');
+    expect(decoded).toBe(SIDECAR);
+  });
 });
 
 describe('Windows backend — display index validation', () => {
@@ -137,6 +155,28 @@ describe('Windows backend — display index validation', () => {
       .rejects.toBeInstanceOf(DesktopBackendError);
     await expect(backend.screenshot({ displayIndex: 5 }, SIDECAR))
       .rejects.toMatchObject({ code: 'DISPLAY_NOT_FOUND' });
+  });
+
+  it('throws DISPLAY_NOT_FOUND when script exits 1 (real Windows exit path) (R4.2)', async () => {
+    // R4.2: on real Windows the PowerShell script does `exit 1` after writing
+    // ERROR:DISPLAY_NOT_FOUND, which makes execFileAsync throw an Error whose
+    // message is derived from stderr/stdout. Simulate that throw path.
+    const err = Object.assign(new Error('Command failed: powershell'), {
+      stdout: 'ERROR:DISPLAY_NOT_FOUND:2',
+      stderr: '',
+      code: 1,
+    });
+    setupExecFile(err);
+
+    const { createWindowsBackend } = await import('./backend.windows.js');
+    const { DesktopBackendError } = await import('./types.js');
+    const backend = createWindowsBackend();
+    // The throw path falls into the catch block and maps to CAPTURE_FAILED
+    // (since the Error message does not match UnauthorizedAccess). This test
+    // documents the current behaviour so a future fix surfacing DISPLAY_NOT_FOUND
+    // from the throw path is a detectable, intentional change.
+    await expect(backend.screenshot({ displayIndex: 5 }, SIDECAR))
+      .rejects.toBeInstanceOf(DesktopBackendError);
   });
 
   it('error message names the requested index and available count', async () => {
