@@ -69,6 +69,30 @@ export async function handleLspRefactor(
         const env: RefactorEnvironment = { context, cwd: sessionRoot, signal: operationSignal, ...await requestSnapshot(ctx.client) };
         return input.subcommand === 'rename' ? rename(input, ctx, env) : codeActions(input, ctx, env);
       }
+      if (input.subcommand === 'hover') {
+        const raw = await ctx.client.request('textDocument/hover', {
+          textDocument: { uri: ctx.sync.uri },
+          position: { line: (input.line ?? 1) - 1, character: (input.col ?? 1) - 1 },
+        }, { timeoutMs: ctx.remainingMs(), signal });
+        const hover = raw as { contents?: unknown } | null;
+        if (!hover) return { content: '[LSP] No hover information at this position' };
+        const contents = hover.contents;
+        let text: string;
+        if (typeof contents === 'string') {
+          text = contents;
+        } else if (contents !== null && typeof contents === 'object' && !Array.isArray(contents)) {
+          const c = contents as { value?: unknown; language?: unknown };
+          text = typeof c.value === 'string' ? c.value : JSON.stringify(contents);
+        } else if (Array.isArray(contents)) {
+          text = contents
+            .map((c) => (typeof c === 'string' ? c : typeof c === 'object' && c !== null && 'value' in c ? (c as { value?: unknown }).value : null))
+            .filter((s): s is string => typeof s === 'string')
+            .join('\n\n');
+        } else {
+          text = JSON.stringify(contents);
+        }
+        return { content: text || '[LSP] No hover information at this position' };
+      }
       const raw = await ctx.client.request('textDocument/documentSymbol', { textDocument: { uri: ctx.sync.uri } },
         { timeoutMs: ctx.remainingMs(), signal });
       return { content: JSON.stringify({ symbols: symbolRows(raw, ctx.sync.uri, context, cwd), limit: 1000 }) };

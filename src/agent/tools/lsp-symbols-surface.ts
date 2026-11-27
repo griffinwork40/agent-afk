@@ -22,7 +22,7 @@ export function createCodeSymbolsHandler(cwd?: string): ToolHandler | undefined 
     const file_path = typeof i['file_path'] === 'string' ? i['file_path'] : '';
     if (!file_path) return fail('file_path is required');
     if (i['subcommand'] !== undefined && i['subcommand'] !== 'definition' && i['subcommand'] !== 'references') {
-      return fail(`invalid subcommand '${String(i['subcommand'])}'. Must be definition, references, rename, document_symbols, workspace_symbols, or code_actions.`);
+      return fail(`invalid subcommand '${String(i['subcommand'])}'. Must be definition, references, rename, document_symbols, workspace_symbols, code_actions, or hover.`);
     }
     const subcommand = (i['subcommand'] as SymbolSubcommand | undefined) ?? 'definition';
     for (const key of ['line', 'col'] as const) {
