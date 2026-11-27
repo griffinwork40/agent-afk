@@ -116,7 +116,7 @@ async function runNative(
     const stats = sm.getStats(route);
     const modelBefore = stats.model;
     const writer = new TelegramWriter();
-    const slashCtx = createTelegramSlashContext(session, stats, writer);
+    const slashCtx = createTelegramSlashContext(session, stats, writer, ctx.from);
     const isClear = cmd.name === '/clear';
     if (isClear) sm.beginConversationReset(route);
     try {

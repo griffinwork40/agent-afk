@@ -166,7 +166,7 @@ describe('projectOutputEvent', () => {
       type: 'chunk',
       chunk: { type: 'tool_result', toolUseId: 'tu1', content: 'boom', isError: true },
     };
-    expect(projectOutputEvent(failed)).toEqual({ kind: 'tool_error', content: 'boom' });
+    expect(projectOutputEvent(failed)).toEqual({ kind: 'tool_error', toolUseId: 'tu1', content: 'boom' });
   });
 
   it('projects successful tool results as tool_result (clipped)', () => {

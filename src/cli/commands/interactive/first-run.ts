@@ -19,6 +19,8 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { getFirstRunMarkerPath } from '../../../paths.js';
 import { palette } from '../../palette.js';
+import { contentBand } from '../../render/measure.js';
+import { getTerminalWidth } from '../../terminal-size.js';
 
 /**
  * True when this is the user's first interactive REPL session.
@@ -78,6 +80,9 @@ export function printFirstRunBanner(opts: FirstRunBannerOpts): boolean {
   // a repeat on the next launch.
   markFirstRunSeen();
 
+  // Content centering (AFK_CENTER_CONTENT): prepend the left margin so the
+  // first-run banner aligns with the centered welcome banner above it.
+  const { margin: centerPad } = contentBand(getTerminalWidth());
   console.log(['', // console-ok
     `  ${palette.bold('Welcome to AFK!')} Here are two good starting points:`,
     `  ${palette.info('/skills')} ${palette.dim('— browse 50+ amplifier skills (try /skills <query> to search by intent)')}`,
@@ -85,7 +90,7 @@ export function printFirstRunBanner(opts: FirstRunBannerOpts): boolean {
     `  ${palette.info('/keys')}   ${palette.dim('— keyboard shortcuts reference')}`,
     `  ${palette.info('/global')} ${palette.dim('— chat with other AFK users')}`,
     '',
-  ].join('\n'));
+  ].map(l => l.length > 0 ? centerPad + l : l).join('\n'));
 
   return true;
 }

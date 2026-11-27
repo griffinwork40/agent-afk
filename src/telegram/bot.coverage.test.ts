@@ -56,6 +56,16 @@ function ctx(
 // Bot factory
 // ---------------------------------------------------------------------------
 
+function mockPolling(bot: TelegramBot): void {
+  const inner = (bot as unknown as { bot: Telegraf }).bot;
+  vi.spyOn(inner.telegram, 'callApi').mockImplementation(() => new Promise(() => {}));
+  vi.spyOn(inner, 'launch').mockImplementation(async () => {
+    await inner.telegram.callApi('getUpdates', { timeout: 50 });
+  });
+  vi.spyOn(inner.telegram, 'setMyCommands').mockResolvedValue(true);
+  vi.spyOn(inner, 'stop').mockImplementation(() => {});
+}
+
 function makeBot(verbose = false): TelegramBot {
   const createSession = vi.fn(async (_cfg: AgentConfig) => ({
     state: 'idle' as const,
@@ -129,8 +139,7 @@ describe('TelegramBot — additional branch coverage', () => {
 
     test('is idempotent — second stop() is a no-op', async () => {
       // Start then stop, then stop again.
-      (bot as unknown as { bot: { launch: () => Promise<void>; telegram: { setMyCommands: () => Promise<void> } } }).bot.launch = vi.fn(async () => {});
-      (bot as unknown as { bot: { telegram: { setMyCommands: () => Promise<void> } } }).bot.telegram.setMyCommands = vi.fn(async () => {});
+      mockPolling(bot);
       await bot.start();
       await bot.stop();
       await expect(bot.stop()).resolves.not.toThrow();
@@ -274,8 +283,7 @@ describe('TelegramBot — additional branch coverage', () => {
     test('elicitation logger is called when createTelegramElicitationHandler fires log', async () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       const noisyBot = makeBot(true);
-      (noisyBot as unknown as { bot: { launch: () => Promise<void>; telegram: { setMyCommands: () => Promise<void> } } }).bot.launch = vi.fn(async () => {});
-      (noisyBot as unknown as { bot: { telegram: { setMyCommands: () => Promise<void> } } }).bot.telegram.setMyCommands = vi.fn(async () => {});
+      mockPolling(noisyBot);
 
       // Mock createTelegramElicitationHandler to capture the log callback.
       const elicMod = await import('./elicitation-telegram.js');
@@ -325,8 +333,7 @@ describe('TelegramBot — additional branch coverage', () => {
       });
       const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
 
-      (bot as unknown as { bot: { launch: () => Promise<void> } }).bot.launch = vi.fn(async () => {});
-      (bot as unknown as { bot: { telegram: { setMyCommands: () => Promise<void> } } }).bot.telegram.setMyCommands = vi.fn(async () => {});
+      mockPolling(bot);
       await bot.start();
       expect(setIntervalSpy.mock.calls.filter((c) => c[1] === 5_000)).toHaveLength(0);
 

@@ -234,7 +234,6 @@ Every named subsystem (renderer, markdown, input, spinner, teardown, resize, PTY
 
 **Known gaps:**
 - `terminal-compositor.input-dispatch.ts` (662 LOC, verified October 2026) was not read fully — the keypress routing detail beyond Ctrl+B / Ctrl+C was sampled, not exhaustively mapped.
-- The `smoke-reveal.ts` visual effect (AFK_SMOKE_TEXT) was identified but not traced end-to-end.
 - `_lib/stream-renderer.ts` per-subagent state machine internals were not fully traced.
 - `.filesize-baseline.json` / `.funcsize-baseline.json` keys were empty in the root (the files exist but parsing produced no output), so function-level hotspot ranking is from LOC only.
 

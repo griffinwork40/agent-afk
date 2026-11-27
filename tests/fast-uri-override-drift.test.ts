@@ -48,6 +48,60 @@ function parseFastUriRange(yamlText: string): string | null {
   return m?.[1]?.trim() ?? null;
 }
 
+/**
+ * Parse the upper-bound semver from a range token like "<4", "<4.0", "<4.0.0".
+ * Returns a full triple, filling missing minor/patch components with 0.
+ */
+function parseCapSemver(capToken: string): [number, number, number] | null {
+  const m = /^<\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?$/.exec(capToken.trim());
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2] ?? 0), Number(m[3] ?? 0)];
+}
+
+/**
+ * Assert that a fast-uri range string has a valid cap (exactly `<MAJOR.0.0`).
+ *
+ * Returns `null` on success, or an error message string on failure.  Factored
+ * out as a pure helper so unit tests can call it with synthetic range strings
+ * and confirm that a revert to major-only logic (which would accept `<4.1.0`)
+ * is caught immediately.
+ *
+ * Valid:   ">=3.1.9 <4"      → cap [4,0,0] === [4,0,0] ✓
+ * Invalid: ">=3.1.9 <4.1.0"  → cap [4,1,0] !== [4,0,0] ✗
+ */
+function assertCapValid(range: string): string | null {
+  if (/\|\|/.test(range)) {
+    return (
+      `fast-uri override "${range}" uses an OR-compound range (||). ` +
+      'OR-compound ranges defeat the upper-bound cap guard because only the first ' +
+      'alternative is checked. Use a single conjunctive range like ">=3.1.9 <4".'
+    );
+  }
+  const capMatch = /(<\s*\d+(?:\.\d+){0,2})/.exec(range);
+  if (!capMatch) {
+    return (
+      `fast-uri override "${range}" does not contain an upper-bound cap (e.g. "<4"). ` +
+      'Without the cap, pnpm may resolve to fast-uri >=4 which is outside ' +
+      "ajv's declared ^3.0.1 range."
+    );
+  }
+  const cap = parseCapSemver(capMatch[1]!);
+  if (!cap) {
+    return `Could not parse semver from fast-uri cap "${capMatch[1]}"`;
+  }
+  // The cap must be exactly [MAJOR, 0, 0] — i.e. a plain major-version boundary
+  // with no minor or patch component.  Accepting <4.1.0 would admit 4.x builds
+  // that break ajv's ^3.0.1 compatibility constraint.
+  if (cmpSemver(cap, [FAST_URI_CAP_MAJOR, 0, 0]) !== 0) {
+    return (
+      `fast-uri cap "${capMatch[1]}" must be exactly <${FAST_URI_CAP_MAJOR} ` +
+      `(i.e. [${FAST_URI_CAP_MAJOR},0,0]), got [${cap.join(',')}]. ` +
+      "A non-zero minor/patch component admits 4.x versions outside ajv's ^3 range."
+    );
+  }
+  return null;
+}
+
 describe('fast-uri override range drift guard', () => {
   it('pnpm-workspace.yaml exists and is readable', () => {
     expect(() => fs.readFileSync(workspaceYaml, 'utf8')).not.toThrow();
@@ -89,21 +143,23 @@ describe('fast-uri override range drift guard', () => {
     const yaml = fs.readFileSync(workspaceYaml, 'utf8');
     const range = parseFastUriRange(yaml)!;
 
-    // Expect an upper-bound like "<4" or "<4.0.0".
-    const capMatch = /<\s*(\d+)(?:\.\d+)*/.exec(range);
-    expect(
-      capMatch,
-      `fast-uri override "${range}" does not contain an upper-bound cap (e.g. "<4"). ` +
-        'Without the cap, pnpm may resolve to fast-uri >=4 which is outside ' +
-        "ajv's declared ^3.0.1 range.",
-    ).not.toBeNull();
+    // Delegate to the testable helper so the same logic covers unit tests below.
+    const err = assertCapValid(range);
+    expect(err, err ?? undefined).toBeNull();
+  });
 
-    const capMajor = Number(capMatch![1]);
-    expect(
-      capMajor,
-      `fast-uri cap major is ${capMajor} but must be <= ${FAST_URI_CAP_MAJOR}. ` +
-        "Raising it beyond 4 risks breaking ajv's ^3 compatibility constraint.",
-    ).toBeLessThanOrEqual(FAST_URI_CAP_MAJOR);
+  it('assertCapValid: ">=3.1.9 <4.1.0" should fail (minor cap admits 4.x)', () => {
+    // A revert to major-only logic (<= major) would silently accept this range.
+    // assertCapValid must reject it because the cap [4,1,0] !== [4,0,0].
+    const err = assertCapValid('>=3.1.9 <4.1.0');
+    expect(err, 'assertCapValid should return an error for <4.1.0').not.toBeNull();
+    expect(err).toMatch(/4,1,0/);
+  });
+
+  it('assertCapValid: ">=3.1.9 <4" should pass (exact major-version boundary)', () => {
+    // The canonical production value — must be accepted.
+    const err = assertCapValid('>=3.1.9 <4');
+    expect(err, `assertCapValid rejected a valid range: ${err}`).toBeNull();
   });
 
   it('parseFastUriRange handles quoted and unquoted values', () => {
@@ -113,11 +169,68 @@ describe('fast-uri override range drift guard', () => {
     expect(parseFastUriRange('other-pkg: ">=1.0.0"\n')).toBeNull();
   });
 
+  it('parseFastUriRange handles the 2-space-indented form used in pnpm-workspace.yaml', () => {
+    // The actual file uses 2-space indentation under `overrides:`.
+    expect(parseFastUriRange('  fast-uri: ">=3.1.9 <4"\n')).toBe('>=3.1.9 <4');
+    expect(parseFastUriRange("  fast-uri: '>=3.1.9 <4'\n")).toBe('>=3.1.9 <4');
+    expect(parseFastUriRange('  fast-uri: >=3.1.9 <4\n')).toBe('>=3.1.9 <4');
+  });
+
   it('parseSemver handles well-formed and malformed inputs', () => {
     expect(parseSemver('3.1.9')).toEqual([3, 1, 9]);
     expect(parseSemver('0.0.1')).toEqual([0, 0, 1]);
     expect(parseSemver('3.1')).toBeNull();
     expect(parseSemver('')).toBeNull();
     expect(parseSemver('abc')).toBeNull();
+  });
+
+  it('cmpSemver returns correct ordering', () => {
+    // equal
+    expect(cmpSemver([3, 1, 9], [3, 1, 9])).toBe(0);
+    expect(cmpSemver([0, 0, 0], [0, 0, 0])).toBe(0);
+
+    // a < b
+    expect(cmpSemver([3, 1, 8], [3, 1, 9])).toBe(-1);
+    expect(cmpSemver([3, 0, 9], [3, 1, 9])).toBe(-1);
+    expect(cmpSemver([2, 9, 9], [3, 1, 9])).toBe(-1);
+    expect(cmpSemver([3, 1, 9], [4, 0, 0])).toBe(-1);
+
+    // a > b
+    expect(cmpSemver([3, 1, 9], [3, 1, 8])).toBe(1);
+    expect(cmpSemver([3, 1, 9], [3, 0, 9])).toBe(1);
+    expect(cmpSemver([4, 0, 0], [3, 1, 9])).toBe(1);
+    expect(cmpSemver([4, 1, 0], [4, 0, 0])).toBe(1);
+  });
+
+  it('parseCapSemver parses upper-bound tokens with varying specificity', () => {
+    expect(parseCapSemver('<4')).toEqual([4, 0, 0]);
+    expect(parseCapSemver('<4.0')).toEqual([4, 0, 0]);
+    expect(parseCapSemver('<4.0.0')).toEqual([4, 0, 0]);
+    expect(parseCapSemver('<4.1.0')).toEqual([4, 1, 0]);
+    expect(parseCapSemver('<3.2.0')).toEqual([3, 2, 0]);
+    expect(parseCapSemver('>=4')).toBeNull();
+    expect(parseCapSemver('')).toBeNull();
+  });
+
+  it('assertCapValid: 4-segment token "<4.1.0.1" should fail (not valid semver cap)', () => {
+    // The old regex /(<\s*\d+(?:\.\d+)*)/ matched "<4.1.0.1" and passed it to
+    // parseCapSemver, which returned null (4-segment not in its pattern), producing
+    // the opaque "Could not parse semver" fallback instead of the diagnostic guard
+    // message. The tightened regex /{0,2}/ stops matching after the third segment,
+    // so parseCapSemver sees "<4.1.0" → [4,1,0] and returns the correct cap error.
+    const err = assertCapValid('>=3.1.9 <4.1.0.1');
+    expect(err, 'assertCapValid should return an error for 4-segment cap').not.toBeNull();
+    // Must NOT be the opaque "Could not parse semver" fallback — must be the cap mismatch.
+    expect(err).not.toMatch(/Could not parse semver/);
+    expect(err).toMatch(/4,1,0/);
+  });
+
+  it('assertCapValid: OR-compound range ">=3.1.9 <4 || >=4" should fail', () => {
+    // OR-compound ranges defeat the guard: the old code matched only the first
+    // "<4" token and returned null (success), allowing a valid YAML edit like
+    // ">=3.1.9 <4 || >=4" to bypass the cap entirely.
+    const err = assertCapValid('>=3.1.9 <4 || >=4');
+    expect(err, 'assertCapValid should return an error for || ranges').not.toBeNull();
+    expect(err).toMatch(/OR-compound/);
   });
 });

@@ -20,8 +20,8 @@ describe('legible approval card titles (profile section 5)', () => {
       ['grep', { pattern: 'TODO', path: 'src' }, `grep "TODO" in ${path.join(cwd, 'src')}`],
       ['glob', { pattern: '**/*.ts' }, `glob "**/*.ts" in ${cwd}`],
       ['mcp__github__create_issue', { title: 'x' }, 'mcp__github__create_issue MCP server github: create_issue'],
-      ['agent', { agent_type: 'research-agent', prompt: 'Find every caller of foo' }, 'agent research-agent "Find every caller of foo" (each subagent tool call is asked separately)'],
-      ['skill', { name: 'review', arguments: '123' }, 'skill review "123" (each subagent tool call is asked separately)'],
+      ['agent', { agent_type: 'research-agent', prompt: 'Find every caller of foo' }, 'agent research-agent "Find every caller of foo" (runs inside this session)'],
+      ['skill', { name: 'review', arguments: '123' }, 'skill review "123" (runs inside this session)'],
       ['git_read', { subcommand: 'diff', args: ['HEAD~1'], paths: ['a.txt'] }, 'git_read diff HEAD~1 -- a.txt'],
       ['write_file', { file_path: 'a.txt' }, `write_file ${path.join(cwd, 'a.txt')}`],
     ];

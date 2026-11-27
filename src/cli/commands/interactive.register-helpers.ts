@@ -23,6 +23,8 @@ import { formatAutonameSkipReason } from './interactive/interactive.session-init
 import type { InteractiveCtx } from './interactive/shared.js';
 import type { WorktreeHandle, DeferredWorktree } from './interactive/worktree.js';
 import { welcomeBanner } from '../render.js';
+import { contentBand } from '../render/measure.js';
+import { getTerminalWidth } from '../terminal-size.js';
 import { printUpdateBanner } from '../update-checker.js';
 import { getVersion } from '../version.js';
 import { isFirstRun, printFirstRunBanner } from './interactive/first-run.js';
@@ -269,7 +271,10 @@ export async function printStartupBanner(params: StartupBannerParams): Promise<v
     ...(resumeMeta !== undefined ? { metaLine: resumeMeta } : {}),
     hintLine: startupHintLine(),
   }));
-  if (bootPruneNotice !== undefined) console.log(palette.dim(`  ${bootPruneNotice}`));
+  // Content centering (AFK_CENTER_CONTENT): welcomeBanner handles its own
+  // margin; the remaining startup lines need the same margin prepended.
+  const { margin: centerPad } = contentBand(getTerminalWidth());
+  if (bootPruneNotice !== undefined) console.log(centerPad + palette.dim(`  ${bootPruneNotice}`));
 
   // Dynamic startup: recall (last session for this cwd) + ambient dashboard.
   const firstRun = isFirstRun();
@@ -280,12 +285,12 @@ export async function printStartupBanner(params: StartupBannerParams): Promise<v
     isResume, isTTY: tty, isFirstRun: firstRun,
     currentSessionId: ctx.session.current.sessionId,
   });
-  if (recallLine) console.log(recallLine); // console-ok
+  if (recallLine) console.log(centerPad + recallLine); // console-ok
   const dashboardLines = await renderStartupDashboard({
     isTTY: tty, isFirstRun: firstRun,
     bootPruneStaleCount: bootPruneRemovedCount,
   });
-  for (const line of dashboardLines) console.log(line); // console-ok
+  for (const line of dashboardLines) console.log(centerPad + line); // console-ok
 
   if (ctx.resumeTarget) await printResumeBanner(ctx.stats, ctx.completionWriter);
   printFirstRunBanner({ isTTY: tty, isResume });

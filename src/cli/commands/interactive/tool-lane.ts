@@ -12,7 +12,6 @@ import {
   type Entry,
 } from './tool-lane-render.js';
 import type { ToolLaneFlash } from './tool-lane-flash.js';
-import type { ElementFade } from '../../smoke-fade.js';
 import { liveChildAgentCount, trailingCompletedRootToolName } from './tool-lane.queries.js';
 import { renderToolLaneOverlay } from './tool-lane-overlay.js';
 import { propagateChildFailure as propagateChildFailureIn } from './tool-lane.ancestry.js';
@@ -105,13 +104,6 @@ export class ToolLane {
 
   /** Return the most recent bash capture path, or `undefined` if none. */
   getLastCapturePath(): string | undefined { return this.lastCapturePath; }
-
-  /**
-   * Optional AFK_SMOKE_TEXT whole-element fade for live rows. Set by
-   * `armSmokeEffects` (stream-renderer-smoke.ts) only when smoke is enabled;
-   * `null` otherwise, so the overlay renders exactly as before.
-   */
-  fade: ElementFade | null = null;
 
   /**
    * When `true`, completed subagent blocks are flushed to scrollback in
@@ -502,7 +494,7 @@ export class ToolLane {
   }
 
   getOverlay(): string {
-    return renderToolLaneOverlay(this.entries, this.order, this.activeTools, this.flash, MAX_OVERLAY_ROOTS, this.fade);
+    return renderToolLaneOverlay(this.entries, this.order, this.activeTools, this.flash, MAX_OVERLAY_ROOTS);
   }
 
   /**

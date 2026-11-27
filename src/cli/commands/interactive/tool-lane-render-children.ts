@@ -12,7 +12,6 @@ import {
   shortenPaths,
 } from './tool-lane-format.js';
 import type { ToolEntry, TextEntry, Entry, Glyphs } from './tool-lane-render.js';
-import type { ElementFade } from '../../smoke-fade.js';
 import {
   buildIndent,
   clampLineToTerminal,
@@ -135,18 +134,6 @@ function pushCompletedChildRows(
 }
 
 /**
- * Stable fade key for one overlay sibling, or null for synthetic rows that
- * must never fade (overflow `··· +N`, result summaries). A group inherits its
- * FIRST member's id, so collapsing already-visible rows into a `×N` group
- * line never re-fades rows the user has already seen settle.
- */
-function siblingFadeKey(item: { kind: string; toolUseId?: string; entries?: ToolEntry[] }): string | null {
-  if (item.kind === 'group') return item.entries?.[0]?.toolUseId ?? null;
-  if (item.kind === 'tool') return item.toolUseId ?? null;
-  return null;
-}
-
-/**
  * Render one NESTING_TOOLS child (skill / Agent / compose) that has live
  * in-lane grandchildren into the overlay `lines` array, then recurse into
  * those grandchildren.
@@ -176,7 +163,6 @@ function renderOverlayNestingChild(
   g: Readonly<Glyphs>,
   isLast: boolean,
   parentIsLast: boolean | undefined,
-  fade: ElementFade | null,
 ): void {
   // Invariant: a NESTING dispatch head (skill / Agent / compose) with
   // in-lane grandchildren is anchored with a tree CONNECTOR (`├─` / `╰─`),
@@ -231,7 +217,7 @@ function renderOverlayNestingChild(
   // `isLast` down as the NEW `parentIsLast` so `child` itself is tracked
   // correctly one level deeper. `g` keeps one glyph set for the frame.
   const parentSlot = parentIsLast ?? isLast;
-  renderOverlayChildren(grandchildren, childMap, lines, cols, [...ancestorIsLast, parentSlot], g, isLast, fade);
+  renderOverlayChildren(grandchildren, childMap, lines, cols, [...ancestorIsLast, parentSlot], g, isLast);
   // Render the thinking-tail AFTER the grandchildren so the in-flight
   // narration sits below the subagent's tool calls (mirrors text-child
   // ordering below; matches the temporal order the model emitted them).
@@ -278,9 +264,6 @@ function renderOverlayChildren(
   // entry (turn-root / Agent head row), where the parent's column is instead
   // derived from which child-subtree we descend into. See the recursion below.
   parentIsLast?: boolean,
-  // AFK_SMOKE_TEXT whole-element fade (smoke-fade.ts), keyed per sibling so a
-  // tool call that joins a live subagent fades in on its own; null = off.
-  fade: ElementFade | null = null,
 ): void {
   // Plain (no-ANSI) indent: lead + ancestor slots + active spine column.
   // `.length` measures display cells correctly (composed of 3-cell units).
@@ -312,7 +295,6 @@ function renderOverlayChildren(
     // ancestor-isLast vector for any recursive call. Compare against the
     // active glyph set's lastConnector (Unicode `'╰─ '` or ASCII `'\\- '`).
     const isLast = rawConnector === g.lastConnector;
-    const firstRow = lines.length;
 
     if (item.kind === 'overflow') {
       lines.push(clampLineToTerminal(indentColored + connector + palette.dim('··· ') + palette.chrome('+' + item.count) + (item.text ? palette.dim('  ' + item.text) : ''), cols));
@@ -328,7 +310,7 @@ function renderOverlayChildren(
       const child = item;
       const grandchildren = childMap.get(child.toolUseId);
       if (NESTING_TOOLS.has(child.toolName) && grandchildren && grandchildren.length > 0) {
-        renderOverlayNestingChild(child, grandchildren, childMap, lines, indentColored, connector, cols, ancestorIsLast, g, isLast, parentIsLast, fade);
+        renderOverlayNestingChild(child, grandchildren, childMap, lines, indentColored, connector, cols, ancestorIsLast, g, isLast, parentIsLast);
       } else if (NESTING_TOOLS.has(child.toolName) && child.headerEmitted) {
         // Invariant: committed labels live in scrollback; live overlay must
         // render nothing for a NESTING_TOOLS child whose header has already
@@ -384,8 +366,6 @@ function renderOverlayChildren(
         }
       }
     }
-    const fadeKey = fade && siblingFadeKey(item);
-    if (fadeKey) fade?.fadeLines(fadeKey, lines, firstRow);
   }
 
   // Text-child narration renders AFTER all tool children. A subagent's

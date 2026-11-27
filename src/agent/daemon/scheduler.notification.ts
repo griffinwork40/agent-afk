@@ -11,7 +11,7 @@ export type NotificationKind = 'completion' | 'failure' | 'escalation' | 're-esc
 export interface NotificationDecision {
   state: 'due' | 'not-due' | 'suppressed';
   kind: NotificationKind;
-  reason?: 'policy-never' | 'policy-failure' | 'no-callback';
+  reason?: 'policy-never' | 'policy-failure' | 'no-callback' | 'handoff-pending';
 }
 
 /** Delivery result reported by the callback; missing results must remain unknown. */

@@ -54,7 +54,7 @@ Behaviour changes that rename nothing are not caught mechanically: when you chan
 ### Running
 
 ```bash
-pnpm dev                                     # tsx watch — live-reloads CLI
+pnpm dev                                     # tsx — runs CLI once (no watch mode)
 afk chat "hi" / afk interactive / afk daemon # one-shot / REPL / cron headless
 pnpm telegram:start                          # Telegram bot
 ```
@@ -102,7 +102,7 @@ For trace internals, journal sync points, witness retention rules: `memory_searc
 
 ### Subagent tool-round budget
 
-Budget unit is tool-use **rounds** (5 parallel calls = 1 round). Default: 50/fork; `0` = unbounded. Cap triggers wind-down, not kill. Spec: `docs/subagent-tool-budget.md`.
+Budget unit is tool-use **rounds** (5 parallel calls = 1 round). Fork fallback is 50 rounds (skill and compose forks). Unnamed `agent` dispatches are uncapped. Named agent types set their own default. `0` = unbounded. Cap triggers wind-down, not kill. Spec: `docs/subagent-tool-budget.md`.
 
 ## Architecture
 

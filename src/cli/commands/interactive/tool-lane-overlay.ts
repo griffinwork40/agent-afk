@@ -28,7 +28,6 @@ import {
   renderFlatRoot,
 } from './tool-lane-overlay-roots.js';
 import type { ToolLaneFlash } from './tool-lane-flash.js';
-import type { ElementFade } from '../../smoke-fade.js';
 
 /**
  * Collect root-level tool entries (those rendered at the top of the overlay),
@@ -81,10 +80,6 @@ export function selectVisibleRoots(
  * @param activeTools     Current parallel-activity snapshot, or `null`.
  * @param flash           Optional flash tracker for 150ms glyph pulses.
  * @param maxOverlayRoots Maximum number of root-level entries to show.
- * @param fade            Optional AFK_SMOKE_TEXT whole-element fade. Each root
- *                        entry's rows (its line, children, tails, diff) fade
- *                        in together, keyed by `toolUseId`, on the frame that
- *                        first shows them. Settled rows render unchanged.
  */
 export function renderToolLaneOverlay(
   entries: Map<string, Entry>,
@@ -92,7 +87,6 @@ export function renderToolLaneOverlay(
   activeTools: { activeCount: number; toolUseIds: Set<string>; toolIndex?: Map<string, number> } | null,
   flash: ToolLaneFlash | null,
   maxOverlayRoots: number,
-  fade: ElementFade | null = null,
 ): string {
   const childMap = buildChildMap(entries, order);
   const lines: string[] = [];
@@ -140,7 +134,6 @@ export function renderToolLaneOverlay(
   const flatRootLeadDone = hasNestingRoot ? palette.dimCompleted(g.turnRoot) : '   ';
 
   for (const entry of visibleRoots) {
-    const firstRow = lines.length;
     const children = childMap.get(entry.toolUseId);
 
     // Dispatch-tools (Agent/Task/agent/compose) own nested children — render
@@ -154,7 +147,7 @@ export function renderToolLaneOverlay(
     // Width invariant: `g.turnRoot` is 3 cells (same as the prior lead),
     // so child columns line up unchanged.
     if (NESTING_TOOLS.has(entry.toolName) && children && children.length > 0) {
-      renderNestingWithChildren(entry, children, childMap, lines, g, cols, fade);
+      renderNestingWithChildren(entry, children, childMap, lines, g, cols);
     } else if (NESTING_TOOLS.has(entry.toolName) && entry.headerEmitted) {
       // NESTING_TOOL ancestor with no in-flight children left in the lane
       // (all descendants flushed to scrollback). Header is already in
@@ -168,7 +161,6 @@ export function renderToolLaneOverlay(
       renderFlatRoot(entry, lines, g, cols, flatRootLeadActive, flatRootLeadDone, activeTools, flash);
     }
 
-    fade?.fadeLines(entry.toolUseId, lines, firstRow);
   }
 
   if (hiddenDoneCount > 0) {

@@ -89,7 +89,7 @@ All commands support `--format json` where machine-readable output makes sense (
 --max-turns <n>           # safety rail (default 100)
 --max-budget-usd <n>
 --task-budget <tokens>
---dangerously-skip-permissions  # force bypass mode (already the CLI default for new installs); disable with `afk config set permissionMode plan`
+--permission-mode <mode>   # override permission mode for this run (e.g. `plan`); CLI default for new installs is bypass
 --no-update-check         # suppress startup update check
 --dump-prompt <path>      # write resolved system prompt to file (provenance included)
 ```

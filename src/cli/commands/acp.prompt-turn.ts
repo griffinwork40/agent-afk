@@ -66,8 +66,8 @@ export function cancelTurn(live: LiveSession, log: (l: string) => void): void {
 }
 
 /**
- * Permission-gate `emitToolCall`: deduplicate against the shared translator
- * tool map. A repeated start becomes an in_progress update or a no-op.
+ * Deduplicate tool call starts against the shared translator tool map.
+ * A repeated start becomes an in_progress update or a no-op.
  */
 export function makeEmitToolCall(live: LiveSession, peer: AcpClientPeer) {
   return async (update: ToolCallStart): Promise<void> => {

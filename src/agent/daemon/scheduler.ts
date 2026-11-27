@@ -119,7 +119,7 @@ export interface SchedulerOptions {
    * Telegraf bot instance for rich elicitation in daemon tasks. When provided
    * together with `primaryChatId`, daemon ask_question calls use
    * `sendHandoffQuestion` (inline keyboards, reply-to matching) instead of
-   * falling back to the plain `pushIfConfigured` text notification path.
+   * using the raw Telegram push path when no bot is available.
    * Applies to both pull tasks and cron/sessionstart tasks (#3243 item 2).
    * Has no effect when absent — fallback is always preserved.
    */
@@ -441,6 +441,7 @@ export class CronScheduler {
       queueDir: this.queueDir,
       ...(this.options.handoffsDir !== undefined && { handoffsDir: this.options.handoffsDir }),
       ...(this.options.bot !== undefined && { bot: this.options.bot }),
+      resolveNotifyChat: this.options.resolveNotifyChat,
       ...(intervalMs !== undefined && { intervalMs }),
       drainResumeQueue: (resumeDir: string) => this.pullTick(resumeDir),
       ...((this.options.pullPollIntervalMs ?? 0) > 0 && { recoverMainQueue: () => recoverDaemonQueues(this.queueDir) }),
