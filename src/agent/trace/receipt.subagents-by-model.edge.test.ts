@@ -9,7 +9,7 @@
  *      discard these without throwing; costUsd stays at 0 for the bucket.
  *   2. Two closure events for the same `subagentId` — the pattern produced by
  *      a model-fallback run where the runtime emits one closure per attempt.
- *      Behaviour on HEAD (80a005919): both costs are summed into the bucket
+ *      Invariant: both costs are summed into the bucket
  *      (`costs.set(id, (costs.get(id) ?? 0) + cost)`).  This test asserts
  *      that existing behaviour so any future change is a deliberate break.
  */
@@ -115,7 +115,7 @@ describe('buildSubagentsByModel: rejected finalCostUsd values', () => {
 // ---------------------------------------------------------------------------
 // 2. Two closures for the same subagentId
 //
-// On HEAD (80a005919) the costs map accumulates:
+// Invariant: the costs map accumulates across closures for the same id:
 //   costs.set(id, (costs.get(id) ?? 0) + cost)
 // So two valid closures for the same id sum into the bucket's costUsd.
 // This test pins that behaviour so any future change is a deliberate break.

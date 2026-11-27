@@ -382,7 +382,7 @@ function mapBulletsToFields(
     for (const b of bullets) {
       if (b.label === '') continue;
       for (const n of needles) {
-        if (b.label.includes(n)) return b.value || undefined;
+        if (b.label.includes(n)) return b.value !== '' ? b.value : undefined;
       }
     }
     return undefined;
