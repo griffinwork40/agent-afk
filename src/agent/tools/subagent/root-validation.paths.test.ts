@@ -52,7 +52,15 @@ describe('validateRootPath shared entry contract', () => {
       for (const value of ['', '  ', null, undefined]) {
         expect(parseAgentInput({ prompt: 'p', [field]: value })[field]).toBeUndefined();
         if (value === undefined) continue;
-        expect(() => parseComposeInput({ nodes: [{ id: 'A', prompt: 'p', [field]: value }] })).toThrow();
+        // cwd blank/null is normalised to absent by the compose parser (mirrors
+        // the agent tool); readRoots/writeRoots have no such leniency and must
+        // still throw so sparse array entries are caught early.
+        if (field === 'cwd') {
+          const { parsed } = parseComposeInput({ nodes: [{ id: 'A', prompt: 'p', [field]: value }] });
+          expect(parsed.nodes[0]!.cwd).toBeUndefined();
+        } else {
+          expect(() => parseComposeInput({ nodes: [{ id: 'A', prompt: 'p', [field]: value }] })).toThrow();
+        }
       }
     }
   });

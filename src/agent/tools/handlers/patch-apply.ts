@@ -48,13 +48,23 @@ function parsePatchApplyInput(input: unknown): {
   const raw = input as Record<string, unknown>;
 
   // --- changes ---
-  if (!Array.isArray(raw['changes'])) {
+  // Some models JSON-encode arrays as strings; parse when possible.
+  let changesRaw = raw['changes'];
+  if (typeof changesRaw === 'string') {
+    try {
+      const parsed = JSON.parse(changesRaw);
+      if (Array.isArray(parsed)) changesRaw = parsed;
+    } catch {
+      // fall through to the type error below
+    }
+  }
+  if (!Array.isArray(changesRaw)) {
     throw new Error('Input must have a "changes" field of type array.');
   }
 
   const changes: PatchFileChange[] = [];
-  for (let i = 0; i < raw['changes'].length; i++) {
-    const item = raw['changes'][i];
+  for (let i = 0; i < changesRaw.length; i++) {
+    const item = (changesRaw as unknown[])[i];
     if (typeof item !== 'object' || item === null) {
       throw new Error(`changes[${i}] must be an object.`);
     }

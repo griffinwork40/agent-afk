@@ -46,10 +46,21 @@ describe('parseComposeInput — per-node cwd', () => {
     );
   });
 
-  it('rejects empty string cwd', () => {
-    expect(() => parseComposeInput(minimal({ cwd: '  ' }))).toThrow(
-      /cwd must be a non-empty string/,
-    );
+  it('treats empty-string cwd as absent (blank normalisation)', () => {
+    // Blank/null cwd is normalised to absent, not rejected — mirrors the agent
+    // tool behaviour so padded optionals never cause spurious errors.
+    const { parsed } = parseComposeInput(minimal({ cwd: '' }));
+    expect(parsed.nodes[0]!.cwd).toBeUndefined();
+  });
+
+  it('treats whitespace-only cwd as absent', () => {
+    const { parsed } = parseComposeInput(minimal({ cwd: '  ' }));
+    expect(parsed.nodes[0]!.cwd).toBeUndefined();
+  });
+
+  it('treats null cwd as absent', () => {
+    const { parsed } = parseComposeInput(minimal({ cwd: null }));
+    expect(parsed.nodes[0]!.cwd).toBeUndefined();
   });
 });
 
@@ -385,16 +396,21 @@ describe('parseComposeInput — per-node agent_type', () => {
     expect(parsed.nodes[0]!.agent_type).toBeUndefined();
   });
 
-  it('rejects empty string agent_type', () => {
-    expect(() => parseComposeInput(minimal({ agent_type: '' }))).toThrow(
-      /non-empty string/,
-    );
+  it('treats empty-string agent_type as absent (blank normalisation)', () => {
+    // Blank/null agent_type is normalised to absent rather than rejected, so a
+    // padded optional never blocks the whole compose call.
+    const { parsed } = parseComposeInput(minimal({ agent_type: '' }));
+    expect(parsed.nodes[0]!.agent_type).toBeUndefined();
   });
 
-  it('rejects whitespace-only agent_type', () => {
-    expect(() => parseComposeInput(minimal({ agent_type: '   ' }))).toThrow(
-      /non-empty string/,
-    );
+  it('treats whitespace-only agent_type as absent', () => {
+    const { parsed } = parseComposeInput(minimal({ agent_type: '   ' }));
+    expect(parsed.nodes[0]!.agent_type).toBeUndefined();
+  });
+
+  it('treats null agent_type as absent', () => {
+    const { parsed } = parseComposeInput(minimal({ agent_type: null }));
+    expect(parsed.nodes[0]!.agent_type).toBeUndefined();
   });
 
   it('rejects non-string agent_type', () => {
@@ -454,16 +470,19 @@ describe('parseComposeInput — per-node agent_type', () => {
     expect(parsed.nodes[0]!.agent_type).toBeUndefined();
   });
 
-  it('rejects empty string agent_type', () => {
-    expect(() => parseComposeInput(minimal({ agent_type: '' }))).toThrow(
-      /non-empty string/,
-    );
+  it('treats empty-string agent_type as absent (blank normalisation)', () => {
+    const { parsed } = parseComposeInput(minimal({ agent_type: '' }));
+    expect(parsed.nodes[0]!.agent_type).toBeUndefined();
   });
 
-  it('rejects whitespace-only agent_type', () => {
-    expect(() => parseComposeInput(minimal({ agent_type: '   ' }))).toThrow(
-      /non-empty string/,
-    );
+  it('treats whitespace-only agent_type as absent', () => {
+    const { parsed } = parseComposeInput(minimal({ agent_type: '   ' }));
+    expect(parsed.nodes[0]!.agent_type).toBeUndefined();
+  });
+
+  it('treats null agent_type as absent', () => {
+    const { parsed } = parseComposeInput(minimal({ agent_type: null }));
+    expect(parsed.nodes[0]!.agent_type).toBeUndefined();
   });
 
   it('rejects non-string agent_type', () => {
@@ -482,6 +501,25 @@ describe('parseComposeInput — per-node isolation', () => {
   it('accepts isolation:"none" and normalises it to undefined', () => {
     const { parsed } = parseComposeInput(minimal({ isolation: 'none' }));
     expect(parsed.nodes[0]!.isolation).toBeUndefined();
+  });
+
+  it('treats empty-string isolation as absent (blank normalisation)', () => {
+    // A model padding isolation:'' must not hit the "none or worktree" error.
+    const { parsed } = parseComposeInput(minimal({ isolation: '' }));
+    expect(parsed.nodes[0]!.isolation).toBeUndefined();
+  });
+
+  it('treats null isolation as absent', () => {
+    const { parsed } = parseComposeInput(minimal({ isolation: null }));
+    expect(parsed.nodes[0]!.isolation).toBeUndefined();
+  });
+
+  it('allows blank cwd alongside isolation:"worktree" (blank cwd is absent)', () => {
+    // The key interaction from issue #4877: a padded cwd:'' next to a real
+    // isolation:'worktree' used to trigger the mutually-exclusive error.
+    const { parsed } = parseComposeInput(minimal({ cwd: '', isolation: 'worktree' }));
+    expect(parsed.nodes[0]!.isolation).toBe('worktree');
+    expect(parsed.nodes[0]!.cwd).toBeUndefined();
   });
 
   it('rejects unknown isolation value', () => {

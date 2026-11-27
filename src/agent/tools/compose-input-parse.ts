@@ -11,6 +11,7 @@
 import type { DAGEdge } from '../dag.js';
 import { parseComposeBudgets, parseToolRounds } from './compose-input-parse.budgets.js';
 import { validateRootPath } from './subagent/root-validation.js';
+import { isBlankInput } from './subagent/optional-input.js';
 
 export interface ComposeNodeInput {
   id: string;
@@ -92,7 +93,9 @@ function parseNodePaths(n: Record<string, unknown>, id: string): {
   readRoots?: string[];
   writeRoots?: string[];
 } {
-  const cwd = n['cwd'] === undefined ? undefined
+  // Treat blank cwd ("" or null) as absent — model serializers pad optionals.
+  // readRoots/writeRoots entries are always validated strictly (no such leniency).
+  const cwd = isBlankInput(n['cwd']) ? undefined
     : validateRootPath(n['cwd'], 'cwd', { kind: 'compose', nodeId: id });
 
   const readRoots = parseRootArray(n, id, 'readRoots');
@@ -167,7 +170,7 @@ function parseComposeNode(node: unknown, seenIds: Set<string>): ComposeNodeInput
   }
 
   let model: string | undefined;
-  if (n['model'] !== undefined) {
+  if (!isBlankInput(n['model'])) {
     if (typeof n['model'] !== 'string') {
       throw new Error(`Node "${id}" model must be a string`);
     }
@@ -191,7 +194,8 @@ function parseComposeNode(node: unknown, seenIds: Set<string>): ComposeNodeInput
   }
 
   let nodeAgentType: string | undefined;
-  if (n['agent_type'] !== undefined) {
+  // Treat blank agent_type ("" or null) as absent; non-blank non-string is an error.
+  if (!isBlankInput(n['agent_type'])) {
     if (typeof n['agent_type'] !== 'string' || n['agent_type'].trim().length === 0) {
       throw new Error(`Node "${id}" agent_type must be a non-empty string`);
     }
@@ -214,7 +218,8 @@ function parseComposeNode(node: unknown, seenIds: Set<string>): ComposeNodeInput
   }
 
   let nodeIsolation: 'none' | 'worktree' | undefined;
-  if (n['isolation'] !== undefined) {
+  // Treat blank isolation ("" or null) as absent.
+  if (!isBlankInput(n['isolation'])) {
     if (n['isolation'] !== 'none' && n['isolation'] !== 'worktree') {
       throw new Error(`Node "${id}" isolation must be "none" or "worktree" (got ${JSON.stringify(n['isolation'])})`);
     }

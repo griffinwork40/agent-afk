@@ -56,6 +56,28 @@ describe('patch_apply handler — validation_failed', () => {
     expect(result.isError).toBe(true);
   });
 
+  it('accepts changes as a JSON-encoded string (model serialiser normalisation)', async () => {
+    // Some Sonnet-class callers pass `changes` as a JSON string instead of an
+    // array. The handler must parse it and proceed normally.
+    const filePath = await writeTemp('json-str.txt', 'hello\n');
+    const handler = createPatchApplyHandler(tempDir);
+    const changes = JSON.stringify([
+      { path: filePath, content: 'world\n' },
+    ]);
+    const result = await handler({ changes, dry_run: true }, signal, makeCtx());
+    expect(result.isError).toBe(false);
+    const body = JSON.parse(result.content as string);
+    // dry_run mode returns status "dry_run", not "applied"
+    expect(body.status).toBe('dry_run');
+  });
+
+  it('returns isError=true when changes is a string that is not valid JSON', async () => {
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler({ changes: 'not json' }, signal, makeCtx());
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('"changes" field of type array');
+  });
+
   it('returns validation_failed status for bad hash', async () => {
     const filePath = await writeTemp('v1.txt', 'current\n');
     const handler = createPatchApplyHandler(tempDir);
