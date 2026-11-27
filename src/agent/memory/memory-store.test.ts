@@ -603,6 +603,97 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Graceful degradation when memory.db schema is newer than this build (#4834)
+// ---------------------------------------------------------------------------
+
+describe('graceful degradation — schema newer than build', () => {
+  let degradedDir: string;
+
+  beforeEach(() => {
+    degradedDir = join(
+      tmpdir(),
+      `afk-memory-degraded-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(degradedDir, { recursive: true });
+    // Seed a DB stamped with a future schema version that this build cannot handle.
+    const seed = new Database(join(degradedDir, 'memory.db'));
+    seed.pragma('user_version = 9999');
+    seed.close();
+  });
+
+  afterEach(() => {
+    rmSync(degradedDir, { recursive: true, force: true });
+  });
+
+  it('does not throw on construction — returns a degraded store', () => {
+    expect(() => new MemoryStore(degradedDir)).not.toThrow();
+  });
+
+  it('sets isDegraded to true and schemaVersionWarning to a non-null string', () => {
+    const s = new MemoryStore(degradedDir);
+    try {
+      expect(s.isDegraded).toBe(true);
+      expect(typeof s.schemaVersionWarning).toBe('string');
+      expect(s.schemaVersionWarning).toMatch(/restart this session/);
+      expect(s.schemaVersionWarning).toMatch(/9999/);
+    } finally {
+      s.close();
+    }
+  });
+
+  it('storeFact returns -1 (no-op) in degraded mode', () => {
+    const s = new MemoryStore(degradedDir);
+    try {
+      const id = s.storeFact({ category: 'preference', content: 'x', source_surface: 'test' });
+      expect(id).toBe(-1);
+    } finally {
+      s.close();
+    }
+  });
+
+  it('searchFacts returns [] in degraded mode', () => {
+    const s = new MemoryStore(degradedDir);
+    try {
+      expect(s.searchFacts('anything')).toEqual([]);
+    } finally {
+      s.close();
+    }
+  });
+
+  it('search returns [] in degraded mode', () => {
+    const s = new MemoryStore(degradedDir);
+    try {
+      expect(s.search('anything')).toEqual([]);
+    } finally {
+      s.close();
+    }
+  });
+
+  it('getEpisodes returns [] in degraded mode', () => {
+    const s = new MemoryStore(degradedDir);
+    try {
+      expect(s.getEpisodes()).toEqual([]);
+    } finally {
+      s.close();
+    }
+  });
+
+  it('startSession is a no-op in degraded mode (does not throw)', () => {
+    const s = new MemoryStore(degradedDir);
+    try {
+      expect(() => s.startSession({ session_id: 'x', surface: 'cli' })).not.toThrow();
+    } finally {
+      s.close();
+    }
+  });
+
+  it('close does not throw in degraded mode', () => {
+    const s = new MemoryStore(degradedDir);
+    expect(() => s.close()).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // searchFacts — access tracking (issue #1848, step 1)
 // ---------------------------------------------------------------------------
 

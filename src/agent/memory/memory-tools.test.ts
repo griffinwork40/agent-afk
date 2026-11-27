@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import Database from 'better-sqlite3';
 import { MemoryStore } from './memory-store.js';
 import { createMemoryHandlers } from './memory-tools.js';
 import type { ToolHandler } from '../tools/types.js';
@@ -81,5 +82,63 @@ describe('memory_update — hot memory budget signal', () => {
       signal,
     );
     expect(res.isError).toBe(true);
+  });
+});
+
+describe('memory_update — degraded store (schema too new)', () => {
+  let degradedDir: string;
+  let degradedStore: MemoryStore;
+  let degradedUpdate: ToolHandler;
+
+  beforeEach(() => {
+    degradedDir = join(
+      tmpdir(),
+      `afk-memory-degraded-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(degradedDir, { recursive: true });
+    // Stamp user_version = 7 (above SCHEMA_VERSION = 6) so the store
+    // treats the DB as written by a newer build and enters degraded mode.
+    const seed = new Database(join(degradedDir, 'memory.db'));
+    seed.pragma('user_version = 7');
+    seed.close();
+    degradedStore = new MemoryStore(degradedDir);
+    degradedUpdate = createMemoryHandlers(degradedStore, 'sess-degraded', 'test').get('memory_update')!;
+  });
+
+  afterEach(() => {
+    degradedStore.close();
+    if (existsSync(degradedDir)) rmSync(degradedDir, { recursive: true, force: true });
+  });
+
+  it('isDegraded is true after schema-version mismatch', () => {
+    expect(degradedStore.isDegraded).toBe(true);
+    expect(degradedStore.schemaVersionWarning).toContain('restart');
+  });
+
+  it('storeFact via handler returns isError:true in degraded mode', async () => {
+    const res = await degradedUpdate(
+      { target: 'fact', action: 'set', category: 'preference', content: 'test fact' },
+      signal,
+    );
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('restart');
+  });
+
+  it('supersedeFact via handler returns isError:true in degraded mode', async () => {
+    const res = await degradedUpdate(
+      { target: 'fact', action: 'supersede', supersedes: 1, content: 'updated fact' },
+      signal,
+    );
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('restart');
+  });
+
+  it('removeFact via handler returns isError:true in degraded mode', async () => {
+    const res = await degradedUpdate(
+      { target: 'fact', action: 'remove', id: 1 },
+      signal,
+    );
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('restart');
   });
 });
