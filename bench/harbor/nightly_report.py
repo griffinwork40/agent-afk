@@ -117,13 +117,17 @@ def regression(history: list[dict]) -> dict:
 
 
 def summary(record: dict, decision: dict) -> str:
+    try:  # local import: this file also runs as a plain script (publish-local)
+        from bench.harbor.exit_reason import describe
+    except ModuleNotFoundError:
+        from exit_reason import describe
     meta = record["metadata"]
     lines = [f"## Nightly Terminal-Bench — {meta['date']}",
              f"[Run]({meta['run_url']}) · `{meta['sha']}` · afk `{meta['afk_version']}`",
              f"Model: `{record['spec']['model']}` · Mean: **{record['mean']:.1%}**",
              f"Complete: {record['complete']} · Comparable: {record['valid_for_comparison']}",
              "", "| Task | Reward | Error class |", "|---|---:|---|"]
-    lines += [f"| {name} | {t['reward']:g} | {t['error'] or '—'} |" for name, t in record['tasks'].items()]
+    lines += [f"| {name} | {t['reward']:g} | {describe(t)} |" for name, t in record['tasks'].items()]
     lines += ["", decision["reason"], "", "**REGRESSION**" if decision["alert"] else "No regression alert."]
     return "\n".join(lines) + "\n"
 

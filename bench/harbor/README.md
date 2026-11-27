@@ -281,6 +281,12 @@ error class, and all-task mean. Missing trials/rewards count as zero and mark
 the run invalid, never disappear from the denominator. Timeout trials retain
 the verifier reward, including a pass achieved before the agent was stopped.
 Raw Harbor logs/configs are **not uploaded** because they may contain secrets.
+When the agent command exits non-zero, the task also gets an `exit_reason`
+(`bench/harbor/exit_reason.py`): a category from a fixed list (for example
+`no_credential`, `auth_rejected`, `usage_limit`, `unknown_option`), the exit
+code, the phase (`setup` or `run`), and for `unknown_option` the flag name if
+it is one the adapter passes. It never contains agent output. It is additive:
+validity and comparability are unchanged.
 The sanitized record artifact is retained 30 days; branch history is durable.
 Job summaries contain the per-task table and regression decision.
 
