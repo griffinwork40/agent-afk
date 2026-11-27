@@ -89,41 +89,35 @@ function assertSingleRow(md: string): void {
 // Table-driven cases
 // ---------------------------------------------------------------------------
 
-const cases: Array<{ label: string; key: string; rawChar: string; escapedForm: string }> = [
+const cases: Array<{ label: string; key: string; escapedForm: string }> = [
   {
     label: 'backslash is escaped to \\\\',
     key: 'model\\name',
-    rawChar: 'model\\name',   // raw key
     escapedForm: 'model\\\\name',
   },
   {
     label: 'backtick is escaped to \\`',
     key: 'model`name',
-    rawChar: '`',
     escapedForm: '\\`',
   },
   {
     label: 'asterisk is escaped to \\*',
     key: 'model*name',
-    rawChar: '*',
     escapedForm: '\\*',
   },
   {
     label: 'underscore is escaped to \\_',
     key: 'model_name',
-    rawChar: '_',
     escapedForm: '\\_',
   },
   {
     label: 'less-than is escaped to \\<',
     key: 'model<name',
-    rawChar: '<',
     escapedForm: '\\<',
   },
   {
     label: 'greater-than is escaped to \\>',
     key: 'model>name',
-    rawChar: '>',
     escapedForm: '\\>',
   },
   {
@@ -131,14 +125,12 @@ const cases: Array<{ label: string; key: string; rawChar: string; escapedForm: s
     // then pipe, so \| becomes \\| (the backslash-first ordering invariant).
     label: 'pre-escaped pipe (\\|) is escaped to \\\\\\|',
     key: 'model\\|name',
-    rawChar: '\\|',
     escapedForm: '\\\\\\|',
   },
   {
     // Trailing backslash: must become \\\\ (double-backslash).
     label: 'trailing backslash is escaped to \\\\',
     key: 'trailing\\',
-    rawChar: 'trailing\\',
     escapedForm: 'trailing\\\\',
   },
 ];
