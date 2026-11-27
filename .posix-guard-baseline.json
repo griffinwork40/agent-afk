@@ -9,6 +9,7 @@
     "src/agent/hooks/command-executor.test.ts": { "R4": 1 },
     "src/agent/hooks/config-bridge.test.ts": { "R4": 6 },
     "src/agent/journal/writer.test.ts": { "R4": 1 },
+    "src/agent/lsp/exit-cleanup.test.ts": { "R4": 2 },
     "src/agent/memory/memory-store.test.ts": { "R4": 3 },
     "src/agent/plugins/command-files.test.ts": { "R4": 5 },
     "src/agent/prompt-dump.test.ts": { "R4": 1 },

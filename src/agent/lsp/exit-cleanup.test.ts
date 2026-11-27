@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { exitPromise, spawnServer } from './client-process.js';
 import { pidAlive, readFakeLog, writeFakeLspServer } from './__test-utils__/fake-lsp-server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -61,6 +62,75 @@ describe('LSP spawn-time exit guardian', () => {
         // The test timeout is set to accommodate the full retry budget (~27.5 s)
         // plus the spawnSync (≤15 s) and poll (≤5 s) phases above (≈47.5 s total,
         // leaving ~12.5 s headroom against the 60 s limit).
+        await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+      }
+    }, 60_000,
+  );
+
+  // Spawn-failure cleanup (#4309 fix): on POSIX+detached, ENOENT fires only
+  // 'error' (not 'exit'). `forget()` runs from the error listener and calls
+  // `child.removeListener('exit', onExit)`. Before the fix the target was
+  // `forget` itself — a function never registered as the exit listener, so the
+  // anonymous arrow remained live (a dangling listener). After the fix `onExit`
+  // is the named, registered listener; removing it is correct and no-ops safely
+  // even if exit never fired. This test verifies: (a) no throw on the error
+  // path, (b) the child set is not corrupted for subsequent spawns.
+  it('forget() runs cleanly on ENOENT spawn-failure — no throw, no set corruption (POSIX only)', async () => {
+    if (process.platform === 'win32') return;
+    const child = spawnServer('/afk-test-nonexistent-binary', [], os.tmpdir());
+    // Wait for the error event — exitPromise resolves on either error or exit.
+    await exitPromise(child);
+    // Yield one microtask tick so any synchronous follow-on listener work settles.
+    await Promise.resolve();
+    // If we reach here without throwing, forget() completed cleanly.
+    // Verify the child set is not corrupted: a subsequent spawn still works.
+    const ok = spawnServer(process.execPath, ['--version'], os.tmpdir());
+    await exitPromise(ok);
+    expect(true).toBe(true);
+  }, 10_000);
+
+  // Crash-first (#4309 item 1): server root exits on its own before the host
+  // shuts down. On POSIX, helpers the server spawned must be killed when the
+  // root's exit event fires, not deferred to the host's own exit handler
+  // (which would skip them because `forget()` already removed the child).
+  it('kills helpers when the server root crashes before the host exits (POSIX only)',
+    async function () {
+      if (process.platform === 'win32') return;
+      const root = mkdtempSync(path.join(os.tmpdir(), 'afk-lsp-exit-'));
+      const log = path.join(root, 'log.jsonl');
+      const server = path.join(root, 'server.cjs');
+      const host = path.join(root, 'host.mts');
+      // Server exits immediately after spawning grandchild; host keeps running briefly.
+      writeFakeLspServer(server, { logFile: log, spawnGrandchild: true, exitAfterGrandchild: true });
+      const pids: number[] = [];
+      try {
+        writeFileSync(host, [
+          `import { getLspPool } from ${moduleUrl('pool.ts')};`,
+          `import { TYPESCRIPT_SERVER_DEFINITION } from ${moduleUrl('typescript-default.ts')};`,
+          `import { readFileSync } from 'node:fs';`,
+          `const pool = getLspPool();`,
+          // The server crashes during start; ignore the resulting LspClientError.
+          `pool.acquire({ definition: TYPESCRIPT_SERVER_DEFINITION, command: process.execPath, args: [${JSON.stringify(server)}], source: 'override' }, ${JSON.stringify(root)}).catch(() => {});`,
+          // Wait until the grandchild pid has been logged, then exit.
+          `while (true) { try { if (readFileSync(${JSON.stringify(log)}, 'utf8').includes('grandchild')) break; } catch {} await new Promise(r => setTimeout(r, 10)); }`,
+          // Brief pause so the root's exit event fires inside the host process.
+          `await new Promise(r => setTimeout(r, 50));`,
+          `process.exit(0);`,
+        ].join('\n'));
+        const result = spawnSync(process.execPath, ['--import', 'tsx/esm', host], {
+          encoding: 'utf8', timeout: 15_000,
+        });
+        for (const entry of readFakeLog(log)) {
+          if (entry.spawn) pids.push(entry.spawn);
+          if (entry.grandchild) pids.push(entry.grandchild);
+        }
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.status, result.stderr).toBe(0);
+        expect(pids).toHaveLength(2);
+        // The grandchild must be dead: killed by the group kill on root exit.
+        await expect.poll(() => !pidAlive(pids[1]!), { timeout: 5000 }).toBe(true);
+      } finally {
+        for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
         await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
       }
     }, 60_000,

@@ -36,6 +36,8 @@ export interface FakeServerConfig {
   publishDelays?: Record<string, number>;
   /** Spawn a long-lived grandchild at startup and log its pid as `grandchild`. */
   spawnGrandchild?: boolean;
+  /** Exit immediately after spawning the grandchild (simulate crash-first). */
+  exitAfterGrandchild?: boolean;
   /** Definition result echoes this file's open copy, falling back to disk. */
   readFileUri?: string;
   capabilities?: Record<string, unknown>;
@@ -72,6 +74,7 @@ if (cfg.crashOnStart) process.exit(1);
 if (cfg.spawnGrandchild) {
   const gc = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
   log({ grandchild: gc.pid });
+  if (cfg.exitAfterGrandchild) process.exit(0);
 }
 const texts = new Map();
 const versions = new Map();
