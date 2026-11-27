@@ -94,6 +94,7 @@ function parseNodePaths(n: Record<string, unknown>, id: string): {
   writeRoots?: string[];
 } {
   // Treat blank cwd ("" or null) as absent — model serializers pad optionals.
+  // readRoots/writeRoots entries are always validated strictly (no such leniency).
   const cwd = isBlankInput(n['cwd']) ? undefined
     : validateRootPath(n['cwd'], 'cwd', { kind: 'compose', nodeId: id });
 

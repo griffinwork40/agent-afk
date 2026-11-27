@@ -59,8 +59,14 @@ export function extractCandidatePath(
   // (resolveAndContain). Return the first path to anchor the containment
   // check and grant flow; the full file list is shown in the approval prompt
   // via promptForApproval (which receives all paths via extractAllPaths).
+  //
+  // Some models JSON-encode the array as a string; normalise here so the
+  // hook sees the same shape as parsePatchApplyInput does post-decode.
   if (toolName === 'patch_apply') {
-    const changes = input['changes'];
+    let changes: unknown = input['changes'];
+    if (typeof changes === 'string') {
+      try { const p = JSON.parse(changes); if (Array.isArray(p)) changes = p; } catch { /* ignore */ }
+    }
     if (Array.isArray(changes) && changes.length > 0) {
       const first = changes[0] as Record<string, unknown>;
       const p = first['path'];
@@ -88,7 +94,10 @@ export function extractAllPaths(
   input: Record<string, unknown>,
 ): string[] {
   if (toolName === 'patch_apply') {
-    const changes = input['changes'];
+    let changes: unknown = input['changes'];
+    if (typeof changes === 'string') {
+      try { const p = JSON.parse(changes); if (Array.isArray(p)) changes = p; } catch { /* ignore */ }
+    }
     if (!Array.isArray(changes)) return [];
     const paths: string[] = [];
     for (const change of changes) {
