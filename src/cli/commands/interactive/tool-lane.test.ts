@@ -3018,6 +3018,47 @@ describe('ToolLane.flushCompletedRoots', () => {
     expect(third.length).toBeGreaterThan(0);
     expect(lane.hasPending()).toBe(false);
   });
+
+  it('orphan scenario: late addStartWithAgentContext for a flushed root is absorbed (dropped)', () => {
+    // After flushCompletedRoots removes a completed root, the root id is added
+    // to absorbedIds. A late-arriving child event (addStartWithAgentContext)
+    // referencing that id must be silently dropped — not create a dangling
+    // orphan root in the lane.
+    const lane = new ToolLane();
+    lane.addStart('task-1', 'Task', JSON.stringify({ subagent_type: 'critic' }));
+    lane.addStartWithAgentContext('bash-1', 'Bash', '"ls"', 'task-1');
+    lane.addResult('bash-1', makeResult('file.ts'));
+    lane.addResult('task-1', makeResult('done'));
+
+    lane.flushCompletedRoots();
+
+    // task-1 and bash-1 were flushed; task-1 is now in absorbedIds.
+    expect(lane.isAbsorbed('task-1')).toBe(true);
+
+    // A late child event for the absorbed root must be silently dropped.
+    lane.addStartWithAgentContext('bash-late', 'Bash', '"cat x"', 'task-1');
+    expect(lane.hasEntry('bash-late')).toBe(false);
+    expect(lane.hasPending()).toBe(false);
+  });
+
+  it('addResult on a silently-dropped entry is a no-op (does not throw or create state)', () => {
+    // When addStartWithAgentContext drops an entry due to the absorbed-id guard,
+    // a subsequent addResult for the same id must be a no-op — not throw, not
+    // create state, and not affect the lane's pending count.
+    const lane = new ToolLane();
+    lane.addStart('task-1', 'Task', JSON.stringify({ subagent_type: 'critic' }));
+    lane.addResult('task-1', makeResult('done'));
+    lane.flushCompletedRoots();
+
+    // task-1 is absorbed; bash-dropped was never registered.
+    lane.addStartWithAgentContext('bash-dropped', 'Bash', '"echo x"', 'task-1');
+    expect(lane.hasEntry('bash-dropped')).toBe(false);
+
+    // addResult for the never-registered id must be a no-op.
+    expect(() => lane.addResult('bash-dropped', makeResult('x'))).not.toThrow();
+    expect(lane.hasEntry('bash-dropped')).toBe(false);
+    expect(lane.hasPending()).toBe(false);
+  });
 });
 
 describe('ToolLane.peekTrailingCompletedRootToolName — cross-flush run gate', () => {
