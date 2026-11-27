@@ -12,6 +12,25 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- add wipe guard with single-slot undo (#5382) (1720d0d97)
+
+### Fixed
+- add no-clobber test for POST/PUT/PATCH in idempotency hook (#5358) (b473cbf1b)
+- pass sharedMemoryStore to injectEpisodeRecall in chat.session-setup (#5364) (5c131e881)
+- tighten assertCapValid regex and guard against || ranges (f7114ff0c)
+- use $RUNNER_TEMP instead of /tmp in Report failure step (f9b6b8f83)
+- harden exit-reason reads and type guards after review (3b658aee1)
+- record a redacted exit reason for non-zero agent exits (7a7183092)
+- parse Assumptions bullet in Done terminal state (9d66169f2)
+- correct stale pnpm dev comment and clarify subagent budget line in AFK.md (a23a392c7)
+- factor cap assertion into assertCapValid helper, add regression tests (31cf9fd76)
+- add REPL-only note to enforceDoneEvidence; backtick daemon.verifyDone (7f18fa182)
+- accurately describe daemon.verifyDone tool-name-only check (8e90dd433)
+- align describe block, contract comment, and step-3 comment with allow assertion (c27c362ef)
+- remove stale telegram.verifyDone references in docs and config (f6c227567)
+- strengthen fast-uri drift test coverage (611dc2cdc)
+
 ## [6.4.1] - 2026-11-27
 
 ### Fixed
