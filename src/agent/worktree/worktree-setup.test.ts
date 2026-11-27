@@ -164,6 +164,10 @@ describe('worktree tool create surfaces setup outcome', () => {
     const execFile = (async (file: string, args: string[]) => {
       if (args.includes('--git-common-dir')) return { stdout: join(dir, '.git') + '\n', stderr: '' };
       if (args.includes('list')) return { stdout: '', stderr: '' };
+      // branchExists() calls `git rev-parse --verify refs/heads/afk/<slug>` to
+      // detect stale branches left behind by a prior remove (#4875). Return empty
+      // stdout so the handler treats the branch as absent (no collision).
+      if (args.includes('--verify')) return { stdout: '', stderr: '' };
       return fn(file, args);
     }) as ExecFileFn;
     const handler = createWorktreeHandler(dir, { execFile });
