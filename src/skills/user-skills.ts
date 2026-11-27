@@ -179,7 +179,7 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
     // "which skill?" ambiguity; sending it unconditionally stops args from
     // REPLACING it, which left the fork with only a task brief it could satisfy
     // by re-dispatching the skill it already was.
-    const anchor = `Run the ${parsed.name} skill now, following the instructions in your system prompt.`;
+    const anchor = `You are now executing the ${parsed.name} skill. Its instructions are in your system prompt. Start the work directly with your tools; do not call the \`skill\` tool for ${parsed.name}.`;
     const userMessage =
       typeof input === 'string' && input.length > 0 ? `${anchor}\n\nSkill arguments:\n${input}` : anchor;
 
