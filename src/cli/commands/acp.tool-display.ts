@@ -1,12 +1,7 @@
 /**
- * Display helpers extracted from the ACP permission files so that
- * acp.tool-kind.ts (and future display-only consumers) do not import from the
- * permission layer. Pure and lexical — no filesystem access, no policy decisions.
- *
- * Sources:
- *   acp.permission.labels   → delegationSuffix
- *   acp.permission.paths    → outsidePaths (+ all transitive helpers)
- *   acp.permission.sensitive → sensitiveMarkers (+ all transitive helpers)
+ * Display helpers for ACP tool cards: delegation suffix, outside-path
+ * detection, and sensitive write-target markers.
+ * Pure and lexical — no filesystem access, no policy decisions.
  *
  * @module cli/commands/acp.tool-display
  */
@@ -25,8 +20,8 @@ export type PathFlavor = typeof path.posix;
 // ---------------------------------------------------------------------------
 
 const DELEGATION_TOOLS = new Set(['agent', 'skill', 'compose', 'remote_agent']);
-/** In-process children are asked per tool call (D9). */
-const DELEGATION_SUFFIX = ' (each subagent tool call is asked separately)';
+/** In-process children run inside the current session (D9). */
+const DELEGATION_SUFFIX = ' (runs inside this session)';
 /** remote_agent runs elsewhere; this session's prompts do not cover it (D9). */
 const REMOTE_SUFFIX = ' (runs on another machine; its actions are NOT asked in this session)';
 
