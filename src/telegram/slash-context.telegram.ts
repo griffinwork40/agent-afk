@@ -24,8 +24,13 @@ export function createTelegramSlashContext(
   session: IAgentSession,
   stats: SessionStats,
   writer: TelegramWriter,
+  from?: { id: number; username?: string },
 ): SlashContext {
   return {
+    invocation: {
+      surface: 'telegram',
+      ...(from && { responderIdentity: from.username ? `${from.id}:${from.username}` : String(from.id) }),
+    },
     capabilities: telegramCapabilities(),
     session: { current: session as unknown as AgentSession },
     stats,
