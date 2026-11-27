@@ -70,7 +70,14 @@ function parseCapSemver(capToken: string): [number, number, number] | null {
  * Invalid: ">=3.1.9 <4.1.0"  → cap [4,1,0] !== [4,0,0] ✗
  */
 function assertCapValid(range: string): string | null {
-  const capMatch = /(<\s*\d+(?:\.\d+)*)/.exec(range);
+  if (/\|\|/.test(range)) {
+    return (
+      `fast-uri override "${range}" uses an OR-compound range (||). ` +
+      'OR-compound ranges defeat the upper-bound cap guard because only the first ' +
+      'alternative is checked. Use a single conjunctive range like ">=3.1.9 <4".'
+    );
+  }
+  const capMatch = /(<\s*\d+(?:\.\d+){0,2})/.exec(range);
   if (!capMatch) {
     return (
       `fast-uri override "${range}" does not contain an upper-bound cap (e.g. "<4"). ` +
@@ -203,5 +210,27 @@ describe('fast-uri override range drift guard', () => {
     expect(parseCapSemver('<3.2.0')).toEqual([3, 2, 0]);
     expect(parseCapSemver('>=4')).toBeNull();
     expect(parseCapSemver('')).toBeNull();
+  });
+
+  it('assertCapValid: 4-segment token "<4.1.0.1" should fail (not valid semver cap)', () => {
+    // The old regex /(<\s*\d+(?:\.\d+)*)/ matched "<4.1.0.1" and passed it to
+    // parseCapSemver, which returned null (4-segment not in its pattern), producing
+    // the opaque "Could not parse semver" fallback instead of the diagnostic guard
+    // message. The tightened regex /{0,2}/ stops matching after the third segment,
+    // so parseCapSemver sees "<4.1.0" → [4,1,0] and returns the correct cap error.
+    const err = assertCapValid('>=3.1.9 <4.1.0.1');
+    expect(err, 'assertCapValid should return an error for 4-segment cap').not.toBeNull();
+    // Must NOT be the opaque "Could not parse semver" fallback — must be the cap mismatch.
+    expect(err).not.toMatch(/Could not parse semver/);
+    expect(err).toMatch(/4,1,0/);
+  });
+
+  it('assertCapValid: OR-compound range ">=3.1.9 <4 || >=4" should fail', () => {
+    // OR-compound ranges defeat the guard: the old code matched only the first
+    // "<4" token and returned null (success), allowing a valid YAML edit like
+    // ">=3.1.9 <4 || >=4" to bypass the cap entirely.
+    const err = assertCapValid('>=3.1.9 <4 || >=4');
+    expect(err, 'assertCapValid should return an error for || ranges').not.toBeNull();
+    expect(err).toMatch(/OR-compound/);
   });
 });
