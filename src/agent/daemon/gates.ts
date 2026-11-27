@@ -27,7 +27,16 @@ export type SessionStartSkipReason =
    * This can happen when `schedules.json` has been hand-edited. The task is
    * skipped and a warning is emitted so the operator knows to fix the value.
    */
-  | 'malformed';
+  | 'malformed'
+  /**
+   * The task was unregistered (disabled) between when the cron callback was
+   * queued and when `runOnce` executed. This can happen when `afk schedule
+   * disable` or an HTTP API call disables a task mid-window, causing the
+   * in-process cron timer to stop — but a callback already on the microtask
+   * queue may still reach `runOnce`. Writing a `skipped/disabled` row ensures
+   * there is no unexplained gap in `get_schedule_history`. (#4831 item 1)
+   */
+  | 'disabled';
 
 export interface GateDecision {
   fire: boolean;

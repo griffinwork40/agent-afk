@@ -138,6 +138,31 @@ export function makeExpiredSkipRecord(
 }
 
 /**
+ * Build a `status: 'skipped', skipReason: 'disabled'` telemetry record for a
+ * cron tick that reached `runOnce` after the task had already been unregistered
+ * (disabled) mid-window. This preserves observability (#4831 item 1): without
+ * this record `get_schedule_history` shows an unexplained gap at the slot where
+ * the disable raced with an already-queued cron callback.
+ */
+export function makeDisabledSkipRecord(
+  task: ScheduledTask,
+  trigger: TelemetryTrigger,
+  nowMs: number,
+): TelemetryRecord {
+  return {
+    taskId: task.taskId,
+    command: redactInlineSecrets(task.command),
+    trigger,
+    ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
+    triggeredAt: new Date(nowMs).toISOString(),
+    durationMs: 0,
+    status: 'skipped',
+    skipReason: 'disabled',
+    ...(task.name !== undefined ? { name: task.name } : {}),
+  };
+}
+
+/**
  * Build a `status: 'skipped', skipReason: 'not-yet'` telemetry record for a
  * `runAt` one-shot whose scheduled time has not been reached yet.
  */
