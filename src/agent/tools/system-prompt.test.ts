@@ -24,6 +24,9 @@ import {
   MEMORY_SYSTEM_PROMPT,
   MEMORY_SYSTEM_PROMPT_READONLY,
   MEMORY_SYSTEM_PROMPT_SEARCH_ONLY,
+  RECALL_DRILL_TOOLS,
+  RECALL_GUIDANCE_FULL,
+  RECALL_GUIDANCE_SEARCH_ONLY,
   WORKSPACE_SYSTEM_PROMPT,
   resolveToolSystemPrompt,
   resolveMemorySystemPrompt,
@@ -160,10 +163,20 @@ describe('resolveMemorySystemPrompt', () => {
   });
 
   it('returns the child variant when readOnlyState is true (fact writes OK, no hot)', () => {
-    // Child sessions (readOnlyState=true, readOnlyMemory=false/undefined) have
-    // memory_search + memory_update(target:"fact"). They get MEMORY_SYSTEM_PROMPT_READONLY.
-    expect(resolveMemorySystemPrompt(false, true)).toBe(MEMORY_SYSTEM_PROMPT_READONLY);
-    expect(resolveMemorySystemPrompt(undefined, true)).toBe(MEMORY_SYSTEM_PROMPT_READONLY);
+    // Child sessions (readOnlyState=true, readOnlyMemory=false/undefined, no
+    // explicit grantedTools) now use readOnlyState as a proxy for the recall
+    // tier: they may not have the drill tools, so search-only recall is safest.
+    // The write-guidance tier (## Persisting facts) is still present.
+    const out1 = resolveMemorySystemPrompt(false, true);
+    const out2 = resolveMemorySystemPrompt(undefined, true);
+    expect(out1).toContain('## Persisting facts');
+    expect(out1).not.toContain('## Writing memory');
+    expect(out1).toContain(RECALL_GUIDANCE_SEARCH_ONLY);
+    expect(out1).not.toContain(RECALL_GUIDANCE_FULL);
+    expect(out2).toContain('## Persisting facts');
+    expect(out2).not.toContain('## Writing memory');
+    expect(out2).toContain(RECALL_GUIDANCE_SEARCH_ONLY);
+    expect(out2).not.toContain(RECALL_GUIDANCE_FULL);
   });
 
   it('returns the search-only variant when readOnlyMemory is true (recon: no memory_update)', () => {
@@ -280,6 +293,38 @@ describe('resolveToolSystemPrompt — named-agent tier (#5309)', () => {
   });
 });
 
+describe('recall guidance in the memory prompt', () => {
+  it('full and child tiers carry the full ladder, in cost order', () => {
+    for (const text of [MEMORY_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT_READONLY]) {
+      expect(text).toContain(RECALL_GUIDANCE_FULL);
+      const order = ['memory_search with two or three', 'get_facet', 'search_witness', 'read_journal'].map((s) =>
+        text.indexOf(s, text.indexOf('## Recalling prior sessions')),
+      );
+      expect(order.every((i) => i > 0)).toBe(true);
+      expect([...order].sort((a, b) => a - b)).toEqual(order);
+    }
+  });
+
+  it('the search-only tier names no tool it lacks', () => {
+    expect(MEMORY_SYSTEM_PROMPT_SEARCH_ONLY).toContain(RECALL_GUIDANCE_SEARCH_ONLY);
+    for (const tool of RECALL_DRILL_TOOLS) expect(MEMORY_SYSTEM_PROMPT_SEARCH_ONLY).not.toContain(tool);
+  });
+
+  it('both variants exempt explicit recall from the once-per-session limit and ask for coverage', () => {
+    for (const text of [RECALL_GUIDANCE_FULL, RECALL_GUIDANCE_SEARCH_ONLY]) {
+      expect(text).toContain('once-per-session limit above does not apply');
+      expect(text).toContain('a single miss proves nothing');
+      expect(text).toContain('came back empty');
+      expect(text).toContain('a lead, not a fact');
+    }
+    // The limit the exemption refers to must still be present above it.
+    for (const text of [MEMORY_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT_READONLY, MEMORY_SYSTEM_PROMPT_SEARCH_ONLY]) {
+      expect(text.indexOf('Search at most once per session')).toBeGreaterThan(0);
+      expect(text.indexOf('Search at most once per session')).toBeLessThan(text.indexOf('## Recalling prior sessions'));
+    }
+  });
+});
+
 // ─── #5310 — Research agent told it has memory_update when it doesn't ─────────
 
 describe('resolveMemorySystemPrompt — tool-grant override (#5310)', () => {
@@ -290,15 +335,52 @@ describe('resolveMemorySystemPrompt — tool-grant override (#5310)', () => {
   });
 
   it('readonly when memory_update IS in grantedTools (fact writes OK)', () => {
-    const tools = ['read_file', 'grep', 'memory_search', 'memory_update'];
+    const tools = ['read_file', 'grep', 'memory_search', 'memory_update', ...RECALL_DRILL_TOOLS];
     expect(resolveMemorySystemPrompt(false, true, tools)).toBe(MEMORY_SYSTEM_PROMPT_READONLY);
   });
 
+  it('keeps the readonly tier but swaps in search-only recall when a drill tool is not granted', () => {
+    // memory_update is granted (so fact-write guidance stays), but get_facet /
+    // search_witness / read_journal are not: the recall section must not name them.
+    const tools = ['read_file', 'grep', 'memory_search', 'memory_update'];
+    const text = resolveMemorySystemPrompt(false, true, tools);
+    expect(text).toContain('## Persisting facts');
+    expect(text).toContain(RECALL_GUIDANCE_SEARCH_ONLY);
+    expect(text).not.toContain(RECALL_GUIDANCE_FULL);
+    for (const tool of RECALL_DRILL_TOOLS) expect(text).not.toContain(tool);
+  });
+
+  it('swaps recall guidance on the full tier too when only some drill tools are granted', () => {
+    const tools = ['memory_search', 'memory_update', 'get_facet'];
+    const text = resolveMemorySystemPrompt(false, false, tools);
+    expect(text).toContain('## Writing memory');
+    expect(text).toContain(RECALL_GUIDANCE_SEARCH_ONLY);
+    expect(text).not.toContain('search_witness');
+    expect(text).not.toContain('read_journal');
+  });
+
   it('tool-grant check is skipped when grantedTools is undefined (flag-based path)', () => {
-    // No tool list supplied → fall through to flag-based logic unchanged.
-    expect(resolveMemorySystemPrompt(false, true, undefined)).toBe(MEMORY_SYSTEM_PROMPT_READONLY);
+    // No tool list supplied → readOnlyState is used as the recall proxy.
+    // readOnlyState=true: child session, safe default is search-only recall,
+    // but write-guidance tier (## Persisting facts) is still present.
+    const childOut = resolveMemorySystemPrompt(false, true, undefined);
+    expect(childOut).toContain('## Persisting facts');
+    expect(childOut).toContain(RECALL_GUIDANCE_SEARCH_ONLY);
+    expect(childOut).not.toContain(RECALL_GUIDANCE_FULL);
+    // readOnlyMemory=true always wins → search-only prompt.
     expect(resolveMemorySystemPrompt(true, false, undefined)).toBe(MEMORY_SYSTEM_PROMPT_SEARCH_ONLY);
+    // readOnlyState=false: top-level session, full recall ladder.
     expect(resolveMemorySystemPrompt(false, false, undefined)).toBe(MEMORY_SYSTEM_PROMPT);
+  });
+
+  it('unnamed child (readOnlyState=true, grantedTools=undefined) gets search-only recall, not full ladder', () => {
+    const text = resolveMemorySystemPrompt(false, true, undefined);
+    // Tier is readonly (fact-write guidance present)
+    expect(text).toContain('## Persisting facts');
+    // Recall guidance is search-only: no drill tools named
+    expect(text).toContain(RECALL_GUIDANCE_SEARCH_ONLY);
+    expect(text).not.toContain(RECALL_GUIDANCE_FULL);
+    for (const tool of RECALL_DRILL_TOOLS) expect(text).not.toContain(tool);
   });
 
   it('tool-grant check takes priority over readOnlyMemory=false', () => {

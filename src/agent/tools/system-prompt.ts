@@ -225,6 +225,39 @@ When dispatching or running as sibling sub-agents, use \`workspace_publish\` and
 - **Query** before reading a file or grep-searching a module a sibling may have already analyzed. A workspace hit saves a tool round.
 - Publishing is free to batch — call \`workspace_publish\` alongside other tools in the same reply at zero additional round cost.`;
 
+/**
+ * Tools the full recall guidance names beyond `memory_search`. A session whose
+ * effective allowlist lacks any of them gets {@link RECALL_GUIDANCE_SEARCH_ONLY}
+ * instead, for the same reason as #5310: a prompt must not advertise a tool the
+ * session cannot call.
+ */
+export const RECALL_DRILL_TOOLS: readonly string[] = ['get_facet', 'search_witness', 'read_journal'];
+
+/**
+ * How to answer "check previous sessions for context on X". The read guidance
+ * above it caps general-context searches at one per session; without this
+ * section the model applies that cap to explicit recall requests too and stops
+ * after a single lexical miss. The order is cheapest and most curated first,
+ * and each later step needs a session id that an earlier step produced.
+ */
+export const RECALL_GUIDANCE_FULL = `## Recalling prior sessions
+When the user asks what happened in earlier sessions, or tells you to check previous sessions for context on a topic, the once-per-session limit above does not apply. Go from the cheapest source to the most detailed and stop at the first one that answers the question:
+1. memory_search with two or three different phrasings of the topic. It matches words, not meaning, so a single miss proves nothing.
+2. A result of type "session" carries a source_session id. Pass it to get_facet for that session's structured summary.
+3. If memory_search finds nothing relevant, search_witness matches trace metadata across recent sessions and returns session ids.
+4. read_journal gives the full conversation of one session. Use it only on a session you have already identified, when you need exact wording, tool arguments, or tool output.
+
+Then tell the user which of these you checked and which came back empty. What you recall is a lead, not a fact: it may be outdated, so check it against current files or git before acting on it. Finding no record does not show that something never happened.`;
+
+/**
+ * Recall guidance for sessions that have `memory_search` but not the drill-down
+ * tools (recon children, narrowly granted named agents). It names no other
+ * tool and asks for the session ids to be handed back, since the caller can
+ * look them up and this session cannot.
+ */
+export const RECALL_GUIDANCE_SEARCH_ONLY = `## Recalling prior sessions
+When your task is to find what happened in earlier sessions on a topic, the once-per-session limit above does not apply. Run memory_search with two or three different phrasings of the topic: it matches words, not meaning, so a single miss proves nothing. A result of type "session" carries a source_session id. Include those ids in what you report, because your caller can look them up in more detail and you cannot. Say which phrasings you tried and which came back empty. What you recall is a lead, not a fact: it may be outdated, and finding no record does not show that something never happened.`;
+
 export const MEMORY_SYSTEM_PROMPT = `# Cross-Session Memory
 
 You have three tools for persisting knowledge across sessions: memory_search, memory_update, and procedure_write.
@@ -237,6 +270,8 @@ On your first turn, decide whether to call memory_search based on the request:
 - Search at most once per session for general context. Search again only if new information surfaces a specific topic worth querying.
 
 Use FTS5 syntax: "exact phrase", term1 AND term2, prefix*.
+
+${RECALL_GUIDANCE_FULL}
 
 ## Writing memory (memory_update)
 Store facts when you encounter:
@@ -280,6 +315,8 @@ On your first turn, decide whether to call memory_search based on the request:
 
 Use FTS5 syntax: "exact phrase", term1 AND term2, prefix*.
 
+${RECALL_GUIDANCE_FULL}
+
 ## Persisting facts (memory_update, target:"fact" only)
 Store findings when you encounter non-obvious facts worth persisting: project conventions, key decisions, surprising learnings. Use target:"fact" — it goes to the searchable SQLite archive. Do NOT use target:"hot" (blocked in child sessions).`;
 
@@ -301,7 +338,9 @@ On your first turn, decide whether to call memory_search based on the request:
 - If hot memory (shown in <cross-session-memory> tags above) already covers the relevant context, skip the search.
 - Search at most once per session for general context. Search again only if new information surfaces a specific topic worth querying.
 
-Use FTS5 syntax: "exact phrase", term1 AND term2, prefix*.`;
+Use FTS5 syntax: "exact phrase", term1 AND term2, prefix*.
+
+${RECALL_GUIDANCE_SEARCH_ONLY}`;
 
 /**
  * Resolve the tool-usage system prompt for a session — the single source of
@@ -361,6 +400,18 @@ export function resolveToolSystemPrompt(
  * if `memory_update` is absent from the granted set the agent cannot call it,
  * so the prompt must not advertise it (#5310). The flags are still the
  * authority for `readOnlyState` (which controls hot-write guidance).
+ *
+ * The same allowlist decides the recall guidance: when any of
+ * {@link RECALL_DRILL_TOOLS} is absent from `grantedTools`, the selected tier's
+ * full recall section is swapped for the search-only one, so the write-guidance
+ * tier and the recall wording are chosen independently.
+ *
+ * When `grantedTools` is `undefined` the function uses `readOnlyState` as a
+ * proxy for the recall-tier decision: top-level sessions (`readOnlyState`
+ * falsy) always have the drill tools and get the full recall ladder; unnamed
+ * child sessions (`readOnlyState=true`) may not have them, so the safe default
+ * is search-only recall. Named agents always supply an explicit `grantedTools`
+ * list and therefore never rely on this proxy path (#5380).
  */
 export function resolveMemorySystemPrompt(
   readOnlyMemory: boolean | undefined,
@@ -373,8 +424,16 @@ export function resolveMemorySystemPrompt(
     return MEMORY_SYSTEM_PROMPT_SEARCH_ONLY;
   }
   if (readOnlyMemory) return MEMORY_SYSTEM_PROMPT_SEARCH_ONLY;
-  if (readOnlyState) return MEMORY_SYSTEM_PROMPT_READONLY;
-  return MEMORY_SYSTEM_PROMPT;
+  const tier = readOnlyState ? MEMORY_SYSTEM_PROMPT_READONLY : MEMORY_SYSTEM_PROMPT;
+  // Contract: when grantedTools is undefined, use readOnlyState as a proxy.
+  // Top-level sessions (readOnlyState falsy) have all tools including drill
+  // tools. Child sessions (readOnlyState true) may not, and without an
+  // explicit grant list the safe default is search-only recall.
+  const canDrill =
+    grantedTools === undefined
+      ? !readOnlyState
+      : RECALL_DRILL_TOOLS.every((t) => grantedTools.includes(t));
+  return canDrill ? tier : tier.replace(RECALL_GUIDANCE_FULL, RECALL_GUIDANCE_SEARCH_ONLY);
 }
 
 /**
