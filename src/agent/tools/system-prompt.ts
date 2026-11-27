@@ -405,6 +405,13 @@ export function resolveToolSystemPrompt(
  * {@link RECALL_DRILL_TOOLS} is absent from `grantedTools`, the selected tier's
  * full recall section is swapped for the search-only one, so the write-guidance
  * tier and the recall wording are chosen independently.
+ *
+ * When `grantedTools` is `undefined` the function uses `readOnlyState` as a
+ * proxy for the recall-tier decision: top-level sessions (`readOnlyState`
+ * falsy) always have the drill tools and get the full recall ladder; unnamed
+ * child sessions (`readOnlyState=true`) may not have them, so the safe default
+ * is search-only recall. Named agents always supply an explicit `grantedTools`
+ * list and therefore never rely on this proxy path (#5380).
  */
 export function resolveMemorySystemPrompt(
   readOnlyMemory: boolean | undefined,
@@ -418,7 +425,14 @@ export function resolveMemorySystemPrompt(
   }
   if (readOnlyMemory) return MEMORY_SYSTEM_PROMPT_SEARCH_ONLY;
   const tier = readOnlyState ? MEMORY_SYSTEM_PROMPT_READONLY : MEMORY_SYSTEM_PROMPT;
-  const canDrill = grantedTools === undefined || RECALL_DRILL_TOOLS.every((t) => grantedTools.includes(t));
+  // Contract: when grantedTools is undefined, use readOnlyState as a proxy.
+  // Top-level sessions (readOnlyState falsy) have all tools including drill
+  // tools. Child sessions (readOnlyState true) may not, and without an
+  // explicit grant list the safe default is search-only recall.
+  const canDrill =
+    grantedTools === undefined
+      ? !readOnlyState
+      : RECALL_DRILL_TOOLS.every((t) => grantedTools.includes(t));
   return canDrill ? tier : tier.replace(RECALL_GUIDANCE_FULL, RECALL_GUIDANCE_SEARCH_ONLY);
 }
 
