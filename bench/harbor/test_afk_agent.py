@@ -11,6 +11,8 @@ environment — they only exercise pure-Python logic.
 from __future__ import annotations
 
 import json
+import re
+import shlex
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -127,8 +129,41 @@ class TestBuildCliFlags:
         agent = _make_agent(max_turns=100, model_name="anthropic/claude-sonnet-4-5")
         flags = agent._build_cli_flags()
         assert "--max-turns 100" in flags
-        assert "--dangerously-skip-permissions" in flags
+        assert "--permission-mode bypassPermissions" in flags
         assert "--model claude-sonnet-4-5" in flags
+
+    def test_emitted_options_are_registered_for_chat(self):
+        """Keep Harbor's generated command aligned with the public CLI registry."""
+        repo_root = Path(__file__).parents[2]
+        surface = json.loads((repo_root / "docs/public-surface.json").read_text())
+        registered = {
+            entry["name"].removeprefix("afk chat ")
+            for entry in surface["symbols"]
+            if entry["kind"] == "flag" and entry["name"].startswith("afk chat --")
+        }
+        emitted: set[str] = {"--format"}
+        emitted_permission_modes: set[str] = set()
+        for variant in ("full", "minimal"):
+            flags = shlex.split(_make_agent(
+                variant=variant,
+                max_turns=200,
+                model_name="anthropic/claude-sonnet-4-5",
+                effort="high",
+                max_budget_usd="3.50",
+            )._build_cli_flags())
+            emitted.update(flag for flag in flags if flag.startswith("--"))
+            permission_mode_index = flags.index("--permission-mode")
+            emitted_permission_modes.add(flags[permission_mode_index + 1])
+
+        valid_modes_source = (repo_root / "src/agent/types/sdk-types.ts").read_text()
+        modes_match = re.search(
+            r"VALID_PERMISSION_MODES[\s\S]*?new Set<PermissionMode>\(\[([\s\S]*?)\]\)",
+            valid_modes_source,
+        )
+        assert modes_match, "could not read VALID_PERMISSION_MODES from its source of truth"
+        valid_modes = set(re.findall(r"'([^']+)'", modes_match.group(1)))
+        assert emitted_permission_modes <= valid_modes
+        assert emitted <= registered, f"unregistered afk chat options: {sorted(emitted - registered)}"
 
     def test_effort_included(self):
         agent = _make_agent(effort="high", model_name=None)

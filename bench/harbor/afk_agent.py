@@ -31,8 +31,8 @@ Minimal arm (variant=minimal):
   no afk.config.json, so overlays are usually absent too.
 
 Container safety vars (all verified in src/config/env.ts or env.paths.ts):
-  --dangerously-skip-permissions → permissionMode=bypassPermissions
-    (src/cli/commands/shared-command-options.ts:114)
+  --permission-mode bypassPermissions → bypass container permission prompts
+    (src/cli/commands/shared-command-options.ts:106)
   AFK_HOME → entire state tier in trial dir (src/config/env.paths.ts:28)
   NO_UPDATE_NOTIFIER=1 → disable update notifier (src/config/env.ts:1619)
   AFK_DISABLE_SPINE_UPDATE=1 → disable SessionEnd LLM hook (src/config/env.ts:181)
@@ -338,8 +338,8 @@ class AfkAgent(BaseInstalledAgent):
         parts: list[str] = [
             f"--max-turns {self._max_turns}",
             # Bypass the permission gate — no grant manager in a container
-            # (src/cli/commands/shared-command-options.ts:114)
-            "--dangerously-skip-permissions",
+            # (src/cli/commands/shared-command-options.ts:106)
+            "--permission-mode bypassPermissions",
         ]
 
         # Strip provider prefix from model name (anthropic/claude-... → claude-...)
