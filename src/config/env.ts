@@ -165,7 +165,7 @@ export const ENV_REGISTRY = [
 
   // ── UI / output (env.ui.ts) ────────────────────────────────────────────────
   ...UI_ENV_REGISTRY,
-  // Entries live in env.display.ts (text measure, centering, smoke text;
+  // Entries live in env.display.ts (text measure, centering;
   // extracted for the 350-line ceiling).
   ...DISPLAY_ENV_REGISTRY,
 

@@ -1653,11 +1653,6 @@
     },
     {
       "kind": "env",
-      "name": "AFK_SMOKE_TEXT",
-      "source": "src/config/env.display.ts"
-    },
-    {
-      "kind": "env",
       "name": "AFK_SPINNER_TIPS",
       "source": "src/config/env.ui.ts"
     },

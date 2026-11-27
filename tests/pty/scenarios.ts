@@ -25,11 +25,8 @@ import { renderMarkdownToTerminal } from '../../src/cli/formatter.js';
 import { formatSubmittedEcho } from '../../src/cli/input/echo.js';
 import { commitBlockAbove } from '../../src/cli/_lib/commit-block.js';
 import { StreamingMarkdownRenderer } from '../../src/cli/markdown-stream.js';
-import { SMOKE_GLYPHS } from '../../src/cli/smoke-reveal.js';
 import { OverlayComposer } from '../../src/cli/_lib/overlay-composer.js';
-import { armSmokeEffects, THOUGHT_SUMMARY_SLOT } from '../../src/cli/_lib/stream-renderer-smoke.js';
 import { ToolLane } from '../../src/cli/commands/interactive/tool-lane.js';
-import { formatThoughtSummary } from '../../src/cli/commands/interactive/thinking-lane.js';
 import { buildResizeMarker } from './constants.js';
 
 /**
@@ -190,34 +187,6 @@ const TABLE_MD = [
   '| 3 | thread cwd through daemon | daemon.ts | plumbing |',
 ].join('\n');
 
-/**
- * Drive the REAL StreamingMarkdownRenderer through an armed compositor with
- * AFK_SMOKE_TEXT on, pushing `text` in small token-sized chunks. The env var
- * is set inside the pty child (drive() runs there), before the renderer
- * reads it at construction. The renderer reads it only once, so the previous
- * value is restored on exit. That keeps the helper from leaking the flag if
- * it is ever reused in-process.
- */
-async function streamWithSmoke(ctx: PtyDriveCtx, text: string): Promise<StreamingMarkdownRenderer> {
-  const prev = process.env['AFK_SMOKE_TEXT'];
-  process.env['AFK_SMOKE_TEXT'] = '1';
-  try {
-    const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout: ctx.stdout, stdin: ctx.stdin, onCancel: () => {}, anchorRow: 1 });
-    await c.arm();
-    const md = new StreamingMarkdownRenderer({ out: ctx.stdout, compositor: c });
-    for (let i = 0; i < text.length; i += 12) {
-      md.push(text.slice(i, i + 12));
-      await settle(15);
-    }
-    return md;
-  } finally {
-    if (prev === undefined) delete process.env['AFK_SMOKE_TEXT'];
-    else process.env['AFK_SMOKE_TEXT'] = prev;
-  }
-}
-
-const SMOKE_PARA_1 = 'SMOKEONE_START the first paragraph streams in and commits whole SMOKEONE_END';
-const SMOKE_PARA_2 = 'SMOKETWO_START the second paragraph stays live in the overlay';
 
 export const SCENARIOS: Record<string, PtyScenario> = {
   // ─────────────────────────────────────────────────────────────────────────
@@ -811,104 +780,6 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       ],
     },
   },
-  // ─────────────────────────────────────────────────────────────────────────
-  // smoke-text (AFK_SMOKE_TEXT): the reveal mask must never corrupt what
-  // reaches the terminal. Paragraph 1 crosses a \n\n boundary and commits
-  // (unmasked, exactly once). Paragraph 2 stays in the live overlay, and after
-  // the stream stops the settle driver alone must finish the fade, leaving
-  // real text with no smoke glyphs behind.
-  // ─────────────────────────────────────────────────────────────────────────
-  'smoke-text-settles': {
-    description: 'AFK_SMOKE_TEXT: committed prose is intact and the live tail settles to real text with no new pushes',
-    cols: 100,
-    rows: 24,
-    ref: 'src/cli/smoke-reveal.ts',
-    async drive(ctx): Promise<void> {
-      await streamWithSmoke(ctx, `${SMOKE_PARA_1}\n\n${SMOKE_PARA_2} SMOKETWO_END`);
-      await settle(900); // no pushes from here on: only the settle driver repaints
-    },
-    expect: {
-      exactlyOnce: ['SMOKEONE_START', 'SMOKEONE_END', 'SMOKETWO_START', 'SMOKETWO_END'],
-      order: [['SMOKEONE_END', 'SMOKETWO_START']],
-      // Every smoke glyph, including the faintest speck, must be gone.
-      absent: [...SMOKE_GLYPHS],
-    },
-  },
-
-  // Positive control for the scenario above: prove the mask is actually
-  // active through the real compositor, so 'smoke-text-settles' cannot pass
-  // just because the effect silently stayed off. The lead text settles. The
-  // final chunk is snapshotted ~40ms after arrival, while it is still smoke
-  // or not yet revealed, so its marker must not be readable yet.
-  'smoke-text-mid-fade': {
-    description: 'AFK_SMOKE_TEXT: text that just arrived is still smoke (the mask is live through the compositor)',
-    cols: 100,
-    rows: 24,
-    ref: 'src/cli/smoke-reveal.ts',
-    async drive(ctx): Promise<void> {
-      const md = await streamWithSmoke(ctx, SMOKE_PARA_2);
-      await settle(700);
-      md.push(' SMOKETWO_END');
-      await settle(40);
-    },
-    expect: {
-      exactlyOnce: ['SMOKETWO_START'],
-      // Deliberately no positive smoke-glyph assertion: at 40ms the chunk may
-      // still be an unrevealed blank placeholder rather than a glyph, so
-      // requiring a specific glyph races the fade and flaked on CI.
-      absent: ['SMOKETWO_END'],
-    },
-  },
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // smoke-fade-status-order (AFK_SMOKE_TEXT machine-status fade): the
-  // `◆ thought for Xs` summary is HELD in the overlay while it fades, and a
-  // tool row fades in below it. A tool row committed to scrollback mid-fade
-  // must land BELOW the summary (the compositor commit barrier pulls the held
-  // summary in first), each exactly once, and both must settle to real text.
-  // Without the barrier the summary would commit ~210ms later, after the tool
-  // row, and the order assertion fails.
-  // ─────────────────────────────────────────────────────────────────────────
-  'smoke-fade-status-order': {
-    description: 'AFK_SMOKE_TEXT: a held thought summary commits above a tool row committed during its fade, exactly once',
-    cols: 100,
-    rows: 24,
-    ref: 'src/cli/_lib/thought-summary-hold.ts',
-    async drive(ctx): Promise<void> {
-      process.env['AFK_SMOKE_TEXT'] = '1';
-      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout: ctx.stdout, stdin: ctx.stdin, onCancel: () => {}, anchorRow: 1 });
-      await c.arm();
-      const composer = new OverlayComposer(c, [THOUGHT_SUMMARY_SLOT, 'tool-lane']);
-      const lane = new ToolLane();
-      composer.register({ key: 'tool-lane', render: () => lane.getOverlay() });
-      const fx = armSmokeEffects({
-        compositor: c,
-        overlayComposer: composer,
-        toolLane: lane,
-        reducedMotion: false,
-        deferFlush: (slot) => { composer.markDirty(slot); queueMicrotask(() => composer.flush()); },
-      });
-      if (!fx) throw new Error('armSmokeEffects returned null: AFK_SMOKE_TEXT did not engage in the pty child');
-      fx.thoughtHold.hold(formatThoughtSummary(4321, 200)); // "thought for 4.3s"
-      lane.addStart('tu_fade', 'Read', '("FADEROW_MARK.ts")');
-      lane.addResult('tu_fade', { type: 'tool_result', toolUseId: 'tu_fade', content: 'ok', isError: false });
-      composer.markDirty('tool-lane');
-      composer.flush();
-      await settle(40); // mid-fade for both elements
-      const rows = lane.flush();
-      composer.markDirty('tool-lane');
-      composer.flush();
-      commitBlockAbove(c, rows);
-      await settle(500); // well past both fades; only the frame driver repaints
-      fx.dispose();
-      c.endTurn();
-    },
-    expect: {
-      exactlyOnce: ['thought for 4.3s', 'FADEROW_MARK'],
-      order: [['thought for 4.3s', 'FADEROW_MARK']],
-    },
-  },
-
   // ─────────────────────────────────────────────────────────────────────────
   // sigwinch-mid-streaming (#1767): SIGWINCH arrives while the compositor is
   // actively streaming — the overlay is held non-empty when requestResize
