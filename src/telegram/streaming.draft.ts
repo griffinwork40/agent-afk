@@ -26,6 +26,7 @@ import { TelegramError } from 'telegraf';
 import type { Context } from 'telegraf';
 import { markdownToTelegramHtml, splitLongMessage } from './formatter.js';
 import { floodRetryAfterMs, realSleep, replyWithFloodRetry as replyWithFloodRetryImpl } from './streaming.retry.js';
+import { debugLog } from '../utils/debug.js';
 
 /** Throttle interval matching the 20-calls-per-5 s Bot API budget. */
 export const DRAFT_THROTTLE_MS = 250;
@@ -149,8 +150,11 @@ export async function finalizeDraft(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/** Upper bound on a single honored `retry_after` for draft calls. */
-const MAX_DRAFT_RETRY_AFTER_MS = 30_000;
+/**
+ * Upper bound on a single honored `retry_after` for draft calls.
+ * Exported so tests can assert near-cap clamping behaviour.
+ */
+export const MAX_DRAFT_RETRY_AFTER_MS = 30_000;
 
 /**
  * Call `sendMessageDraft` via `callApi`, updating `state.lastDraftAt` and
@@ -180,28 +184,33 @@ async function callDraftApi(
     keep_on_stop: false,
   };
 
+  debugLog('[draft] callDraftApi chatId=%d draftId=%d htmlLen=%d', chatId, draftId, html.length);
   try {
     await (ctx.telegram as unknown as { callApi: (method: string, params: unknown) => Promise<unknown> })
       .callApi('sendMessageDraft', params);
     state.lastDraftAt = Date.now();
     state.isDraftMode = true;
+    debugLog('[draft] sendMessageDraft ok chatId=%d draftId=%d', chatId, draftId);
   } catch (e) {
     const waitMs = floodRetryAfterMs(e);
     if (waitMs !== null) {
       const cappedWait = Math.min(waitMs, MAX_DRAFT_RETRY_AFTER_MS);
+      debugLog('[draft] 429 chatId=%d draftId=%d retry_after=%dms capped=%dms', chatId, draftId, waitMs, cappedWait);
       await realSleep(cappedWait);
       try {
         await (ctx.telegram as unknown as { callApi: (method: string, params: unknown) => Promise<unknown> })
           .callApi('sendMessageDraft', params);
         state.lastDraftAt = Date.now();
         state.isDraftMode = true;
-      } catch {
+        debugLog('[draft] sendMessageDraft retry ok chatId=%d draftId=%d', chatId, draftId);
+      } catch (retryErr) {
         // Retry exhausted — the draft update is lost but the turn continues.
         // Set lastDraftAt so the next call doesn't burst immediately after
         // recovery (avoids hitting the 20/5 s budget on the next live update).
         state.lastDraftAt = Date.now();
         // Clear draftId so the next call starts fresh.
         state.draftId = null;
+        debugLog('[draft] retry exhausted chatId=%d draftId=%d err=%s', chatId, draftId, String(retryErr));
       }
     } else {
       // Non-429 errors (e.g. chat type mismatch): clear draftId and stamp
@@ -210,6 +219,7 @@ async function callDraftApi(
       // lastDraftAt === 0 and the next call bypassed the throttle entirely.
       state.draftId = null;
       state.lastDraftAt = Date.now();
+      debugLog('[draft] non-429 error chatId=%d draftId=%d err=%s', chatId, draftId, String(e));
     }
   }
 }
