@@ -193,6 +193,14 @@
  * this by adding/removing the class rather than fighting the media query.
  */
 @media (prefers-color-scheme: dark) {
+  /* Dark-mode overrides for standard ANSI colors — media-query path.
+   * Duplicates the .dark rules above so OS-dark users without the .dark
+   * class get correct terminal black/white colours. */
+  :root:not(.light) .ansi-fg-black   { color: #4d4d4d; }
+  :root:not(.light) .ansi-fg-white   { color: #e8e8e8; }
+  :root:not(.light) .ansi-bg-black   { background-color: #0d0d0d; }
+  :root:not(.light) .ansi-bg-white   { background-color: #e8e8e8; }
+
   :root:not(.light) {
     --background: 216 28% 7%;
     --foreground: 210 17% 82%;
@@ -294,7 +302,7 @@
   .ansi-bg-bright-cyan    { background-color: #1abc9c; }
   .ansi-bg-bright-white   { background-color: #ffffff; }
 
-  /* Dark-mode overrides for standard colors */
+  /* Dark-mode overrides for standard colors — .dark class path */
   .dark .ansi-fg-black   { color: #4d4d4d; }
   .dark .ansi-fg-white   { color: #e8e8e8; }
   .dark .ansi-bg-black   { background-color: #0d0d0d; }
