@@ -340,7 +340,7 @@ export async function* runTurn(
     // (assistant push, rollback on throw, tool_result commit) lives inside.
     const round = yield* runToolRound(result, input, turn, maxIterations, softDeadlineMs);
     if (round === 'terminated') return;
-    applyBeforeNextRound(input, input.beforeNextRound?.());
+    applyBeforeNextRound(input, input.beforeNextRound?.(), trace);
   }
   } finally {
     input.toolDispatcher.setTurnTrace?.(undefined);

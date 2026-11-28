@@ -226,6 +226,16 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   get closed(): boolean { return this._closed; }
 
   /**
+   * Active turn's witness bracket. Set per-turn in `runTurn`; cleared in its
+   * `finally`. Exposed via `get turnTrace()` to satisfy `TurnDriverContext`
+   * so `applyAndSyncSteering` can call `addPaused` on it.
+   */
+  private _turnTrace: TurnTrace | undefined;
+
+  /** Live getter — always reflects the current turn's bracket (or undefined). */
+  get turnTrace(): TurnTrace | undefined { return this._turnTrace; }
+
+  /**
    * Last completed turn's accumulated usage — drives `getContextUsage()`.
    * Mutable — updated by finishTurn (via FinishTurnContext) and mid-round live refresh.
    * @internal Package-visible for FinishTurnContext satisfaction.
@@ -408,6 +418,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     const checkpointId = this.checkpoint.begin(this.toolDispatcher, userMessageId);
 
     const trace = new TurnTrace(controller.signal, this.traceWriter, 'openai-compatible');
+    this._turnTrace = trace;
     this.toolDispatcher?.setTurnTrace?.(trace);
     this.fastTier.beginTurn(this.currentModel);
     try {
@@ -422,6 +433,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
       ), this.toolDispatcher, checkpointId);
     } finally {
       this.toolDispatcher?.setTurnTrace?.(undefined);
+      this._turnTrace = undefined;
       trace.finish(Date.now() - turnStartTime);
       this.checkpoint.end(this.toolDispatcher);
     }
