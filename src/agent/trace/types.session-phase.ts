@@ -270,11 +270,12 @@ export type SessionPhaseName =
   // Server dropped one or more thinking blocks via `input_transformations`
   // (thinking-binding-controls-2026-08-01 beta, `drop_block` policy). Emitted
   // per drop-bearing frame (both message_start and message_delta paths) so the
-  // witness layer records each frame's droppedCount and source independently.
-  // Distinct from the process-global warn cap — the trace event fires on
-  // every drop-bearing frame so operators can correlate per-session without
-  // depending on the bounded console output.
-  // metadata: { droppedCount, source ('message_start'|'message_delta') }
+  // witness layer records each frame independently, even after the session's
+  // single console notice. Metadata: droppedCount, source ('message_start' |
+  // 'message_delta'), and flat numeric reason_<code> tallies (nonzero only),
+  // e.g. reason_prefix_binding_mismatch: 3. Unknown identifier codes are kept;
+  // malformed/missing reasons use reason_unknown_reason. Scalar fields support
+  // witness where filters such as payload.metadata.reason_model_binding_mismatch.
   // No path values, thinking text, or signatures are recorded.
   | 'thinking_block_dropped'
   // Background process lifecycle — emitted by `bash run_in_background` so

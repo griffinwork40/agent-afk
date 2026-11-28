@@ -1,143 +1,82 @@
-/**
- * Observable handling for `input_transformations` — the Anthropic
- * thinking-binding-controls beta's signal that thinking blocks were dropped
- * before the model read them.
- *
- * Wire shape (documented at
- * https://platform.claude.com/docs/en/build-with-claude/preserved-thinking):
- *
- *   input_transformations?: Array<{
- *     type: 'thinking_dropped' | 'thinking_mismatch_allowed' | string;
- *     path: string;                 // e.g. 'messages.1.content.0'
- *     reason:
- *       | 'prefix_binding_mismatch'
- *       | 'model_binding_mismatch'
- *       | 'organization_binding_mismatch'
- *       | string;                   // forward-compat: ignore unknowns
- *   }>
- *
- * Placement:
- *   - `message_start.message.input_transformations` — all drops for this request.
- *   - `message_delta` final event — carries the serving model's entries after a
- *     server-side fallback (may duplicate or augment the message_start list).
- *
- * `thinking_dropped`           — the block was removed; the model did not see it.
- * `thinking_mismatch_allowed`  — the block failed the prefix check but was NOT
- *                                dropped (older account, no enforcement). NOT a drop.
- *
- * Per the spec: "Ignore entries whose type or reason you don't recognize."
- *
- * @module agent/providers/anthropic-direct/input-transformations
- */
+// Contract: Observe thinking_dropped entries from message_start and message_delta.
+// thinking_mismatch_allowed and unknown types are not drops. Never record paths,
+// thinking text, or signatures. Every drop-bearing frame is traced, even when
+// its console notice is suppressed by per-stream or per-session deduplication.
 
 import { emitSessionPhase } from '../../trace/emit.js';
 import type { TraceSink } from '../../trace/index.js';
 
-/** Known `thinking_dropped` reason values. Future-proof: unknown reasons are counted but not named. */
-export const KNOWN_DROP_REASONS = new Set([
-  'prefix_binding_mismatch',
-  'model_binding_mismatch',
-  'organization_binding_mismatch',
+const REASON_DESCRIPTIONS = new Map([
+  ['prefix_binding_mismatch', 'the request context changed (system prompt, tools, or earlier messages)'],
+  ['model_binding_mismatch', 'the model changed'],
+  ['organization_binding_mismatch', 'the account changed'],
 ]);
 
-/**
- * Maximum number of `input_transformations` warnings emitted per process
- * lifetime. Avoids log-flooding when drop_block fires on every turn of a
- * long session.
- */
-const MAX_WARN_COUNT = 10;
-let warnCount = 0;
+// FIFO retention bounds process memory. An evicted session may be notified again
+// if revisited after 4096 other sessions have received notices; no global log cap.
+const MAX_NOTIFIED_SESSIONS = 4096;
+const notifiedSessions = new Set<string>();
 
-/**
- * Emit a bounded diagnostic when the server reports dropped thinking blocks
- * via `input_transformations` (thinking-binding-controls beta, `drop_block`
- * policy).
- *
- * Safe contract:
- * - Logs ONLY the count of dropped blocks and their known reason categories.
- * - Does NOT log `path` values (they contain message/content indices that are
- *   internal structural metadata — not secrets, but unvalidated, so omitted
- *   per the bounded-warning contract).
- * - Does NOT log thinking text, signature bytes, or any content.
- * - `thinking_mismatch_allowed` entries are IGNORED — they mean the block was
- *   NOT dropped and the model still read it.
- * - Unknown `type` or `reason` values are counted but not named (forward-compat).
- * - Capped at {@link MAX_WARN_COUNT} total warnings per process.
- * - Emits a `thinking_block_dropped` session_phase trace event (once per
- *   stream, caller-gated via the per-stream dedup in translate.ts) when
- *   `traceWriter` is supplied. The trace event fires on EVERY stream with
- *   drops regardless of the console-warn process-global cap, so operators
- *   can correlate per-session in the witness layer without depending on the
- *   bounded console output.
- *
- * @param transformations - The raw `input_transformations` array from the API.
- * @param source - Label for the stream position (`message_start` or `message_delta`).
- * @param traceWriter - Optional trace sink; when supplied, emits a
- *   `thinking_block_dropped` session_phase event for this stream.
- */
+type DropSummary = {
+  droppedCount: number;
+  reasonCounts: Record<string, number>;
+};
+
+/** Shared filtering and tally for both first-frame and already-warned paths. */
+function summarizeDrops(transformations: unknown): DropSummary {
+  const reasonCounts: Record<string, number> = Object.create(null) as Record<string, number>;
+  let droppedCount = 0;
+  if (!Array.isArray(transformations)) return { droppedCount, reasonCounts };
+  for (const entry of transformations) {
+    if (typeof entry !== 'object' || entry === null || entry['type'] !== 'thinking_dropped') continue;
+    droppedCount++;
+    // Preserve searchable future reason codes, but not arbitrary untrusted text.
+    // The bounded identifier alphabet also keeps console notices on one line.
+    const raw: unknown = entry['reason'];
+    const reason = typeof raw === 'string' && /^[a-z][a-z0-9_]{0,127}$/.test(raw)
+      ? raw : 'unknown_reason';
+    reasonCounts[reason] = (reasonCounts[reason] ?? 0) + 1;
+  }
+  return { droppedCount, reasonCounts };
+}
+
+/** Returns whether this frame carries drops; tracing is independent of notices. */
 export function warnOnDroppedThinkingBlocks(
   transformations: unknown,
   source: 'message_start' | 'message_delta',
+  sessionId: string,
   traceWriter?: TraceSink,
-): void {
-  if (!Array.isArray(transformations) || transformations.length === 0) return;
+  alreadyWarned = false,
+): boolean {
+  const { droppedCount, reasonCounts } = summarizeDrops(transformations);
+  if (droppedCount === 0) return false;
 
-  // Count only entries with type === 'thinking_dropped' — NOT 'thinking_mismatch_allowed'
-  // (those mean NOT dropped, the block reached the model on an older account).
-  const dropped = transformations.filter(
-    (t): t is Record<string, unknown> =>
-      typeof t === 'object' &&
-      t !== null &&
-      (t as Record<string, unknown>)['type'] === 'thinking_dropped',
-  );
-  if (dropped.length === 0) return;
-
-  // Tally known vs. unknown reasons (do not log path or raw values).
-  const reasonCounts: Record<string, number> = {};
-  let unknownReasonCount = 0;
-  for (const entry of dropped) {
-    const reason = typeof entry['reason'] === 'string' ? entry['reason'] : '';
-    if (KNOWN_DROP_REASONS.has(reason)) {
-      reasonCounts[reason] = (reasonCounts[reason] ?? 0) + 1;
-    } else {
-      unknownReasonCount++;
-    }
-  }
-
-  // Emit a trace event for every stream with drops — independent of the
-  // process-global console-warn cap. The caller (translate.ts warnDropsDeduped)
-  // gates this to at most once per stream via the per-stream alreadyWarned flag,
-  // so we do not need a separate cap here.
   if (traceWriter) {
-    void emitSessionPhase(traceWriter, {
-      phase: 'thinking_block_dropped',
-      metadata: { droppedCount: dropped.length, source },
-    });
+    // Flat numeric fields fit session_phase metadata and scalar witness where filters.
+    const metadata: Record<string, string | number> = { droppedCount, source };
+    for (const [reason, count] of Object.entries(reasonCounts)) metadata[`reason_${reason}`] = count;
+    void emitSessionPhase(traceWriter, { phase: 'thinking_block_dropped', metadata });
   }
 
-  if (warnCount >= MAX_WARN_COUNT) return;
-  warnCount++;
+  if (alreadyWarned || notifiedSessions.has(sessionId)) return true;
+  if (notifiedSessions.size >= MAX_NOTIFIED_SESSIONS) {
+    const oldest = notifiedSessions.values().next().value;
+    if (oldest !== undefined) notifiedSessions.delete(oldest);
+  }
+  notifiedSessions.add(sessionId);
 
-  const reasonSummary = [
-    ...Object.entries(reasonCounts).map(([r, n]) => `${n} ${r}`),
-    ...(unknownReasonCount > 0 ? [`${unknownReasonCount} unknown_reason`] : []),
-  ].join(', ');
-
-  const capNote = warnCount === MAX_WARN_COUNT ? ' (further drops will not be logged)' : '';
-
-  // eslint-disable-next-line no-console
+  const reasonSummary = Object.entries(reasonCounts).map(([reason, count]) =>
+    `${REASON_DESCRIPTIONS.get(reason) ?? 'reason not recognised'} [${count} ${reason}]`,
+  ).join('; ');
   console.warn(
-    `[afk] drop_block (${source}): ${dropped.length} thinking block(s) were omitted by the ` +
-      `server before this request — prior reasoning was not available for this turn` +
-      (reasonSummary ? ` [${reasonSummary}]` : '') +
-      `.${capNote}`,
+    `[afk] Earlier reasoning from ${droppedCount} thinking block(s) was not available to the model ` +
+    `on this request because ${reasonSummary}. AFK continued normally and no action is needed. ` +
+    'Further omissions in this session are recorded in the trace only.',
   );
+  return true;
 }
 
-/**
- * Reset the warn counter. Exposed for tests only — do not call in production code.
- * @internal
- */
-export function _resetWarnCountForTest(): void {
-  warnCount = 0;
+/** @internal Reset notice retention for isolated tests only. */
+export function _resetNotifiedSessionsForTest(): void {
+  notifiedSessions.clear();
 }
