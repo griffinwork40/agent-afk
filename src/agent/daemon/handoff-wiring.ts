@@ -308,8 +308,23 @@ export async function recoverPendingHandoffs(
           parts.push(`\nReply to this task's next run to provide your answer.`);
         }
         // Revalidate the persisted override against today's allowlist.
-        const target = resolveNotifyChat?.(record.notifyChat, record.taskId);
-        void operatorNotify(parts.join('\n'), { replyMarkup, target }).catch(() => undefined);
+        // If the alias was removed between daemon restarts, skip delivery rather
+        // than silently broadcasting to the default wider audience.
+        if (record.notifyChat !== undefined && resolveNotifyChat !== undefined) {
+          const target = resolveNotifyChat(record.notifyChat, record.taskId);
+          if (target === undefined) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[handoff-wiring] stale notifyChat alias for task ${record.taskId} — skipping delivery`,
+            );
+            result.renotified += 1;
+            continue;
+          }
+          void operatorNotify(parts.join('\n'), { replyMarkup, target }).catch(() => undefined);
+        } else {
+          const target = resolveNotifyChat?.(record.notifyChat, record.taskId);
+          void operatorNotify(parts.join('\n'), { replyMarkup, target }).catch(() => undefined);
+        }
       }
       result.renotified += 1;
     } catch {
