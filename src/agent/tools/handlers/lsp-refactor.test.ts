@@ -228,3 +228,38 @@ describe('failure and validation', () => {
     expect(await handler(input, new AbortController().signal)).toMatchObject({ isError: true });
   });
 });
+
+describe('hover', () => {
+  it('returns MarkupContent value from hoverProvider', async () => {
+    server({ hoverResult: { contents: { kind: 'markdown', value: '**number**\n\nconst old: 1' } } });
+    const result = await run({ subcommand: 'hover', line: 1, col: 7 });
+    expect(result.isError).not.toBe(true);
+    expect(result.content).toBe('**number**\n\nconst old: 1');
+  });
+  it('returns plain string contents', async () => {
+    server({ hoverResult: { contents: 'number' } });
+    const result = await run({ subcommand: 'hover', line: 1, col: 1 });
+    expect(result.isError).not.toBe(true);
+    expect(result.content).toBe('number');
+  });
+  it('returns concatenated MarkedString array contents', async () => {
+    server({ hoverResult: { contents: [{ language: 'typescript', value: 'const old: 1' }, 'documentation'] } });
+    const result = await run({ subcommand: 'hover', line: 1, col: 1 });
+    expect(result.isError).not.toBe(true);
+    expect(result.content).toContain('const old: 1');
+    expect(result.content).toContain('documentation');
+  });
+  it('returns no-hover message when server returns null', async () => {
+    server({ hoverResult: null });
+    const result = await run({ subcommand: 'hover', line: 1, col: 1 });
+    expect(result.isError).not.toBe(true);
+    expect(result.content).toContain('No hover information');
+  });
+  it('sends textDocument/hover with correct position', async () => {
+    server({ hoverResult: { contents: { kind: 'plaintext', value: 'x' } } });
+    await run({ subcommand: 'hover', line: 2, col: 3 });
+    const msgs = messagesWithMethod(log, 'textDocument/hover');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]?.params.position).toEqual({ line: 1, character: 2 });
+  });
+});

@@ -50,6 +50,7 @@ export const CLIENT_CAPABILITIES = {
     definition: { dynamicRegistration: false, linkSupport: true },
     references: { dynamicRegistration: false },
     publishDiagnostics: { relatedInformation: false, versionSupport: true },
+    hover: { dynamicRegistration: false, contentFormat: ['markdown', 'plaintext'] },
     rename: { dynamicRegistration: false, prepareSupport: true },
     codeAction: {
       dynamicRegistration: false,

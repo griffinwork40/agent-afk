@@ -52,6 +52,8 @@ export interface FakeServerConfig {
   workspaceSymbols?: unknown[];
   codeActions?: unknown[];
   resolvedCodeAction?: unknown;
+  /** Result for textDocument/hover. null means no hover info. */
+  hoverResult?: unknown;
   /** workspace/applyEdit sent during executeCommand; command completes after its reply. */
   commandEdit?: unknown;
   /**
@@ -106,6 +108,7 @@ const handle = (m) => {
     'workspace/symbol': cfg.workspaceSymbols || [],
     'textDocument/codeAction': cfg.codeActions || [],
     'codeAction/resolve': cfg.resolvedCodeAction || null,
+    'textDocument/hover': cfg.hoverResult === undefined ? null : cfg.hoverResult,
   };
   if (Object.prototype.hasOwnProperty.call(results, m.method) || m.method === 'workspace/executeCommand') {
     if (cfg.crashOnRequest) process.exit(1);

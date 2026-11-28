@@ -9,7 +9,7 @@ export const codeSymbolsTool: AnthropicToolDef = {
     'Query and refactor code using a persistent language server. Requires AFK_LSP_DIAGNOSTICS=1. ' +
     'definition/references return locations; document_symbols lists a file outline; workspace_symbols searches ' +
     'the project (provide file_path to choose a language in mixed projects). Positions are 1-based UTF-16. ' +
-    'rename applies a safe multi-file edit; apply:false previews it. code_actions lists available actions ' +
+    'hover returns type/documentation at a position. rename applies a safe multi-file edit; apply:false previews it. code_actions lists available actions ' +
     'by zero-based index and title; apply:true plus action_index OR exact action_title applies one action. ' +
     'Selected actions may run language-server commands, including server-requested workspace edits. ' +
     'Edits use the normal write policy and checkpoints; file create/delete/rename resource operations are refused. ' +
@@ -18,7 +18,7 @@ export const codeSymbolsTool: AnthropicToolDef = {
     type: 'object',
     properties: {
       file_path: { type: 'string', description: 'Source file path. Required except for workspace_symbols, which detects project language when omitted.' },
-      subcommand: { type: 'string', enum: ['definition', 'references', 'rename', 'document_symbols', 'workspace_symbols', 'code_actions'] },
+      subcommand: { type: 'string', enum: ['definition', 'references', 'rename', 'document_symbols', 'workspace_symbols', 'code_actions', 'hover'] },
       line: { type: 'integer', minimum: 1, description: '1-based line; default 1.' },
       col: { type: 'integer', minimum: 1, description: '1-based UTF-16 column; default 1.' },
       end_line: { type: 'integer', minimum: 1, description: 'Code action range end line; defaults to line.' },

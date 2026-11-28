@@ -1,5 +1,5 @@
 /** Input contract and validation for the extended code_symbols surface. */
-export const REFACTOR_COMMANDS = ['rename', 'document_symbols', 'workspace_symbols', 'code_actions'] as const;
+export const REFACTOR_COMMANDS = ['rename', 'document_symbols', 'workspace_symbols', 'code_actions', 'hover'] as const;
 export type RefactorCommand = typeof REFACTOR_COMMANDS[number];
 export interface LspRefactorInput {
   subcommand: RefactorCommand;
