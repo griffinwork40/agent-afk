@@ -319,7 +319,7 @@ describe('Schema versioning', () => {
     }).not.toThrow();
   });
 
-  it('throws a clear error when DB has a newer schema version', () => {
+  it('degrades gracefully when DB has a newer schema version', () => {
     store.close();
     // Manually stamp a future version into the DB.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -328,9 +328,14 @@ describe('Schema versioning', () => {
     db.pragma('user_version = 99');
     db.close();
 
-    expect(() => new MemoryStore(tmpMemDir)).toThrow(
+    // The constructor no longer throws — it enters degraded mode so the
+    // session can keep running with memory disabled (c38718c70).
+    const degraded = new MemoryStore(tmpMemDir);
+    expect(degraded.isDegraded).toBe(true);
+    expect(degraded.schemaVersionWarning).toMatch(
       /newer than this build supports/,
     );
+    degraded.close();
   });
 });
 
