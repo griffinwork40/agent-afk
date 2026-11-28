@@ -303,7 +303,7 @@ describe('BgResultNotifier', () => {
   // ensures the injection itself is suppressed.
 
   it('injects a job whose parentSessionId matches the owner session', () => {
-    const ownedNotifier = new BgResultNotifier(registry, undefined, 'sess-owner');
+    const ownedNotifier = new BgResultNotifier(registry, undefined, () => 'sess-owner');
     const { handle, fireTerminal } = makeBgHandle('sub-own-1');
     registry.register({ handle, prompt: 'owned job', model: 'sonnet', parentSessionId: 'sess-owner' });
     fireTerminal(succeed('sub-own-1', 'result for owner'));
@@ -313,7 +313,7 @@ describe('BgResultNotifier', () => {
   });
 
   it('suppresses injection for a job dispatched by a different (child) session', () => {
-    const ownedNotifier = new BgResultNotifier(registry, undefined, 'sess-owner');
+    const ownedNotifier = new BgResultNotifier(registry, undefined, () => 'sess-owner');
     const { handle, fireTerminal } = makeBgHandle('sub-child-1');
     registry.register({ handle, prompt: 'child job', model: 'sonnet', parentSessionId: 'sess-child' });
     fireTerminal(succeed('sub-child-1', 'result for child'));
@@ -325,7 +325,7 @@ describe('BgResultNotifier', () => {
   });
 
   it('passes through a job with no parentSessionId even when ownerSessionId is set (backward compat)', () => {
-    const ownedNotifier = new BgResultNotifier(registry, undefined, 'sess-owner');
+    const ownedNotifier = new BgResultNotifier(registry, undefined, () => 'sess-owner');
     const { handle, fireTerminal } = makeBgHandle('sub-compat-1');
     // No parentSessionId — legacy job or model dispatch without session context.
     registry.register({ handle, prompt: 'legacy job', model: 'sonnet' });
@@ -334,8 +334,8 @@ describe('BgResultNotifier', () => {
     ownedNotifier.dispose();
   });
 
-  it('passes through all jobs when ownerSessionId is not provided (no filter)', () => {
-    // `notifier` from beforeEach has no ownerSessionId.
+  it('passes through all jobs when getOwnerSessionId is not provided (no filter)', () => {
+    // `notifier` from beforeEach has no getOwnerSessionId.
     const { handle, fireTerminal } = makeBgHandle('sub-nofilter-1');
     registry.register({ handle, prompt: 'any job', model: 'sonnet', parentSessionId: 'sess-child' });
     fireTerminal(succeed('sub-nofilter-1', 'unfiltered result'));
@@ -343,13 +343,49 @@ describe('BgResultNotifier', () => {
   });
 
   it('suppressed child job does not fire onInjectable', () => {
-    const ownedNotifier = new BgResultNotifier(registry, undefined, 'sess-owner');
+    const ownedNotifier = new BgResultNotifier(registry, undefined, () => 'sess-owner');
     const spy = vi.fn();
     ownedNotifier.onInjectable = spy;
     const { handle, fireTerminal } = makeBgHandle('sub-child-wake');
     registry.register({ handle, prompt: 'child wake', model: 'sonnet', parentSessionId: 'sess-child' });
     fireTerminal(succeed('sub-child-wake', 'child result'));
     expect(spy).not.toHaveBeenCalled();
+    ownedNotifier.dispose();
+  });
+
+  it('tracks sessionId through /resume — getter is re-read at delivery time', () => {
+    let currentSessionId: string | undefined = 'sess-before';
+    const ownedNotifier = new BgResultNotifier(registry, undefined, () => currentSessionId);
+
+    // Job dispatched under the pre-resume session id.
+    const { handle: h1, fireTerminal: fire1 } = makeBgHandle('sub-pre-resume');
+    registry.register({ handle: h1, prompt: 'pre-resume job', model: 'sonnet', parentSessionId: 'sess-before' });
+
+    // Simulate /resume: sessionId changes.
+    currentSessionId = 'sess-after';
+
+    // Job dispatched under the post-resume session id.
+    const { handle: h2, fireTerminal: fire2 } = makeBgHandle('sub-post-resume');
+    registry.register({ handle: h2, prompt: 'post-resume job', model: 'sonnet', parentSessionId: 'sess-after' });
+
+    // The pre-resume job settles — its parentSessionId no longer matches.
+    fire1(succeed('sub-pre-resume', 'stale result'));
+    expect(ownedNotifier.drainInjections()).toBe('');
+
+    // The post-resume job settles — its parentSessionId matches the current getter.
+    fire2(succeed('sub-post-resume', 'fresh result'));
+    expect(ownedNotifier.drainInjections()).toContain('fresh result');
+    ownedNotifier.dispose();
+  });
+
+  it('getter returning undefined on fresh REPL passes all jobs through', () => {
+    let currentSessionId: string | undefined = undefined;
+    const ownedNotifier = new BgResultNotifier(registry, undefined, () => currentSessionId);
+    const { handle, fireTerminal } = makeBgHandle('sub-fresh-repl');
+    registry.register({ handle, prompt: 'early job', model: 'sonnet', parentSessionId: 'sess-child' });
+    fireTerminal(succeed('sub-fresh-repl', 'early result'));
+    // sessionId undefined → filter disabled, job passes through.
+    expect(ownedNotifier.drainInjections()).toContain('early result');
     ownedNotifier.dispose();
   });
 });

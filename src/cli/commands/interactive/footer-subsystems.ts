@@ -132,7 +132,7 @@ export function setupFooterSubsystems(
   // Pass the session id so the notifier filters out jobs dispatched by child
   // subagents (depth > 0) — their results belong to that child's root-session
   // delivery path, not to this top-level REPL (#5177 item 3).
-  const bgResultNotifier = new BgResultNotifier(ctx.backgroundRegistry, ctx.detachRegistry, ctx.stats.sessionId);
+  const bgResultNotifier = new BgResultNotifier(ctx.backgroundRegistry, ctx.detachRegistry, () => ctx.stats.sessionId);
   // Expose buffer reset so the /resume swap path can drop outgoing-session jobs.
   ctx.clearBgResultBuffer = () => bgResultNotifier.reset();
   return {

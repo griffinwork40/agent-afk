@@ -248,12 +248,13 @@ export class BgResultNotifier {
     // Filter rule: skip injection when BOTH sides are known and disagree.
     // - `job.parentSessionId` undefined → old job or model-dispatch without
     //   session context; pass through (backward compat, no false drops).
-    // - `ownerSessionId` undefined → notifier wired without a session id;
+    // - getter returns undefined → notifier wired without a session id;
     //   pass through (safe default, no behavior change).
+    const ownerSessionId = this.getOwnerSessionId?.();
     if (
-      this.ownerSessionId !== undefined &&
+      ownerSessionId !== undefined &&
       job.parentSessionId !== undefined &&
-      job.parentSessionId !== this.ownerSessionId
+      job.parentSessionId !== ownerSessionId
     ) return;
     this.pendingNotifications.push({ job });
     if (this.pendingNotifications.length > MAX_PENDING) {
@@ -277,16 +278,16 @@ export class BgResultNotifier {
   /**
    * @param registry       The shared background-job registry.
    * @param detachRegistry Optional Ctrl+B detach registry.
-   * @param ownerSessionId Session ID of the top-level REPL session. When
-   *   provided, jobs whose `parentSessionId` differs are silently skipped
-   *   (they were dispatched by a child subagent — their result goes to the
-   *   root-session delivery path, not to this notifier). Pass `undefined`
-   *   (the default) to disable the filter and pass all jobs through.
+   * @param getOwnerSessionId Getter for the session ID of the top-level REPL
+   *   session. Read at delivery time (not construction) so the value tracks
+   *   through `/resume` swaps and deferred SDK initialization. When the
+   *   getter returns `undefined`, the filter is disabled and all jobs pass
+   *   through (safe default, no behavior change).
    */
   constructor(
     private readonly registry: BackgroundAgentRegistry,
     detachRegistry?: DetachableToolRegistry,
-    private readonly ownerSessionId?: string,
+    private readonly getOwnerSessionId?: () => string | undefined,
   ) {
     registry.on('settled', this.onSettled);
     if (detachRegistry) {
