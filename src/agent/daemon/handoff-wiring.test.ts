@@ -46,6 +46,12 @@ vi.mock('../operator-notify.js', () => ({
   operatorNotify: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Suppress Telegram handoff sends — tests that need to verify these use the spy.
+vi.mock('../../telegram/handoff-answer.js', () => ({
+  sendHandoffQuestion: vi.fn().mockResolvedValue(undefined),
+  clearPendingTextHandoff: vi.fn(),
+}));
+
 // ---------------------------------------------------------------------------
 // Fixture: isolated temp directories per test
 // ---------------------------------------------------------------------------
@@ -368,6 +374,35 @@ describe('recoverPendingHandoffs', () => {
 
     const result = await recoverPendingHandoffs(handoffsDir);
     expect(result.renotified).toBe(2);
+  });
+
+  it('skips sendHandoffQuestion for never handoff even when bot and route are present', async () => {
+    // Finding 2 from #5375: the `never` guard fires before the `bot && record.route`
+    // branch, so delivery is correctly suppressed — verify the invariant.
+    const { sendHandoffQuestion } = await import('../../telegram/handoff-answer.js');
+    const mockSend = sendHandoffQuestion as ReturnType<typeof vi.fn>;
+    mockSend.mockClear();
+
+    const record: HandoffRecord = {
+      taskId: 'q-never-with-route',
+      sessionId: 'sess-never',
+      question: { message: 'Should not be asked', type: 'confirm' } as Record<string, unknown>,
+      requestType: 'ask_question',
+      createdAt: new Date().toISOString(),
+      status: 'pending',
+      originalCommand: '/never-test',
+      notifyOn: 'never',
+      route: { chatId: 12345 },
+    };
+    await writeHandoff(record, handoffsDir);
+
+    const fakeBot = {} as import('telegraf').Telegraf;
+    const result = await recoverPendingHandoffs(handoffsDir, queueDir, fakeBot);
+
+    // notifyOn:'never' guard fires before bot && record.route branch — delivery suppressed.
+    expect(result.renotified).toBe(0);
+    expect(result.expired).toBe(0);
+    expect(mockSend).not.toHaveBeenCalled();
   });
 
   it('clears lease waiting_human_input state when handoff expires', async () => {
