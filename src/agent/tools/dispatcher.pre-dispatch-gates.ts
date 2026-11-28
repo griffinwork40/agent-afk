@@ -495,15 +495,34 @@ function checkCrossTurnRepeatFailure(
     return null;
   }
   if (history.length < CROSS_TURN_REPEAT_FAILURE_THRESHOLD) return null;
-  // Count only error observations in the history window.
-  const errorCount = history.filter((e) => e.result.isError === true).length;
+  // Count only errors AFTER the last success, mirroring RepeatFailureGuard's
+  // "success clears the streak" contract. Without this, 5 alternating
+  // fail/success pairs would trigger the gate even though the most recent call
+  // succeeded — a false positive the per-turn guard explicitly avoids.
+  const lastSuccessIdx = history.reduce(
+    (best, e, i) => (e.result.isError !== true ? i : best),
+    -1,
+  );
+  const tail = lastSuccessIdx === -1 ? history : history.slice(lastSuccessIdx + 1);
+  const errorCount = tail.filter((e) => e.result.isError === true).length;
   if (errorCount < CROSS_TURN_REPEAT_FAILURE_THRESHOLD) return null;
   // Quote the most recent error for actionability (same pattern as per-turn guard).
-  const lastError = [...history].reverse().find((e) => e.result.isError === true);
-  const summary = lastError
+  // Sanitize before reflecting: strip ANSI escape sequences and C0/C1 control
+  // bytes so adversarial tool output cannot inject terminal sequences through
+  // the gate-issued ToolResult (prompt-injection amplification vector).
+  const lastError = [...tail].reverse().find((e) => e.result.isError === true);
+  const rawSummary = lastError
     ? lastError.result.content.split('\n').find((l) => l.trim() !== '')?.trim() ?? ''
     : '';
-  const truncated = summary.length > 240 ? `${summary.slice(0, 240)}…` : summary;
+  // Strip ESC-prefixed sequences then bare C0/C1/DEL bytes, then collapse spaces.
+  const sanitized = rawSummary
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1F\x7F-\x9F]/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+  const truncated = sanitized.length > 240 ? `${sanitized.slice(0, 240)}…` : sanitized;
   debugLog(
     `[cross-turn-repeat-failure #4476] refused ${call.name} after ${errorCount} cross-turn errors`,
   );
@@ -713,9 +732,14 @@ export async function runPreDispatchGates(
   // consecutive failures and resets each round; this gate catches inter-turn
   // spirals where the same call fails across successive rounds. Read-only
   // from the ledger; writes happen in noteSettledOutcome after the call
-  // settles. Safe on the parallel-gate path: lookup() is a pure read with
-  // no shared mutable state, so concurrent closures cannot race.
-  if (deps.toolCallLedger !== undefined) {
+  // settles.
+  // Skipped on the parallel-gate path (parallelSafe) to match the asymmetric
+  // enforcement of sibling gates 2c and 2c-bis, which also skip on
+  // parallelSafe. Although lookup() is a pure read and cannot race, applying
+  // an enforcing gate only on the sequential path keeps the enforcement model
+  // consistent: the gate fires when the sequential path catches it, and the
+  // parallel-safe path runs the full set of calls without interference.
+  if (!opts?.parallelSafe && deps.toolCallLedger !== undefined) {
     const crossTurnRefusal = checkCrossTurnRepeatFailure(
       call,
       deps.toolCallLedger,

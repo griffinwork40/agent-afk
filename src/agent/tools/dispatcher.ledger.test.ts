@@ -204,4 +204,102 @@ describe('SessionToolDispatcher — ToolCallLedger wiring (#4476)', () => {
     expect(suppressed.content).toMatch(/cross-turn repeat-failure/i);
     expect(suppressed.content).toMatch(new RegExp(String(CROSS_TURN_REPEAT_FAILURE_THRESHOLD)));
   });
+
+  it('cross-turn gate resets on success: interleaved same-call fail/success never suppresses (#4476 finding 1)', async () => {
+    // Verifies the "success clears the streak" contract. Without the fix,
+    // alternating fail/success pairs accumulate error entries in the window and
+    // trigger a false-positive refusal even though the most-recent call succeeded.
+    // We use a custom dispatcher whose fail_tool alternates between error and ok.
+    const { CROSS_TURN_REPEAT_FAILURE_THRESHOLD } = await import('./dispatcher.pre-dispatch-gates.js');
+    const { SessionToolDispatcher } = await import('./dispatcher.js');
+    const wiring = new ToolCallLedgerWiring(new ToolCallLedger(20));
+    const theCall = call('fail_tool', { interleaved: true });
+
+    // Build two dispatchers sharing the same ledger: one that always fails and
+    // one that always succeeds, both registered under 'fail_tool'.
+    const dFail = new SessionToolDispatcher({
+      handlers: new Map([['fail_tool', async () => ({ content: 'err', isError: true as const })]]),
+      schemas: [schema('fail_tool')],
+      hookRegistry: undefined,
+      toolCallLedger: wiring,
+    });
+    const dOk = new SessionToolDispatcher({
+      handlers: new Map([['fail_tool', async () => ({ content: 'ok' })]]),
+      schemas: [schema('fail_tool')],
+      hookRegistry: undefined,
+      toolCallLedger: wiring,
+    });
+
+    // Run (threshold + 2) alternating fail → success pairs. After each success,
+    // the cross-turn error streak for this call resets; the gate must never fire.
+    for (let i = 0; i < CROSS_TURN_REPEAT_FAILURE_THRESHOLD + 2; i++) {
+      const failResult = await dFail.execute(theCall);
+      expect(failResult.isError).toBe(true);
+      expect(failResult.content).not.toMatch(/cross-turn repeat-failure/i);
+
+      const okResult = await dOk.execute(theCall);
+      expect(okResult.isError).toBeFalsy();
+      expect(okResult.content).not.toMatch(/cross-turn repeat-failure/i);
+    }
+  });
+
+  it('cross-turn gate resets after a same-call success clears the error tail (#4476 finding 1 — direct)', async () => {
+    // Direct test: run (threshold - 1) failures, then ONE success, then
+    // (threshold - 1) more failures. Gate must NOT fire after the second batch
+    // because the success reset the streak. Then one final failure pushes the
+    // post-success tail to threshold and the gate fires.
+    // Note: each dispatcher owns its own per-turn RepeatFailureGuard (threshold
+    // 3), so we use a fresh dispatcher per call to avoid per-turn suppression.
+    const { CROSS_TURN_REPEAT_FAILURE_THRESHOLD } = await import('./dispatcher.pre-dispatch-gates.js');
+    const { SessionToolDispatcher } = await import('./dispatcher.js');
+    const wiring = new ToolCallLedgerWiring(new ToolCallLedger(20));
+
+    const dFail = () =>
+      new SessionToolDispatcher({
+        handlers: new Map([['fail_tool', async () => ({ content: 'err', isError: true as const })]]),
+        schemas: [schema('fail_tool')],
+        hookRegistry: undefined,
+        toolCallLedger: wiring,
+      });
+    const dOk = () =>
+      new SessionToolDispatcher({
+        handlers: new Map([['fail_tool', async () => ({ content: 'ok' })]]),
+        schemas: [schema('fail_tool')],
+        hookRegistry: undefined,
+        toolCallLedger: wiring,
+      });
+
+    const theCall = call('fail_tool', { reset: 'direct' });
+
+    // Phase 1: (threshold - 1) failures — not enough to trigger yet.
+    for (let i = 0; i < CROSS_TURN_REPEAT_FAILURE_THRESHOLD - 1; i++) {
+      const r = await dFail().execute(theCall);
+      expect(r.isError).toBe(true);
+      expect(r.content).not.toMatch(/cross-turn repeat-failure/i);
+    }
+
+    // Phase 2: one success — streak resets.
+    const okResult = await dOk().execute(theCall);
+    expect(okResult.isError).toBeFalsy();
+
+    // Phase 3: (threshold - 1) more failures — post-success tail is below threshold.
+    for (let i = 0; i < CROSS_TURN_REPEAT_FAILURE_THRESHOLD - 1; i++) {
+      const r = await dFail().execute(theCall);
+      expect(r.isError).toBe(true);
+      expect(r.content).not.toMatch(/cross-turn repeat-failure/i);
+    }
+
+    // Phase 4: one more failure is EXECUTED (gate sees 4 errors < threshold, allows
+    // it through); this records the threshold-th error in the ledger.
+    const r4 = await dFail().execute(theCall);
+    expect(r4.isError).toBe(true);
+    expect(r4.content).not.toMatch(/cross-turn repeat-failure/i);
+
+    // Phase 5: now the ledger holds exactly threshold errors after the success;
+    // the gate fires and suppresses this call.
+    const suppressed = await dFail().execute(theCall);
+    expect(suppressed.isError).toBe(true);
+    expect(suppressed.failureClass).toBe('repeat-failure');
+    expect(suppressed.content).toMatch(/cross-turn repeat-failure/i);
+  });
 });
