@@ -111,6 +111,7 @@ describe('native slash dispatch with the chat SessionManager', () => {
   it.each([
     [{ id: 42, username: 'alice' }, '42:alice'],
     [{ id: 42 }, '42'],
+    [undefined, undefined],
   ] as const)('attributes a typed handoff answer to %j', async (from, identity) => {
     const taskId = 'q-telegram';
     await writeHandoff({
@@ -118,9 +119,13 @@ describe('native slash dispatch with the chat SessionManager', () => {
       requestType: 'ask_question', createdAt: new Date().toISOString(), status: 'pending', originalCommand: 'test',
     });
     await dispatchTelegramSlash(deps(), Object.assign(ctx(), { from }), { chatId: 5 }, `/handoffs:answer ${taskId} Alice`);
-    expect(await readHandoff(taskId)).toMatchObject({
-      status: 'answered', answer: { value: 'Alice' }, answerSource: 'telegram', responderIdentity: identity,
-    });
+    const handoff = await readHandoff(taskId);
+    expect(handoff).toMatchObject({ status: 'answered', answer: { value: 'Alice' }, answerSource: 'telegram' });
+    if (identity === undefined) {
+      expect(handoff).not.toHaveProperty('responderIdentity');
+    } else {
+      expect(handoff).toMatchObject({ responderIdentity: identity });
+    }
   });
 
   it('resets in place: same session object, fresh id, stats/name cleared, cwd/model kept', async () => {
