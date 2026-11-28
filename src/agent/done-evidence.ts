@@ -70,6 +70,39 @@ export function isPatchApplyDryRun(e: ToolEventMin): boolean {
   }
 }
 
+// Contract: AFK-internal NON-SOURCE subdirectories whose writes should not
+// trigger the terminal-state verification gate. Narrowed to specific paths
+// rather than the broad `.afk/` prefix because `.afk/skills/`, `.afk/plugins/`,
+// `.afk/commands/`, and `.afk/agents/` contain executable source code that
+// must continue to trigger verification.
+const NON_SOURCE_PREFIXES: readonly string[] = [
+  '.afk/plans/',
+  '.afk/state/',
+  '.afk/logs/',
+  '.afk/tmp/',
+  '.afk/agent-framework/',
+  '.afk-scratch/',
+];
+
+/**
+ * True when a file path targets an AFK-internal artifact that should NOT
+ * trigger the terminal-state verification gate.
+ *
+ * Matches known non-source subdirectories: plans/, state/, logs/, tmp/,
+ * agent-framework/, and .afk-scratch/.
+ *
+ * Does NOT match:
+ *   - `.afk/skills/`    — project-scoped skills (executable source)
+ *   - `.afk/plugins/`   — project-scoped plugins (executable source)
+ *   - `.afk/commands/`  — project-scoped commands (executable source)
+ *   - `.afk/agents/`    — project-scoped agents (executable source)
+ *   - `.afk-worktrees/` — worktree paths contain real source code
+ */
+export function isNonSourcePath(path: string): boolean {
+  const p = path.trim();
+  return NON_SOURCE_PREFIXES.some((prefix) => p.startsWith(prefix) || p.includes('/' + prefix));
+}
+
 // Contract: tools whose SUCCESSFUL invocation is observable corroboration that
 // real work happened this turn — a file mutation or an executed command. A
 // `Done` turn with none of these may be a self-certified completion with no
@@ -168,6 +201,9 @@ export function classifyDoneEvidence(
     if (CODE_MUTATION_TOOLS.has(e.toolName)) {
       // patch_apply with dry_run: true writes nothing — skip it.
       if (e.toolName === 'patch_apply' && isPatchApplyDryRun(e)) continue;
+      // Skip AFK-internal artifact writes (plan notes, scratch files, etc.).
+      // These are gitignored and must not trigger the verification gate.
+      if (e.toolName !== 'patch_apply' && isNonSourcePath(e.input)) continue;
       lastMutationIndex = i;
     } else if (e.toolName === 'bash') {
       // Verification check takes priority: a command that matches a verification
