@@ -635,6 +635,42 @@ describe('registerHandoffAnswerHandlers', () => {
     expect(await readHandoff(record.taskId, handoffsDir)).toEqual(record);
   });
 
+  it('resolves questionId → taskId via the in-memory index without a directory scan', async () => {
+    // After sendHandoffQuestion the index is warm; a button tap must NOT call
+    // listPendingHandoffs — verify by spying on it.
+    const store = await import('../agent/daemon/handoff-store.js');
+    const listSpy = vi.spyOn(store, 'listPendingHandoffs');
+
+    const bot = mockBot();
+    const record = await writeHandoff(makeRecord(), handoffsDir);
+    await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
+    const data: string = bot.telegram.sendMessage.mock.calls[0]![2]?.reply_markup
+      .inline_keyboard[0][0].callback_data;
+
+    await tap(data);
+
+    expect(listSpy).not.toHaveBeenCalled();
+    expect(await readHandoff(record.taskId, handoffsDir)).toMatchObject({ status: 'answered' });
+  });
+
+  it('falls back to a directory scan on a cold-restart cache miss and then indexes the result', async () => {
+    // Simulate cold restart: write a record directly (no sendHandoffQuestion),
+    // so the questionIdToTaskId index is empty.
+    const store = await import('../agent/daemon/handoff-store.js');
+    const listSpy = vi.spyOn(store, 'listPendingHandoffs');
+
+    const record = await writeHandoff(makeRecord(), handoffsDir);
+    // Build the new-format callback manually — same format as buildHandoffCallback
+    // but we bypass sendHandoffQuestion to leave the cache cold.
+    const data = buildHandoffCallback(record, 1);
+
+    // First tap: index miss → directory scan
+    await tap(data);
+
+    expect(listSpy).toHaveBeenCalledOnce();
+    expect(await readHandoff(record.taskId, handoffsDir)).toMatchObject({ status: 'answered' });
+  });
+
   it('rejects a replacement that arrives between token lookup and the answer write', async () => {
     const record = await writeHandoff(makeRecord(), handoffsDir);
     const store = await import('../agent/daemon/handoff-store.js');

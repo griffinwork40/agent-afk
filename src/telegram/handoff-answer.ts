@@ -51,6 +51,17 @@ export interface SendHandoffResult {
  */
 const pendingTextHandoffs = new Map<number, string>();
 
+/**
+ * In-memory index of questionId → taskId for new-format (`afk:h:q:…`) buttons.
+ * Populated in sendHandoffQuestion so button taps can call readHandoff(taskId)
+ * directly — O(1) — instead of listPendingHandoffs() — O(N) disk reads.
+ *
+ * Invariant: this map is ephemeral — rebuilt via recoverPendingHandoffs on
+ * bot restart. On a cold-restart cache miss the handler falls back to the
+ * directory scan as a safety net.
+ */
+const questionIdToTaskId = new Map<string, string>();
+
 // ---------------------------------------------------------------------------
 // Send a handoff question to Telegram
 // ---------------------------------------------------------------------------
@@ -125,6 +136,7 @@ export async function sendHandoffQuestion(opts: SendHandoffOpts): Promise<SendHa
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     });
     if (acceptsTextReply) pendingTextHandoffs.set(sent.message_id, record.taskId);
+    if (record.questionId) questionIdToTaskId.set(record.questionId, record.taskId);
     const route = { chatId, ...(threadId ? { threadId } : {}) };
     // Best effort: restart recovery can fall back to its default route.
     await updateHandoffMessage(record.taskId, record.questionId ?? null, route, sent.message_id, handoffsDir)
@@ -165,10 +177,26 @@ export function registerHandoffAnswerHandlers(bot: Telegraf): void {
 
     const { choiceIndex } = parsed;
     const expectedQuestionId = 'questionId' in parsed ? parsed.questionId : null;
-    // Read durable state on every tap, including the first one after a restart.
-    const record = 'taskId' in parsed
-      ? await readHandoff(parsed.taskId)
-      : (await listPendingHandoffs()).find((candidate) => candidate.questionId === parsed.questionId);
+    // Resolve taskId for new-format buttons via the in-memory index (O(1)).
+    // Fall back to a full directory scan only on a cold-restart cache miss,
+    // then populate the index for subsequent taps on the same question.
+    let record: HandoffRecord | null | undefined;
+    if ('taskId' in parsed) {
+      record = await readHandoff(parsed.taskId);
+    } else {
+      const cachedTaskId = questionIdToTaskId.get(parsed.questionId);
+      if (cachedTaskId !== undefined) {
+        record = await readHandoff(cachedTaskId);
+      } else {
+        const found = (await listPendingHandoffs()).find(
+          (candidate) => candidate.questionId === parsed.questionId,
+        );
+        if (found) {
+          questionIdToTaskId.set(parsed.questionId, found.taskId);
+        }
+        record = found;
+      }
+    }
     if (record?.status !== 'pending' || record.questionId !== (expectedQuestionId ?? undefined)) {
       await ctx.answerCbQuery(QUESTION_NOT_OPEN).catch(() => {});
       await editClosedMessage(ctx, QUESTION_NOT_OPEN);
