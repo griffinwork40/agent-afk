@@ -45,7 +45,7 @@ import {
   fireOnTaskComplete,
   type PullTickContext,
 } from './scheduler.pull-tick.js';
-import { makeCwdErrorRecord, snapshotInFlightTasks, makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
+import { makeCwdErrorRecord, snapshotInFlightTasks, makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord, makeDisabledSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
 import { ensureTelemetrySink, probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
 import { FailureStreakTracker } from './scheduler.failure-streak.js';
@@ -491,6 +491,20 @@ export class CronScheduler {
       this.writeTelemetry(record, notifyTask, shouldAlert
         ? { responseText: formatOverlapAlertMessage(task.taskId, record.command, task.cronExpression) }
         : undefined);
+      return record;
+    }
+    // Disabled mid-window guard (#4831 item 1): write a skipped/disabled row
+    // when a cron callback reaches runOnce after unregister() already removed
+    // the task from the registry. This race happens when afk schedule disable
+    // (or an HTTP API call) disables a task while a callback is already queued
+    // on the event loop — the cron timer is stopped, but the already-dispatched
+    // callback still executes. Without this record, get_schedule_history shows
+    // an unexplained gap at that slot. Pull tasks are synthetic (never in the
+    // registry) and are excluded; sessionstart tasks are always called with the
+    // current task object, so they are excluded too.
+    if (trigger === 'cron' && !this.registry.has(task.taskId)) {
+      const record = makeDisabledSkipRecord(task, trigger, this.now());
+      this.writeTelemetry(record, task);
       return record;
     }
     this.inFlightTasks.set(overlapKey, this.now());
