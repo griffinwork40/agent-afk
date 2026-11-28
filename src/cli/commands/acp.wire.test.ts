@@ -37,7 +37,6 @@ const methods: Record<string, readonly [string, string | null, string]> = {
   'session/close': ['CloseSessionRequest', 'CloseSessionResponse', 'client_to_agent'],
   'session/cancel': ['CancelNotification', null, 'client_to_agent'],
   'session/update': ['SessionNotification', null, 'agent_to_client'],
-  'session/request_permission': ['RequestPermissionRequest', 'RequestPermissionResponse', 'agent_to_client'],
 };
 interface Row { direction: 'client_to_agent' | 'agent_to_client'; frame: Record<string, unknown> }
 

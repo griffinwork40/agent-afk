@@ -60,12 +60,11 @@ export function boundedContent(content: ToolCallContent[]): ToolCallContent[] {
 // Frame types emitted by the server and their display fields:
 //   tool_call (ToolCallStart)        — title, locations[].path
 //   tool_call_update (ToolCallUpdate) — title (when present), locations[].path (when present)
-//   session/request_permission        — toolCall.title, toolCall.locations[].path, options[].name
 //
 // Fields that are DATA (byte-exact, never shown verbatim to the human as the
 // action description) are NOT touched here: rawInput, rawOutput, content (message
 // text, tool output, diffs), toolCallId, sessionId, name (tool identifier),
-// kind, status, optionId.  The permission option name IS display text.
+// kind, status.
 //
 // Inner escaping (oneLine, shellCommandLine, toolTitle) is preserved because it
 // must count toward byte bounds and because outside-path and sensitive markers
@@ -97,11 +96,10 @@ const cleanDisplay = (s: string): string => escapeInvisible(s.replace(/[\u0000-\
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**
- * Write-boundary pass: applied to the params of every `session/update` and
- * `session/request_permission` immediately before they are written, so a
- * display string cannot leave the server unescaped however the frame was
- * built. Covers `title`, `locations[].path`, `options[].name` and the `path`
- * of a `diff` content item, on the frame
+ * Write-boundary pass: applied to the params of every `session/update`
+ * immediately before they are written, so a display string cannot leave the
+ * server unescaped however the frame was built. Covers `title`,
+ * `locations[].path` and the `path` of a `diff` content item, on the frame
  * itself and on a nested `update` or `toolCall`. Idempotent (an escape is plain
  * ASCII), so the inner passes above stay correct. Data fields are not touched.
  */
