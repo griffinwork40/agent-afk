@@ -26,6 +26,31 @@ import { providerForModel } from '../providers/index.js';
 import { preloadClaudeKeychainOAuth } from '../auth/credential-resolver.js';
 import { applySlotCredentials, type SlotCredentialTarget } from './slot-credentials.js';
 import type { AgentConfig } from '../types/config-types.js';
+import type { ClaudeLoginRefreshResult } from '../auth/claude-login-status.js';
+
+// Symbol property for the session-scoped prime result. Stored directly on the
+// AgentConfig so it survives the `{ ...baseConfig }` shallow copy that
+// ProviderRouter.resolveInner() creates — a WeakMap keyed by object identity
+// would miss on the copy and fall back to the process-global.
+const PRIME_RESULT: unique symbol = Symbol('primeLoginResult');
+
+/** Augment AgentConfig with the symbol property (module-private). */
+type ConfigWithPrime = AgentConfig & { [PRIME_RESULT]?: ClaudeLoginRefreshResult };
+
+/**
+ * The result of the most recent {@link primeSessionCredential} call for
+ * `config`, or `undefined` if the prime was skipped or not yet run. Never
+ * touches the credential store; purely a session-local memo.
+ *
+ * Works on both the original config AND shallow copies (e.g. the innerConfig
+ * created by `ProviderRouter.resolveInner`) because the result is stored as a
+ * Symbol own-property that spread copies along with the rest.
+ */
+export function getSessionPrimeLoginResult(
+  config: AgentConfig,
+): ClaudeLoginRefreshResult | undefined {
+  return (config as ConfigWithPrime)[PRIME_RESULT];
+}
 
 /** Whether a session inner built for `model` would read the stored login. */
 export function sessionNeedsStoredLogin(config: AgentConfig, model: string | undefined): boolean {
@@ -52,11 +77,17 @@ export function sessionNeedsStoredLogin(config: AgentConfig, model: string | und
  * Refresh the stored login before the first provider request when the session
  * depends on it. Never throws; a failure leaves the store untouched and the
  * provider reports the recorded login status in its "no credential" error.
+ *
+ * Stores the refresh result in a session-scoped WeakMap keyed by `config` so
+ * the provider can build a diagnostic error from THIS session's own prime
+ * rather than from the process-global `lastClaudeLoginStatus()` (which is
+ * overwritten by every other session's refresh in a multi-session process).
  */
 export async function primeSessionCredential(config: AgentConfig, model: string | undefined): Promise<void> {
   if (!sessionNeedsStoredLogin(config, model)) return;
   try {
-    await preloadClaudeKeychainOAuth('anthropic-direct');
+    const result = await preloadClaudeKeychainOAuth('anthropic-direct');
+    if (result !== undefined) (config as ConfigWithPrime)[PRIME_RESULT] = result;
   } catch {
     /* preload never throws; defensive so priming can never break a session */
   }

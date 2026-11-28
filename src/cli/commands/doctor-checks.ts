@@ -52,7 +52,7 @@ export async function checkAnthropicKey(): Promise<Check> {
   // credential already exists or the provider isn't anthropic-direct.
   // Use the return value as a fallback: on a locked/read-only keychain the
   // refresh succeeds but write-back fails, so getApiKey() would read stale data.
-  const freshToken = await preloadClaudeKeychainOAuth('anthropic-direct');
+  const freshToken = (await preloadClaudeKeychainOAuth('anthropic-direct'))?.token;
 
   const key = freshToken ?? getApiKey();
   if (key) {

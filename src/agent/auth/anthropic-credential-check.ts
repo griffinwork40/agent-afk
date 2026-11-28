@@ -5,7 +5,7 @@
  */
 
 import { preloadClaudeKeychainOAuth, resolveAnthropicCredential, type CredentialSourceId } from './credential-resolver.js';
-import { describeClaudeLoginStatus, lastClaudeLoginStatus } from './claude-login-status.js';
+import { describeClaudeLoginStatus } from './claude-login-status.js';
 
 /** Outcome of {@link checkAnthropicCredential}. Never carries token material. */
 export interface AnthropicCredentialStatus {
@@ -25,13 +25,17 @@ export interface AnthropicCredentialStatus {
  * token (and writing it back) when no env credential is set. Never throws.
  */
 export async function checkAnthropicCredential(): Promise<AnthropicCredentialStatus> {
-  await preloadClaudeKeychainOAuth('anthropic-direct');
+  // Capture the result before the synchronous credential read so the status
+  // comes from THIS invocation's own refresh attempt, not the process-global
+  // `lastClaudeLoginStatus()` which is overwritten by every session in the
+  // process (Telegram bot, daemon, SDK embedder).
+  const primeResult = await preloadClaudeKeychainOAuth('anthropic-direct');
   const cred = resolveAnthropicCredential();
   if (cred) return { ok: true, source: cred.source };
   return {
     ok: false,
     detail:
-      describeClaudeLoginStatus(lastClaudeLoginStatus()) ??
+      describeClaudeLoginStatus(primeResult?.status) ??
       'No Anthropic credential found. Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN, or run `claude login`.',
   };
 }

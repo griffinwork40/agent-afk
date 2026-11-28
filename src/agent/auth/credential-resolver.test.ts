@@ -13,7 +13,7 @@ import {
   _resetRefreshedClaudeCodeOauthToken,
   setRefreshedClaudeCodeOauthToken,
 } from './credential-resolver.js';
-import { refreshClaudeCodeOauthToken, loadClaudeCodeOauthToken, _resetKeychainReadCache } from './keychain.js';
+import { refreshClaudeCodeOauthToken, refreshClaudeCodeOauthTokenWithStatus, loadClaudeCodeOauthToken, _resetKeychainReadCache } from './keychain.js';
 
 // Keep the network/keychain refresh hermetic — preloadClaudeKeychainOAuth's
 // guard is what's under test, not the real token exchange.
@@ -22,6 +22,7 @@ vi.mock('./keychain.js', async (importOriginal) => {
   return {
     ...actual,
     refreshClaudeCodeOauthToken: vi.fn(async () => 'sk-ant-oat01-refreshed'),
+    refreshClaudeCodeOauthTokenWithStatus: vi.fn(async () => ({ token: 'sk-ant-oat01-refreshed', status: 'refreshed' as const })),
     // Hermetic: never read the developer's real keychain. Default = store has
     // no valid token (the write-back-failed / expired case).
     loadClaudeCodeOauthToken: vi.fn(() => undefined),
@@ -164,7 +165,7 @@ describe('preloadClaudeKeychainOAuth — startup refresh guard', () => {
     expect(await preloadClaudeKeychainOAuth('openai-compatible')).toBeUndefined();
     expect(await preloadClaudeKeychainOAuth('xai')).toBeUndefined();
     expect(await preloadClaudeKeychainOAuth('xai-oauth')).toBeUndefined();
-    expect(refreshClaudeCodeOauthToken).not.toHaveBeenCalled();
+    expect(refreshClaudeCodeOauthTokenWithStatus).not.toHaveBeenCalled();
   });
 
   it('skips the refresh when an env credential already takes precedence', async () => {
@@ -175,13 +176,14 @@ describe('preloadClaudeKeychainOAuth — startup refresh guard', () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'sk-ant-oat01-env';
     expect(await preloadClaudeKeychainOAuth('anthropic-direct')).toBeUndefined();
 
-    expect(refreshClaudeCodeOauthToken).not.toHaveBeenCalled();
+    expect(refreshClaudeCodeOauthTokenWithStatus).not.toHaveBeenCalled();
   });
 
-  it('refreshes the keychain token (and returns it) for Anthropic with no env credential', async () => {
-    const token = await preloadClaudeKeychainOAuth('anthropic-direct');
-    expect(refreshClaudeCodeOauthToken).toHaveBeenCalledOnce();
-    expect(token).toBe('sk-ant-oat01-refreshed');
+  it('refreshes the keychain token (and returns the result) for Anthropic with no env credential', async () => {
+    const result = await preloadClaudeKeychainOAuth('anthropic-direct');
+    expect(refreshClaudeCodeOauthTokenWithStatus).toHaveBeenCalledOnce();
+    expect(result?.token).toBe('sk-ant-oat01-refreshed');
+    expect(result?.status).toBe('refreshed');
   });
 
   it('uses the refreshed token for later reads when store write-back is unavailable', async () => {
