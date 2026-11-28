@@ -124,6 +124,58 @@ describe('hook command data exemptions (#3762)', () => {
     });
   });
 
+  describe('quoted-argument false-positive fixes (#4827)', () => {
+    // release-boundary: grep/rg/echo with guarded phrase as a quoted argument
+    // must NOT fire — the phrase is data, not a command.
+    it.each([
+      // single-quoted
+      ["grep -n 'npm publish' file.txt"],
+      ["grep 'npm publish' docs/"],
+      ["rg 'npm publish' README.md"],
+      ["echo 'npm publish'"],
+      // double-quoted (the main gap before this fix)
+      ['grep -n "npm publish" file.txt'],
+      ['grep "npm publish" docs/'],
+      ['rg "npm publish" README.md'],
+      ['echo "npm publish"'],
+      // safe-destruct: grep/rg/echo with guarded phrase as a quoted argument
+      ["grep -n 'git reset --hard' history.log"],
+      ['grep -n "git reset --hard" history.log'],
+      ["grep 'git reset --hard' history.log"],
+      ['grep "git reset --hard" history.log'],
+      ["rg 'git reset --hard' logs/"],
+      ['rg "git reset --hard" logs/'],
+      ["echo 'git reset --hard'"],
+      ['echo "git reset --hard"'],
+    ])('does not flag read-only command quoting a guarded phrase: %s', (command) => {
+      expect(detectReleaseBoundaryCommands(command)).toEqual([]);
+      expect(detectDestructiveCommands(command)).toEqual([]);
+    });
+
+    // Double-quoted strings WITH substitutions must stay visible (executable).
+    it('keeps double-quoted string with $() substitution visible to detectors', () => {
+      expect(detectReleaseBoundaryCommands('grep "$(npm publish)" file.txt')).toContain('npm-publish');
+      expect(detectDestructiveCommands('grep "$(git reset --hard)" file.txt')).toContain('git-reset-hard');
+    });
+
+    it('keeps double-quoted string with backtick substitution visible to detectors', () => {
+      expect(detectReleaseBoundaryCommands('grep "`npm publish`" file.txt')).toContain('npm-publish');
+    });
+
+    // A real command after a quoted-argument grep must still fire.
+    it('still detects real operation on subsequent line after a grep with quoted phrase', () => {
+      expect(detectReleaseBoundaryCommands('grep "npm publish" docs/\nnpm publish')).toContain('npm-publish');
+      expect(detectDestructiveCommands('grep "git reset --hard" logs/\ngit reset --hard HEAD')).toContain('git-reset-hard');
+    });
+
+    // Non-read-only commands quoting a guarded phrase must still fire (the phrase
+    // could be a live argument, not a search pattern).
+    it('still flags a non-read-only command that quotes a guarded phrase', () => {
+      // awk is not in the literalSearch allowlist, so its quoted args stay visible.
+      expect(detectReleaseBoundaryCommands("awk '/npm publish/ {print}' file.txt")).toContain('npm-publish');
+    });
+  });
+
   describe('multiline quoted argument handling (#3780)', () => {
     it('masks multiline single-quoted --body in gh pr create', () => {
       const cmd = "gh pr create --body 'line1\nnpm publish\nline3'";

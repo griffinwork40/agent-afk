@@ -53,11 +53,11 @@ export function analyzeCommand(command: string): CommandAnalysis {
   let risk: RiskVerdict | undefined;
   let destructive: CommandAnalysis['destructive'] | undefined;
   let releaseBoundary: CommandAnalysis['releaseBoundary'] | undefined;
-  // Separate masking modes are intentional, not equivalent parse results.
-  // Declared before `analysis` so the reading order matches the dependency order.
+  // Both maskers now use stripLiterals=true (see #4827 fix). Declared before
+  // `analysis` so the reading order matches the dependency order.
   let destructiveView: string | undefined;
   let releaseView: string | undefined;
-  const maskedDestructive = (): string => destructiveView ??= maskHookCommandData(command);
+  const maskedDestructive = (): string => destructiveView ??= maskHookCommandData(command, true);
   const maskedRelease = (): string => releaseView ??= maskHookCommandData(command, true);
   const analysis: CommandAnalysis = {
     get segments() { return tokensFor(command); },
