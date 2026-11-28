@@ -131,6 +131,9 @@ export class TurnStreamRunner {
       interruptProvider: () => this.deps.getProviderQuery().interrupt(),
       recordSyntheticDone: (turn) =>
         this.recordSyntheticDone(turn.turnStartMs, turn.interrupted && !turn.hadProviderError),
+      // R1.7 (#5174): thread the trace writer so drain_timeout and settle_error
+      // phase events are visible in the witness layer.
+      traceWriter: deps.getConfig().traceWriter,
     });
     // Every seal path (close, reset, abort) must leave the ledger with an
     // abandoned turn's `done`, even when it has not finished stopping (#4830).

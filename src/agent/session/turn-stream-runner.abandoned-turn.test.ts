@@ -1158,6 +1158,131 @@ describe('drain timeout: R1.11 (#5174)', () => {
     expect(syntheticDoneRecorded).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// R1.7 (#5174): trace events for drain timeout and settlement error
+// ---------------------------------------------------------------------------
+
+import { InMemoryTraceWriter } from '../trace/writer.js';
+
+/**
+ * R1.7 drain_timeout: a drain_timeout session_phase event is emitted when
+ * drain() force-ends a stuck abandoned turn after SETTLE_DRAIN_TIMEOUT_MS.
+ * Uses fake timers and ProviderTurns directly (no full AgentSession) so the
+ * timer fires deterministically.
+ */
+describe('R1.7 (#5174): drain_timeout trace event', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('emits a drain_timeout session_phase event when the drain times out', async () => {
+    let markEnded: (() => void) | null = null;
+    const neverEnded = new Promise<void>((resolve) => {
+      markEnded = resolve;
+    });
+
+    const writer = new InMemoryTraceWriter();
+    const turns = new ProviderTurns({
+      consume: async () => null,
+      interruptProvider: async () => {},
+      recordSyntheticDone: () => {},
+      traceWriter: writer,
+    });
+
+    const hungIterator: AsyncIterator<never> = {
+      next: () => neverEnded.then(() => ({ done: true as const, value: undefined })),
+    };
+
+    const send = turns.beginSend();
+    const turn = turns.startTurn(
+      send,
+      {} as import('./stream-consumer.js').TransformDeps,
+      hungIterator,
+      Date.now(),
+    );
+    turn.interrupted = true;
+    turns.abandon(turn);
+
+    const send2 = turns.beginSend();
+    const drainDone = turns.untilClear(send2, null);
+
+    // Fire the timeout.
+    await vi.advanceTimersByTimeAsync(SETTLE_DRAIN_TIMEOUT_MS);
+    await drainDone;
+    turns.withdraw(send2);
+
+    // Release the hung iterator so the background settle() finally block runs.
+    markEnded!();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // A drain_timeout session_phase event must have been written.
+    const drainTimeoutEvents = writer.events.filter(
+      (e): e is Extract<typeof e, { kind: 'session_phase' }> =>
+        e.kind === 'session_phase' && (e.payload as { phase: string }).phase === 'drain_timeout',
+    );
+    expect(drainTimeoutEvents).toHaveLength(1);
+    expect((drainTimeoutEvents[0]!.payload as { phase: string; durationMs?: number }).durationMs).toBe(SETTLE_DRAIN_TIMEOUT_MS);
+  });
+});
+
+/**
+ * R1.7 settle_error: a settle_error session_phase event is emitted when
+ * settleAbandonedTurn catches a provider-level error during settlement.
+ */
+describe('R1.7 (#5174): settle_error trace event', () => {
+  it('emits a settle_error session_phase event when settlement catches an error', async () => {
+    const writer = new InMemoryTraceWriter();
+    const turns = new ProviderTurns({
+      consume: async () => { throw new Error('provider-boom'); },
+      interruptProvider: async () => {},
+      recordSyntheticDone: () => {},
+      traceWriter: writer,
+    });
+
+    // An iterator that immediately yields one (non-terminal) event so consume()
+    // is called and throws, triggering the catch block in settleAbandonedTurn.
+    let didYield = false;
+    const throwingIterator: AsyncIterator<ProviderEvent> = {
+      async next() {
+        if (!didYield) {
+          didYield = true;
+          return { done: false, value: { type: 'delta.text', text: 'x', sessionId: 'test' } as ProviderEvent };
+        }
+        return { done: true, value: undefined };
+      },
+    };
+
+    const send = turns.beginSend();
+    const turn = turns.startTurn(
+      send,
+      {} as import('./stream-consumer.js').TransformDeps,
+      throwingIterator,
+      Date.now(),
+    );
+    turn.interrupted = true;
+    turns.abandon(turn);
+
+    // Wait for settlement to complete (settle() is called by abandon since
+    // turn.interrupted is true).
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    const settleErrorEvents = writer.events.filter(
+      (e): e is Extract<typeof e, { kind: 'session_phase' }> =>
+        e.kind === 'session_phase' && (e.payload as { phase: string }).phase === 'settle_error',
+    );
+    expect(settleErrorEvents).toHaveLength(1);
+    const errMeta = (settleErrorEvents[0]!.payload as { metadata?: Record<string, unknown> }).metadata;
+    expect(String(errMeta?.['error'] ?? '')).toContain('provider-boom');
+
+    turns.endTurn(turn);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // R1.2 / R1.3 regression tests (#5173)
 // ---------------------------------------------------------------------------
