@@ -294,6 +294,64 @@ describe('BgResultNotifier', () => {
     fireTerminal({ id: 'sub-r2', status: 'cancelled' } as SubagentResult);
     expect(notifier.hasPendingInjections()).toBe(false);
   });
+
+  // ── ownerSessionId filter — item 3 (#5177) ───────────────────────────────
+  // Jobs dispatched by child subagents (depth > 0) have a `parentSessionId`
+  // that differs from the top-level REPL's session id. They must NOT be
+  // injected into the top-level context. `resolveBackgroundDelivery` already
+  // tells the child model its result goes to the root session; this guard
+  // ensures the injection itself is suppressed.
+
+  it('injects a job whose parentSessionId matches the owner session', () => {
+    const ownedNotifier = new BgResultNotifier(registry, undefined, 'sess-owner');
+    const { handle, fireTerminal } = makeBgHandle('sub-own-1');
+    registry.register({ handle, prompt: 'owned job', model: 'sonnet', parentSessionId: 'sess-owner' });
+    fireTerminal(succeed('sub-own-1', 'result for owner'));
+    const injection = ownedNotifier.drainInjections();
+    expect(injection).toContain('result for owner');
+    ownedNotifier.dispose();
+  });
+
+  it('suppresses injection for a job dispatched by a different (child) session', () => {
+    const ownedNotifier = new BgResultNotifier(registry, undefined, 'sess-owner');
+    const { handle, fireTerminal } = makeBgHandle('sub-child-1');
+    registry.register({ handle, prompt: 'child job', model: 'sonnet', parentSessionId: 'sess-child' });
+    fireTerminal(succeed('sub-child-1', 'result for child'));
+    // No injection — wrong owner.
+    expect(ownedNotifier.drainInjections()).toBe('');
+    // But drainNotifications is also suppressed (whole onSettled returns early).
+    expect(ownedNotifier.drainNotifications()).toHaveLength(0);
+    ownedNotifier.dispose();
+  });
+
+  it('passes through a job with no parentSessionId even when ownerSessionId is set (backward compat)', () => {
+    const ownedNotifier = new BgResultNotifier(registry, undefined, 'sess-owner');
+    const { handle, fireTerminal } = makeBgHandle('sub-compat-1');
+    // No parentSessionId — legacy job or model dispatch without session context.
+    registry.register({ handle, prompt: 'legacy job', model: 'sonnet' });
+    fireTerminal(succeed('sub-compat-1', 'legacy result'));
+    expect(ownedNotifier.drainInjections()).toContain('legacy result');
+    ownedNotifier.dispose();
+  });
+
+  it('passes through all jobs when ownerSessionId is not provided (no filter)', () => {
+    // `notifier` from beforeEach has no ownerSessionId.
+    const { handle, fireTerminal } = makeBgHandle('sub-nofilter-1');
+    registry.register({ handle, prompt: 'any job', model: 'sonnet', parentSessionId: 'sess-child' });
+    fireTerminal(succeed('sub-nofilter-1', 'unfiltered result'));
+    expect(notifier.drainInjections()).toContain('unfiltered result');
+  });
+
+  it('suppressed child job does not fire onInjectable', () => {
+    const ownedNotifier = new BgResultNotifier(registry, undefined, 'sess-owner');
+    const spy = vi.fn();
+    ownedNotifier.onInjectable = spy;
+    const { handle, fireTerminal } = makeBgHandle('sub-child-wake');
+    registry.register({ handle, prompt: 'child wake', model: 'sonnet', parentSessionId: 'sess-child' });
+    fireTerminal(succeed('sub-child-wake', 'child result'));
+    expect(spy).not.toHaveBeenCalled();
+    ownedNotifier.dispose();
+  });
 });
 
 describe('isAutoDeliverEnabled', () => {

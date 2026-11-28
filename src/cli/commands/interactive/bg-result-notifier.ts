@@ -237,6 +237,24 @@ export class BgResultNotifier {
 
   private readonly onSettled = (job: BackgroundJob): void => {
     if (!isAutoDeliverEnabled(env.AFK_BG_AUTO_DELIVER)) return;
+    // Item 3 (#5177): only inject jobs dispatched by this session. When a
+    // child session (depth > 1) dispatches a background job, the registry is
+    // shared and `settled` fires here too — but the result belongs to the
+    // child's session, not the top-level REPL. `resolveBackgroundDelivery`
+    // already tells the child model that its result goes to the root session;
+    // this guard prevents the actual injection so the parent does not receive
+    // a stale result it did not request.
+    //
+    // Filter rule: skip injection when BOTH sides are known and disagree.
+    // - `job.parentSessionId` undefined → old job or model-dispatch without
+    //   session context; pass through (backward compat, no false drops).
+    // - `ownerSessionId` undefined → notifier wired without a session id;
+    //   pass through (safe default, no behavior change).
+    if (
+      this.ownerSessionId !== undefined &&
+      job.parentSessionId !== undefined &&
+      job.parentSessionId !== this.ownerSessionId
+    ) return;
     this.pendingNotifications.push({ job });
     if (this.pendingNotifications.length > MAX_PENDING) {
       this.pendingNotifications.shift();
@@ -256,7 +274,20 @@ export class BgResultNotifier {
 
   private readonly detachedTools: DetachedToolNotifier | undefined;
 
-  constructor(private readonly registry: BackgroundAgentRegistry, detachRegistry?: DetachableToolRegistry) {
+  /**
+   * @param registry       The shared background-job registry.
+   * @param detachRegistry Optional Ctrl+B detach registry.
+   * @param ownerSessionId Session ID of the top-level REPL session. When
+   *   provided, jobs whose `parentSessionId` differs are silently skipped
+   *   (they were dispatched by a child subagent — their result goes to the
+   *   root-session delivery path, not to this notifier). Pass `undefined`
+   *   (the default) to disable the filter and pass all jobs through.
+   */
+  constructor(
+    private readonly registry: BackgroundAgentRegistry,
+    detachRegistry?: DetachableToolRegistry,
+    private readonly ownerSessionId?: string,
+  ) {
     registry.on('settled', this.onSettled);
     if (detachRegistry) {
       this.detachedTools = new DetachedToolNotifier(detachRegistry);
