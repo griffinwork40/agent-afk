@@ -83,6 +83,59 @@ function resolveTranscriber(e: typeof env): ReturnType<typeof createTranscriber>
 }
 
 /**
+ * Construct the TelegramBot instance from resolved config and shared stores.
+ * Extracted from main() to keep that function within the 200-line ceiling.
+ * All dependencies are passed explicitly — no closure over main() locals.
+ */
+function buildBot(params: {
+  botToken: string;
+  config: ReturnType<typeof loadConfig>;
+  frameworkBase: string | undefined;
+  allowedChatIds: Set<number>;
+  tagOnlyChats: Set<number>;
+  sharedMemoryStore: MemoryStore;
+  sharedStateStore: StateStore;
+}): TelegramBot {
+  const { botToken, config, frameworkBase, allowedChatIds, tagOnlyChats, sharedMemoryStore, sharedStateStore } = params;
+  const telegramCwd = env.AFK_TELEGRAM_CWD;
+  const idleSessionMsRaw = env.AFK_TELEGRAM_SESSION_IDLE_MS;
+  const idleSessionMs = idleSessionMsRaw !== undefined ? parseInt(idleSessionMsRaw, 10) : undefined;
+  const opMode = getOperatorPermissionMode();
+  return new TelegramBot({
+    botToken,
+    apiKey: config.apiKey ?? '',
+    dataDir: env.TELEGRAM_DATA_DIR || './data/telegram-sessions',
+    defaultModel: config.model as AgentModelInput,
+    verbose: ['1', 'true', 'yes', 'on'].includes((env.TELEGRAM_VERBOSE ?? '').trim().toLowerCase()),
+    allowedChatIds,
+    tagOnlyChats,
+    // Only meaningful for the Anthropic provider — the Codex adapter
+    // ignores settingSources at construction time.
+    settingSources: ['user', 'project'],
+    // Thread AFK_THINKING / AFK_EFFORT into every bot-spawned session so the
+    // Telegram surface honours these env vars just like chat, daemon, and REPL.
+    thinking: getThinking(),
+    effort: getEffort(),
+    // Bot-global cwd fallback used by SessionManager when no per-chat
+    // override is set via /cd. Per-session `data.cwd` takes precedence.
+    ...(telegramCwd !== undefined && telegramCwd.length > 0 ? { botCwd: telegramCwd } : {}),
+    ...(idleSessionMs !== undefined && !isNaN(idleSessionMs) && idleSessionMs > 0 ? { idleSessionMs } : {}),
+    transcriber: resolveTranscriber(env),
+    // Forward permissionMode only when the operator explicitly set it in afk.config.json.
+    // loadConfig() always fills in DEFAULT_CLI_PERMISSION_MODE, so checking config.permissionMode
+    // would unconditionally forward bypassPermissions into Telegram session metadata (#3969).
+    ...(opMode !== undefined ? { permissionMode: opMode } : {}),
+    createSession: createTelegramSessionFactory({
+      config,
+      frameworkBase,
+      telegramCwd,
+      memoryStore: sharedMemoryStore,
+      stateStore: sharedStateStore,
+    }),
+  });
+}
+
+/**
  * Resolve the tag-only chat set from config + env, and log a notice when it
  * is non-empty. Extracted from main() to keep that function within the
  * 200-line ceiling.
@@ -201,47 +254,8 @@ export async function main(): Promise<void> {
   const sharedMemoryStore = new MemoryStore();
   const sharedStateStore = new StateStore(getStateDatabasePath());
 
-  // Optional working-directory override for every bot-spawned session.
-  // When set, all per-chat AgentSessions (and their forked subagents)
-  // operate in this directory rather than the bot process's
-  // `process.cwd()`. Use this to point the bot at a specific repo or
-  // worktree without changing cwd before launch.
-  const telegramCwd = env.AFK_TELEGRAM_CWD;
-  const idleSessionMs = env.AFK_TELEGRAM_SESSION_IDLE_MS !== undefined ? parseInt(env.AFK_TELEGRAM_SESSION_IDLE_MS, 10) : undefined;
-
-  const opMode = getOperatorPermissionMode();
-  const bot = new TelegramBot({
-    botToken,
-    apiKey: config.apiKey ?? '',
-    dataDir: env.TELEGRAM_DATA_DIR || './data/telegram-sessions',
-    defaultModel: config.model as AgentModelInput,
-    verbose: ['1', 'true', 'yes', 'on'].includes((env.TELEGRAM_VERBOSE ?? '').trim().toLowerCase()),
-    allowedChatIds,
-    tagOnlyChats,
-    // Only meaningful for the Anthropic provider — the Codex adapter
-    // ignores settingSources at construction time.
-    settingSources: ['user', 'project'],
-    // Thread AFK_THINKING / AFK_EFFORT into every bot-spawned session so the
-    // Telegram surface honours these env vars just like chat, daemon, and REPL.
-    thinking: getThinking(),
-    effort: getEffort(),
-    // Bot-global cwd fallback used by SessionManager when no per-chat
-    // override is set via /cd. Per-session `data.cwd` takes precedence.
-    ...(telegramCwd !== undefined && telegramCwd.length > 0 ? { botCwd: telegramCwd } : {}),
-    ...(idleSessionMs !== undefined && !isNaN(idleSessionMs) && idleSessionMs > 0 ? { idleSessionMs } : {}),
-    transcriber: resolveTranscriber(env),
-    // Forward permissionMode only when the operator explicitly set it in afk.config.json.
-    // loadConfig() always fills in DEFAULT_CLI_PERMISSION_MODE, so checking config.permissionMode
-    // would unconditionally forward bypassPermissions into Telegram session metadata (#3969).
-    ...(opMode !== undefined ? { permissionMode: opMode } : {}),
-    createSession: createTelegramSessionFactory({
-      config,
-      frameworkBase,
-      telegramCwd,
-      memoryStore: sharedMemoryStore,
-      stateStore: sharedStateStore,
-    }),
-  });
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  const bot = buildBot({ botToken, config: config!, frameworkBase, allowedChatIds, tagOnlyChats, sharedMemoryStore, sharedStateStore });
 
   // Elicitation wiring (path-approval + ask_question) is installed inside
   // `bot.start()` via composeTelegramElicitation — a SINGLE composed handler,
@@ -259,17 +273,28 @@ export async function main(): Promise<void> {
     clearInterval(statsInterval);
     try {
       await bot.stop();
-      sharedMemoryStore.close();
-      sharedStateStore.close();
-      console.log(palette.success('✅ Bot stopped.'));
     } finally {
-      process.exit(exitCode);
+      // Guard store closes independently so a bot.stop() rejection does not
+      // skip them (finding #4: store close in its own try/finally).
+      try { sharedMemoryStore.close(); } catch { /* best-effort */ }
+      try { sharedStateStore.close(); } catch { /* best-effort */ }
     }
+    console.log(palette.success('✅ Bot stopped.'));
+    // Signal listeners are removed before exit so this finally path is
+    // reachable and the removeListener calls in main()'s finally are live
+    // (finding #1: process.exit moved after cleanup).
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
+    process.exit(exitCode);
   };
   // ??= ensures a concurrent second signal never overwrites shutdownPromise.
   // shutdown() returns a Promise<void> (async always does), but the stopping
   // guard makes it resolve immediately on re-entry — ??= keeps the original
   // pending promise so `await shutdownPromise` in finally waits for cleanup.
+  // The ??= also means shutdown(1) called from the catch block below does NOT
+  // overwrite a concurrent signal-triggered shutdown(0) (finding #8: non-obvious
+  // but correct — shutdown(1) is called directly, bypassing ??=, so the exit
+  // code from the first shutdown always wins; onSignal is the ??= path only).
   const onSignal = () => { shutdownPromise ??= shutdown(0); };
 
   installCrashHandlers();
@@ -292,9 +317,18 @@ export async function main(): Promise<void> {
   } catch (error) {
     if (stopping) return;
     const message = started ? 'Telegram polling failed: ' : 'Failed to start bot: ';
-    console.error(palette.error('❌ ' + message + String(error)));
+    // Scrub any embedded bot token from the error string before logging
+    // (defense-in-depth — Telegraf scrubs internally, but error.message may
+    // carry a URL with the token; finding #2: token scrub on startup error path).
+    const safeError = String(error).replace(/\/bot[^/]+\//g, '/bot[REDACTED]/');
+    console.error(palette.error('❌ ' + message + safeError));
     await shutdown(1);
   } finally {
+    // shutdown() now removes the listeners itself before process.exit(), so
+    // these calls are a belt-and-suspenders guard for the non-shutdown exit
+    // path (polling ended cleanly without stopping=true, which throws above).
+    // They are intentionally kept here so coverage is complete regardless of
+    // which code path exits (finding #1: removeListener now reachable).
     await shutdownPromise;
     process.removeListener('SIGINT', onSignal);
     process.removeListener('SIGTERM', onSignal);
