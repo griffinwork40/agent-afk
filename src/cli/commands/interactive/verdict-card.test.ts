@@ -1098,6 +1098,74 @@ describe('renderVerdictCard — secondary-tier edge cases (#4777)', () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
+// assumptions field render (#5385)
+//
+// Guards that the parsed `assumptions` field is wired into the verdict card
+// as a secondary-tier row — the render gap identified in issue #5385.
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('renderVerdictCard — assumptions field (#5385)', () => {
+  it('renders assumptions as a secondary-tier row when present', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      whatWasDone: 'wired the flag',
+      assumptions: 'proceeded on main branch; no ask_question was declined',
+      rawBody: '',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    expect(out).toContain('assumptions');
+    expect(out).toContain('proceeded on main branch; no ask_question was declined');
+  });
+
+  it('omits assumptions row when field is absent', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      whatWasDone: 'wired the flag',
+      rawBody: '',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    expect(out).not.toContain('assumptions');
+  });
+
+  it('assumptions is secondary tier — appears after primary rows with separator', () => {
+    withCols(80, () => {
+      const state: TerminalState = {
+        kind: 'done',
+        whatWasDone: 'shipped it',
+        assumptions: 'used default config; operator confirmed intent',
+        rawBody: '',
+      };
+      const out = stripAnsi(renderVerdictCard(state));
+      const lines = out.split('\n');
+      const assumIdx = lines.findIndex((l) => l.includes('assumptions'));
+      expect(assumIdx).toBeGreaterThan(0);
+      // A secondary row must be preceded by a blank separator row (box chrome with
+      // only whitespace inside) since there is a primary row before it.
+      const prevLine = lines[assumIdx - 1] ?? '';
+      expect(prevLine.trim()).toMatch(/^│\s+│$/);
+    });
+  });
+
+  it('absence: "Assumed:" label does not trigger the assumptions field', () => {
+    // Probes the parser for false matches on assumption-adjacent labels.
+    // "Assumed:" should NOT be captured as the `assumptions` field because
+    // the parser needle is 'assumption' and 'assumed' does not contain it.
+    const parsed = parseTerminalState(
+      'Done\n- What was done: reviewed the diff\n- Assumed: branch is main',
+    );
+    // The parser may or may not capture "Assumed:" depending on needle matching —
+    // the key assertion is that the verdict card does NOT show an "assumptions" row
+    // from an "Assumed:" bullet, so this probes for false-positive rendering.
+    const out = parsed ? stripAnsi(renderVerdictCard(parsed)) : '';
+    // If "Assumed:" is NOT matched as assumptions, the row is absent (correct).
+    // If it IS matched, we'd see the value — that would be a false positive.
+    // The parser uses find('assumption') which checks b.label.includes('assumption');
+    // 'assumed' does NOT include the substring 'assumption', so no match.
+    expect(out).not.toContain('assumptions');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
 // Long unbreakable token geometry (breakLongWords regression)
 //
 // An unbreakable token (URL, file path, commit SHA) wider than the inner card

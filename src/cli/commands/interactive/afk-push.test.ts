@@ -423,6 +423,37 @@ describe('doneHasCorroboratingEvidence', () => {
   });
 });
 
+describe('formatTerminalStateForTelegram — assumptions field (#5385)', () => {
+  it('renders Assumptions in Telegram output when present', () => {
+    const msg = formatTerminalStateForTelegram(
+      done({ whatWasDone: 'wired the flag', assumptions: 'proceeded on main; no ask declined' }),
+    );
+    expect(msg).toContain('Assumptions: proceeded on main; no ask declined');
+  });
+
+  it('omits Assumptions line when field is absent', () => {
+    const msg = formatTerminalStateForTelegram(done({ whatWasDone: 'wired the flag' }));
+    expect(msg).not.toContain('Assumptions:');
+  });
+
+  it('assumptions appears between Worth doing and Not checked in output order', () => {
+    const msg = formatTerminalStateForTelegram(
+      done({
+        whatWasDone: 'shipped',
+        worthDoing: 'High value',
+        assumptions: 'used default branch',
+        notChecked: 'integration tests',
+      }),
+    );
+    const worthAt = msg.indexOf('Worth doing:');
+    const assumAt = msg.indexOf('Assumptions:');
+    const notAt = msg.indexOf('Not checked:');
+    expect(worthAt).toBeGreaterThan(-1);
+    expect(assumAt).toBeGreaterThan(worthAt);
+    expect(notAt).toBeGreaterThan(assumAt);
+  });
+});
+
 describe('formatTerminalStateForTelegram — verification downgrade', () => {
   it('downgrades a done verdict to "unverified" when opts.unverified is true', () => {
     const msg = formatTerminalStateForTelegram(done({ whatWasDone: 'shipped' }), { unverified: true });
