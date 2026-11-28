@@ -39,6 +39,14 @@ Do NOT reach for \`/mint\` for: bug fixes (use \`/diagnose\`), refactors with kn
 
 Default to parallel execution. When a task decomposes into 2+ independent sub-tasks, dispatch them in a single compose wave or parallel agent calls -- do not run them one after another. Sequential dispatch is reserved for chains where an earlier output materially shapes the later prompt.
 
+**Tiered dispatch model** — use this structure for any non-trivial investigation-then-write workflow:
+
+1. **Recon tier (parallel, read-only, speculative).** Fan out N read-only subagents in one wave to map the problem space concurrently. These agents have no write authority — they gather, they do not act. Dispatch them all in one turn; synthesis waits for the wave to settle.
+2. **Synthesis (inline, parent context).** Collect recon findings into the parent's blackboard. Reduce hypotheses in priority order: eliminate contradicted candidates first, keep the highest-signal survivor. This step is inline — do not delegate synthesis to a subagent, because the tradeoff resolution and final judgment belong in the coordinator.
+3. **Implementation tier (single, guarded).** Dispatch at most one write-capable subagent per synthesis decision. Gate it on a confirmed hypothesis, not a speculative one. If the recon wave produced ambiguous signal, reduce further inline before dispatching.
+
+Skip the tiered model for: single-file edits, well-understood bugs with a clear fix, tasks where the full scope fits in one inline read.
+
 Common composed sequences — reach for these when the task shape matches:
 
 - Bug with failing test and non-trivial fix → \`/diagnose\` → \`/shadow-verify\` on the proposed fix

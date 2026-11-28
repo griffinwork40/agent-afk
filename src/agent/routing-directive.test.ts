@@ -216,6 +216,52 @@ describe('assembleSystemPrompt', () => {
     it('pins the parallel-first scheduling posture', () => {
       expect(ROUTING_DIRECTIVE).toContain('Default to parallel execution');
     });
+
+    it('names all three tiers of the tiered dispatch model', () => {
+      // Regression guard for #1675: the tiered dispatch model (recon-parallel,
+      // synthesis-inline, implementation-guarded) must be present in the
+      // routing directive so the interactive model applies it without a skill
+      // invocation. If any tier is removed the enforcement layer is silently
+      // lost and the agent collapses back to unstructured fan-out.
+      expect(ROUTING_DIRECTIVE).toContain('Recon tier');
+      expect(ROUTING_DIRECTIVE).toContain('Synthesis');
+      expect(ROUTING_DIRECTIVE).toContain('Implementation tier');
+    });
+
+    it('constrains recon tier to read-only, parallel, speculative agents', () => {
+      // The key safety property: recon agents must have no write authority.
+      // A model that reads "recon" but dispatches write-capable agents defeats
+      // the guard entirely.
+      expect(ROUTING_DIRECTIVE).toMatch(/read.only/);
+      expect(ROUTING_DIRECTIVE).toContain('no write authority');
+    });
+
+    it('constrains implementation tier to single, guarded dispatch', () => {
+      // The implementation tier must be bounded: at most one write-capable
+      // subagent per synthesis decision, gated on a confirmed hypothesis.
+      expect(ROUTING_DIRECTIVE).toMatch(/at most one write-capable subagent/);
+      expect(ROUTING_DIRECTIVE).toContain('confirmed hypothesis');
+    });
+
+    it('keeps synthesis inline in the parent context', () => {
+      // Delegating synthesis loses the tradeoff-resolution property: the child
+      // cannot access the parent blackboard and cannot reduce across all recon
+      // findings simultaneously. The directive must name this constraint.
+      expect(ROUTING_DIRECTIVE).toMatch(/inline/);
+      expect(ROUTING_DIRECTIVE).toContain('do not delegate synthesis to a subagent');
+    });
+
+    it('places the tiered dispatch model after the parallel-execution paragraph', () => {
+      // Structural guard: the tiered model must follow (and refine) the
+      // parallel-first posture, not precede it. Reading order matters: the
+      // agent reads the posture first, then the tiered structure that
+      // implements it.
+      const parallelIdx = ROUTING_DIRECTIVE.indexOf('Default to parallel execution');
+      const tieredIdx = ROUTING_DIRECTIVE.indexOf('Tiered dispatch model');
+      expect(parallelIdx).toBeGreaterThan(-1);
+      expect(tieredIdx).toBeGreaterThan(-1);
+      expect(parallelIdx).toBeLessThan(tieredIdx);
+    });
   });
 
   describe('END_OF_TURN_DIRECTIVE content', () => {
