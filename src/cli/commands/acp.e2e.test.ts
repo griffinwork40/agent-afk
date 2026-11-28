@@ -83,7 +83,7 @@ describe('ACP golden transcripts against the real server (A1/A2/A3/A4 integratio
       if (stem === 'session-cwd-outside-launch') vi.mocked(process.cwd).mockReturnValue(launchElsewhere());
       await replayGolden(connect(), rowsFor(file), root, stem);
       expect(script.executed, `${stem}: only approved tools execute`).toEqual(
-        stem.startsWith('tool-') ? ['tool-1'] : [],
+        (['tool-read', 'tool-edit-diff', 'tool-bash-failed'] as string[]).includes(stem) ? ['tool-1'] : [],
       );
       // Replay may construct a provider but must never execute historical calls.
       if (stem === 'load-replay' || stem === 'load-live-session') expect(script.asked).toEqual([]);

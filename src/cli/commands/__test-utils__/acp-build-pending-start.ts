@@ -1,7 +1,8 @@
 /**
- * Local test helper: re-implements buildPendingStart from the deleted
- * acp.permission.policy.ts so that acp.tool-title.*.test.ts files continue
- * to work without depending on the removed permission layer.
+ * Local test helper: constructs a pending ToolCallStart for acp.tool-title.*.test.ts
+ * files. This was originally duplicated from the deleted acp.permission.policy.ts;
+ * it now lives here as the canonical test-only implementation.
+ * If production code ever needs the same logic, extract it to a shared module.
  */
 import path from 'node:path';
 import type { ToolCallStart, ToolKind } from '../acp.wire.js';

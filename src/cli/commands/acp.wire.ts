@@ -112,7 +112,7 @@ export interface SessionNotification { sessionId: string; update: SessionUpdate 
 export interface TranslatorToolState {
   name: string;
   input?: JsonValue;
-  /** Shared with emitToolCall so permission paints and stream paints deduplicate. */
+  /** Shared with emitToolCall so duplicate start frames are suppressed. */
   announced: boolean;
   content: ToolCallContent[];
   status: ToolCallStatus;

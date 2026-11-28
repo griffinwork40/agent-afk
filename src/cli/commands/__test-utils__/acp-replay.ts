@@ -31,8 +31,7 @@ export function substitute(value: unknown, root: string, sessionId: string): unk
 function owner(frame: Frame): string {
   const params = frame['params'] as { update?: { sessionUpdate?: string } } | undefined;
   const update = params?.update?.sessionUpdate;
-  if (frame['method'] === 'session/request_permission') return 'A3 acp.permission.ts / A1 rpc routing';
-  if (update?.startsWith('tool')) return 'A2 acp.translate.ts + A3 permission announcement/dedup';
+  if (update?.startsWith('tool')) return 'A2 acp.translate.ts';
   if (update) return 'A2 acp.translate.ts (or A4 acp.session-load.ts for replay)';
   return 'A1 acp.server.ts (A4 acp.session-load.ts for load/resume)';
 }
@@ -75,7 +74,7 @@ export class GoldenConnection {
       if (this.stopped) throw new Error(`${context}: A1 server stopped before frame ${index + 1}: ${String(this.serverError)}`);
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => { this.changed = undefined;
-          reject(new Error(`${context}: missing agent frame ${index + 1}; inspect ${context.includes('permission') ? 'A3 gate / A1 response routing' : 'A1 dispatch / A2 translator / A4 load'}`));
+          reject(new Error(`${context}: missing agent frame ${index + 1}; inspect A1 dispatch / A2 translator / A4 load`));
         }, 2000);
         this.changed = () => { clearTimeout(timer); this.changed = undefined; resolve(); };
       });
@@ -88,7 +87,7 @@ export class GoldenConnection {
     this.input.end();
     try {
       await Promise.race([this.done, new Promise<never>((_resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('A1 EOF cleanup hung (pending prompt/permission)')), 2000);
+        const timer = setTimeout(() => reject(new Error('A1 EOF cleanup hung (pending prompt)')), 2000);
         timer.unref();
         void this.done.then(() => clearTimeout(timer));
       })]);
