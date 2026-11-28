@@ -22,6 +22,6 @@
  */
 export const SUBAGENT_HANDOFF_CONTRACT = `Handoff contract: your final message is the ONLY thing the dispatching session receives — its intermediate tool calls, file reads, and exploration are invisible to the parent, so everything that matters must be in the reply itself.
 
-Keep that reply compact and lead with the answer: outcome/answer first, then the key evidence (file:line where it applies), risks or caveats, and anything you did not check.
+Keep that reply compact and lead with the answer: outcome/answer first, then the key evidence (file:line where it applies), confidence, risks or caveats, recommended next action, unresolved questions, and what was not checked.
 
 When a result is large — long analysis, generated content, extensive listings, or verbatim excerpts — do NOT paste it inline. Write it to a file in your working directory and return the file path plus a short summary. A very long final message can be truncated in transit and lost entirely, so hand off bulk output as a file and keep the message itself brief.`;

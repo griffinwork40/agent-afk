@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 
-import { injectToolBudgetPreamble, renderBudgetPreamble } from './budget-preamble.js';
+import {
+  injectToolBudgetPreamble,
+  renderBudgetPreamble,
+  renderUnboundedLimitsNote,
+} from './budget-preamble.js';
 import type { AgentConfig } from '../types/config-types.js';
 
 describe('renderBudgetPreamble', () => {
@@ -91,20 +95,23 @@ describe('injectToolBudgetPreamble', () => {
     });
   });
 
-  // `0` means unbounded (resolveMaxToolIterations) — a child with no ceiling
-  // has no budget to disclose, and claiming one would be a lie.
+  // `0` means unbounded (resolveMaxToolIterations) — no round cap to disclose,
+  // but wall-clock and idle limits still apply, so we emit the limits note
+  // rather than returning the config unchanged (#5313 item 1).
   it.each([
     ['unset', undefined],
     ['zero (unbounded)', 0],
     ['negative', -1],
-  ])('is a no-op when the cap is %s', (_label, cap) => {
+  ])('emits the limits note (not a no-op) when the cap is %s', (_label, cap) => {
     const config: AgentConfig = {
       systemPrompt: 'untouched',
       ...(cap === undefined ? {} : { maxToolUseIterations: cap }),
     };
     const out = injectToolBudgetPreamble(config);
-    expect(out).toBe(config);
-    expect(out.systemPrompt).toBe('untouched');
+    // Must produce a NEW object (not the original) containing the limits note.
+    expect(out).not.toBe(config);
+    expect(out.systemPrompt as string).toContain('# Tool budget');
+    expect(out.systemPrompt as string).toContain('untouched');
   });
 
   it('floors a fractional cap rather than printing a decimal', () => {
@@ -117,5 +124,40 @@ describe('injectToolBudgetPreamble', () => {
     const config: AgentConfig = { systemPrompt: 'original', maxToolUseIterations: 50 };
     injectToolBudgetPreamble(config);
     expect(config.systemPrompt).toBe('original');
+  });
+
+  // Unbounded children (0 / undefined / non-finite) previously received no
+  // limits note at all. Now they get renderUnboundedLimitsNote() appended so
+  // they know about the wall-clock abort and idle watchdog (#5313 item 1).
+  it('appends the limits note for an unbounded child with an existing prompt', () => {
+    const config: AgentConfig = { systemPrompt: 'You are the research agent.' };
+    const out = injectToolBudgetPreamble(config);
+    expect(typeof out.systemPrompt).toBe('string');
+    expect(out.systemPrompt as string).toMatch(/^You are the research agent\./);
+    expect(out.systemPrompt as string).toContain('# Tool budget');
+    expect(out.systemPrompt as string).toContain('hard ceiling, not a target');
+  });
+
+  it('sets the limits note as the prompt when no prompt is set for unbounded child', () => {
+    const out = injectToolBudgetPreamble({});
+    expect(out.systemPrompt).toBe(renderUnboundedLimitsNote());
+  });
+});
+
+describe('renderUnboundedLimitsNote', () => {
+  it('opens with the Tool budget heading', () => {
+    expect(renderUnboundedLimitsNote()).toMatch(/^# Tool budget/);
+  });
+
+  it('frames the budget as a ceiling to finish under, not an allowance to spend', () => {
+    expect(renderUnboundedLimitsNote()).toContain('hard ceiling, not a target');
+  });
+
+  it('includes the convergence sentence', () => {
+    expect(renderUnboundedLimitsNote()).toContain('stop gathering and answer now');
+  });
+
+  it('includes the code-quality caveat', () => {
+    expect(renderUnboundedLimitsNote()).toContain('internally consistent checkpoint');
   });
 });

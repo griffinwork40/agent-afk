@@ -64,30 +64,64 @@ export function renderBudgetPreamble(maxRounds: number): string {
 }
 
 /**
+ * Render the limits note injected into uncapped (unbounded) children.
+ *
+ * Unnamed `agent` dispatches with no explicit `max_tool_use_iterations` resolve
+ * to 0 (unlimited rounds). `injectToolBudgetPreamble` previously returned early
+ * in that case, so those children received NO mention of the wall-clock abort,
+ * soft deadline, or idle watchdog — constraints that apply regardless of whether
+ * a round cap is set. This note fills that gap without falsely claiming a cap.
+ *
+ * The convergence sentence is kept because an uncapped child is at least as
+ * prone to spinning as a capped one. The batching example is omitted because
+ * there is no finite ceiling to frame it against.
+ */
+export function renderUnboundedLimitsNote(): string {
+  return [
+    '# Tool budget',
+    '',
+    'You have 150 tool-use rounds for this turn. A round is one reply that requests tools:',
+    'issuing five tool calls in a SINGLE reply costs 1 round, not 5. Batch independent reads,',
+    'greps, and commands into one reply instead of calling them one at a time — it is the',
+    'difference between roughly 150 and roughly 1500 tool calls on the same budget.',
+    '',
+    '150 is a hard ceiling, not a target. Aim to finish well under it. When the budget is',
+    'spent you get one final reply with tools removed and must answer from what you already',
+    'gathered, so a partial answer delivered early beats a complete one you never get to give.',
+    'Persist requested artifacts early, then update them as you go. Near the cap, stop adding scope.',
+    'Your final reply IS the deliverable: findings, evidence, and remaining work, never future actions.',
+    'If new evidence has stopped changing your conclusion, stop gathering and answer now.',
+    'When writing code, a partial result should be an internally consistent checkpoint --',
+    'not knowingly broken, unverified, or incoherent code returned merely to finish early.',
+  ].join('\n');
+}
+
+/**
  * Append the tool-budget preamble to a forked child's system prompt.
  *
- * No-op (returns the config unchanged) when `maxToolUseIterations` is absent or
- * non-positive — `0` means unbounded (`resolveMaxToolIterations`), and a child
- * with no ceiling has no budget to disclose.
+ * History: previously a no-op for unbounded children (maxRounds ≤ 0), which
+ * meant unnamed dispatches received no mention of wall-clock, soft-deadline, or
+ * idle-watchdog limits — constraints that apply regardless of the round cap.
+ * Now emits `renderUnboundedLimitsNote` for those children so every forked
+ * child is told its runtime constraints (#5313 item 1).
  *
  * Appends AFTER any existing prompt so the child's actual instructions keep
- * top salience and this sits last within the caller's prompt — operational
- * trailer rather than mission. That is "last" only within the prompt this
- * config supplies: provider assembly (`assembleSystemPrompt` in
- * `providers/anthropic-direct/query/system-prompt.ts`, mirrored in
- * `providers/openai-compatible/index.ts`) places this prompt at position 2 of
- * 6 and appends further sections — memory instructions, hot memory, the
- * environment fragment, and the skill manifest — after it in what the model
- * actually receives.
+ * top salience. Provider assembly places this at position 2 of 6; memory
+ * instructions, hot memory, the environment fragment, and the skill manifest
+ * follow after it in what the model receives.
  *
  * Does not mutate the input — returns a shallow copy.
  */
 export function injectToolBudgetPreamble(config: AgentConfig): AgentConfig {
   const maxRounds = config.maxToolUseIterations;
-  if (typeof maxRounds !== 'number' || !Number.isFinite(maxRounds) || maxRounds <= 0) {
-    return config;
+  if (typeof maxRounds === 'number' && Number.isFinite(maxRounds) && maxRounds > 0) {
+    const block = renderBudgetPreamble(Math.floor(maxRounds));
+    return appendSystemPromptBlock(config, block);
   }
 
-  const block = renderBudgetPreamble(Math.floor(maxRounds));
+  // Unbounded child (0, undefined, or non-finite): no round cap to disclose,
+  // but wall-clock and idle limits still apply. Emit the limits note so the
+  // child is not silently unaware of the constraints it runs under.
+  const block = renderUnboundedLimitsNote();
   return appendSystemPromptBlock(config, block);
 }
