@@ -90,9 +90,10 @@ function localFile(uri: string): string {
 // Residuals: a server cache already stale BEFORE the request is not detectable;
 // a write within the same timestamp tick as the snapshot ties and is accepted
 // (resolution: coarse kernel ticks on Linux, 1-2 s on FAT/HFS+/some mounts); a
-// workspace on a different filesystem or clock than os.tmpdir() (network mount,
-// other volume) is compared across clocks and resolutions; wall-clock
-// adjustments between snapshot and check move both bounds.
+// workspace on a different filesystem or volume than os.tmpdir() (network mount,
+// other volume) is compared across clocks and resolutions; a filesystem clock
+// step between snapshot and check shifts both bounds equally, so the window
+// width is preserved but its absolute position moves.
 async function assertUnchangedSinceRequest(path: string, uri: string, before: string, options: WorkspaceEditOptions): Promise<void> {
   const written = options.writtenContents?.get(path);
   const expected = written ?? options.expectedContents.get(uri);

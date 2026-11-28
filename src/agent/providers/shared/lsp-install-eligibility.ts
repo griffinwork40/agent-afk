@@ -6,6 +6,6 @@ export function lspInstallEligible(config: Pick<AgentConfig,
   return config.lspInstallAllowed === true
     && (config.surface === 'cli' || config.surface === 'telegram' || config.surface === 'repl')
     && config.isNonInteractive !== true
-    && (config.depth === undefined || config.depth === 0)
+    && (config.depth ?? 0) === 0
     && config.parentSessionId === undefined && config.subagentId === undefined;
 }
