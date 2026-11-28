@@ -326,6 +326,37 @@ describe('worktree handler — create', () => {
     expect(result.content).toContain('auto-suffixed path');
   });
 
+  // #5387: when the auto-suffixed BRANCH ref also already exists (stillBranchTaken path),
+  // the handler must surface an error — zero test coverage before this fix.
+  it('errors when the original slug is path-taken and the auto-suffixed branch ref also exists', async () => {
+    const base = 'branch-double';
+    const fixedSuffix = 'cd34';
+    const wtPath = join(afkRoot, base);
+    const suffixedSlug = `${base}-${fixedSuffix}`;
+    // Porcelain: original slug path is checked out; suffixed path is NOT checked out.
+    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath)}\n`, (call) => {
+      // rev-parse --verify refs/heads/afk/<suffixedSlug>: branch EXISTS (stillBranchTaken).
+      if (
+        call.args.includes('rev-parse') &&
+        call.args.includes('--verify') &&
+        call.args.some((a) => a.endsWith(`refs/heads/afk/${suffixedSlug}`))
+      ) {
+        return { stdout: 'deadbeef\n', stderr: '' };
+      }
+      return undefined;
+    }));
+    const handler = createWorktreeHandler(repoRoot, {
+      execFile: mock,
+      generateSuffix: () => fixedSuffix,
+    });
+    const result = await handler({ action: 'create', name: base }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('already exists');
+    expect(result.content).toContain('auto-suffixed path');
+    // Must NOT call git worktree add.
+    expect(mock.calls.some((c) => c.args.includes('add'))).toBe(false);
+  });
+
   it('rejects a name that sanitizes to empty', async () => {
     const handler = createWorktreeHandler(repoRoot, { execFile: makeMock(standardResponder('')) });
     const result = await handler({ action: 'create', name: '///' }, SIGNAL);
@@ -521,6 +552,22 @@ describe('worktree handler — keep / release', () => {
     expect(parsed.note).toMatch(/already unlocked/i);
     // Must NOT call git worktree unlock — the worktree isn't locked.
     expect(mock.calls.some((c) => c.args.includes('unlock'))).toBe(false);
+  });
+
+  // #5387: keep on an already-locked worktree must succeed without calling
+  // git worktree lock again (symmetric guard to release's unlocked check).
+  it('keep on an already-locked worktree returns success with a note (#5387)', async () => {
+    const wtPath = join(afkRoot, 'already-locked');
+    // Porcelain includes 'locked' for this entry.
+    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath, { locked: true })}\n`));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'keep', path: 'already-locked', reason: 'still needed' }, SIGNAL);
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(String(result.content)) as { locked: boolean; note: string };
+    expect(parsed.locked).toBe(true);
+    expect(parsed.note).toMatch(/already locked/i);
+    // Must NOT call git worktree lock — it's already locked.
+    expect(mock.calls.some((c) => c.args.includes('lock'))).toBe(false);
   });
 });
 
