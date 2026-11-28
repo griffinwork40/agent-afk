@@ -626,7 +626,10 @@ describe('graceful degradation — schema newer than build', () => {
   });
 
   it('does not throw on construction — returns a degraded store', () => {
-    expect(() => new MemoryStore(degradedDir)).not.toThrow();
+    const s = new MemoryStore(degradedDir);
+    // Close immediately so the FacetFtsStore releases its lock on
+    // facets-fts.db before afterEach rmSync (EBUSY on Windows).
+    s.close();
   });
 
   it('sets isDegraded to true and schemaVersionWarning to a non-null string', () => {
