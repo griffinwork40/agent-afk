@@ -622,11 +622,17 @@ export class CronScheduler {
     task: ScheduledTask,
     trigger: TelemetryTrigger = 'cron',
   ): ReturnType<typeof spawnDaemonSession> {
+    // Per-task model/maxBudgetUsd override the daemon-wide sessionConfig.
+    // resolveUnattendedLimits in spawnDaemonSession honours explicit config
+    // fields, so the task value wins over the env-var default.
+    const hasTaskOverrides = task.model !== undefined || task.maxBudgetUsd !== undefined;
     return spawnDaemonSession(task.taskId, {
       ...this.options,
       trigger,
-      // Per-task cwd takes precedence over the daemon-wide sessionConfig.cwd.
       ...(task.cwd !== undefined ? { taskCwd: task.cwd } : {}),
+      sessionConfig: hasTaskOverrides
+        ? { ...this.options.sessionConfig, ...(task.model !== undefined ? { model: task.model } : {}), ...(task.maxBudgetUsd !== undefined ? { maxBudgetUsd: task.maxBudgetUsd } : {}) }
+        : this.options.sessionConfig,
     });
   }
 

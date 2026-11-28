@@ -39,6 +39,8 @@ export const listSchedulesHandler: ToolHandler = async (input, _signal) => {
         ...(s.cwd !== undefined ? { cwd: s.cwd } : {}),
         ...(s.runAt !== undefined ? { runAt: s.runAt } : {}),
         ...(s.expiresAt !== undefined ? { expiresAt: s.expiresAt } : {}),
+        ...(s.model !== undefined ? { model: s.model } : {}),
+        ...(s.maxBudgetUsd !== undefined ? { maxBudgetUsd: s.maxBudgetUsd } : {}),
       })),
     ),
   };

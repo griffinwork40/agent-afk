@@ -140,6 +140,18 @@ export interface ScheduledTask {
    * See: scheduler.failure-streak.ts, issue #5146.
    */
   failureStreakThreshold?: number;
+  /**
+   * Optional model override for this task's agent session. When set, the
+   * spawned session uses this model instead of the daemon default.
+   * Resolved as: task.model → daemon default → global default.
+   * Applies to `executor: 'agent'` tasks only.
+   */
+  model?: string;
+  /**
+   * Optional per-run cost ceiling in USD. Aborts the agent session when
+   * cumulative cost reaches this limit. Applies to `executor: 'agent'` only.
+   */
+  maxBudgetUsd?: number;
 }
 
 /**
