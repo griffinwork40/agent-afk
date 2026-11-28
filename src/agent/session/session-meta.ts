@@ -92,9 +92,6 @@ export interface GitHeadSnapshot {
   capturedAt: number;
 }
 
-/** @deprecated Use {@link GitHeadSnapshot}. Kept as alias to avoid a wider rename. */
-export type SessionStart = GitHeadSnapshot;
-
 /**
  * Capture the full 40-hex HEAD SHA and branch name for `cwd` via two
  * bounded, shell-free spawnSync calls. Returns `{ branch: null, headSha:

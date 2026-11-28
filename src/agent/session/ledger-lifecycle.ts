@@ -16,7 +16,7 @@ import { sessionLabelFromTracePath } from '../../paths.js';
 import { SessionLedgerWriter } from '../session-ledger.js';
 import type { OutputEvent } from '../types.js';
 import type { ElicitationRequest } from '../types/sdk-types.js';
-import { captureGitHead, writeSessionMeta, type SessionStart } from './session-meta.js';
+import { captureGitHead, writeSessionMeta, type GitHeadSnapshot } from './session-meta.js';
 
 /**
  * Inputs for {@link LedgerLifecycle.ensure}. `getMetadata` is a lazy accessor so
@@ -43,7 +43,7 @@ export class LedgerLifecycle {
   private writer: SessionLedgerWriter | null = null;
   /** Set true once ledger creation has been attempted (success or not). */
   private initAttempted = false;
-  private start: { cwd: string; gitHead: SessionStart } | undefined;
+  private start: { cwd: string; gitHead: GitHeadSnapshot } | undefined;
   /** In-flight session-meta.json write; {@link seal} awaits it (#4959). */
   private metaWrite: Promise<void> | null = null;
   /** The most recent seal; a later seal waits for it. */
