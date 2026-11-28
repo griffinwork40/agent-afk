@@ -13,7 +13,7 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 ## [Unreleased]
 
 ### Removed
-- **Breaking (ACP clients):** `session/request_permission` is no longer emitted. External ACP clients that implemented a permission-approval UI will silently stop receiving this method. The `pending` tool-call status is also no longer produced; tool calls transition directly to `in_progress`. Seven wire types defined in the upstream schema (`RequestPermissionRequest`, `RequestPermissionResponse`, `RequestPermissionOutcome`, and related) remain in the schema document but are unused by AFK. `--dangerously-skip-permissions` was removed in 6.2.1 (`protocolVersion` stays `1` as this is an AFK-profile change, not an ACP spec version change). (#5305)
+- **Breaking (ACP clients):** `session/request_permission` is no longer emitted. External ACP clients that implemented a permission-approval UI will silently stop receiving this method. Seven wire types defined in the upstream schema (`RequestPermissionRequest`, `RequestPermissionResponse`, `RequestPermissionOutcome`, and related) remain in the schema document but are unused by AFK. `--dangerously-skip-permissions` was removed in 6.2.1 (`protocolVersion` stays `1` as this is an AFK-profile change, not an ACP spec version change). (#5305)
 
 ## [6.5.0] - 2026-11-27
 
