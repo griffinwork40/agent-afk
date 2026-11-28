@@ -1,5 +1,5 @@
 /**
- * Operator notification port for the `agent/` layer.
+ * Contract: operator notification port for the `agent/` layer.
  *
  * This module is the single import point for all `agent/` code that needs to
  * send out-of-band Telegram notifications. It exists to eliminate the
@@ -18,8 +18,9 @@
  * @module agent/operator-notify
  */
 
-import type { PushResult } from '../telegram/push.js';
+import type { PushOptions, PushResult } from '../telegram/push.js';
 export type { PushResult } from '../telegram/push.js';
+export { buildHandoffReplyMarkup } from '../telegram/handoff-reply-markup.js';
 
 /**
  * Options accepted by `operatorNotify`. This is an exact structural match of
@@ -29,7 +30,8 @@ export type { PushResult } from '../telegram/push.js';
 export interface OperatorNotifyOptions {
   parseMode?: 'MarkdownV2' | 'HTML' | 'Markdown';
   markdown?: boolean;
-  replyMarkup?: import('telegraf/types').InlineKeyboardMarkup;
+  replyMarkup?: PushOptions['replyMarkup'];
+  captureDelivery?: boolean;
   fetchImpl?: typeof fetch;
   /**
    * Explicit delivery target(s) that OVERRIDE the configured notify routing.

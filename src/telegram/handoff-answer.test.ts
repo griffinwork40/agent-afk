@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { getHandoffsDir } from '../paths.js';
 import type { HandoffRecord } from '../agent/daemon/handoff-store.js';
 import { writeHandoff, readHandoff, updateHandoffAnswer } from '../agent/daemon/handoff-store.js';
+import { buildHandoffCallback } from './handoff-callback-data.js';
 import {
   sendHandoffQuestion,
   matchReplyToHandoff,
@@ -35,7 +37,7 @@ function makeRecord(overrides: Partial<HandoffRecord> = {}): HandoffRecord {
 /** Minimal mock of a Telegraf bot for testing. */
 function mockBot() {
   const actions: Array<{ re: RegExp; handler: (ctx: unknown) => Promise<void> }> = [];
-  return {
+  const bot = {
     telegram: {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 42 }),
       editMessageText: vi.fn().mockResolvedValue(true),
@@ -43,8 +45,9 @@ function mockBot() {
     action: vi.fn((re: RegExp, handler: (ctx: unknown) => Promise<void>) => {
       actions.push({ re, handler });
     }),
-    _actions: actions,
-  } as unknown as import('telegraf').Telegraf;
+    actions,
+  };
+  return bot as typeof bot & import('telegraf').Telegraf;
 }
 
 // ---------------------------------------------------------------------------
@@ -60,8 +63,7 @@ describe('sendHandoffQuestion', () => {
 
   it('sends a confirm question with inline buttons and returns messageId', async () => {
     const bot = mockBot();
-    const record = makeRecord();
-    await writeHandoff(record, handoffsDir);
+    const record = await writeHandoff(makeRecord(), handoffsDir);
 
     const result = await sendHandoffQuestion({
       bot,
@@ -79,23 +81,51 @@ describe('sendHandoffQuestion', () => {
     expect(call[1]).toContain('Approve the deployment?');
     expect(call[2]).toHaveProperty('parse_mode', 'HTML');
     expect(call[2]).toHaveProperty('reply_markup');
-    // Buttons should use afk:h: prefix
-    const buttons = call[2].reply_markup.inline_keyboard;
-    expect(buttons).toHaveLength(1);
-    expect(buttons[0]).toHaveLength(2); // Yes + No
-    expect(buttons[0][0].callback_data).toMatch(/^afk:h:/);
+    expect(call[2].reply_markup).toEqual({ inline_keyboard: [[
+      { text: 'Yes', callback_data: `afk:h:q:1:${record.questionId}` },
+      { text: 'No', callback_data: `afk:h:q:0:${record.questionId}` },
+    ]] });
+  });
+
+  it('sends usable inline buttons for a 60-character task ID', async () => {
+    const bot = mockBot();
+    const taskId = 'a'.repeat(60);
+    // Read back rather than depending on the new return type, so this test also runs against main.
+    await writeHandoff(makeRecord({ taskId }), handoffsDir);
+    const record = (await readHandoff(taskId, handoffsDir))!;
+
+    const result = await sendHandoffQuestion({
+      bot, record, chatId: 12345, handoffsDir,
+    });
+    expect(result.ok).toBe(true);
+    const markup = bot.telegram.sendMessage.mock.calls[0]![2]?.reply_markup;
+    expect(markup).toEqual({ inline_keyboard: [[
+      { text: 'Yes', callback_data: `afk:h:q:1:${record.questionId}` },
+      { text: 'No', callback_data: `afk:h:q:0:${record.questionId}` },
+    ]] });
+  });
+
+  it('still sends a plain message when a legacy task ID is too long for buttons', async () => {
+    const bot = mockBot();
+    const record = makeRecord({ taskId: 'a'.repeat(60) });
+    await writeFile(join(handoffsDir, `${record.taskId}.json`), JSON.stringify(record));
+
+    expect(await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir })).toEqual({ ok: true, messageId: 42 });
+    const [, text, options] = bot.telegram.sendMessage.mock.calls[0]!;
+    expect(text).toContain('Approve the deployment?');
+    expect(options).not.toHaveProperty('reply_markup');
+    expect(await readHandoff(record.taskId, handoffsDir)).toMatchObject({ telegramMessageId: 42 });
   });
 
   it('sends a choice question with per-option buttons', async () => {
     const bot = mockBot();
-    const record = makeRecord({
+    const record = await writeHandoff(makeRecord({
       question: {
         message: 'Pick a color',
         type: 'choice',
         choices: ['Red', 'Green', 'Blue'],
       },
-    });
-    await writeHandoff(record, handoffsDir);
+    }), handoffsDir);
 
     const result = await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
     expect(result.ok).toBe(true);
@@ -105,26 +135,23 @@ describe('sendHandoffQuestion', () => {
     expect(buttons).toHaveLength(3);
   });
 
-  it('sends a text question as plain message and registers for reply-to', async () => {
+  it('sends a text question with ForceReply and registers for reply-to', async () => {
     const bot = mockBot();
-    const record = makeRecord({
+    const record = await writeHandoff(makeRecord({
       question: { message: 'What is the password?', type: 'text' },
-    });
-    await writeHandoff(record, handoffsDir);
+    }), handoffsDir);
 
     const result = await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
     expect(result.ok).toBe(true);
 
     const call = (bot.telegram.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    // No reply_markup for text questions
-    expect(call[2]).not.toHaveProperty('reply_markup');
+    expect(call[2].reply_markup).toEqual({ force_reply: true });
     expect(call[1]).toContain('Reply to this message');
   });
 
   it('persists route and telegramMessageId to the handoff record', async () => {
     const bot = mockBot();
-    const record = makeRecord();
-    await writeHandoff(record, handoffsDir);
+    const record = await writeHandoff(makeRecord(), handoffsDir);
 
     await sendHandoffQuestion({ bot, record, chatId: 12345, threadId: 99, handoffsDir });
 
@@ -138,8 +165,7 @@ describe('sendHandoffQuestion', () => {
 
   it('includes thread_id in send options for supergroups', async () => {
     const bot = mockBot();
-    const record = makeRecord();
-    await writeHandoff(record, handoffsDir);
+    const record = await writeHandoff(makeRecord(), handoffsDir);
 
     await sendHandoffQuestion({ bot, record, chatId: 12345, threadId: 77, handoffsDir });
 
@@ -163,8 +189,7 @@ describe('sendHandoffQuestion', () => {
 
   it('persistRouteAndMessageId: updates route/messageId on a still-pending record', async () => {
     const bot = mockBot();
-    const record = makeRecord();
-    await writeHandoff(record, handoffsDir);
+    const record = await writeHandoff(makeRecord(), handoffsDir);
 
     await sendHandoffQuestion({ bot, record, chatId: 55555, threadId: 7, handoffsDir });
 
@@ -176,10 +201,9 @@ describe('sendHandoffQuestion', () => {
     expect(updated.telegramMessageId).toBe(42);
   });
 
-  it('persistRouteAndMessageId: skips write when record transitions to answered before persist', async () => {
+  it('tracks a late delivery without clobbering a concurrent answer', async () => {
     const bot = mockBot();
-    const record = makeRecord();
-    await writeHandoff(record, handoffsDir);
+    const record = await writeHandoff(makeRecord(), handoffsDir);
 
     // Intercept sendMessage to simulate the operator answering in the narrow
     // window between sendMessage resolving and persistRouteAndMessageId writing.
@@ -191,13 +215,28 @@ describe('sendHandoffQuestion', () => {
 
     await sendHandoffQuestion({ bot, record, chatId: 99999, handoffsDir });
 
-    // The record on disk must reflect the answer, not the stale pending+route overwrite.
-    const onDisk = await readHandoff(record.taskId, handoffsDir);
-    expect(onDisk).not.toBeNull();
-    expect(onDisk!.status).toBe('answered');
-    // route and telegramMessageId must NOT have been written (would require status=pending)
-    expect(onDisk!.route).toBeUndefined();
-    expect(onDisk!.telegramMessageId).toBeUndefined();
+    expect(await readHandoff(record.taskId, handoffsDir)).toMatchObject({
+      status: 'answered',
+      answer: { value: true },
+      telegramCopies: [{ chatId: 99999, messageId: 42, questionId: record.questionId }],
+    });
+  });
+
+  it('does not attach metadata from an in-flight send to a replacement question', async () => {
+    const bot = mockBot();
+    const record = await writeHandoff(makeRecord(), handoffsDir);
+    const question = { message: 'Replacement?', type: 'confirm' };
+    bot.telegram.sendMessage.mockImplementationOnce(async () => {
+      await writeHandoff(makeRecord({ taskId: record.taskId, question }), handoffsDir);
+      return { message_id: 42 };
+    });
+
+    expect(await sendHandoffQuestion({ bot, record, chatId: 12345, threadId: 99, handoffsDir })).toMatchObject({ ok: true });
+    const replacement = await readHandoff(record.taskId, handoffsDir);
+    expect(replacement).toMatchObject({ status: 'pending', question });
+    expect(replacement?.questionId).not.toBe(record.questionId);
+    expect(replacement?.route).toBeUndefined();
+    expect(replacement?.telegramMessageId).toBeUndefined();
   });
 
   afterEach(async () => {
@@ -226,10 +265,9 @@ describe('matchReplyToHandoff', () => {
 
   it('consumes a text reply and records the answer', async () => {
     const bot = mockBot();
-    const record = makeRecord({
+    const record = await writeHandoff(makeRecord({
       question: { message: 'What is the name?', type: 'text' },
-    });
-    await writeHandoff(record, handoffsDir);
+    }), handoffsDir);
 
     // Send the question to register the reply-to mapping
     await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
@@ -246,14 +284,14 @@ describe('matchReplyToHandoff', () => {
     expect(updated.status).toBe('answered');
     expect(updated.answer).toEqual({ value: 'Alice' });
     expect(updated.answerSource).toBe('telegram');
+    expect(bot.telegram.editMessageText).toHaveBeenCalledWith(12345, 42, undefined, 'Answered: Alice');
   });
 
   it('validates number replies', async () => {
     const bot = mockBot();
-    const record = makeRecord({
+    const record = await writeHandoff(makeRecord({
       question: { message: 'How many?', type: 'number' },
-    });
-    await writeHandoff(record, handoffsDir);
+    }), handoffsDir);
     await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
 
     // Invalid number -- consumed but not answered
@@ -267,10 +305,9 @@ describe('matchReplyToHandoff', () => {
 
   it('records responderIdentity with userId and username when fromUser is provided', async () => {
     const bot = mockBot();
-    const record = makeRecord({
+    const record = await writeHandoff(makeRecord({
       question: { message: 'Confirm?', type: 'text' },
-    });
-    await writeHandoff(record, handoffsDir);
+    }), handoffsDir);
     await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
 
     const consumed = await matchReplyToHandoff(
@@ -289,10 +326,9 @@ describe('matchReplyToHandoff', () => {
 
   it('records responderIdentity with userId only when username is absent', async () => {
     const bot = mockBot();
-    const record = makeRecord({
+    const record = await writeHandoff(makeRecord({
       question: { message: 'Proceed?', type: 'text' },
-    });
-    await writeHandoff(record, handoffsDir);
+    }), handoffsDir);
     await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
 
     const consumed = await matchReplyToHandoff(
@@ -310,10 +346,9 @@ describe('matchReplyToHandoff', () => {
 
   it('leaves responderIdentity undefined when fromUser is not provided', async () => {
     const bot = mockBot();
-    const record = makeRecord({
+    const record = await writeHandoff(makeRecord({
       question: { message: 'Skip me?', type: 'text' },
-    });
-    await writeHandoff(record, handoffsDir);
+    }), handoffsDir);
     await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
 
     await matchReplyToHandoff(bot, 12345, 42, 'nope', handoffsDir);
@@ -347,15 +382,14 @@ describe('allowCustom', () => {
 
   it('choice+allowCustom: pendingTextHandoffs is populated after sendHandoffQuestion', async () => {
     const bot = mockBot();
-    const record = makeRecord({
+    const record = await writeHandoff(makeRecord({
       question: {
         message: 'Pick a deployment target',
         type: 'choice',
         choices: ['prod', 'staging'],
         allowCustom: true,
       },
-    });
-    await writeHandoff(record, handoffsDir);
+    }), handoffsDir);
 
     const result = await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
     expect(result.ok).toBe(true);
@@ -375,15 +409,14 @@ describe('allowCustom', () => {
 
   it('choice+allowCustom: matchReplyToHandoff accepts free text as custom_value', async () => {
     const bot = mockBot();
-    const record = makeRecord({
+    const record = await writeHandoff(makeRecord({
       question: {
         message: 'Pick a deployment target',
         type: 'choice',
         choices: ['prod', 'staging'],
         allowCustom: true,
       },
-    });
-    await writeHandoff(record, handoffsDir);
+    }), handoffsDir);
     await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
 
     const consumed = await matchReplyToHandoff(bot, 12345, 42, 'canary', handoffsDir);
@@ -398,14 +431,13 @@ describe('allowCustom', () => {
 
   it('choice without allowCustom: no reply-to path registered', async () => {
     const bot = mockBot();
-    const record = makeRecord({
+    const record = await writeHandoff(makeRecord({
       question: {
         message: 'Pick a color',
         type: 'choice',
         choices: ['Red', 'Green'],
       },
-    });
-    await writeHandoff(record, handoffsDir);
+    }), handoffsDir);
     await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
 
     // Without allowCustom, reply-to should not be registered
@@ -415,15 +447,14 @@ describe('allowCustom', () => {
 
   it('multi_choice+allowCustom: accepts non-numeric text as custom_value', async () => {
     const bot = mockBot();
-    const record = makeRecord({
+    const record = await writeHandoff(makeRecord({
       question: {
         message: 'Pick features',
         type: 'multi_choice',
         choices: ['auth', 'logging', 'metrics'],
         allowCustom: true,
       },
-    });
-    await writeHandoff(record, handoffsDir);
+    }), handoffsDir);
     await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
 
     const consumed = await matchReplyToHandoff(bot, 12345, 42, 'tracing', handoffsDir);
@@ -438,14 +469,13 @@ describe('allowCustom', () => {
 
   it('multi_choice without allowCustom: rejects non-numeric text', async () => {
     const bot = mockBot();
-    const record = makeRecord({
+    const record = await writeHandoff(makeRecord({
       question: {
         message: 'Pick features',
         type: 'multi_choice',
         choices: ['auth', 'logging', 'metrics'],
       },
-    });
-    await writeHandoff(record, handoffsDir);
+    }), handoffsDir);
     await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
 
     // Non-numeric text should be rejected (consumed=true, but still pending)
@@ -462,15 +492,14 @@ describe('allowCustom', () => {
 
   it('multi_choice+allowCustom: still accepts valid numeric lists', async () => {
     const bot = mockBot();
-    const record = makeRecord({
+    const record = await writeHandoff(makeRecord({
       question: {
         message: 'Pick features',
         type: 'multi_choice',
         choices: ['auth', 'logging', 'metrics'],
         allowCustom: true,
       },
-    });
-    await writeHandoff(record, handoffsDir);
+    }), handoffsDir);
     await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
 
     const consumed = await matchReplyToHandoff(bot, 12345, 42, '1,3', handoffsDir);
@@ -485,97 +514,144 @@ describe('allowCustom', () => {
 });
 
 // ---------------------------------------------------------------------------
-// registerHandoffAnswerHandlers — button-tap identity extraction
+// registerHandoffAnswerHandlers — mocked Telegram with the durable store
 // ---------------------------------------------------------------------------
 
 describe('registerHandoffAnswerHandlers', () => {
+  const keyboardRemoved = { reply_markup: { inline_keyboard: [] } };
+  let stateDir: string;
   let handoffsDir: string;
 
   beforeEach(async () => {
-    handoffsDir = await mkdtemp(join(tmpdir(), 'handoff-btn-test-'));
+    stateDir = await makeTmpDir();
+    // The registered callback uses the default store without a path override.
+    vi.stubEnv('AFK_STATE_DIR', stateDir);
+    handoffsDir = getHandoffsDir();
   });
 
   afterEach(async () => {
-    if (handoffsDir) await rm(handoffsDir, { recursive: true, force: true }).catch(() => {});
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    await rm(stateDir, { recursive: true, force: true });
   });
 
-  it('registers a bot.action handler with the afk:h: prefix', () => {
+  async function tap(data: string, from: { id: number; username?: string } = { id: 9 }) {
     const bot = mockBot();
     registerHandoffAnswerHandlers(bot);
-    expect((bot.action as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
-    const re = (bot.action as ReturnType<typeof vi.fn>).mock.calls[0]![0] as RegExp;
-    expect(re.test('afk:h:0:q-123')).toBe(true);
+    expect(bot.actions).toHaveLength(1);
+    const { re, handler } = bot.actions[0]!;
+    expect(re.test(data)).toBe(true);
     expect(re.test('afk:e:0:elic-abc')).toBe(false);
+    const ctx = {
+      callbackQuery: { data, from },
+      answerCbQuery: vi.fn().mockResolvedValue(undefined),
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+      editMessageReplyMarkup: vi.fn().mockResolvedValue(undefined),
+    };
+    await handler(ctx);
+    expect(ctx.answerCbQuery).toHaveBeenCalledOnce();
+    return ctx;
+  }
+
+  function expectClosed(ctx: Awaited<ReturnType<typeof tap>>) {
+    expect(ctx.answerCbQuery).toHaveBeenCalledWith('This question is no longer open.');
+    expect(ctx.editMessageText).toHaveBeenCalledWith('This question is no longer open.', keyboardRemoved);
+  }
+
+  it('keeps the replacement pending when a superseded button is tapped', async () => {
+    const bot = mockBot();
+    const original = makeRecord();
+    await writeHandoff(original, handoffsDir);
+    const record = (await readHandoff(original.taskId, handoffsDir))!;
+    await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
+    const markup = bot.telegram.sendMessage.mock.calls[0]![2]?.reply_markup;
+    const data: string = markup.inline_keyboard[0][0].callback_data;
+
+    const question = { message: 'Delete the preview?', type: 'confirm' };
+    await writeHandoff(makeRecord({ taskId: original.taskId, question }), handoffsDir);
+    const ctx = await tap(data);
+
+    expect(await readHandoff(original.taskId, handoffsDir)).toMatchObject({ status: 'pending', question });
+    expectClosed(ctx);
   });
 
-  it('button-tap handler extracts responderIdentity with userId and username', async () => {
-    // The action handler calls readHandoff (default dir) then answerHandoff.
-    // Mock both at the handoff-answer module's import boundary so the handler
-    // runs with full logic but no disk I/O.
-    const { buildHandoffCallback } = await import('./handoff-callback-data.js');
-    const record = makeRecord({ question: { message: 'Deploy?', type: 'confirm' } });
+  it.each([
+    { from: { id: 55667788, username: 'charlie' }, identity: '55667788:charlie' },
+    { from: { id: 11223344 }, identity: '11223344' },
+  ])('answers the current confirm question directly from disk as $identity', async ({ from, identity }) => {
+    const record = await writeHandoff(makeRecord(), handoffsDir);
+    const ctx = await tap(buildHandoffCallback(record, 1), from);
 
-    // Capture answerHandoff args by hooking the wiring module's export.
-    // Because handoff-answer.ts imports answerHandoff with a static import,
-    // we can't spy on it after the fact. Instead we verify the responderIdentity
-    // value by reading it off the updateHandoffAnswer opts — spy on the store.
-    const storeMod = await import('../agent/daemon/handoff-store.js');
-    const spyUpdate = vi.spyOn(storeMod, 'updateHandoffAnswer').mockResolvedValue({ won: true });
-    // Also mock readHandoff so the handler gets our record without disk I/O.
-    const spyRead = vi.spyOn(storeMod, 'readHandoff').mockResolvedValue(record);
-
-    const bot = mockBot();
-    registerHandoffAnswerHandlers(bot);
-    const [, handler] = (bot.action as ReturnType<typeof vi.fn>).mock.calls[0]!;
-
-    const ctx = {
-      answerCbQuery: vi.fn().mockResolvedValue(undefined),
-      callbackQuery: {
-        data: buildHandoffCallback(record.taskId, 1),
-        from: { id: 55667788, username: 'charlie' },
-      },
-      editMessageText: vi.fn().mockResolvedValue(undefined),
-    };
-
-    await (handler as (ctx: unknown) => Promise<void>)(ctx);
-
-    // updateHandoffAnswer (the store call inside answerHandoff) receives opts with responderIdentity.
-    expect(spyUpdate).toHaveBeenCalled();
-    const opts = spyUpdate.mock.calls[0]![3] as { responderIdentity?: string };
-    expect(opts.responderIdentity).toBe('55667788:charlie');
-
-    spyUpdate.mockRestore();
-    spyRead.mockRestore();
+    expect(await readHandoff(record.taskId, handoffsDir)).toMatchObject({
+      status: 'answered', answer: { value: true }, answerSource: 'telegram', responderIdentity: identity,
+    });
+    expect(ctx.editMessageText).toHaveBeenCalledWith('Answered: Yes', keyboardRemoved);
   });
 
-  it('button-tap handler extracts responderIdentity with userId only when username absent', async () => {
-    const { buildHandoffCallback } = await import('./handoff-callback-data.js');
-    const record = makeRecord({ question: { message: 'Go?', type: 'confirm' } });
+  it('answers a current choice button with the selected option', async () => {
+    const record = await writeHandoff(makeRecord({
+      question: { message: 'Pick a color', type: 'choice', choices: ['Red', 'Blue'] },
+    }), handoffsDir);
+    const ctx = await tap(buildHandoffCallback(record, 1));
 
-    const storeMod = await import('../agent/daemon/handoff-store.js');
-    const spyUpdate = vi.spyOn(storeMod, 'updateHandoffAnswer').mockResolvedValue({ won: true });
-    const spyRead = vi.spyOn(storeMod, 'readHandoff').mockResolvedValue(record);
+    expect(await readHandoff(record.taskId, handoffsDir)).toMatchObject({
+      status: 'answered', answer: { value: 'Blue' },
+    });
+    expect(ctx.editMessageText).toHaveBeenCalledWith('Answered: Blue', keyboardRemoved);
+  });
 
-    const bot = mockBot();
-    registerHandoffAnswerHandlers(bot);
-    const [, handler] = (bot.action as ReturnType<typeof vi.fn>).mock.calls[0]!;
+  it('accepts a legacy button for a record without identity', async () => {
+    const record = makeRecord();
+    await mkdir(handoffsDir, { recursive: true });
+    await writeFile(join(handoffsDir, `${record.taskId}.json`), JSON.stringify(record));
+    const ctx = await tap(`afk:h:0:${record.taskId}`);
 
-    const ctx = {
-      answerCbQuery: vi.fn().mockResolvedValue(undefined),
-      callbackQuery: {
-        data: buildHandoffCallback(record.taskId, 1),
-        from: { id: 11223344 },
-      },
-      editMessageText: vi.fn().mockResolvedValue(undefined),
-    };
+    expect(await readHandoff(record.taskId, handoffsDir)).toMatchObject({
+      status: 'answered', answer: { value: false },
+    });
+    expect(ctx.editMessageText).toHaveBeenCalledWith('Answered: No', keyboardRemoved);
+  });
 
-    await (handler as (ctx: unknown) => Promise<void>)(ctx);
+  it('rejects a legacy button for a record with identity', async () => {
+    const record = await writeHandoff(makeRecord(), handoffsDir);
+    expectClosed(await tap(`afk:h:1:${record.taskId}`));
+    expect(await readHandoff(record.taskId, handoffsDir)).toEqual(record);
+  });
 
-    expect(spyUpdate).toHaveBeenCalled();
-    const opts = spyUpdate.mock.calls[0]![3] as { responderIdentity?: string };
-    expect(opts.responderIdentity).toBe('11223344');
+  it.each(['answered', 'expired'] as const)('clears a stale button for an %s question', async (status) => {
+    const record = await writeHandoff(makeRecord({ status }), handoffsDir);
+    expectClosed(await tap(buildHandoffCallback(record, 1)));
+    expect(await readHandoff(record.taskId, handoffsDir)).toEqual(record);
+  });
 
-    spyUpdate.mockRestore();
-    spyRead.mockRestore();
+  it('leaves the keyboard available to retry when the pending question is locked', async () => {
+    const record = await writeHandoff(makeRecord(), handoffsDir);
+    await writeFile(join(handoffsDir, `${record.taskId}.lock`), '', { flag: 'wx' });
+    const ctx = await tap(buildHandoffCallback(record, 1));
+
+    expect(ctx.answerCbQuery).toHaveBeenCalledWith('Could not record the answer. Please try again.');
+    expect(ctx.editMessageText).not.toHaveBeenCalled();
+    expect(await readHandoff(record.taskId, handoffsDir)).toEqual(record);
+  });
+
+  it('rejects a replacement that arrives between token lookup and the answer write', async () => {
+    const record = await writeHandoff(makeRecord(), handoffsDir);
+    const store = await import('../agent/daemon/handoff-store.js');
+    const update = store.updateHandoffAnswer;
+    const question = { message: 'Replacement?', type: 'confirm' };
+    vi.spyOn(store, 'updateHandoffAnswer').mockImplementationOnce(async (...args) => {
+      await writeHandoff(makeRecord({ taskId: record.taskId, question }), handoffsDir);
+      return update(...args);
+    });
+
+    const ctx = await tap(buildHandoffCallback(record, 1));
+    expect(ctx.answerCbQuery).toHaveBeenCalledWith('This question is no longer open.');
+    // Fix: replacement path removes only the keyboard — must NOT replace message text.
+    expect(ctx.editMessageText).not.toHaveBeenCalled();
+    expect(ctx.editMessageReplyMarkup).toHaveBeenCalledWith({ inline_keyboard: [] });
+    const replacement = await readHandoff(record.taskId, handoffsDir);
+    expect(replacement).toMatchObject({ status: 'pending', question });
+    expect(replacement?.questionId).not.toBe(record.questionId);
+    expect(replacement?.answer).toBeUndefined();
   });
 });

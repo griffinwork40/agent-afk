@@ -1,5 +1,5 @@
 /**
- * Wire the durable handoff store into the daemon elicitation path.
+ * Contract: wire the durable handoff store into the daemon elicitation path.
  *
  * Two entry points:
  *
@@ -34,28 +34,10 @@ import {
 } from './handoff-store.js';
 import { setLeaseState } from './lease-store.js';
 import { DEFAULT_HANDOFF_TTL_MS, expireHandoff, isHandoffStale } from './handoff-expiry.js';
-import { operatorNotify } from '../operator-notify.js';
+import { pushHandoffQuestion, truncateHandoffNotice } from './handoff-notify.js';
 import type { Telegraf } from 'telegraf';
 import { sendHandoffQuestion, clearPendingTextHandoff } from '../../telegram/handoff-answer.js';
-import { buildHandoffCallback } from '../../telegram/handoff-callback-data.js';
 import { errorMessage } from '../../utils/errors.js';
-import { truncateTelegramLabel } from '../../utils/truncate-telegram-label.js';
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/**
- * Cap on the question text echoed to Telegram. Mirrors the elicitation
- * router's MAX_NOTIFY_MESSAGE_CHARS (300) for consistency.
- */
-const MAX_NOTIFY_CHARS = 300;
-
-function truncateForNotify(text: string): string {
-  return text.length <= MAX_NOTIFY_CHARS
-    ? text
-    : `${text.slice(0, MAX_NOTIFY_CHARS)}…(truncated)`;
-}
 
 // ---------------------------------------------------------------------------
 // Daemon elicitation handler
@@ -97,7 +79,7 @@ export interface DaemonElicitationOpts {
 }
 
 /**
- * Build an ElicitationHandler for daemon-spawned sessions.
+ * Contract: build an ElicitationHandler for daemon-spawned sessions.
  *
  * When the agent calls `ask_question`, this handler:
  *   1. Writes a HandoffRecord to disk (write-before-notify invariant).
@@ -122,7 +104,7 @@ export function makeDaemonElicitationHandler(
   ): Promise<ElicitationResult> => {
     if (options.signal.aborted) return { action: 'decline' };
 
-    const record: HandoffRecord = {
+    const draft: HandoffRecord = {
       taskId: opts.taskId,
       sessionId: options.sessionId ?? '',
       question: serializeRequest(request),
@@ -134,8 +116,9 @@ export function makeDaemonElicitationHandler(
     };
 
     // Step 1: persist the handoff record BEFORE any notification.
+    let record: HandoffRecord;
     try {
-      await writeHandoff(record, opts.handoffsDir);
+      record = await writeHandoff(draft, opts.handoffsDir);
     } catch (err) {
       // If we cannot persist, decline immediately — better to lose the
       // question than to send a notification with no durable backing.
@@ -162,9 +145,8 @@ export function makeDaemonElicitationHandler(
       );
     }
 
-    // Step 3: send the question to Telegram. When a bot instance is available,
-    // use sendHandoffQuestion for rich inline keyboards (confirm/choice) and
-    // reply-to-message matching (text/number). Otherwise fall back to plain push.
+    // Step 3: send the question with buttons or ForceReply.
+    if (record.notifyOn === 'never') return { action: 'decline' };
     if (opts.bot && opts.chatId) {
       void sendHandoffQuestion({
         bot: opts.bot,
@@ -174,24 +156,12 @@ export function makeDaemonElicitationHandler(
         handoffsDir: opts.handoffsDir,
       }).catch(() => undefined);
     } else {
-      // Daemon process (no Telegraf instance). Build the notification via the
-      // raw push path. For confirm/choice, attach inline keyboard markup so the
-      // separate Telegram bot process can handle the callback via afk:h:*.
-      const questionText = truncateForNotify(request.message);
-      const qType = request.type ?? 'text';
       const parts = [
-        `🔔 Daemon task waiting for your answer`,
+        '🔔 Daemon task waiting for your answer',
         `📋 Task: ${opts.taskId}`,
-        questionText,
+        truncateHandoffNotice(request.message),
       ];
-      const replyMarkup = buildHandoffReplyMarkup(qType, opts.taskId, request.choices);
-      if (!replyMarkup && request.choices && request.choices.length > 0) {
-        parts.push(`Options: ${truncateForNotify(request.choices.join(', '))}`);
-      }
-      if (!replyMarkup) {
-        parts.push(`\nReply to this task's next run to provide your answer.`);
-      }
-      void operatorNotify(parts.join('\n'), { replyMarkup }).catch(() => undefined);
+      await pushHandoffQuestion(record, parts.join('\n'), { handoffsDir: opts.handoffsDir }).catch(() => false);
     }
 
     // Step 4: decline — daemon sessions cannot block on a synchronous answer.
@@ -286,30 +256,17 @@ export async function recoverPendingHandoffs(
         });
       } else {
         const questionText = typeof record.question['message'] === 'string'
-          ? truncateForNotify(record.question['message'] as string)
+          ? truncateHandoffNotice(record.question['message'])
           : '(question details unavailable)';
-        const qType = typeof record.question['type'] === 'string'
-          ? record.question['type'] as string
-          : 'text';
-        const choices = Array.isArray(record.question['choices'])
-          ? record.question['choices'] as readonly string[]
-          : undefined;
         const parts = [
           `🔔 Reminder: daemon task still waiting for your answer`,
           `📋 Task: ${record.taskId}`,
           questionText,
           `⏱️ Waiting for ${Math.round(age / 60_000)} minutes`,
         ];
-        const replyMarkup = buildHandoffReplyMarkup(qType, record.taskId, choices);
-        if (!replyMarkup && choices && choices.length > 0) {
-          parts.push(`Options: ${truncateForNotify(choices.join(', '))}`);
-        }
-        if (!replyMarkup) {
-          parts.push(`\nReply to this task's next run to provide your answer.`);
-        }
         // Revalidate the persisted override against today's allowlist.
         const target = resolveNotifyChat?.(record.notifyChat, record.taskId);
-        void operatorNotify(parts.join('\n'), { replyMarkup, target }).catch(() => undefined);
+        await pushHandoffQuestion(record, parts.join('\n'), { handoffsDir, target }).catch(() => false);
       }
       result.renotified += 1;
     } catch {
@@ -332,7 +289,7 @@ export async function recoverPendingHandoffs(
 export const MAX_ANSWER_BYTES = 64 * 1024; // 64 KB
 
 /**
- * Record a human answer for a pending handoff and clean up.
+ * Contract: record a human answer for a pending handoff.
  *
  * Called by Telegram reply handlers (or any future surface) when the operator
  * provides an answer to a pending handoff question.
@@ -345,8 +302,9 @@ export const MAX_ANSWER_BYTES = 64 * 1024; // 64 KB
  * @param responderIdentity  - Optional opaque identity token for the responder.
  *   Surface-specific format: Telegram uses `"<userId>"` or `"<userId>:<username>"`;
  *   web uses `"web:<remoteIp>"`; REPL omits (passes undefined).
- * @returns true if this caller won the first-writer CAS, false if another
- *   surface already answered.
+ * @param expectedQuestionId - Exact question to answer; null matches legacy only,
+ *   and omission answers the current question by task ID.
+ * @returns true if this caller won the first-writer CAS.
  * @throws if the serialized answer exceeds MAX_ANSWER_BYTES.
  */
 export async function answerHandoff(
@@ -355,6 +313,7 @@ export async function answerHandoff(
   source: string,
   handoffsDir?: string,
   responderIdentity?: string,
+  expectedQuestionId?: string | null,
 ): Promise<boolean> {
   const serialized = JSON.stringify(answer);
   if (Buffer.byteLength(serialized, 'utf-8') > MAX_ANSWER_BYTES) {
@@ -366,7 +325,7 @@ export async function answerHandoff(
     taskId,
     answer,
     source,
-    { handoffsDir, responderIdentity },
+    { handoffsDir, responderIdentity, expectedQuestionId },
   );
   return result.won;
 }
@@ -380,48 +339,4 @@ export async function cleanupHandoff(
   handoffsDir?: string,
 ): Promise<void> {
   await deleteHandoff(taskId, handoffsDir);
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/** Alias for the shared helper (kept for local call-site readability). */
-const truncateLabel = truncateTelegramLabel;
-
-/**
- * Build Telegram InlineKeyboardMarkup for confirm/choice question types.
- * Returns undefined for text/number/multi_choice (no buttons for those).
- *
- * The returned shape matches Telegram's InlineKeyboardMarkup interface and
- * is forwarded verbatim as `replyMarkup` in pushIfConfigured.
- */
-export function buildHandoffReplyMarkup(
-  qType: string,
-  taskId: string,
-  choices?: readonly string[],
-): import('telegraf/types').InlineKeyboardMarkup | undefined {
-  try {
-    if (qType === 'confirm') {
-      return {
-        inline_keyboard: [[
-          { text: 'Yes', callback_data: buildHandoffCallback(taskId, 1) },
-          { text: 'No', callback_data: buildHandoffCallback(taskId, 0) },
-        ]],
-      };
-    }
-    if (qType === 'choice' && choices && choices.length > 0) {
-      const MAX_CHOICES = 20;
-      return {
-        inline_keyboard: choices.slice(0, MAX_CHOICES).map((c, i) => [{
-          text: truncateLabel(String(c)),
-          callback_data: buildHandoffCallback(taskId, i),
-        }]),
-      };
-    }
-  } catch {
-    // buildHandoffCallback can throw if taskId is too long for the 64-byte
-    // Telegram limit. Fall through to no-markup so the push still sends.
-  }
-  return undefined;
 }

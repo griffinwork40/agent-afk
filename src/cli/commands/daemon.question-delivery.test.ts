@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Telegraf } from 'telegraf';
 import { makeTaskCompleteHandler } from './daemon.action.js';
 import { resolveNotifyChatTarget } from './daemon.js';
@@ -31,36 +34,47 @@ vi.mock('../config.js', async (importOriginal) => ({
 }));
 
 vi.mock('../../agent/operator-notify.js', async (importOriginal) => {
-  const { operatorNotify: notify } = await importOriginal<typeof import('../../agent/operator-notify.js')>();
-  return { operatorNotify: vi.fn(notify) };
+  const original = await importOriginal<typeof import('../../agent/operator-notify.js')>();
+  return { ...original, operatorNotify: vi.fn(original.operatorNotify) };
 });
 
 const fetchStub = vi.fn<typeof fetch>();
 const confirm: ElicitationRequest = { message: 'Continue with this task?', type: 'confirm' };
 const choice: ElicitationRequest = { message: 'Which plan?', type: 'choice', choices: ['A', 'B'] };
 const confirmKeyboard = [[
-  { text: 'Yes', callback_data: 'afk:h:1:question-task' },
-  { text: 'No', callback_data: 'afk:h:0:question-task' },
+  { text: 'Yes', callback_data: expect.stringMatching(/^afk:h:q:1:[0-9a-f-]{36}$/) },
+  { text: 'No', callback_data: expect.stringMatching(/^afk:h:q:0:[0-9a-f-]{36}$/) },
 ]];
 const choiceKeyboard = [
-  [{ text: 'A', callback_data: 'afk:h:0:question-task' }],
-  [{ text: 'B', callback_data: 'afk:h:1:question-task' }],
+  [{ text: 'A', callback_data: expect.stringMatching(/^afk:h:q:0:[0-9a-f-]{36}$/) }],
+  [{ text: 'B', callback_data: expect.stringMatching(/^afk:h:q:1:[0-9a-f-]{36}$/) }],
 ];
 
-beforeEach(() => {
+let stateDir: string;
+beforeEach(async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'daemon-question-delivery-'));
+  vi.stubEnv('AFK_STATE_DIR', stateDir);
   vi.stubEnv('TELEGRAM_BOT_TOKEN', 'fixture-token');
   vi.stubEnv('AFK_TELEGRAM_ALLOWED_CHAT_IDS', '101,102,-100200');
   vi.stubEnv('AFK_ALLOW_PROJECT_MCP', '0');
   vi.mocked(operatorNotify).mockClear();
   telegramFileConfig.current = {};
-  fetchStub.mockReset().mockImplementation(async () => new Response('{}'));
+  let messageId = 40;
+  fetchStub.mockReset().mockImplementation(async (_url, init) => {
+    const sent = JSON.parse(String(init?.body)) as { chat_id: number };
+    return Response.json({
+      ok: true,
+      result: { chat: { id: sent.chat_id }, message_id: ++messageId, message_thread_id: 12 },
+    });
+  });
   vi.stubGlobal('fetch', fetchStub);
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+  await rm(stateDir, { recursive: true, force: true });
 });
 
 function telegramMessages(): Record<string, unknown>[] {
@@ -118,7 +132,7 @@ function expectQuestion(request: ElicitationRequest, chatId: number, keyboard?: 
   expect(messages).toHaveLength(1);
   expect(messages[0]).toMatchObject({ chat_id: chatId, text: expect.stringContaining(request.message) });
   if (keyboard !== undefined) expect(messages[0]?.['reply_markup']).toEqual({ inline_keyboard: keyboard });
-  else expect(messages[0]).not.toHaveProperty('reply_markup');
+  else expect(messages[0]?.['reply_markup']).toEqual({ force_reply: true });
 }
 
 describe('cron question Telegram delivery', () => {
@@ -141,10 +155,27 @@ describe('cron question Telegram delivery', () => {
     expect(await readHandoff('question-task')).toMatchObject({ status: 'pending' });
   });
 
-  it.each(['text', 'number'] as const)('sends a %s question without buttons', async (type) => {
-    const request = { message: 'What value should I use?', type };
+  it.each(['text', 'number', 'multi_choice'] as const)('sends a %s question with ForceReply and saves the copy', async (type) => {
+    const request = { message: 'What value should I use?', type, ...(type === 'multi_choice' ? { choices: ['A', 'B'] } : {}) };
     await runTask(request, 'failure');
-    await vi.waitFor(() => expectQuestion(request, 101));
+    expectQuestion(request, 101);
+    const handoff = await readHandoff('question-task');
+    expect(handoff?.questionId).toEqual(expect.any(String));
+    expect(handoff).toMatchObject({
+      telegramCopies: [{ chatId: 101, messageId: 41, threadId: 12, questionId: handoff?.questionId }],
+    });
+    if (type === 'multi_choice') expect(telegramMessages()[0]?.['text']).toContain('1. A\n2. B');
+  });
+
+  it('appends broadcast and startup recovery message IDs to the same question', async () => {
+    telegramFileConfig.current = { notify: { mode: 'custom', targets: [101, 102] } };
+    await runTask({ message: 'What next?', type: 'text' }, 'failure', undefined, undefined, true);
+    const handoff = await readHandoff('question-task');
+    expect(handoff).toMatchObject({
+      telegramCopies: [101, 102, 101, 102].map((chatId, i) => ({
+        chatId, messageId: 41 + i, threadId: 12, questionId: handoff?.questionId,
+      })),
+    });
   });
 
   it('keeps an ordinary success silent under failure policy', async () => {

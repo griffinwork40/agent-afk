@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -42,9 +42,9 @@ beforeEach(async () => {
   testDir = await mkdtemp(join(tmpdir(), 'handoff-store-test-'));
 });
 
-// Note: temp directories are left behind if a test fails — they are in /tmp
-// and the OS cleans them up. This keeps test failure output readable without
-// needing a try/finally in every case.
+afterEach(async () => {
+  await rm(testDir, { recursive: true, force: true });
+});
 
 // ---------------------------------------------------------------------------
 // writeHandoff + readHandoff round-trip
@@ -69,10 +69,11 @@ describe('writeHandoff + readHandoff', () => {
       originalCommand: '/run-something --flag',
     });
 
-    await writeHandoff(record, testDir);
+    const persisted = await writeHandoff(record, testDir);
     const read = await readHandoff(record.taskId, testDir);
 
-    expect(read).not.toBeNull();
+    expect(persisted.questionId).toMatch(/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/);
+    expect(read).toEqual(persisted);
     expect(read?.taskId).toBe(record.taskId);
     expect(read?.sessionId).toBe(record.sessionId);
     expect(read?.requestType).toBe('ask_question');
@@ -123,13 +124,11 @@ describe('writeHandoff + readHandoff', () => {
 
   it('overwrites an existing record atomically', async () => {
     const record = makeRecord({ taskId: 'q-overwrite-test' });
-    await writeHandoff(record, testDir);
+    const original = await writeHandoff(record, testDir);
+    const replacement = await writeHandoff(original, testDir);
 
-    const updated = { ...record, sessionId: 'sess-updated' };
-    await writeHandoff(updated, testDir);
-
-    const read = await readHandoff(record.taskId, testDir);
-    expect(read?.sessionId).toBe('sess-updated');
+    expect(replacement.questionId).not.toBe(original.questionId);
+    expect(await readHandoff(record.taskId, testDir)).toEqual(replacement);
   });
 });
 
@@ -401,6 +400,17 @@ describe('concurrent writes', () => {
     expect(r2?.sessionId).toBe('sess-c2');
   });
 
+  it('serializes concurrent replacements for the same taskId without dropping either write', async () => {
+    const record = makeRecord({ taskId: 'q-parallel-replacements' });
+    const [first, second] = await Promise.all([
+      writeHandoff(record, testDir),
+      writeHandoff({ ...record, sessionId: 'sess-second' }, testDir),
+    ]);
+
+    expect(first.questionId).not.toBe(second.questionId);
+    expect([first, second]).toContainEqual(await readHandoff(record.taskId, testDir));
+  });
+
   it('many concurrent writes for distinct taskIds all land correctly', async () => {
     const count = 20;
     const records = Array.from({ length: count }, (_, i) =>
@@ -481,14 +491,4 @@ describe('withHandoffLock', () => {
     expect(results.filter(r => r === null)).toHaveLength(1);
     expect(order).toHaveLength(1);
   });
-});
-
-// ---------------------------------------------------------------------------
-// Temp dir cleanup (after all tests in file)
-// ---------------------------------------------------------------------------
-
-afterAll(async () => {
-  try {
-    await rm(testDir, { recursive: true, force: true });
-  } catch { /* ignore */ }
 });

@@ -257,6 +257,19 @@ export class MessageHandler {
 
     this.log(`📬 Message from chat ID: ${chatId}`);
 
+    const tgMsg = ctx.message as Message.TextMessage;
+    // An explicit handoff reply is literal, even if it starts with a slash.
+    // Early-exit: only scan when the replied-to message was sent by this bot.
+    // Skipping this check causes a full disk scan on every explicit reply in an
+    // allowed chat that misses the in-process cache (security: M).
+    if (
+      tgMsg.reply_to_message?.message_id !== undefined &&
+      tgMsg.reply_to_message.from?.id === ctx.botInfo?.id
+    ) {
+      const { matchReplyToHandoff } = await import('../handoff-answer.js');
+      if (await matchReplyToHandoff(this.bot, chatId, tgMsg.reply_to_message.message_id, messageText, undefined, tgMsg.from, route.threadId)) return;
+    }
+
     // Shared-registry slash commands (Telegram-only ones are bot.command handlers
     // and never reach here). Skills/session-native commands fall through as text.
     if (messageText.startsWith('/') && await this.runSlash(ctx, route, messageText)) {
@@ -270,7 +283,6 @@ export class MessageHandler {
     // for pending elicitation, enqueue, and processOne paths. The tag-only gate
     // below still uses raw text + entity offsets for addressed-to-bot checks.
     // See sender-attribution.ts.
-    const tgMsg = ctx.message as Message.TextMessage;
     const replyCtx = replyContextPrefix({
       replyToMessage: tgMsg.reply_to_message as RepliedMessage | undefined,
       quote: tgMsg.quote,
@@ -284,13 +296,6 @@ export class MessageHandler {
     // choice validation). Restores the pre-#688 elicitation value (senderPrefix + text).
     // forward provenance prefix is also excluded intentionally -- a forwarded elicitation answer would confuse the resolver
     const elicitationAnswer = senderPrefix(tgMsg.from, ctx.chat?.type) + messageText;
-
-    // Durable handoff reply-to: route reply to a daemon handoff question to
-    // the durable store. Checked BEFORE in-process elicitation (disjoint).
-    if (tgMsg.reply_to_message?.message_id !== undefined) {
-      const { matchReplyToHandoff } = await import('../handoff-answer.js');
-      if (await matchReplyToHandoff(this.bot, chatId, tgMsg.reply_to_message.message_id, messageText, undefined, tgMsg.from)) return;
-    }
 
     // Answer consumed by active ask_question elicitation -- never reaches
     // session message queue. Intercept BEFORE the session.state check so

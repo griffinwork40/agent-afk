@@ -56,7 +56,10 @@ import { CronScheduler, type TelemetryRecord, type TaskCompletionDetails } from 
 import { elicitationRouter } from '../elicitation-router.js';
 import { operatorNotify } from '../operator-notify.js';
 
-vi.mock('../operator-notify.js', () => ({ operatorNotify: vi.fn().mockResolvedValue(null) }));
+vi.mock('../operator-notify.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../operator-notify.js')>(),
+  operatorNotify: vi.fn().mockResolvedValue(null),
+}));
 import type { AgentSession } from '../session/agent-session.js';
 import type { AgentConfig } from '../types.js';
 import type { ScheduledTask } from './triggers.js';
@@ -433,8 +436,8 @@ describe('makeCronElicitationHandler target routing', () => {
   const confirmReq: ElicitationRequest = { serverName: 'agent', origin: 'agent', message: 'Deploy now?', type: 'confirm' };
   const confirmKeyboard = {
     inline_keyboard: [[
-      { text: 'Yes', callback_data: 'afk:h:1:route-task' },
-      { text: 'No', callback_data: 'afk:h:0:route-task' },
+      { text: 'Yes', callback_data: expect.stringMatching(/^afk:h:q:1:[0-9a-f-]{36}$/) },
+      { text: 'No', callback_data: expect.stringMatching(/^afk:h:q:0:[0-9a-f-]{36}$/) },
     ]],
   };
 
@@ -525,7 +528,7 @@ describe('makeCronElicitationHandler target routing', () => {
     })(confirmReq, { signal });
 
     expect(operatorNotify).toHaveBeenCalledOnce();
-    expect(vi.mocked(operatorNotify).mock.calls[0]?.[1]).toEqual({ target: -100200, replyMarkup: confirmKeyboard });
+    expect(vi.mocked(operatorNotify).mock.calls[0]?.[1]).toEqual({ target: -100200, replyMarkup: confirmKeyboard, captureDelivery: true });
   });
 
   it('per-target fallback: only the failed target is re-sent via raw push, with buttons and its own thread', async () => {
@@ -540,8 +543,8 @@ describe('makeCronElicitationHandler target routing', () => {
     expect(sendMessage).toHaveBeenCalledTimes(3);
     const pushes = vi.mocked(operatorNotify).mock.calls.map((c) => c[1]);
     expect(pushes).toEqual([
-      { target: 101, messageThreadId: 7, replyMarkup: confirmKeyboard },
-      { target: -100200, replyMarkup: confirmKeyboard },
+      { target: 101, messageThreadId: 7, replyMarkup: confirmKeyboard, captureDelivery: true },
+      { target: -100200, replyMarkup: confirmKeyboard, captureDelivery: true },
     ]);
   });
 
@@ -561,8 +564,8 @@ describe('makeCronElicitationHandler target routing', () => {
   it('without a bot, each target gets its own raw push with buttons', async () => {
     await handler({ resolveDefaultTargets: () => [101, 102] })(confirmReq, { signal });
     expect(vi.mocked(operatorNotify).mock.calls.map((c) => c[1])).toEqual([
-      { target: 101, replyMarkup: confirmKeyboard },
-      { target: 102, replyMarkup: confirmKeyboard },
+      { target: 101, replyMarkup: confirmKeyboard, captureDelivery: true },
+      { target: 102, replyMarkup: confirmKeyboard, captureDelivery: true },
     ]);
   });
 

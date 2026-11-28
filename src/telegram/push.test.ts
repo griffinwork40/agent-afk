@@ -4,6 +4,7 @@
 
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { push, pushIfConfigured, pushMarkdown } from './push';
+import { operatorNotify } from '../agent/operator-notify.js';
 
 // loadTelegramConfig reads afk.config.json; mock it so these tests are hermetic
 // (notify routing is then driven purely by the env vars set per-test). The pure
@@ -25,6 +26,54 @@ function makeFetchError(status: number, description: string): typeof fetch {
 }
 
 describe('push', () => {
+  test.each([undefined, false])('does not read a success body with captureDelivery=%s', async (captureDelivery) => {
+    const response = Response.json({ ok: true, result: { message_id: 12, chat: { id: 42 } } });
+    const json = vi.spyOn(response, 'json');
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(response);
+
+    expect(await push({ token: 't', chatId: 42, text: 'hi', fetchImpl, captureDelivery }))
+      .toStrictEqual({ ok: true, status: 200 });
+    expect(json).not.toHaveBeenCalled();
+  });
+
+  test('prefers the chat and thread IDs from Telegram over the request target', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      ok: true, result: { message_id: 12, chat: { id: -100450 }, message_thread_id: 29 },
+    }));
+
+    const result = await push({
+      token: 't', chatId: -100123, messageThreadId: 17, text: 'hi', fetchImpl, captureDelivery: true,
+    });
+
+    expect(result).toStrictEqual({
+      ok: true, status: 200, delivery: { chatId: -100450, messageId: 12, threadId: 29 },
+    });
+  });
+
+  test('falls back to the requested numeric chat when the response omits it', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      ok: true, result: { message_id: 12 },
+    }));
+
+    expect(await push({ token: 't', chatId: '-100450', text: 'hi', fetchImpl, captureDelivery: true }))
+      .toStrictEqual({ ok: true, status: 200, delivery: { chatId: -100450, messageId: 12 } });
+  });
+
+  test.each([
+    ['non-JSON body', 'not json', 42],
+    ['null body', 'null', 42],
+    ['unexpected success response', '{"ok":false,"result":{"message_id":12}}', 42],
+    ['invalid message ID', '{"ok":true,"result":{"message_id":"12"}}', 42],
+    ['zero message ID', '{"ok":true,"result":{"message_id":0}}', 42],
+    ['invalid response chat ID', '{"ok":true,"result":{"message_id":12,"chat":{"id":0}}}', 42],
+    ['invalid response thread ID', '{"ok":true,"result":{"message_id":12,"message_thread_id":-9}}', 42],
+    ['nonnumeric chat fallback', '{"ok":true,"result":{"message_id":12}}', '@channel'],
+  ] as const)('keeps HTTP success without delivery metadata for %s', async (_label, body, chatId) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(body));
+
+    expect(await push({ token: 't', chatId, text: 'hi', fetchImpl, captureDelivery: true }))
+      .toStrictEqual({ ok: true, status: 200 });
+  });
   test('POSTs to sendMessage with chat_id and text', async () => {
     const fetchImpl = makeFetchOk();
     const result = await push({
@@ -384,6 +433,72 @@ describe('pushIfConfigured', () => {
         expect(body.reply_markup).toBeUndefined();
       }
     }
+  });
+
+  test('captures every plain chunk and sends ForceReply only on the last chunk per target through operatorNotify', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 't';
+    let messageId = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({
+      ok: true, result: { message_id: ++messageId },
+    }));
+    const replyMarkup = { force_reply: true, input_field_placeholder: 'Answer here' } as const;
+    const first = 'x'.repeat(4096);
+    const last = '**answer this**';
+
+    const result = await operatorNotify(first + last, {
+      target: [111, -222], messageThreadId: 17, replyMarkup, captureDelivery: true, fetchImpl,
+    });
+
+    expect(fetchImpl.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))).toStrictEqual([
+      { chat_id: 111, text: first, message_thread_id: 17 },
+      { chat_id: 111, text: last, message_thread_id: 17, reply_markup: replyMarkup },
+      { chat_id: -222, text: first, message_thread_id: 17 },
+      { chat_id: -222, text: last, message_thread_id: 17, reply_markup: replyMarkup },
+    ]);
+    expect(result).toStrictEqual([
+      { ok: true, status: 200, delivery: { chatId: 111, messageId: 1, threadId: 17 } },
+      { ok: true, status: 200, delivery: { chatId: 111, messageId: 2, threadId: 17 } },
+      { ok: true, status: 200, delivery: { chatId: -222, messageId: 3, threadId: 17 } },
+      { ok: true, status: 200, delivery: { chatId: -222, messageId: 4, threadId: 17 } },
+    ]);
+  });
+
+  test('retains successful chunk IDs around a failed send', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 't';
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ ok: true, result: { message_id: 1 } }))
+      .mockResolvedValueOnce(Response.json({ ok: false, description: 'unavailable' }, { status: 503 }))
+      .mockResolvedValueOnce(Response.json({ ok: true, result: { message_id: 3 } }));
+
+    const result = await pushIfConfigured('x'.repeat(9000), { captureDelivery: true, target: 42, fetchImpl });
+
+    expect(result).toStrictEqual([
+      { ok: true, status: 200, delivery: { chatId: 42, messageId: 1 } },
+      { ok: false, status: 503, errorMessage: 'unavailable' },
+      { ok: true, status: 200, delivery: { chatId: 42, messageId: 3 } },
+    ]);
+  });
+
+  test.each([false, true])('keeps markdown delivery opt-in after HTML re-splitting (captureDelivery=%s)', async (captureDelivery) => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 't';
+    let messageId = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({
+      ok: true, result: { message_id: ++messageId },
+    }));
+    const replyMarkup = { inline_keyboard: [[{ text: 'OK', callback_data: 'ok' }]] };
+
+    const result = await pushIfConfigured('<'.repeat(3000), {
+      captureDelivery, target: 42, markdown: true, replyMarkup, fetchImpl,
+    });
+
+    const sent = fetchImpl.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+    expect(sent.map((body) => body.parse_mode)).toStrictEqual(['HTML', 'HTML', 'HTML']);
+    expect(sent.map((body) => body.reply_markup)).toStrictEqual(captureDelivery
+      ? [replyMarkup, undefined, undefined]
+      : [replyMarkup, replyMarkup, replyMarkup]);
+    expect(result).toStrictEqual(captureDelivery
+      ? [1, 2, 3].map((id) => ({ ok: true, status: 200, delivery: { chatId: 42, messageId: id } }))
+      : [{ ok: true, status: 200 }]);
   });
 
   test('target override routes to the explicit chat, ignoring notify config', async () => {

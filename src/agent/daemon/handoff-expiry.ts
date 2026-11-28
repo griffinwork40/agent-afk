@@ -1,5 +1,5 @@
 /**
- * Locked expiry for daemon handoff records (#1416).
+ * Contract: locked expiry for daemon handoff records (#1416).
  *
  * A daemon task that calls ask_question writes a pending HandoffRecord and
  * then declines, so its run finishes and its lease is archived. The record
@@ -18,13 +18,11 @@
  *     pending questions (that stays a startup-only action in
  *     `recoverPendingHandoffs`).
  *
- * Invariant: the pending → expired transition happens inside
- * `withHandoffLock`, after a re-read that requires status 'pending'. This is
- * the same lock `updateHandoffAnswer` takes, so an answer and an expiry for
- * the same task are serialised: whichever takes the lock first wins, and the
- * loser sees a non-pending status and does nothing. Writing an expired copy of
- * a record read before the lock would silently erase an answer that landed in
- * between.
+ * Invariant: `expirePendingHandoff` re-reads and expires only pending records
+ * under the same task lock as `updateHandoffAnswer`. Whichever transition
+ * claims the pending record first wins; the loser either cannot acquire the
+ * lock or sees a non-pending record. Expiring a snapshot from before the lock
+ * could silently erase an answer that landed in between.
  *
  * Invariant: the lease is moved back to 'leased' only when it is still in
  * 'waiting_human_input' (an expected-state check), so expiry can never clobber
@@ -38,10 +36,8 @@
 import { join } from 'node:path';
 import { getHandoffsDir, getQueueDir } from '../../paths.js';
 import {
+  expirePendingHandoff,
   listPendingHandoffs,
-  readHandoff,
-  withHandoffLock,
-  writeHandoff,
   type HandoffRecord,
 } from './handoff-store.js';
 import { setLeaseState } from './lease-store.js';
@@ -116,18 +112,7 @@ export async function expireHandoff(
   const now = opts.now ?? Date.now();
   const ttlMs = opts.ttlMs ?? DEFAULT_HANDOFF_TTL_MS;
 
-  const expired = await withHandoffLock(taskId, dir, async () => {
-    const fresh = await readHandoff(taskId, dir);
-    if (fresh === null || fresh.status !== 'pending') return null;
-    if (!isHandoffStale(fresh, now, ttlMs)) return null;
-    const next: HandoffRecord = {
-      ...fresh,
-      status: 'expired',
-      expiredAt: new Date(now).toISOString(),
-    };
-    await writeHandoff(next, dir);
-    return fresh;
-  });
+  const expired = await expirePendingHandoff(taskId, dir, now, (record) => isHandoffStale(record, now, ttlMs));
   if (expired === null) return false;
 
   // Crash path only: a lease still parked in waiting_human_input goes back to

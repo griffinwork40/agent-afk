@@ -1,5 +1,5 @@
 /**
- * File-based store for durable human-handoff records.
+ * Contract: file-based store for durable human-handoff records.
  *
  * A HandoffRecord is written when the daemon's elicitation router needs to
  * ask a human a question via Telegram. Writing the record BEFORE sending the
@@ -13,14 +13,16 @@
  * Writes are atomic: payload is written to a temp file in the same directory
  * then renamed into place — same pattern as queue-store.ts and lease-store.ts.
  *
- * Contract: this module is purely additive in PR 1. Nothing in the existing
- * system calls into it yet; wiring happens in PR 2.
+ * Replacements, answers, expiry and delivery metadata updates share one
+ * per-task lock. Only replacement assigns a new question identity.
  *
  * @module agent/daemon/handoff-store
  */
 
+import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { assertSafeJobId, getHandoffsDir } from '../../paths.js';
 import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
 import { isErrnoCode, isWindowsLockContention } from '../../utils/errors.js';
@@ -49,10 +51,16 @@ export interface HandoffRoute {
   threadId?: number;
 }
 
+export interface HandoffTelegramCopy extends HandoffRoute {
+  messageId: number;
+  /** Question that was sent, even if since replaced; null for a legacy question. */
+  questionId: string | null;
+}
+
 /**
  * Result returned by updateHandoffAnswer.
  * won === true  — this caller claimed the record and wrote the answer.
- * won === false — another caller already claimed it (first-writer-wins CAS).
+ * won === false — the caller could not claim a pending record in scope.
  */
 export interface UpdateHandoffResult {
   won: boolean;
@@ -64,12 +72,14 @@ export interface UpdateHandoffResult {
  * Lifecycle: pending → answered | expired | cancelled
  *
  * Invariant: at most one HandoffRecord per taskId exists on disk. A second
- * writeHandoff call for the same taskId overwrites the prior record atomically
- * (rename wins; the old pending question is replaced).
+ * writeHandoff call for the same taskId replaces the prior record atomically
+ * under the task lock, with a new questionId.
  */
 export interface HandoffRecord {
   /** Daemon task ID that owns this handoff, e.g. `q-<timestamp>-<hex>`. */
   taskId: string;
+  /** Identity of this specific question; absent on legacy records. */
+  questionId?: string;
   /** SDK session ID of the session that raised the elicitation. */
   sessionId: string;
   /**
@@ -103,7 +113,7 @@ export interface HandoffRecord {
   /** ISO 8601 timestamp when the record transitioned to 'expired' (handoff-expiry.ts). */
   expiredAt?: string;
   /**
-   * Opaque identity of the responder for provenance tracking.
+   * Contract: opaque identity of the responder for provenance tracking.
    *
    * Format is surface-specific:
    *   - Telegram: `"<userId>"` (numeric string) or `"<userId>:<username>"` when
@@ -124,14 +134,10 @@ export interface HandoffRecord {
   responderIdentity?: string;
   /** The daemon task command, preserved for re-enqueue with injected answer. */
   originalCommand: string;
-  /**
-   * Telegram message_id of the question message sent to the operator.
-   * Used by the reply-to-message matching path: when the operator replies
-   * to this message, the bot matches the reply's `reply_to_message.message_id`
-   * against this field to route the answer to the correct handoff.
-   * Populated after the Telegram message is successfully sent.
-   */
+  /** Latest Telegram message ID associated with `route` (also used by legacy records). */
   telegramMessageId?: number;
+  /** Delivered Telegram messages for this task, including superseded questions. */
+  telegramCopies?: HandoffTelegramCopy[];
   /**
    * Origin context of the task that asked (#1416), carried into the resumed
    * run: original task id (overlap identity), pinned cwd, and notification
@@ -158,7 +164,7 @@ function handoffPath(dir: string, taskId: string): string {
   return join(dir, `${taskId}.json`);
 }
 
-/** Derive the per-task lock file path (used by CAS in updateHandoffAnswer). */
+/** Derive the per-task lock file path shared by replacement and pending updates. */
 function lockPath(dir: string, taskId: string): string {
   return join(dir, `${taskId}.lock`);
 }
@@ -166,6 +172,36 @@ function lockPath(dir: string, taskId: string): string {
 /** Atomically write JSON to dest via a tmp file in the same directory (owner-only: 0o600). */
 async function atomicWriteJson(dest: string, data: unknown): Promise<void> {
   await atomicWriteFileAsync(dest, JSON.stringify(data), { mode: 0o600, mkdirp: false });
+}
+
+// Replacement and metadata writes wait for a turn, but not through the stale-lock TTL.
+const WRITE_LOCK_RETRIES = 100;
+const WRITE_LOCK_RETRY_MS = 10;
+
+async function withHandoffWriteLock<T>(
+  taskId: string,
+  handoffsDir: string,
+  operation: string,
+  cb: () => Promise<T>,
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    const result = await withHandoffLock(taskId, handoffsDir, cb);
+    if (result !== null) return result;
+    if (attempt === WRITE_LOCK_RETRIES) {
+      throw new Error(`handoff-store: timed out waiting to ${operation} for taskId ${taskId}`);
+    }
+    await sleep(WRITE_LOCK_RETRY_MS);
+  }
+}
+
+function telegramCopiesOf(record: HandoffRecord): HandoffTelegramCopy[] {
+  const copies = Array.isArray(record.telegramCopies) ? record.telegramCopies : [];
+  const { route, telegramMessageId: messageId } = record;
+  if (!route || !Number.isSafeInteger(route.chatId) || !Number.isSafeInteger(messageId) || messageId === undefined) {
+    return copies;
+  }
+  if (copies.some((copy) => copy?.chatId === route.chatId && copy.messageId === messageId)) return copies;
+  return [...copies, { ...route, messageId, questionId: record.questionId ?? null }];
 }
 
 // ---------------------------------------------------------------------------
@@ -176,9 +212,9 @@ async function atomicWriteJson(dest: string, data: unknown): Promise<void> {
  * Persist a HandoffRecord atomically to `<handoffsDir>/<taskId>.json`.
  *
  * Creates the handoffs directory if it does not exist.
- * An existing record for the same taskId is replaced atomically (the rename
- * is the single-winner gate — concurrent writers for the same taskId produce
- * one winner and one ENOENT on the loser's rename, which is re-raised).
+ * Assigns a new questionId, replacing any existing record for the same taskId.
+ * Retries on lock contention so parallel replacements can succeed in sequence;
+ * throws if the lock stays busy through the retry budget.
  *
  * @param record     - The HandoffRecord to persist.
  * @param handoffsDir - Override the handoffs directory (defaults to `getHandoffsDir()`).
@@ -186,10 +222,25 @@ async function atomicWriteJson(dest: string, data: unknown): Promise<void> {
 export async function writeHandoff(
   record: HandoffRecord,
   handoffsDir: string = getHandoffsDir(),
-): Promise<void> {
+): Promise<HandoffRecord & { questionId: string }> {
   assertSafeJobId(record.taskId);
   await ensureHandoffsDir(handoffsDir);
-  await atomicWriteJson(handoffPath(handoffsDir, record.taskId), record);
+  return withHandoffWriteLock(record.taskId, handoffsDir, 'replace handoff', async () => {
+    const existing = await readHandoff(record.taskId, handoffsDir).catch((err: unknown) => {
+      if (err instanceof SyntaxError) return null; // A corrupt record can still be replaced.
+      throw err;
+    });
+    const persisted = { ...record, questionId: randomUUID() };
+    if (existing) {
+      const history = telegramCopiesOf(existing);
+      if (history.length) persisted.telegramCopies = history;
+      else delete persisted.telegramCopies;
+      // For a replacement, only the locked snapshot is authoritative about past sends.
+      delete persisted.telegramMessageId;
+    }
+    await atomicWriteJson(handoffPath(handoffsDir, persisted.taskId), persisted);
+    return persisted;
+  });
 }
 
 /**
@@ -255,29 +306,38 @@ export async function listPendingHandoffs(
     return [];
   }
 
-  let filenames: string[];
-  try {
-    filenames = await readdir(handoffsDir);
-  } catch {
-    return [];
-  }
-
   const pending: HandoffRecord[] = [];
-  for (const filename of filenames) {
-    if (!filename.endsWith('.json') || filename.startsWith('.tmp-')) continue;
-    try {
-      const raw = await readFile(join(handoffsDir, filename), 'utf-8');
-      const record = JSON.parse(raw) as HandoffRecord;
-      if (record.status === 'pending') pending.push(record);
-    } catch {
-      // Silently skip unreadable or malformed records.
-    }
+  for await (const record of scanHandoffs(handoffsDir)) {
+    if (record.status === 'pending') pending.push(record);
   }
   return pending;
 }
 
+async function* scanHandoffs(handoffsDir: string): AsyncGenerator<HandoffRecord> {
+  let filenames: string[];
+  try {
+    filenames = await readdir(handoffsDir);
+  } catch {
+    return;
+  }
+
+  for (const filename of filenames) {
+    if (!filename.endsWith('.json') || filename.startsWith('.tmp-')) continue;
+    const taskId = filename.slice(0, -'.json'.length);
+    try {
+      const record = await readHandoff(taskId, handoffsDir);
+      if (record?.taskId === taskId) yield record;
+    } catch {
+      // Silently skip unreadable or malformed records.
+    }
+  }
+}
+
+// Invariant: a lock older than this threshold is assumed to be a crash leftover.
+const STALE_LOCK_TTL_MS = 30_000;
+
 /**
- * Acquire the O_EXCL lock for a taskId, run `cb` inside the lock, then release.
+ * Contract: acquire the O_EXCL lock for a taskId, run `cb` inside the lock, then release.
  *
  * Protocol:
  *   1. Try to create `<taskId>.lock` with O_EXCL — fails immediately with EEXIST
@@ -294,11 +354,6 @@ export async function listPendingHandoffs(
  * @param handoffsDir - Directory containing the lock file.
  * @param cb          - Callback to run while the lock is held.
  */
-// Invariant: a lock file older than this threshold is assumed to be a crash
-// leftover (SIGKILL/OOM between lock creation and the finally-unlink). We retry
-// once after unlinking; a second EEXIST means a genuine concurrent holder.
-const STALE_LOCK_TTL_MS = 30_000;
-
 export async function withHandoffLock<T>(
   taskId: string,
   handoffsDir: string,
@@ -366,40 +421,44 @@ export interface UpdateHandoffAnswerOpts {
    * See `HandoffRecord.responderIdentity` for format details and PII note.
    */
   responderIdentity?: string;
+  /** Omit or pass undefined for an unscoped answer; null matches only legacy records. */
+  expectedQuestionId?: string | null | undefined;
 }
 
+function matchesQuestionId(record: HandoffRecord, expectedQuestionId: string | null): boolean {
+  return record.questionId === (expectedQuestionId === null ? undefined : expectedQuestionId);
+}
+
+/** Prefix of the error thrown by unscoped {@link updateHandoffAnswer} when the
+ *  record no longer exists. Consumers should match this constant. */
+export const HANDOFF_STORE_NO_RECORD_PREFIX = 'handoff-store: no record found' as const;
+
 /**
- * Record a human answer for the given taskId using an exclusive-create lock
+ * Contract: record a human answer for the given taskId using an exclusive-create lock
  * file as a compare-and-swap gate to prevent TOCTOU races.
  *
  * Protocol:
  *   1. Acquire the O_EXCL lock via withHandoffLock — returns { won: false } if
  *      another caller already holds it (first-writer-wins CAS).
- *   2. Re-read the record and verify status is still 'pending'; if not, return
- *      { won: false }.
+ *   2. Re-read the record and verify status is still 'pending' and any expected
+ *      question identity matches; if not, return { won: false }.
  *   3. Write the updated record atomically, then release the lock.
  *   4. Return { won: true } on success.
  *
  * @param taskId  - The daemon task ID to update.
  * @param answer  - The human's response value.
  * @param source  - Which surface provided the answer ('telegram' | 'web' | 'repl').
- * @param opts    - Optional overrides: `handoffsDir` and `responderIdentity`.
- * @throws If no record exists for the taskId.
+ * @param opts    - Optional directory, responder identity and question identity.
+ * @throws If the record is missing and the answer is unscoped.
  * @returns UpdateHandoffResult — won: true if this caller claimed the record.
  */
-/** Prefix of the error message thrown by {@link updateHandoffAnswer} when the
- *  record no longer exists.  Consumers (e.g. the web-server race handler) must
- *  match against this constant rather than a hand-rolled string literal so that
- *  a rename here is caught at compile time instead of silently at runtime. */
-export const HANDOFF_STORE_NO_RECORD_PREFIX = 'handoff-store: no record found' as const;
-
 export async function updateHandoffAnswer(
   taskId: string,
   answer: unknown,
   source: string,
   opts: UpdateHandoffAnswerOpts = {},
 ): Promise<UpdateHandoffResult> {
-  const { handoffsDir = getHandoffsDir(), responderIdentity } = opts;
+  const { handoffsDir = getHandoffsDir(), responderIdentity, expectedQuestionId } = opts;
   assertSafeJobId(taskId);
   await ensureHandoffsDir(handoffsDir);
 
@@ -407,12 +466,12 @@ export async function updateHandoffAnswer(
     // Re-read record inside lock.
     const existing = await readHandoff(taskId, handoffsDir);
     if (existing === null) {
+      if (expectedQuestionId !== undefined) return { won: false };
       throw new Error(`${HANDOFF_STORE_NO_RECORD_PREFIX} for taskId ${taskId}`);
     }
-
-    // Guard — another winner may have landed between our EEXIST check
-    // and this read (shouldn't happen with O_EXCL, but be defensive).
-    if (existing.status !== 'pending') {
+    if (existing.status !== 'pending' || (
+      expectedQuestionId !== undefined && !matchesQuestionId(existing, expectedQuestionId)
+    )) {
       return { won: false };
     }
 
@@ -438,4 +497,73 @@ export async function updateHandoffAnswer(
 
   // null means the lock was not acquired — another caller holds it.
   return result ?? { won: false };
+}
+
+/**
+ * Append a copy for the exact question, even if it has closed (null = legacy).
+ * Raw sends can preserve the recovery route and its latest message with `preserveRoute`.
+ * Missing or superseded questions are a no-op; sustained lock contention throws.
+ */
+export async function updateHandoffMessage(
+  taskId: string,
+  expectedQuestionId: string | null,
+  route: HandoffRoute,
+  telegramMessageId: number,
+  handoffsDir: string = getHandoffsDir(),
+  opts: { preserveRoute?: boolean } = {},
+): Promise<void> {
+  assertSafeJobId(taskId);
+  await ensureHandoffsDir(handoffsDir);
+  await withHandoffWriteLock(taskId, handoffsDir, 'update handoff message', async () => {
+    const existing = await readHandoff(taskId, handoffsDir);
+    if (!existing || !matchesQuestionId(existing, expectedQuestionId)) return;
+    const copies = telegramCopiesOf(existing);
+    const seen = copies.find((copy) => copy?.chatId === route.chatId && copy.messageId === telegramMessageId);
+    if (seen && seen.questionId !== expectedQuestionId) return;
+    const delivery: HandoffTelegramCopy = { ...route, messageId: telegramMessageId, questionId: expectedQuestionId };
+    await atomicWriteJson(handoffPath(handoffsDir, taskId), {
+      ...existing,
+      ...(opts.preserveRoute ? {} : { route, telegramMessageId }),
+      telegramCopies: seen ? copies : [...copies, delivery],
+    });
+  });
+}
+
+/** Find a unique delivery by chat and message. The match identity can predate the record's current question. */
+export async function findHandoffByTelegramMessage(
+  chatId: number,
+  messageId: number,
+  handoffsDir: string = getHandoffsDir(),
+): Promise<{ record: HandoffRecord; questionId: string | null; threadId?: number } | undefined> {
+  let match: { record: HandoffRecord; questionId: string | null; threadId?: number } | undefined;
+  for await (const record of scanHandoffs(handoffsDir)) {
+    for (const copy of telegramCopiesOf(record)) {
+      if (copy?.chatId !== chatId || copy.messageId !== messageId) continue;
+      if (match || (copy.questionId !== null && typeof copy.questionId !== 'string')) return undefined;
+      const { questionId, threadId } = copy;
+      match = { record, questionId, ...(threadId === undefined ? {} : { threadId }) };
+    }
+  }
+  return match;
+}
+
+/** @internal Expire under the task lock; return the previous record for lease/notice handling. */
+export async function expirePendingHandoff(
+  taskId: string,
+  handoffsDir: string,
+  now: number,
+  isStale: (record: HandoffRecord) => boolean,
+): Promise<HandoffRecord | null> {
+  assertSafeJobId(taskId);
+  await ensureHandoffsDir(handoffsDir);
+  return withHandoffLock(taskId, handoffsDir, async () => {
+    const existing = await readHandoff(taskId, handoffsDir);
+    if (existing?.status !== 'pending' || !isStale(existing)) return null;
+    await atomicWriteJson(handoffPath(handoffsDir, taskId), {
+      ...existing,
+      status: 'expired',
+      expiredAt: new Date(now).toISOString(),
+    });
+    return existing;
+  });
 }

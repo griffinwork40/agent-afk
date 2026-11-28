@@ -13,12 +13,13 @@
  * @module telegram/push
  */
 
-import type { InlineKeyboardMarkup } from 'telegraf/types';
+import type { ForceReply, InlineKeyboardMarkup } from 'telegraf/types';
 
 import { resolveConfiguredNotifyTargets } from './notify-routing.js';
 import { splitLongMessage, markdownToTelegramHtml } from './formatter.js';
 import { env } from '../config/env.js';
 import { errorMessage } from '../utils/errors.js';
+import { isPlainObject } from '../utils/type-guards.js';
 
 const TELEGRAM_API_BASE = 'https://api.telegram.org';
 
@@ -28,14 +29,10 @@ export interface PushOptions {
   text: string;
   /** Optional parse mode. Telegram supports 'MarkdownV2' | 'HTML' | 'Markdown'. */
   parseMode?: 'MarkdownV2' | 'HTML' | 'Markdown';
-  /**
-   * Optional inline keyboard (or other reply markup). Forwarded verbatim as
-   * the `reply_markup` field on Telegram's `sendMessage`. Callers that want
-   * inline buttons attach an `InlineKeyboardMarkup` here; everything else
-   * (force reply, custom keyboards) is intentionally out of scope today and
-   * can be added by widening the union when needed.
-   */
-  replyMarkup?: InlineKeyboardMarkup;
+  /** Optional reply markup forwarded verbatim to Telegram's `sendMessage`. */
+  replyMarkup?: InlineKeyboardMarkup | ForceReply;
+  /** Read Telegram's success body to capture the sent message's identity. */
+  captureDelivery?: boolean;
   /**
    * Optional Telegram `message_thread_id` for sending to a specific topic in
    * a supergroup with topics enabled. Ignored when the target chat is not a
@@ -53,6 +50,38 @@ export interface PushResult {
   status: number;
   /** Telegram-returned error description on failure. */
   errorMessage?: string;
+  /** Present only when requested and Telegram returned usable message metadata. */
+  delivery?: { chatId: number; messageId: number; threadId?: number };
+}
+
+function isTelegramId(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value !== 0;
+}
+
+function parseDelivery(json: unknown, options: PushOptions): PushResult['delivery'] {
+  if (!isPlainObject(json) || json['ok'] !== true) return undefined;
+  const message = json['result'];
+  if (!isPlainObject(message)) return undefined;
+  const messageId = message['message_id'];
+  if (!isTelegramId(messageId) || messageId < 0) return undefined;
+
+  const chat = message['chat'];
+  if (chat !== undefined && !isPlainObject(chat)) return undefined;
+  let chatId = chat?.['id'];
+  if (chatId === undefined) {
+    const requestedChat = options.chatId;
+    chatId = typeof requestedChat === 'string' && /^-?\d+$/.test(requestedChat)
+      ? Number(requestedChat)
+      : requestedChat;
+  }
+  if (!isTelegramId(chatId)) return undefined;
+
+  const threadId = message['message_thread_id'] === undefined
+    ? options.messageThreadId || undefined
+    : message['message_thread_id'];
+  if (threadId === undefined) return { chatId, messageId };
+  if (!isTelegramId(threadId) || threadId < 0) return undefined;
+  return { chatId, messageId, threadId };
 }
 
 /**
@@ -91,7 +120,16 @@ export async function push(options: PushOptions): Promise<PushResult> {
       signal: controller.signal,
     });
     if (response.ok) {
-      return { ok: true, status: response.status };
+      const result: PushResult = { ok: true, status: response.status };
+      if (options.captureDelivery) {
+        try {
+          const delivery = parseDelivery(await response.json(), options);
+          if (delivery) result.delivery = delivery;
+        } catch {
+          // A missing or unreadable success body does not undo delivery.
+        }
+      }
+      return result;
     }
     let errorMessage: string | undefined;
     try {
@@ -132,6 +170,13 @@ export async function push(options: PushOptions): Promise<PushResult> {
 export async function pushMarkdown(
   options: Omit<PushOptions, 'parseMode'>,
 ): Promise<PushResult> {
+  return sendMarkdown(options);
+}
+
+async function sendMarkdown(
+  options: Omit<PushOptions, 'parseMode'>,
+  capturedChunks?: PushResult[],
+): Promise<PushResult> {
   const html = markdownToTelegramHtml(options.text);
   // Re-split the RENDERED html before sending: escaping (& → &amp;) and tag
   // injection (<b>, <code>) expand the text, so a chunk near the 4096 raw limit
@@ -139,10 +184,20 @@ export async function pushMarkdown(
   // the tail. Splitting the html keeps every sendMessage within the limit.
   // Sends are sequential so Telegram preserves message order.
   const htmlChunks = splitLongMessage(html);
+  const markup = options.replyMarkup;
+  const forceReply = markup && 'force_reply' in markup;
   let result: PushResult = { ok: true, status: 200 };
-  for (const htmlChunk of htmlChunks) {
-    result = await push({ ...options, text: htmlChunk, parseMode: 'HTML' });
-    if (result.ok) continue;
+  for (const [i, htmlChunk] of htmlChunks.entries()) {
+    const last = i === htmlChunks.length - 1;
+    // Preserve legacy keyboard placement on rendered sub-chunks unless opted in.
+    const attachMarkup = forceReply ? last : !options.captureDelivery || i === 0;
+    const replyMarkup = attachMarkup ? markup : undefined;
+    result = await push({ ...options, text: htmlChunk, parseMode: 'HTML', replyMarkup });
+    if (result.ok) {
+      // The caller appends the terminal result, including any plain fallback.
+      if (!last) capturedChunks?.push(result);
+      continue;
+    }
     // Fall back to plain text ONLY on Telegram's parse-entities rejection — other
     // failures (rate limit, 403, network) must not trigger a duplicate send.
     if (
@@ -153,7 +208,8 @@ export async function pushMarkdown(
       // deliverClean, this may re-send a sub-chunk already accepted above — a
       // rare edge (multi-chunk render + mid-stream parse failure) accepted
       // over silent loss.
-      return push({ ...options });
+      // With capture, don't repeat an inline keyboard already sent on chunk 0.
+      return push({ ...options, replyMarkup: options.captureDelivery && !forceReply ? replyMarkup : markup });
     }
     return result;
   }
@@ -171,6 +227,8 @@ export async function pushMarkdown(
  * Telegram HTML (with a plain-text fallback) instead of being shown verbatim;
  * leave it off for pre-formatted or markup-sensitive text (e.g. raw URLs).
  * `markdown` and `parseMode` are mutually exclusive — `markdown` wins.
+ * With `captureDelivery`, results include each accepted chunk in send order,
+ * including markdown sub-chunks, with delivery metadata when available.
  */
 export async function pushIfConfigured(
   text: string,
@@ -178,6 +236,7 @@ export async function pushIfConfigured(
     parseMode?: PushOptions['parseMode'];
     markdown?: boolean;
     replyMarkup?: PushOptions['replyMarkup'];
+    captureDelivery?: boolean;
     fetchImpl?: typeof fetch;
     /**
      * Explicit delivery target(s) that OVERRIDE the configured notify routing.
@@ -213,19 +272,21 @@ export async function pushIfConfigured(
   // rendered HTML could sever a tag mid-chunk and trip Telegram's parser.
   const chunks = splitLongMessage(text);
   const results: PushResult[] = [];
+  const markupChunk = opts.replyMarkup && 'force_reply' in opts.replyMarkup ? chunks.length - 1 : 0;
   for (const chatId of chatIds) {
     for (let i = 0; i < chunks.length; i++) {
       const base = {
         token,
         chatId,
         text: chunks[i] ?? '',
-        ...(opts.replyMarkup !== undefined && i === 0 ? { replyMarkup: opts.replyMarkup } : {}),
+        ...(opts.replyMarkup !== undefined && i === markupChunk ? { replyMarkup: opts.replyMarkup } : {}),
+        ...(opts.captureDelivery ? { captureDelivery: true } : {}),
         ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
         ...(opts.messageThreadId !== undefined ? { messageThreadId: opts.messageThreadId } : {}),
       };
       results.push(
         opts.markdown
-          ? await pushMarkdown(base)
+          ? await sendMarkdown(base, opts.captureDelivery ? results : undefined)
           : await push({
               ...base,
               ...(opts.parseMode !== undefined ? { parseMode: opts.parseMode } : {}),
