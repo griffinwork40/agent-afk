@@ -23,20 +23,36 @@ import {
 // ---------------------------------------------------------------------------
 
 describe('isNonSourcePath', () => {
-  it('matches .afk/ prefix', () => {
+  it('matches .afk/plans/ prefix', () => {
     expect(isNonSourcePath('.afk/plans/note.md')).toBe(true);
+  });
+
+  it('matches .afk/state/ prefix', () => {
+    expect(isNonSourcePath('.afk/state/sessions/abc.json')).toBe(true);
+  });
+
+  it('matches .afk/agent-framework/ prefix', () => {
+    expect(isNonSourcePath('.afk/agent-framework/pattern-cards/x.md')).toBe(true);
   });
 
   it('matches .afk-scratch/ prefix', () => {
     expect(isNonSourcePath('.afk-scratch/pr-body.md')).toBe(true);
   });
 
-  it('matches /.afk/ segment in absolute paths', () => {
+  it('matches /.afk/plans/ segment in absolute paths', () => {
     expect(isNonSourcePath('/Users/me/project/.afk/plans/note.md')).toBe(true);
   });
 
   it('matches space-prefixed path (summarizeToolInput format)', () => {
     expect(isNonSourcePath(' .afk/plans/note.md')).toBe(true);
+  });
+
+  it('does NOT match .afk/skills/ (executable source)', () => {
+    expect(isNonSourcePath('.afk/skills/review/SKILL.md')).toBe(false);
+  });
+
+  it('does NOT match .afk/plugins/ (executable source)', () => {
+    expect(isNonSourcePath('.afk/plugins/my-plugin/index.ts')).toBe(false);
   });
 
   it('does NOT match .afk-worktrees source paths', () => {

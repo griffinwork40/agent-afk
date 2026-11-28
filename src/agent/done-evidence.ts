@@ -70,24 +70,37 @@ export function isPatchApplyDryRun(e: ToolEventMin): boolean {
   }
 }
 
+// Contract: AFK-internal NON-SOURCE subdirectories whose writes should not
+// trigger the terminal-state verification gate. Narrowed to specific paths
+// rather than the broad `.afk/` prefix because `.afk/skills/`, `.afk/plugins/`,
+// `.afk/commands/`, and `.afk/agents/` contain executable source code that
+// must continue to trigger verification.
+const NON_SOURCE_PREFIXES: readonly string[] = [
+  '.afk/plans/',
+  '.afk/state/',
+  '.afk/logs/',
+  '.afk/tmp/',
+  '.afk/agent-framework/',
+  '.afk-scratch/',
+];
+
 /**
  * True when a file path targets an AFK-internal artifact that should NOT
  * trigger the terminal-state verification gate.
  *
- * Matches:
- *   - `.afk/`        — plan notes, scratch files, config artifacts (prefix)
- *   - `.afk-scratch/` — session scratch files (prefix)
- *   - `/.afk/`       — absolute-path variants of the above
+ * Matches known non-source subdirectories: plans/, state/, logs/, tmp/,
+ * agent-framework/, and .afk-scratch/.
  *
  * Does NOT match:
- *   - `.afk-worktrees/<wt>/src/x.ts` — worktree paths contain real source
- *     code and must continue to trigger verification. The broad
- *     `includes('/.afk-')` pattern is a confirmed false-negative factory
- *     for this case and must NOT be used.
+ *   - `.afk/skills/`    — project-scoped skills (executable source)
+ *   - `.afk/plugins/`   — project-scoped plugins (executable source)
+ *   - `.afk/commands/`  — project-scoped commands (executable source)
+ *   - `.afk/agents/`    — project-scoped agents (executable source)
+ *   - `.afk-worktrees/` — worktree paths contain real source code
  */
 export function isNonSourcePath(path: string): boolean {
   const p = path.trim();
-  return p.startsWith('.afk/') || p.startsWith('.afk-scratch/') || p.includes('/.afk/');
+  return NON_SOURCE_PREFIXES.some((prefix) => p.startsWith(prefix) || p.includes('/' + prefix));
 }
 
 // Contract: tools whose SUCCESSFUL invocation is observable corroboration that
