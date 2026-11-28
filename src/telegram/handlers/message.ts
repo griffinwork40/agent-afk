@@ -259,7 +259,13 @@ export class MessageHandler {
 
     const tgMsg = ctx.message as Message.TextMessage;
     // An explicit handoff reply is literal, even if it starts with a slash.
-    if (tgMsg.reply_to_message?.message_id !== undefined) {
+    // Early-exit: only scan when the replied-to message was sent by this bot.
+    // Skipping this check causes a full disk scan on every explicit reply in an
+    // allowed chat that misses the in-process cache (security: M).
+    if (
+      tgMsg.reply_to_message?.message_id !== undefined &&
+      tgMsg.reply_to_message.from?.id === ctx.botInfo?.id
+    ) {
       const { matchReplyToHandoff } = await import('../handoff-answer.js');
       if (await matchReplyToHandoff(this.bot, chatId, tgMsg.reply_to_message.message_id, messageText, undefined, tgMsg.from, route.threadId)) return;
     }

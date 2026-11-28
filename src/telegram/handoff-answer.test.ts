@@ -546,6 +546,7 @@ describe('registerHandoffAnswerHandlers', () => {
       callbackQuery: { data, from },
       answerCbQuery: vi.fn().mockResolvedValue(undefined),
       editMessageText: vi.fn().mockResolvedValue(undefined),
+      editMessageReplyMarkup: vi.fn().mockResolvedValue(undefined),
     };
     await handler(ctx);
     expect(ctx.answerCbQuery).toHaveBeenCalledOnce();
@@ -643,7 +644,11 @@ describe('registerHandoffAnswerHandlers', () => {
       return update(...args);
     });
 
-    expectClosed(await tap(buildHandoffCallback(record, 1)));
+    const ctx = await tap(buildHandoffCallback(record, 1));
+    expect(ctx.answerCbQuery).toHaveBeenCalledWith('This question is no longer open.');
+    // Fix: replacement path removes only the keyboard — must NOT replace message text.
+    expect(ctx.editMessageText).not.toHaveBeenCalled();
+    expect(ctx.editMessageReplyMarkup).toHaveBeenCalledWith({ inline_keyboard: [] });
     const replacement = await readHandoff(record.taskId, handoffsDir);
     expect(replacement).toMatchObject({ status: 'pending', question });
     expect(replacement?.questionId).not.toBe(record.questionId);

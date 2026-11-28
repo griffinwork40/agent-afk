@@ -79,11 +79,25 @@ export async function matchReplyToHandoff(
 ): Promise<boolean> {
   const key = messageKey(chatId, replyToMessageId);
   const cached = pendingTextHandoffs.get(key);
-  const saved = cached ? undefined : await findHandoffByTelegramMessage(chatId, replyToMessageId, handoffsDir);
-  const delivery = cached ?? saved;
+
+  // Fix: a stale cache entry must not silently block the durable-store fallback.
+  // If cached is present but the live record is no longer open (e.g. question was
+  // replaced), evict the stale entry and fall through to findHandoffByTelegramMessage
+  // so the durable store can resolve the current delivery (correctness: M).
+  let effectiveCached = cached;
+  if (cached) {
+    const liveRecord = await readHandoff(cached.taskId, handoffsDir);
+    if (!isOpen(liveRecord, cached.questionId)) {
+      if (pendingTextHandoffs.get(key) === cached) pendingTextHandoffs.delete(key);
+      effectiveCached = undefined;
+    }
+  }
+
+  const saved = effectiveCached ? undefined : await findHandoffByTelegramMessage(chatId, replyToMessageId, handoffsDir);
+  const delivery = effectiveCached ?? saved;
   if (!delivery) return false;
 
-  const record = cached ? await readHandoff(cached.taskId, handoffsDir) : saved?.record;
+  const record = effectiveCached ? await readHandoff(effectiveCached.taskId, handoffsDir) : saved?.record;
   const questionId = delivery.questionId;
   const threadId = delivery.threadId ?? replyThreadId;
   const sendNotice = (notice: string) => bot.telegram.sendMessage(chatId, notice, {
@@ -92,7 +106,7 @@ export async function matchReplyToHandoff(
   }).catch(() => {});
 
   if (!isOpen(record, questionId)) {
-    if (pendingTextHandoffs.get(key) === cached) pendingTextHandoffs.delete(key);
+    if (effectiveCached && pendingTextHandoffs.get(key) === effectiveCached) pendingTextHandoffs.delete(key);
     await sendNotice(QUESTION_NOT_OPEN);
     return true;
   }
@@ -117,8 +131,8 @@ export async function matchReplyToHandoff(
     return true;
   }
 
-  if (cached) {
-    if (pendingTextHandoffs.get(key) === cached) pendingTextHandoffs.delete(key);
+  if (effectiveCached) {
+    if (pendingTextHandoffs.get(key) === effectiveCached) pendingTextHandoffs.delete(key);
     // Preserve the existing visual closure for co-hosted prompts when Telegram
     // permits editing; a ForceReply prompt may not be editable.
     const label = parsed.label.length > 50 ? `${parsed.label.slice(0, 50)}...` : parsed.label;

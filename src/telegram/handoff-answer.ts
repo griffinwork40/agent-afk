@@ -207,8 +207,11 @@ export function registerHandoffAnswerHandlers(bot: Telegraf): void {
       await ctx.answerCbQuery('Could not record the answer. Please try again.').catch(() => {});
       return;
     }
+    // The question was replaced. Remove only the keyboard — do NOT replace the
+    // entire message text with editClosedMessage, which would destroy the original
+    // question text (correctness: M). editMessageReplyMarkup removes buttons only.
     await ctx.answerCbQuery(QUESTION_NOT_OPEN).catch(() => {});
-    await editClosedMessage(ctx, QUESTION_NOT_OPEN);
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
   });
 }
 
