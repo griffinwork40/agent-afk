@@ -64,7 +64,7 @@ export async function runFirstRunDetector(command: Command): Promise<void> {
   // non-Anthropic route. loadConfig() retains its own default-model behavior;
   // missing credentials for the selected route remain provider-specific.
   if (provider !== 'anthropic-direct') return;
-  const refreshedToken = await preloadClaudeKeychainOAuth(provider);
+  const refreshedToken = (await preloadClaudeKeychainOAuth(provider))?.token;
   const credential = refreshedToken ?? loadCredential();
   if (credential) return;
   // Daemon/farm are unattended even when launched from a terminal. Service

@@ -28,18 +28,28 @@ import { grantsWorkspacePrompt, grantsToolStrict, skillManifestGranted } from '.
 import { isSkillManifestAlways } from '../../../config/env.js';
 import { deriveCredentialFromStore } from './provider-query-setup.credential.js';
 import { loadClaudeCodeOauthToken } from '../../auth/keychain.js';
-import { describeClaudeLoginStatus, lastClaudeLoginStatus } from '../../auth/claude-login-status.js';
+import { describeClaudeLoginStatus, lastClaudeLoginStatus, type ClaudeLoginRefreshResult } from '../../auth/claude-login-status.js';
+import { getSessionPrimeLoginResult } from '../../session/credential-prime.js';
 
 /**
  * The "no credential" error. Names every tier, including the stored Claude
- * Code login, and appends why that login yielded nothing when this process
- * has observed it. Never includes token material.
+ * Code login, and appends why that login yielded nothing.
+ *
+ * Prefers `primeResult` — the outcome of THIS session's own credential prime —
+ * over the process-global `lastClaudeLoginStatus()`. In a multi-session process
+ * (Telegram bot, daemon, SDK embedder) the global is overwritten by every
+ * refresh attempt and therefore describes whichever session refreshed last,
+ * not the one that is actually failing. No token material is included.
  */
-export function missingCredentialError(providerName: string): Error {
+export function missingCredentialError(
+  providerName: string,
+  primeResult?: ClaudeLoginRefreshResult,
+): Error {
   const base =
     `${providerName} provider requires config.apiKey (resolved from ANTHROPIC_API_KEY, ` +
     'CLAUDE_CODE_OAUTH_TOKEN, or the stored Claude Code login)';
-  const detail = describeClaudeLoginStatus(lastClaudeLoginStatus());
+  const status = primeResult?.status ?? lastClaudeLoginStatus();
+  const detail = describeClaudeLoginStatus(status);
   return new Error(detail !== undefined ? `${base}. ${detail}` : base);
 }
 
@@ -112,7 +122,7 @@ export function setUpQuerySession(
 ): QuerySetupResult {
   const config = args.config;
   const { localMode, token } = resolveQueryToken(config);
-  if (!token || token.length === 0) throw missingCredentialError(providerName);
+  if (!token || token.length === 0) throw missingCredentialError(providerName, getSessionPrimeLoginResult(config));
   const authMode = detectAuthMode(token);
 
   // Client + observability wiring (throttle mailbox, quota capture, tracing

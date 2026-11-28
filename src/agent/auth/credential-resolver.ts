@@ -22,7 +22,8 @@
  */
 
 import { providerForModel, type ProviderRouteHints } from '../providers/index.js';
-import { loadClaudeCodeOauthToken, refreshClaudeCodeOauthToken } from './keychain.js';
+import { loadClaudeCodeOauthToken, refreshClaudeCodeOauthTokenWithStatus } from './keychain.js';
+import type { ClaudeLoginRefreshResult } from './claude-login-status.js';
 import { env } from '../../config/env.js';
 
 // Process-local fallback for a successfully refreshed token whose persistent
@@ -152,19 +153,24 @@ export function _resetLastResolvedAnthropicCredential(): void {
  *      "OAuth token expired" warning from a stale `claude login` entry.
  *   2. It keeps a network refresh off the startup path for those users.
  *
- * Returns the fresh access token when a refresh occurred and produced one, so
- * callers can use it as a fallback if the write-back to the credential store
- * failed (locked / read-only keychain); returns `undefined` when the guard
- * skipped the refresh or no token was available. Never throws.
+ * Returns the full {@link ClaudeLoginRefreshResult} so callers can use the
+ * session-scoped `.status` to build diagnostic error messages without reading
+ * the process-global `lastClaudeLoginStatus()` — which is overwritten by every
+ * refresh attempt in the process and therefore describes whichever session
+ * refreshed last in a multi-session process (Telegram bot, daemon, SDK embedder).
+ *
+ * Callers that only need the token extract `.token` from the result.
+ * Returns `undefined` when the guard conditions are not met (non-Anthropic
+ * provider, or an env credential already in play). Never throws.
  */
 export async function preloadClaudeKeychainOAuth(
   provider: string,
-): Promise<string | undefined> {
+): Promise<ClaudeLoginRefreshResult | undefined> {
   if (provider !== 'anthropic-direct') return undefined;
   if (env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN) return undefined;
-  const token = await refreshClaudeCodeOauthToken();
-  if (token) refreshedClaudeCodeOauthToken = token;
-  return token;
+  const result = await refreshClaudeCodeOauthTokenWithStatus();
+  if (result.token) refreshedClaudeCodeOauthToken = result.token;
+  return result;
 }
 
 /** Reset the process-local refresh fallback. Intended for isolated tests. */
