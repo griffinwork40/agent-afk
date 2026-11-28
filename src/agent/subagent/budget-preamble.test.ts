@@ -135,7 +135,8 @@ describe('injectToolBudgetPreamble', () => {
     expect(typeof out.systemPrompt).toBe('string');
     expect(out.systemPrompt as string).toMatch(/^You are the research agent\./);
     expect(out.systemPrompt as string).toContain('# Tool budget');
-    expect(out.systemPrompt as string).toContain('hard ceiling, not a target');
+    // Unbounded path must NOT claim a numeric round cap.
+    expect(out.systemPrompt as string).not.toMatch(/\d+ tool-use rounds/);
   });
 
   it('sets the limits note as the prompt when no prompt is set for unbounded child', () => {
@@ -149,8 +150,15 @@ describe('renderUnboundedLimitsNote', () => {
     expect(renderUnboundedLimitsNote()).toMatch(/^# Tool budget/);
   });
 
-  it('frames the budget as a ceiling to finish under, not an allowance to spend', () => {
-    expect(renderUnboundedLimitsNote()).toContain('hard ceiling, not a target');
+  it('mentions wall-clock and idle-watchdog limits', () => {
+    const text = renderUnboundedLimitsNote();
+    expect(text).toContain('wall-clock');
+    expect(text).toContain('idle-watchdog');
+  });
+
+  it('does not claim a numeric round cap', () => {
+    expect(renderUnboundedLimitsNote()).not.toMatch(/\d+ tool-use rounds/);
+    expect(renderUnboundedLimitsNote()).not.toContain('hard ceiling');
   });
 
   it('includes the convergence sentence', () => {
