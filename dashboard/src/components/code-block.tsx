@@ -89,7 +89,7 @@ export const CodeBlock = memo(function CodeBlock({ code, language }: CodeBlockPr
     }).catch(() => { /* clipboard write failed silently */ });
   }, [code]);
 
-  const bgColor = tokenResult?.bg ?? '#0d1117';
+  const bgColor = tokenResult?.bg ?? 'transparent';
 
   return (
     <div className="relative group rounded-md overflow-hidden mb-2" style={{ backgroundColor: bgColor }}>
