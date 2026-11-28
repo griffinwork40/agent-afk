@@ -355,7 +355,14 @@ export async function removeManagedWorktreeGuarded(
     }
     const ahead = await managedWorktreeCommitsAhead(execFile, repoRoot, worktreePath);
     if (ahead > 0) {
-      return { removed: false, reason: 'commits-ahead', commitsAhead: ahead };
+      // Allow removal when every commit is already reachable from the upstream
+      // tracking ref (i.e. the branch was pushed or merged). The work is durable
+      // on the remote, so the checkout is safe to drop without force (#4829).
+      const unpushed = await probeUnpushedCommits(execFile, worktreePath);
+      if (unpushed) {
+        return { removed: false, reason: 'commits-ahead', commitsAhead: ahead };
+      }
+      // All commits are upstream-reachable — fall through to removal.
     }
   }
   const gitArgs = ['-C', repoRoot, 'worktree', 'remove'];
@@ -481,7 +488,17 @@ async function probeUnpushedCommits(execFile: ExecFileFn, worktreePath: string):
   try {
     const r = await execFile('git', ['--no-optional-locks', '-C', worktreePath, 'log', '--oneline', '@{upstream}..HEAD']);
     return r.stdout.trim();
-  } catch { return 'probe-failed'; }
+  } catch {
+    // @{upstream} is not configured (branch was pushed without -u). Fall back to
+    // origin/<branch> if we can determine the current branch name.
+    try {
+      const b = await execFile('git', ['--no-optional-locks', '-C', worktreePath, 'branch', '--show-current']);
+      const branch = b.stdout.trim();
+      if (!branch) return 'probe-failed'; // detached HEAD — fail safe
+      const r2 = await execFile('git', ['--no-optional-locks', '-C', worktreePath, 'log', '--oneline', `origin/${branch}..HEAD`]);
+      return r2.stdout.trim();
+    } catch { return 'probe-failed'; }
+  }
 }
 
 /**

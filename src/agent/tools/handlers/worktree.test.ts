@@ -579,12 +579,43 @@ describe('worktree handler — remove guards', () => {
         return { stdout: 'tip456\n', stderr: '' };
       }
       if (call.args.includes('rev-list')) return { stdout: '2\n', stderr: '' };
+      // log @{upstream}..HEAD → non-empty means commits are NOT yet pushed
+      if (call.args.includes('log')) return { stdout: 'tip456 some unpushed commit\n', stderr: '' };
       return undefined;
     }));
     const handler = createWorktreeHandler(repoRoot, { execFile: mock });
     const result = await handler({ action: 'remove', path: 'ahead-wt' }, SIGNAL);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('commit(s) ahead');
+  });
+
+  // #4829: when every commit ahead of base is already on the remote (pushed /
+  // merged), allow removal without force — the branch ref survives, so the
+  // work is durable.
+  it('removes a worktree with commits ahead without force when all commits are pushed (#4829)', async () => {
+    const wtPath = join(afkRoot, 'ahead-pushed-wt');
+    await fs.mkdir(wtPath, { recursive: true });
+    await fs.writeFile(
+      join(wtPath, '.afk-worktree-meta.json'),
+      JSON.stringify({ owner: 'agent', createdAt: new Date().toISOString(), baseSha: 'base123' }),
+    );
+    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath)}\n`, (call) => {
+      if (call.args.includes('status')) return { stdout: '', stderr: '' };
+      if (call.args.includes('rev-parse') && call.args.includes('HEAD') && call.args.includes(wtPath)) {
+        return { stdout: 'tip456\n', stderr: '' };
+      }
+      if (call.args.includes('rev-list')) return { stdout: '2\n', stderr: '' };
+      // log @{upstream}..HEAD → empty means all commits are upstream-reachable
+      if (call.args.includes('log')) return { stdout: '', stderr: '' };
+      return undefined;
+    }));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'remove', path: 'ahead-pushed-wt' }, SIGNAL);
+    expect(result.isError).toBeUndefined();
+    const removeCall = mock.calls.find((c) => c.args.includes('remove'));
+    expect(removeCall).toBeDefined();
+    // Must NOT pass --force
+    expect(removeCall?.args).not.toContain('--force');
   });
 
   // #759 (second removal path): a tree whose only content is a non-rebuildable
