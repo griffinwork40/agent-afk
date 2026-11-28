@@ -218,7 +218,10 @@ const PKG_INSTALL =
 
 // ── curl / wget writes ─────────────────────────────────────────────────────
 // Download-to-file (`-o`/`-O`/`--output`) or write HTTP methods / form data.
-const CURL_WGET_OUTPUT = /\b(curl|wget)\b[^|;&]*\s(-o\b|-O\b|--output\b)/i;
+// `-o /dev/null` and `--output /dev/null` are explicitly exempted: they discard
+// the response body entirely and write nothing to the filesystem. This is the
+// canonical curl idiom for timing/health checks (`curl -o /dev/null -w "%{time_total}" …`).
+const CURL_WGET_OUTPUT = /\b(curl|wget)\b[^|;&]*\s(-o\b|-O\b|--output\b)(?!\s*\/dev\/null\b)/i;
 const CURL_WRITE_METHOD = /\bcurl\b[^|;&]*\s-X\s+(POST|PUT|PATCH|DELETE)\b/i;
 const CURL_DATA = /\bcurl\b[^|;&]*\s(-d\b|--data\b|-F\b|--form\b)/i;
 

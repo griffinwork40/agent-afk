@@ -14,8 +14,10 @@ import { describe, it, expect } from 'vitest';
 import {
   classifyDoneEvidence,
   doneHasCorroboratingEvidence,
+  isVerificationCommand,
   type ToolEventMin,
 } from './done-evidence.js';
+import { classifyBashCommand } from './tools/readonly-bash.js';
 
 // ---------------------------------------------------------------------------
 // classifyDoneEvidence
@@ -147,6 +149,72 @@ describe('classifyDoneEvidence', () => {
 });
 
 // ---------------------------------------------------------------------------
+// isVerificationCommand — Cause 1 (#5408): prefixed / compound commands
+// ---------------------------------------------------------------------------
+
+describe('isVerificationCommand — prefixed commands (#5408 Cause 1)', () => {
+  it.each([
+    ['pnpm lint', true],
+    ['cd /home/me/project && pnpm lint', true],
+    ['(pnpm lint 2>&1 | tail -n 12)', true],
+    ['CI=1 pnpm test', true],
+    ['time pnpm test', true],
+    ['cd website && pnpm build', true],
+    ['ls -la', false],
+    ['cd /repo && git status', false],
+    ['echo done', false],
+  ])('%s -> %s', (cmd, expected) => {
+    expect(isVerificationCommand(cmd)).toBe(expected);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// classifyDoneEvidence — Cause 2 (#5408): pre-classified booleans bypass truncation
+// ---------------------------------------------------------------------------
+
+describe('classifyDoneEvidence — pre-classified booleans bypass truncation (#5408 Cause 2)', () => {
+  it('isVerificationBash:true counts as verification even when input is truncated/garbled', () => {
+    // Simulate a command that was truncated mid-string in the 160-char summary.
+    // Without the fix this would not be recognised as verification.
+    const events: ToolEventMin[] = [
+      { toolName: 'edit_file', input: '', isError: false },
+      {
+        toolName: 'bash',
+        input: 'some truncated garbage…', // truncated — would not match VERIFICATION_COMMANDS
+        isError: false,
+        isVerificationBash: true, // pre-classified from full command
+        isMutatingBash: false,
+      },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('verified');
+  });
+
+  it('isMutatingBash:true counts as mutation even when mutation appears after char 160', () => {
+    // Simulate a command whose mutation (e.g. rm -rf build/) appears after char 160.
+    // Without the fix classifyBashCommand would see only the truncated prefix and
+    // return mutating:false, so the Done would appear verified when it isn\'t.
+    const events: ToolEventMin[] = [
+      { toolName: 'edit_file', input: '', isError: false },
+      // A command that looks like verification at the front but is mutating overall
+      { toolName: 'bash', input: 'pnpm test', isError: false, isMutatingBash: true, isVerificationBash: false },
+    ];
+    // The pre-classified isMutatingBash:true should advance lastMutationIndex;
+    // since isVerificationBash is false, there is no subsequent verification,
+    // so the result should be unverified.
+    expect(classifyDoneEvidence(events)).toBe('unverified');
+  });
+
+  it('falls back to input-string classification when booleans are absent (legacy fixtures)', () => {
+    // No isMutatingBash/isVerificationBash: must still work via e.input fallback.
+    const events: ToolEventMin[] = [
+      { toolName: 'edit_file', input: '', isError: false },
+      { toolName: 'bash', input: 'pnpm test', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('verified');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // doneHasCorroboratingEvidence
 // ---------------------------------------------------------------------------
 
@@ -188,5 +256,31 @@ describe('doneHasCorroboratingEvidence', () => {
       { toolName: 'bash', input: 'pnpm test', isError: true },
     ];
     expect(doneHasCorroboratingEvidence(events)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cause 3 (#5408): curl -o /dev/null must NOT be treated as mutating
+// ---------------------------------------------------------------------------
+
+describe('classifyBashCommand — curl /dev/null exemption (#5408 Cause 3)', () => {
+  it('curl -o /dev/null is NOT mutating', () => {
+    expect(classifyBashCommand('curl -o /dev/null https://example.com').mutating).toBe(false);
+  });
+
+  it('curl --output /dev/null is NOT mutating', () => {
+    expect(classifyBashCommand('curl --output /dev/null https://example.com').mutating).toBe(false);
+  });
+
+  it('curl -o /dev/null with timing flags is NOT mutating', () => {
+    expect(classifyBashCommand('curl -o /dev/null -w "%{time_total}" https://api.example.com').mutating).toBe(false);
+  });
+
+  it('curl -o realfile.json IS still mutating', () => {
+    expect(classifyBashCommand('curl -o data.json https://example.com').mutating).toBe(true);
+  });
+
+  it('curl -O IS still mutating (saves with remote filename)', () => {
+    expect(classifyBashCommand('curl -O https://example.com/file.zip').mutating).toBe(true);
   });
 });

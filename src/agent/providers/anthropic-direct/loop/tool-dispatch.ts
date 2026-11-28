@@ -21,6 +21,7 @@ import { abortFailureClass } from '../../../abort-reason.js';
 import { emitToolCall } from '../../../trace/emit.js';
 import { extractRawToolInput } from '../../../facets/raw-input.js';
 import { summarizeToolInput } from '../../shared/tool-input-summary.js';
+import { classifyBashToolInput } from '../../shared/bash-classify.js';
 import { buildToolCallStartedPayload } from '../../shared/tool-call-trace.js';
 import { relayWhilePending } from '../../shared/event-relay.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
@@ -74,12 +75,14 @@ export async function* dispatchToolCalls(
         subagentId: input.subagentId,
       }),
     );
+    const bashFlags = classifyBashToolInput(block.name, block.input);
     yield {
       type: 'tool.use.start',
       toolUseId: block.id,
       toolName: block.name,
       toolInput: summarizeToolInput(block.name, block.input),
       toolInputRaw: extractRawToolInput(block.input),
+      ...bashFlags,
       sessionId: input.ctx.sessionId,
     };
   }

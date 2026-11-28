@@ -41,6 +41,16 @@ export interface ToolEventMin {
    */
   inputRaw?: string;
   isError?: boolean;
+  /**
+   * Pre-classified from the FULL bash command before the 160-char `toolInput`
+   * summary is applied. When present, `classifyDoneEvidence` uses these booleans
+   * directly instead of re-classifying the truncated `input` string — fixing the
+   * false-positive and false-negative classes caused by mid-command truncation.
+   * Absent for non-bash tools and for events constructed without pre-classification
+   * (e.g. unit-test fixtures that only supply `input`).
+   */
+  isMutatingBash?: boolean;
+  isVerificationBash?: boolean;
 }
 
 /**
@@ -130,14 +140,55 @@ const VERIFICATION_COMMANDS: readonly RegExp[] = [
   /^\s*(?:rake\s+(?:test|spec)|bundle\s+exec\s+rspec)\b/,
 ];
 
+// Contract: ENV_ASSIGNMENT strips leading `KEY=value` pairs (e.g. `CI=1`,
+// `NODE_ENV=test`) and the `time` / `command` no-op wrappers that agents
+// prepend before the real command verb. This is applied segment-by-segment
+// after splitting on `&&` / `;` so only the leading prefix of each segment
+// is stripped, never an assignment that appears as an argument later.
+const ENV_ASSIGNMENT = /^(?:[A-Z_][A-Z0-9_]*=\S*\s+)*/i;
+// LEADING_WRAPPERS strips `time`, `command`, `exec` immediately before the
+// real verb (after env-var stripping).
+const LEADING_WRAPPERS = /^(?:time|command|exec)\s+/i;
+
+/**
+ * Split a compound shell command on `&&` and `;` boundaries (top-level only —
+ * does not descend into subshells) and strip one level of wrapping parentheses
+ * from each segment, then strip leading env assignments and no-op wrappers.
+ * Returns the normalised segments so each can be tested against VERIFICATION_COMMANDS.
+ */
+function verificationSegments(input: string): string[] {
+  // Strip one level of outer parens: `(cmd)` → `cmd`, `(cmd 2>&1 | tail)` → `cmd 2>&1 | tail`.
+  const unwrapped = input.trim().replace(/^\((.*)\)\s*$/, '$1');
+  // Split on && and ; — intentionally simple: does not parse quotes or subshells.
+  // When unsure, do not classify as verification (false-negative is safe).
+  const rawSegments = unwrapped.split(/&&|;/);
+  return rawSegments.map((seg) => {
+    // Strip leading `cd <dir>` navigation prefix — agents write `cd repo && pnpm test`.
+    const withoutCd = seg.trim().replace(/^cd\s+\S+\s*/, '');
+    // Strip leading env assignments (CI=1 pnpm test → pnpm test).
+    const withoutEnv = withoutCd.replace(ENV_ASSIGNMENT, '');
+    // Strip no-op wrappers: `time pnpm test` → `pnpm test`.
+    return withoutEnv.replace(LEADING_WRAPPERS, '');
+  });
+}
+
 /**
  * True when a bash command's flattened input looks like a verification step.
- * The input string is the `toolInput` summary from `summarizeToolInput` —
- * a flattened, redacted, space-prefixed command string.
+ *
+ * Tests each `&&`/`;` segment of the command independently, after:
+ *   1. Stripping one level of wrapping parentheses from the whole command.
+ *   2. Stripping a leading `cd <dir>` navigation prefix from each segment.
+ *   3. Stripping leading `KEY=value` env-var assignments from each segment.
+ *   4. Stripping no-op wrappers (`time`, `command`, `exec`) from each segment.
+ *
+ * A command is considered a verification step when ANY segment matches.
+ * Invariant: when uncertain, do NOT classify as verification — false negatives
+ * (treating a real test run as non-verification) are safe; false positives
+ * (treating a mutation as verification) are dangerous.
  */
 export function isVerificationCommand(input: string): boolean {
-  const trimmed = input.trim();
-  return VERIFICATION_COMMANDS.some((re) => re.test(trimmed));
+  const segments = verificationSegments(input);
+  return segments.some((seg) => VERIFICATION_COMMANDS.some((re) => re.test(seg)));
 }
 
 /**
@@ -170,13 +221,19 @@ export function classifyDoneEvidence(
       if (e.toolName === 'patch_apply' && isPatchApplyDryRun(e)) continue;
       lastMutationIndex = i;
     } else if (e.toolName === 'bash') {
+      // Prefer pre-classified booleans (computed from the FULL command before
+      // the 160-char summary truncation). Fall back to classifying the truncated
+      // `e.input` only when the booleans are absent (legacy paths, test fixtures).
+      const isVerification = e.isVerificationBash ?? isVerificationCommand(e.input);
+      const isMutating = e.isMutatingBash ?? (!isVerification && classifyBashCommand(e.input).mutating);
+
       // Verification check takes priority: a command that matches a verification
       // pattern (pnpm test, cargo check, …) counts as verification. Only when it
       // is NOT a verification command do we check whether it contains a shell write
       // operator; a mutating bash call (output redirect, tee) advances
       // lastMutationIndex so a verification that ran BEFORE it is not counted as
       // post-mutation confirmation.
-      if (isVerificationCommand(e.input)) {
+      if (isVerification) {
         lastVerificationIndex = i;
         // A bash command can match a verification pattern AND also write to disk
         // (e.g. `pnpm test > results.txt`, `pnpm test 2>&1 | tee log.txt`).
@@ -189,7 +246,7 @@ export function classifyDoneEvidence(
         if (SHELL_WRITE_OPERATOR.test(e.input)) {
           lastMutationIndex = i;
         }
-      } else if (classifyBashCommand(e.input).mutating) {
+      } else if (isMutating) {
         lastMutationIndex = i;
       }
     }

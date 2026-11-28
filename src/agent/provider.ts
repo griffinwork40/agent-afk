@@ -216,6 +216,19 @@ export type ProviderEvent =
        * openai-compatible emits only the complete event and never sets this.
        */
       pending?: true;
+      /**
+       * Pre-classified bash mutation/verification booleans, computed from the FULL
+       * raw command before the 160-char `toolInput` summary is applied. Present only
+       * for `bash` tool calls; absent for all other tools.
+       *
+       * Carrying these two booleans — rather than the raw command — keeps secret
+       * command text out of at-rest storage (the raw command is never persisted;
+       * only these derived, non-sensitive flags flow through the event pipeline).
+       * Done-evidence classification reads these instead of the truncated `toolInput`
+       * so a mutation or verification after char 160 is never invisible.
+       */
+      isMutatingBash?: boolean;
+      isVerificationBash?: boolean;
       sessionId?: string;
     }
   | {
