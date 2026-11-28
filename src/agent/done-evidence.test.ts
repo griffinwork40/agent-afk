@@ -14,8 +14,39 @@ import { describe, it, expect } from 'vitest';
 import {
   classifyDoneEvidence,
   doneHasCorroboratingEvidence,
+  isNonSourcePath,
   type ToolEventMin,
 } from './done-evidence.js';
+
+// ---------------------------------------------------------------------------
+// isNonSourcePath
+// ---------------------------------------------------------------------------
+
+describe('isNonSourcePath', () => {
+  it('matches .afk/ prefix', () => {
+    expect(isNonSourcePath('.afk/plans/note.md')).toBe(true);
+  });
+
+  it('matches .afk-scratch/ prefix', () => {
+    expect(isNonSourcePath('.afk-scratch/pr-body.md')).toBe(true);
+  });
+
+  it('matches /.afk/ segment in absolute paths', () => {
+    expect(isNonSourcePath('/Users/me/project/.afk/plans/note.md')).toBe(true);
+  });
+
+  it('matches space-prefixed path (summarizeToolInput format)', () => {
+    expect(isNonSourcePath(' .afk/plans/note.md')).toBe(true);
+  });
+
+  it('does NOT match .afk-worktrees source paths', () => {
+    expect(isNonSourcePath('.afk-worktrees/wt1/src/x.ts')).toBe(false);
+  });
+
+  it('does NOT match normal source paths', () => {
+    expect(isNonSourcePath('src/agent/done-evidence.ts')).toBe(false);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // classifyDoneEvidence
@@ -143,6 +174,36 @@ describe('classifyDoneEvidence', () => {
       { toolName: 'bash', input: 'grep -r foo src/', isError: false },
     ];
     expect(classifyDoneEvidence(events)).toBe('verified');
+  });
+
+  // AFK-internal path filtering — gate must NOT fire for gitignored plan notes.
+  it('write_file to .afk/plans/note.md alone → no-code-changes', () => {
+    const events: ToolEventMin[] = [
+      { toolName: 'write_file', input: ' .afk/plans/note.md', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('no-code-changes');
+  });
+
+  it('write_file to .afk-scratch/pr-body.md alone → no-code-changes', () => {
+    const events: ToolEventMin[] = [
+      { toolName: 'write_file', input: ' .afk-scratch/pr-body.md', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('no-code-changes');
+  });
+
+  it('write_file to .afk/plans/note.md + edit_file to src/foo.ts → unverified (mixed)', () => {
+    const events: ToolEventMin[] = [
+      { toolName: 'write_file', input: ' .afk/plans/note.md', isError: false },
+      { toolName: 'edit_file', input: ' src/foo.ts', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('unverified');
+  });
+
+  it('write_file to .afk-worktrees/wt1/src/x.ts → unverified (worktree source is real code)', () => {
+    const events: ToolEventMin[] = [
+      { toolName: 'write_file', input: ' .afk-worktrees/wt1/src/x.ts', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('unverified');
   });
 });
 

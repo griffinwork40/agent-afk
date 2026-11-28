@@ -70,6 +70,26 @@ export function isPatchApplyDryRun(e: ToolEventMin): boolean {
   }
 }
 
+/**
+ * True when a file path targets an AFK-internal artifact that should NOT
+ * trigger the terminal-state verification gate.
+ *
+ * Matches:
+ *   - `.afk/`        — plan notes, scratch files, config artifacts (prefix)
+ *   - `.afk-scratch/` — session scratch files (prefix)
+ *   - `/.afk/`       — absolute-path variants of the above
+ *
+ * Does NOT match:
+ *   - `.afk-worktrees/<wt>/src/x.ts` — worktree paths contain real source
+ *     code and must continue to trigger verification. The broad
+ *     `includes('/.afk-')` pattern is a confirmed false-negative factory
+ *     for this case and must NOT be used.
+ */
+export function isNonSourcePath(path: string): boolean {
+  const p = path.trim();
+  return p.startsWith('.afk/') || p.startsWith('.afk-scratch/') || p.includes('/.afk/');
+}
+
 // Contract: tools whose SUCCESSFUL invocation is observable corroboration that
 // real work happened this turn — a file mutation or an executed command. A
 // `Done` turn with none of these may be a self-certified completion with no
@@ -168,6 +188,9 @@ export function classifyDoneEvidence(
     if (CODE_MUTATION_TOOLS.has(e.toolName)) {
       // patch_apply with dry_run: true writes nothing — skip it.
       if (e.toolName === 'patch_apply' && isPatchApplyDryRun(e)) continue;
+      // Skip AFK-internal artifact writes (plan notes, scratch files, etc.).
+      // These are gitignored and must not trigger the verification gate.
+      if (e.toolName !== 'patch_apply' && isNonSourcePath(e.input)) continue;
       lastMutationIndex = i;
     } else if (e.toolName === 'bash') {
       // Verification check takes priority: a command that matches a verification
