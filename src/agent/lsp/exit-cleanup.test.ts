@@ -86,7 +86,7 @@ describe('LSP spawn-time exit guardian', () => {
     // Verify the child set is not corrupted: a subsequent spawn still works.
     const ok = spawnServer(process.execPath, ['--version'], os.tmpdir());
     await exitPromise(ok);
-    expect(true).toBe(true);
+    expect(ok.exitCode).not.toBeNull();
   }, 10_000);
 
   // Crash-first (#4309 item 1): server root exits on its own before the host
