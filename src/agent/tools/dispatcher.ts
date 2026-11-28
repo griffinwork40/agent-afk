@@ -31,6 +31,7 @@ import type { CanUseTool } from '../types/sdk-types.js';
 import { PathGrantManager, type GrantSnapshot, type GrantManager } from './grant-manager.js';
 
 import type { TraceSink } from '../trace/index.js';
+import type { TurnTrace } from '../providers/shared/turn-trace.js';
 import { defaultConcurrencyClassifier } from './dispatch-batching.js';
 
 import type { SuspectedLoopWindow } from './suspected-loop-detector.js';
@@ -191,6 +192,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
     | ((toolUseId: string) => (tail: string | undefined) => void)
     | undefined;
   /**
+   * The active turn's witness bracket. Set per-turn by the provider loop via
+   * {@link setTurnTrace}; cleared (undefined) between turns. Injected onto the
+   * handler context so elicitation handlers can record awaiting-user time.
+   */
+  private _turnTrace: TurnTrace | undefined;
+  /**
    * Mutable state for the pre-dispatch gate chain. Owned by the dispatcher;
    * passed by reference into {@link PreDispatchGateDeps} on each call so the
    * extracted free functions in `dispatcher.pre-dispatch-gates.ts` can read and
@@ -349,6 +356,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
       ...(this.spawnedPidRegistry !== undefined ? { spawnedPidRegistry: this.spawnedPidRegistry } : {}),
       // File-checkpoint registry for rewindFiles; swapped per-turn by the provider.
       ...this.fileCheckpointWiring.contextSpread(),
+      // Witness bracket: lets elicitation handlers record awaiting-user time.
+      ...(this._turnTrace !== undefined ? { turnTrace: this._turnTrace } : {}),
     };
   }
 
@@ -409,6 +418,16 @@ export class SessionToolDispatcher implements ToolDispatcher {
    */
   setAllowAll(allow: boolean): void {
     this._allowAll = allow;
+  }
+
+  /**
+   * Attach the current turn's {@link TurnTrace} so elicitation handlers can
+   * accumulate awaiting-user time via {@link TurnTrace.addAwaitingUser}.
+   * Called by the provider loop immediately after constructing a `TurnTrace`
+   * and cleared (via `setTurnTrace(undefined)`) in the loop's `finally`.
+   */
+  setTurnTrace(trace: TurnTrace | undefined): void {
+    this._turnTrace = trace;
   }
 
   /**

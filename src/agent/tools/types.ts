@@ -15,6 +15,7 @@ export type { ToolDispatcher } from '../providers/anthropic-direct/tool-dispatch
 
 import type { ToolResult } from '../providers/shared/tool-result.js';
 import type { TraceSink } from '../trace/index.js';
+import type { TurnTrace } from '../providers/shared/turn-trace.js';
 import type { SpawnedPidRegistry } from './handlers/pid-registry.js';
 import type { UserAttention } from './user-yield.js';
 import type { DetachableToolRegistry } from './detach-registry.js';
@@ -195,6 +196,15 @@ export interface ToolHandlerContext {
    * Bash-made file mutations are NOT tracked (out of scope).
    */
   fileCheckpoint?: FileCheckpointRegistry;
+  /**
+   * The active turn's witness bracket. When present, human-blocking handlers
+   * (`ask_question`, `exit_plan_mode`, `clipboard`) record the wall-clock
+   * duration of each elicitation call via {@link TurnTrace.addAwaitingUser}
+   * so that `loop_end` can report `awaitingUserMs` separately from the total
+   * `durationMs`. Absent for headless surfaces and test invocations where no
+   * `TurnTrace` was created.
+   */
+  turnTrace?: TurnTrace;
 }
 
 /**

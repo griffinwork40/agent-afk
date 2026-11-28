@@ -9,6 +9,7 @@ import type { RunTurnInput } from '../request-types.js';
 import type { MessageParam } from '@anthropic-ai/sdk/resources';
 import { emitQueuedUserMessage } from '../../../trace/emit.js';
 import { PauseController, formatPauseNote } from '../../../session/pause-controller.js';
+import type { TurnTrace } from '../../shared/turn-trace.js';
 
 /**
  * If `steeringText` is non-empty OR a pending pause duration exists, push a
@@ -30,6 +31,7 @@ import { PauseController, formatPauseNote } from '../../../session/pause-control
 export function applyBeforeNextRound(
   input: RunTurnInput,
   steeringText: string | undefined,
+  turnTrace?: TurnTrace,
 ): void {
   // Consume any pending pause duration and prepend its note to steeringText.
   const pauseMs = PauseController.instance().consumeLastPauseDuration();
@@ -37,6 +39,8 @@ export function applyBeforeNextRound(
   if (pauseNote) {
     steeringText = steeringText ? pauseNote + '\n\n' + steeringText : pauseNote;
   }
+  // Record pause time on the turn bracket so loop_end carries pausedMs.
+  if (pauseMs !== undefined) turnTrace?.addPaused(pauseMs);
 
   if (!steeringText) return;
 

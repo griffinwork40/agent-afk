@@ -149,6 +149,7 @@ export function createClipboardReadHandler(
     // ── Operator confirmation gate ────────────────────────────────────────
     // The clipboard may contain passwords, tokens, or other sensitive material.
     // Require explicit operator approval on every call; decline or cancel aborts.
+    const elicitationStart = Date.now();
     const confirmation = await elicitationRouter.route(
       {
         serverName: 'agent',
@@ -164,6 +165,7 @@ export function createClipboardReadHandler(
         ...(context?.sessionId !== undefined ? { sessionId: context.sessionId } : {}),
       },
     );
+    context?.turnTrace?.addAwaitingUser(Date.now() - elicitationStart);
 
     if (confirmation.action !== 'accept' || confirmation.content?.['value'] !== true) {
       return {

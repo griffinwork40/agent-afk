@@ -210,6 +210,7 @@ export async function* runTurn(
   // block so all exit paths — abort, error, clean end-of-turn, capped — are
   // covered without per-site annotation.
   const trace = new TurnTrace(input.signal, input.traceWriter, 'anthropic-direct');
+  input.toolDispatcher.setTurnTrace?.(trace);
 
   try {
   while (true) {
@@ -339,9 +340,10 @@ export async function* runTurn(
     // (assistant push, rollback on throw, tool_result commit) lives inside.
     const round = yield* runToolRound(result, input, turn, maxIterations, softDeadlineMs);
     if (round === 'terminated') return;
-    applyBeforeNextRound(input, input.beforeNextRound?.());
+    applyBeforeNextRound(input, input.beforeNextRound?.(), trace);
   }
   } finally {
+    input.toolDispatcher.setTurnTrace?.(undefined);
     trace.finish(turn.elapsedMs());
   }
 }

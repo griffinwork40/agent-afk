@@ -29,6 +29,18 @@ import { emitSessionPhase } from '../../trace/emit.js';
  */
 export class TurnTrace {
   private interruptedAt: number | null;
+  /**
+   * Cumulative milliseconds spent inside elicitation and approval calls
+   * (`ask_question`, `exit_plan_mode`, `clipboard` confirmation) during this
+   * turn. Accumulated by {@link addAwaitingUser}; reported on `loop_end`.
+   */
+  private _awaitingUserMs = 0;
+  /**
+   * Cumulative milliseconds parked inside operator-pause or provider-backoff
+   * calls during this turn. Accumulated by {@link addPaused}; reported on
+   * `loop_end`.
+   */
+  private _pausedMs = 0;
 
   /**
    * @param signal      - The turn's abort signal. Watched for the ESC soft-stop.
@@ -70,6 +82,23 @@ export class TurnTrace {
   };
 
   /**
+   * Accumulate time spent waiting for a human response (elicitation /
+   * approval calls). Call once per elicitation with the wall-clock duration
+   * of that call in milliseconds.
+   */
+  addAwaitingUser(ms: number): void {
+    if (ms > 0) this._awaitingUserMs += ms;
+  }
+
+  /**
+   * Accumulate time spent in an operator-pause or provider-backoff park.
+   * Call once per park with the wall-clock duration in milliseconds.
+   */
+  addPaused(ms: number): void {
+    if (ms > 0) this._pausedMs += ms;
+  }
+
+  /**
    * Tear down the listener and emit the closing phases. Called from the
    * generator's `finally`, so it covers every exit path — abort, error, clean
    * end-of-turn, capped — without per-site annotation.
@@ -99,6 +128,8 @@ export class TurnTrace {
     void emitSessionPhase(this.traceWriter, {
       phase: 'loop_end',
       durationMs: turnElapsedMs,
+      ...(this._awaitingUserMs > 0 ? { awaitingUserMs: this._awaitingUserMs } : {}),
+      ...(this._pausedMs > 0 ? { pausedMs: this._pausedMs } : {}),
     });
   }
 }

@@ -161,6 +161,13 @@ export function wrapDispatcherWithRuntimeState(
       }
       return inner.execute(call);
     },
+    // Forward optional mutating methods so the provider loop's
+    // setTurnTrace/setAllowAll/setResolveBase calls reach the inner
+    // SessionToolDispatcher. Without these, e.g. setTurnTrace() is a no-op
+    // on the wrapper and awaitingUserMs is silently absent from loop_end.
+    setTurnTrace(trace) { inner.setTurnTrace?.(trace); },
+    setAllowAll(allow) { inner.setAllowAll?.(allow); },
+    setResolveBase(cwd) { inner.setResolveBase?.(cwd); },
   };
   if (baseDefs !== null) {
     // Avoid duplicating the schema if the caller's inner dispatcher already

@@ -172,6 +172,10 @@ export const SessionPhaseNameSchema = z.enum([
 export const SessionPhasePayloadSchema = z.object({
   phase: SessionPhaseNameSchema,
   durationMs: z.number().nonnegative().optional(),
+  /** Milliseconds inside elicitation/approval calls this turn (loop_end only). */
+  awaitingUserMs: z.number().nonnegative().optional(),
+  /** Milliseconds parked in operator-pause or provider-backoff this turn (loop_end only). */
+  pausedMs: z.number().nonnegative().optional(),
   metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
   // Model provenance — see SessionPhasePayload JSDoc in types.ts. `model` is
   // the operator-typed alias, `resolvedModel` the wire id. Both optional:
