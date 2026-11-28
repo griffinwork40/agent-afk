@@ -145,9 +145,11 @@ describe('makeDaemonElicitationHandler', () => {
     expect(kb).toHaveLength(1);
     expect(kb[0]).toHaveLength(2);
     expect(kb[0][0].text).toBe('Yes');
-    expect(kb[0][0].callback_data).toMatch(/^afk:h:1:q-confirm-kb$/);
+    const record = await readHandoff('q-confirm-kb', handoffsDir);
+    expect(record?.questionId).toEqual(expect.any(String));
+    expect(kb[0][0].callback_data).toBe(`afk:h:q:1:${record?.questionId}`);
     expect(kb[0][1].text).toBe('No');
-    expect(kb[0][1].callback_data).toMatch(/^afk:h:0:q-confirm-kb$/);
+    expect(kb[0][1].callback_data).toBe(`afk:h:q:0:${record?.questionId}`);
   });
 
   it('sends choice question with per-option buttons via pushIfConfigured', async () => {

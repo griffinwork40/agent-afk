@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,8 +41,9 @@ beforeEach(async () => {
   resetExpirySweepThrottleForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllEnvs();
+  await Promise.all([handoffsDir, queueDir].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 function record(taskId: string, ageMs: number, overrides: Partial<HandoffRecord> = {}): HandoffRecord {
@@ -87,12 +88,13 @@ describe('isHandoffStale', () => {
 
 describe('expireHandoff', () => {
   it('expires a stale pending record, stamps expiredAt, and notifies once', async () => {
-    await writeHandoff(record('q-stale', 25 * HOUR), handoffsDir);
+    const original = await writeHandoff(record('q-stale', 25 * HOUR), handoffsDir);
 
     expect(await expireHandoff('q-stale', { handoffsDir, queueDir, now: NOW })).toBe(true);
 
     const after = await readHandoff('q-stale', handoffsDir);
     expect(after?.status).toBe('expired');
+    expect(after?.questionId).toBe(original.questionId);
     expect(after?.expiredAt).toBe(new Date(NOW).toISOString());
     expect(operatorNotify).toHaveBeenCalledTimes(1);
     const notice = vi.mocked(operatorNotify).mock.calls[0]?.[0] as string;
@@ -102,6 +104,18 @@ describe('expireHandoff', () => {
     // Second call is a no-op: no second transition, no second notice.
     expect(await expireHandoff('q-stale', { handoffsDir, queueDir, now: NOW })).toBe(false);
     expect(operatorNotify).toHaveBeenCalledTimes(1);
+  });
+
+  it('expires a legacy handoff without assigning an identity', async () => {
+    const legacy = record('q-legacy', 25 * HOUR, { notifyOn: 'never' });
+    await writeFile(join(handoffsDir, `${legacy.taskId}.json`), JSON.stringify(legacy));
+
+    expect(await expireHandoff(legacy.taskId, { handoffsDir, queueDir, now: NOW })).toBe(true);
+    expect(await readHandoff(legacy.taskId, handoffsDir)).toEqual({
+      ...legacy,
+      status: 'expired',
+      expiredAt: new Date(NOW).toISOString(),
+    });
   });
 
   it('still expires a never handoff without notifying the operator', async () => {

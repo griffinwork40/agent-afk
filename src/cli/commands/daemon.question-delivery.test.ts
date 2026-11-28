@@ -39,12 +39,12 @@ const fetchStub = vi.fn<typeof fetch>();
 const confirm: ElicitationRequest = { message: 'Continue with this task?', type: 'confirm' };
 const choice: ElicitationRequest = { message: 'Which plan?', type: 'choice', choices: ['A', 'B'] };
 const confirmKeyboard = [[
-  { text: 'Yes', callback_data: 'afk:h:1:question-task' },
-  { text: 'No', callback_data: 'afk:h:0:question-task' },
+  { text: 'Yes', callback_data: expect.stringMatching(/^afk:h:q:1:[0-9a-f-]{36}$/) },
+  { text: 'No', callback_data: expect.stringMatching(/^afk:h:q:0:[0-9a-f-]{36}$/) },
 ]];
 const choiceKeyboard = [
-  [{ text: 'A', callback_data: 'afk:h:0:question-task' }],
-  [{ text: 'B', callback_data: 'afk:h:1:question-task' }],
+  [{ text: 'A', callback_data: expect.stringMatching(/^afk:h:q:0:[0-9a-f-]{36}$/) }],
+  [{ text: 'B', callback_data: expect.stringMatching(/^afk:h:q:1:[0-9a-f-]{36}$/) }],
 ];
 
 beforeEach(() => {
