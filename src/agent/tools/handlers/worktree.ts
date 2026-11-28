@@ -9,7 +9,7 @@
  * @module agent/tools/handlers/worktree
  */
 
-import { join, resolve, isAbsolute, sep } from 'node:path';
+import { join, resolve, isAbsolute } from 'node:path';
 import { promises as fs } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import type { ToolHandler, ToolResult } from '../types.js';
@@ -27,6 +27,10 @@ import {
 } from './worktree-managed.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { buildCreateNote } from './worktree.create-note.js';
+import {
+  findEntry,
+  resolveManagedWorktree,
+} from './worktree.porcelain.js';
 
 /** Injectable deps for tests. */
 export interface WorktreeHandlerDeps {
@@ -49,74 +53,6 @@ function resolveCreateBaseRef(base: unknown): string | undefined | { error: stri
     return { error: 'Invalid input: base must be a git ref, not an option' };
   }
   return base;
-}
-
-/** True when `child` is `parent` or nested inside it. */
-function isPathWithin(child: string, parent: string): boolean {
-  const c = resolve(child);
-  const p = resolve(parent);
-  return c === p || c.startsWith(p + sep);
-}
-
-interface PorcelainEntry {
-  path: string;
-  branch?: string;
-  locked: boolean;
-}
-
-async function listRegisteredWorktrees(
-  execFile: ExecFileFn,
-  repoRoot: string,
-): Promise<PorcelainEntry[]> {
-  const out = await execFile('git', ['-C', repoRoot, 'worktree', 'list', '--porcelain']);
-  const entries: PorcelainEntry[] = [];
-  let current: PorcelainEntry | undefined;
-  for (const line of out.stdout.split('\n')) {
-    if (line.startsWith('worktree ')) {
-      if (current) entries.push(current);
-      current = { path: line.slice('worktree '.length).trim(), locked: false };
-    } else if (line.startsWith('branch ') && current) {
-      current.branch = line.slice('branch '.length).trim();
-    } else if (line.startsWith('locked') && current) {
-      current.locked = true;
-    }
-  }
-  if (current) entries.push(current);
-  return entries;
-}
-
-/** Find the registered entry for `path`, or undefined. */
-async function findEntry(
-  execFile: ExecFileFn,
-  repoRoot: string,
-  path: string,
-): Promise<PorcelainEntry | undefined> {
-  const entries = await listRegisteredWorktrees(execFile, repoRoot);
-  return entries.find((e) => resolve(e.path) === resolve(path));
-}
-
-/** Resolve a caller-supplied path/slug to a registered entry, or return an error string. */
-async function resolveManagedWorktree(
-  execFile: ExecFileFn,
-  ctx: RepoContext,
-  pathInput: string,
-): Promise<PorcelainEntry | string> {
-  let candidate: string;
-  if (isAbsolute(pathInput)) {
-    candidate = pathInput;
-  } else if (pathInput.startsWith(`.afk-worktrees${sep}`)) {
-    candidate = resolve(ctx.repoRoot, pathInput);
-  } else {
-    candidate = join(ctx.afkWorktreesRoot, pathInput);
-  }
-  if (!isPathWithin(candidate, ctx.afkWorktreesRoot)) {
-    return `Refused: ${pathInput} is outside .afk-worktrees/. Pass a slug (e.g. "my-worktree") or a path under .afk-worktrees/ from a prior create/list result. Do not pass absolute paths outside .afk-worktrees/.`;
-  }
-  const entry = await findEntry(execFile, ctx.repoRoot, candidate);
-  if (!entry) {
-    return `No registered git worktree at ${candidate}. Run action "list" to see all managed worktrees and their current paths.`;
-  }
-  return entry;
 }
 
 /** Build the human-readable detail string for an `ignored-local-state` refusal. */
@@ -179,6 +115,9 @@ async function handleCreate(args: CreateArgs): Promise<ToolResult> {
   // Check both: worktree path already checked out, OR branch ref left behind by
   // a prior remove (remove keeps the branch by design — #4875).
   const pathTaken = !!existing;
+  // !pathTaken short-circuits the branch check as a perf optimisation: if the
+  // path is already checked out the slug is taken regardless of the branch ref,
+  // so the expensive rev-parse can be skipped (finding 4).
   const branchTaken = !pathTaken && await branchExists(execFile, ctx.repoRoot, `${prefix}${slug}`);
   if (pathTaken || branchTaken) {
     // Auto-retry with a unique 4-char hex suffix rather than surfacing
@@ -214,6 +153,57 @@ async function handleCreate(args: CreateArgs): Promise<ToolResult> {
     signal,
   });
   return { content: JSON.stringify({ path: info.path, branch: info.branch, base: info.baseRef, note: await buildCreateNote(info) }) };
+}
+
+/** Args shared by keep and release actions. */
+interface LockArgs {
+  obj: Record<string, unknown>;
+  ctx: RepoContext;
+  execFile: ExecFileFn;
+}
+
+/** `keep` action: lock a managed worktree, idempotent (#5387). */
+async function handleKeep({ obj, ctx, execFile }: LockArgs): Promise<ToolResult> {
+  if (typeof obj['path'] !== 'string' || !obj['path']) {
+    return { content: 'Invalid input: path required for keep', isError: true };
+  }
+  const entry = await resolveManagedWorktree(execFile, ctx, obj['path']);
+  if (typeof entry === 'string') return { content: entry, isError: true };
+  // Symmetric guard to release's unlocked check (#5387): if the worktree
+  // is already locked the requested end-state already holds — avoid a
+  // git error from locking an already-locked worktree.
+  if (entry.locked) {
+    return { content: JSON.stringify({ path: entry.path, locked: true, note: 'Worktree was already locked; no change made.' }) };
+  }
+  const reason = typeof obj['reason'] === 'string' && obj['reason']
+    ? obj['reason']
+    : 'kept by agent';
+  await execFile('git', [
+    '-C', ctx.repoRoot, 'worktree', 'lock', '--reason', `afk: ${reason}`, entry.path,
+  ]);
+  return {
+    content: JSON.stringify({
+      path: entry.path,
+      locked: true,
+      note: 'The sweep engine never removes or warns about locked worktrees. Use action "release" to unlock.',
+    }),
+  };
+}
+
+/** `release` action: unlock a managed worktree, idempotent (#4875). */
+async function handleRelease({ obj, ctx, execFile }: LockArgs): Promise<ToolResult> {
+  if (typeof obj['path'] !== 'string' || !obj['path']) {
+    return { content: 'Invalid input: path required for release', isError: true };
+  }
+  const entry = await resolveManagedWorktree(execFile, ctx, obj['path']);
+  if (typeof entry === 'string') return { content: entry, isError: true };
+  // #4875: when the worktree is not locked, git worktree unlock fails.
+  // The requested end-state (not locked) already holds — return success.
+  if (!entry.locked) {
+    return { content: JSON.stringify({ path: entry.path, locked: false, note: 'Worktree was already unlocked; no change made.' }) };
+  }
+  await execFile('git', ['-C', ctx.repoRoot, 'worktree', 'unlock', entry.path]);
+  return { content: JSON.stringify({ path: entry.path, locked: false }) };
 }
 
 /** Build the `worktree` tool handler bound to a session cwd fallback. */
@@ -302,41 +292,11 @@ export function createWorktreeHandler(
         case 'create':
           return await handleCreate({ obj, ctx, anchor, explicitRepo, execFile, generateSuffix, signal });
 
-        case 'keep': {
-          if (typeof obj['path'] !== 'string' || !obj['path']) {
-            return { content: 'Invalid input: path required for keep', isError: true };
-          }
-          const entry = await resolveManagedWorktree(execFile, ctx, obj['path']);
-          if (typeof entry === 'string') return { content: entry, isError: true };
-          const reason = typeof obj['reason'] === 'string' && obj['reason']
-            ? obj['reason']
-            : 'kept by agent';
-          await execFile('git', [
-            '-C', ctx.repoRoot, 'worktree', 'lock', '--reason', `afk: ${reason}`, entry.path,
-          ]);
-          return {
-            content: JSON.stringify({
-              path: entry.path,
-              locked: true,
-              note: 'The sweep engine never removes or warns about locked worktrees. Use action "release" to unlock.',
-            }),
-          };
-        }
+        case 'keep':
+          return await handleKeep({ obj, ctx, execFile });
 
-        case 'release': {
-          if (typeof obj['path'] !== 'string' || !obj['path']) {
-            return { content: 'Invalid input: path required for release', isError: true };
-          }
-          const entry = await resolveManagedWorktree(execFile, ctx, obj['path']);
-          if (typeof entry === 'string') return { content: entry, isError: true };
-          // #4875: when the worktree is not locked, git worktree unlock fails.
-          // The requested end-state (not locked) already holds — return success.
-          if (!entry.locked) {
-            return { content: JSON.stringify({ path: entry.path, locked: false, note: 'Worktree was already unlocked; no change made.' }) };
-          }
-          await execFile('git', ['-C', ctx.repoRoot, 'worktree', 'unlock', entry.path]);
-          return { content: JSON.stringify({ path: entry.path, locked: false }) };
-        }
+        case 'release':
+          return await handleRelease({ obj, ctx, execFile });
 
         case 'list': {
           const result = await runSweep({
