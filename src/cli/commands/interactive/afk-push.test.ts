@@ -231,6 +231,13 @@ describe('isVerificationCommand', () => {
     // Python
     ['python -m pytest', true],
     ['python3 -m unittest', true],
+    // Cause 1 (#5408): prefixed verification commands — cd, env assignments, time, parens
+    ['cd /home/me/project && pnpm lint', true],
+    ['(pnpm lint 2>&1 | tail -n 12)', true],
+    ['CI=1 pnpm test', true],
+    ['time pnpm test', true],
+    ['cd website && pnpm build', true],
+    ['NODE_ENV=test pnpm run typecheck', true],
     // NON-verification commands
     ['ls -la', false],
     ['cat src/foo.ts', false],

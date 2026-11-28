@@ -37,9 +37,10 @@ export const DEFAULT_MAX_TERMINAL_STATE_INJECTIONS = 3;
  * to verify it).
  */
 export const TERMINAL_STATE_GATE_CORRECTION =
-  '[terminal-state gate] The previous turn modified source files but ended in ' +
-  '**Done** without running a verification step afterward (test, lint, or ' +
-  'type-check). Before ending again, do ONE of:\n' +
+  '[terminal-state gate] The previous turn modified source files or ran ' +
+  'commands with side effects, but ended in **Done** without running a ' +
+  'verification step afterward (test, lint, or type-check). Before ending ' +
+  'again, do ONE of:\n' +
   '  (a) run the relevant verification command and cite the result; or\n' +
   '  (b) if the work is not actually complete, correct the terminal state to ' +
   'Blocked or Asking with the accurate status.\n' +

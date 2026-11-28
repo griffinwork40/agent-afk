@@ -4,6 +4,7 @@ import { emitToolCall } from '../../../trace/emit.js';
 import type { TraceSink } from '../../../trace/index.js';
 import type { ProviderEvent } from '../../../provider.js';
 import { extractRawToolInput } from '../../../facets/raw-input.js';
+import { classifyBashToolInput } from '../../shared/bash-classify.js';
 import type { ToolDispatcher } from '../../anthropic-direct/tool-dispatcher.js';
 import type { ToolCall, ToolResult } from '../../anthropic-direct/types.js';
 import { DENIAL_BREAKER_FAILURE_CLASS } from '../../../tools/denial-circuit-breaker.js';
@@ -115,12 +116,14 @@ export async function* dispatchAndAppendToolCalls({
         subagentId,
       }),
     );
+    const bashFlags = classifyBashToolInput(call.name, call.input);
     yield {
       type: 'tool.use.start',
       toolUseId: call.id,
       toolName: call.name,
       toolInput: summarizeToolInput(call.name, call.input),
       toolInputRaw: extractRawToolInput(call.input),
+      ...bashFlags,
       sessionId,
     };
   }

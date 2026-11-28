@@ -39,6 +39,14 @@ export interface ToolEventAccumulator {
    * itself via `isError`.
    */
   _turnToolEvents?: ToolEventMin[];
+  /**
+   * toolUseId -> pre-classified bash booleans captured at `tool.use.start`.
+   * Populated only for `bash` calls that carry the flags (set by both provider
+   * dispatch sites from the full raw command before 160-char summary truncation).
+   * `recordToolOutput` splices these onto the `ToolEventMin` it pushes so
+   * `classifyDoneEvidence` reads from the full command, not the truncated summary.
+   */
+  _pendingToolStarts?: Map<string, { isMutatingBash?: boolean; isVerificationBash?: boolean }>;
 }
 
 /** Remember a tool call's input so its later output can be classified. */
@@ -48,6 +56,14 @@ export function recordToolUseStart(acc: ToolEventAccumulator, event: ToolUseStar
   (acc._pendingToolInputs ??= new Map()).set(event.toolUseId, event.toolInput);
   if (event.toolInputRaw !== undefined) {
     (acc._pendingToolInputsRaw ??= new Map()).set(event.toolUseId, event.toolInputRaw);
+  }
+  // Capture pre-classified bash booleans so recordToolOutput can splice them
+  // onto the ToolEventMin without re-classifying the truncated summary string.
+  if (event.isMutatingBash !== undefined || event.isVerificationBash !== undefined) {
+    (acc._pendingToolStarts ??= new Map()).set(event.toolUseId, {
+      isMutatingBash: event.isMutatingBash,
+      isVerificationBash: event.isVerificationBash,
+    });
   }
 }
 
@@ -60,12 +76,15 @@ export function recordToolOutput(acc: ToolEventAccumulator, event: ToolOutputEve
   if (!event.toolName) return;
   const isError = event.isError === true;
   const inputRaw = acc._pendingToolInputsRaw?.get(event.toolUseId);
+  const pendingStart = acc._pendingToolStarts?.get(event.toolUseId);
   (acc._turnToolEvents ??= []).push({
     toolName: event.toolName,
     // '' when the input was never captured (unknown id): classifies as a
     // non-verification call, the conservative direction.
     input: acc._pendingToolInputs?.get(event.toolUseId) ?? '',
     ...(inputRaw !== undefined ? { inputRaw } : {}),
+    ...(pendingStart?.isMutatingBash !== undefined ? { isMutatingBash: pendingStart.isMutatingBash } : {}),
+    ...(pendingStart?.isVerificationBash !== undefined ? { isVerificationBash: pendingStart.isVerificationBash } : {}),
     isError,
   });
   const isDryRun = event.toolName === 'patch_apply' &&
