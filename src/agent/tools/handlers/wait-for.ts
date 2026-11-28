@@ -51,6 +51,8 @@ interface WaitForInput {
   // Command
   command?: unknown;
   cwd?: unknown;
+  stdout_contains?: unknown;
+  stdout_equals?: unknown;
   // Common
   timeout_ms?: unknown;
   poll_interval_ms?: unknown;
@@ -165,10 +167,18 @@ function parseInput(
       } else {
         resolvedCwd = context?.resolveBase;
       }
+      if (input.stdout_contains !== undefined && typeof input.stdout_contains !== 'string') {
+        throw new Error('"stdout_contains" must be a string when provided');
+      }
+      if (input.stdout_equals !== undefined && typeof input.stdout_equals !== 'string') {
+        throw new Error('"stdout_equals" must be a string when provided');
+      }
       const condition: WaitCondition = {
         type: 'command',
         command: input.command,
         ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
+        ...(input.stdout_contains !== undefined ? { stdout_contains: input.stdout_contains as string } : {}),
+        ...(input.stdout_equals !== undefined ? { stdout_equals: input.stdout_equals as string } : {}),
       };
       return { condition, timeoutMs, pollIntervalMs, backoff };
     }

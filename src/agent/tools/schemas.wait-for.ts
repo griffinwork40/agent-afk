@@ -22,9 +22,15 @@ export const waitForTool: AnthropicToolDef = {
     '"process" — waits until a PID has exited (process.kill(pid, 0) → ESRCH). Only PIDs this session\'s bash tool spawned ' +
     '(the shell it launched, including the pid returned by bash run_in_background) are accepted; grandchildren and other PIDs are refused. ' +
     '"command" — runs a shell command repeatedly; exit 0 signals the condition is met. ' +
+    'Set stdout_contains or stdout_equals to also require specific output (evaluated in Node ' +
+    'on the command\'s stdout after exit 0). ' +
+    'Canonical CI polling forms: ' +
+    '`gh run watch <run-id> --exit-status` (waits for a workflow run to succeed); ' +
+    '`npm view <pkg>@<version> version` with stdout_equals set to the version string ' +
+    '(waits for a package version to appear on the registry). ' +
     'Command restrictions: no compound syntax (&&, ||, ;), no redirects, no shell ' +
     'expansion or substitution, and only allowlisted read-only commands (test, ls, cat, ' +
-    'grep, git status, gh …). For file existence/content use type=file; for HTTP use ' +
+    'grep, git status, gh, npm view …). For file existence/content use type=file; for HTTP use ' +
     'type=url. Set cwd to run the command in a specific directory instead of writing ' +
     '"cd <dir> && <cmd>", which the poll policy refuses. ' +
     'The tool returns when the condition is met, the timeout elapses (status: timed_out), or ' +
@@ -80,6 +86,21 @@ export const waitForTool: AnthropicToolDef = {
       command: {
         type: 'string',
         description: 'For command type: shell command to run. Condition is met when it exits 0.',
+      },
+      stdout_contains: {
+        type: 'string',
+        description:
+          'For command type: condition is met when the command exits 0 AND its stdout ' +
+          'contains this substring. Evaluated in Node on the raw stdout bytes decoded as UTF-8. ' +
+          'Example: stdout_contains set to "completed" with command "gh run list --limit 1 --json status --jq \'.[0].status\'".',
+      },
+      stdout_equals: {
+        type: 'string',
+        description:
+          'For command type: condition is met when the command exits 0 AND its stdout ' +
+          '(trimmed of leading/trailing whitespace) equals this string exactly. ' +
+          'Example: stdout_equals set to "1.2.3" with command "npm view my-pkg@1.2.3 version" ' +
+          'to wait for a package version to appear on the registry after publish.',
       },
       cwd: {
         type: 'string',

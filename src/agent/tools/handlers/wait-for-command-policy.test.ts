@@ -142,6 +142,41 @@ describe('wait_for refuses write/exec flags and background jobs', () => {
   });
 });
 
+// #4828: npm view allowlist
+describe('wait_for npm view allowlist', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(execSync).mockReturnValue(Buffer.from(''));
+  });
+
+  it.each([
+    'npm view my-pkg version',
+    'npm view my-pkg@1.2.3 version',
+    'npm info my-pkg',
+    'npm show my-pkg dist-tags',
+    'npm view @scope/my-pkg@1.0.0 version',
+  ])('executes allowed npm read-only poll: %s', (command) => {
+    const result = evaluateCommand({ type: 'command', command });
+    expect(result.data?.['blocked']).toBeUndefined();
+    expect(result.met).toBe(true);
+    expect(execSync).toHaveBeenCalledWith(command, expect.any(Object));
+  });
+
+  it.each([
+    'npm install my-pkg',
+    'npm publish',
+    'npm run build',
+    'npm ci',
+    'npm update',
+    'npm uninstall my-pkg',
+  ])('refuses non-read-only npm subcommand: %s', (command) => {
+    const result = evaluateCommand({ type: 'command', command });
+    expect(result.met).toBe(false);
+    expect(result.data?.['blocked']).toBe(true);
+    expect(execSync).not.toHaveBeenCalled();
+  });
+});
+
 describe('hasUnquotedBackgroundOp', () => {
   it.each([
     ['false &', true], ['a & b', true], ['ls &>out', true], ['ls |& grep x', true],

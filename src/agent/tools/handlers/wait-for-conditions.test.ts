@@ -503,4 +503,117 @@ describe('evaluateCommand', () => {
     expect(result.detail).toContain('command timed out (30s limit)');
     expect(result.data?.timedOut).toBe(true);
   });
+
+  // #4828: stdout_contains output condition
+  describe('stdout_contains', () => {
+    it('returns met:true when command exits 0 and stdout contains the substring', () => {
+      mockExecSync.mockReturnValue('completed\n' as unknown as Buffer);
+      const result = evaluateCommand({
+        type: 'command',
+        command: 'gh run list --limit 1 --json status',
+        stdout_contains: 'completed',
+      });
+      expect(result.met).toBe(true);
+      expect(result.detail).toContain('exited 0');
+    });
+
+    it('returns met:false when command exits 0 but stdout does not contain the substring', () => {
+      mockExecSync.mockReturnValue('in_progress\n' as unknown as Buffer);
+      const result = evaluateCommand({
+        type: 'command',
+        command: 'gh run list --limit 1 --json status',
+        stdout_contains: 'completed',
+      });
+      expect(result.met).toBe(false);
+      expect(result.detail).toContain('does not contain');
+      expect(result.detail).toContain('"completed"');
+      expect(result.data?.exitCode).toBe(0);
+    });
+
+    it('returns met:false when command exits non-zero (stdout_contains not evaluated)', () => {
+      mockExecSync.mockImplementation(() => {
+        throw Object.assign(new Error('exit 1'), { status: 1 });
+      });
+      const result = evaluateCommand({
+        type: 'command',
+        command: 'false',
+        stdout_contains: 'anything',
+      });
+      expect(result.met).toBe(false);
+      expect(result.detail).toContain('exited 1');
+    });
+
+    it('returns met:true when stdout_contains is an empty string (always matches)', () => {
+      mockExecSync.mockReturnValue('some output' as unknown as Buffer);
+      const result = evaluateCommand({
+        type: 'command',
+        command: 'true',
+        stdout_contains: '',
+      });
+      expect(result.met).toBe(true);
+    });
+  });
+
+  // #4828: stdout_equals output condition
+  describe('stdout_equals', () => {
+    it('returns met:true when command exits 0 and trimmed stdout equals the expected string', () => {
+      mockExecSync.mockReturnValue('1.2.3\n' as unknown as Buffer);
+      const result = evaluateCommand({
+        type: 'command',
+        command: 'npm view my-pkg@1.2.3 version',
+        stdout_equals: '1.2.3',
+      });
+      expect(result.met).toBe(true);
+      expect(result.detail).toContain('exited 0');
+    });
+
+    it('returns met:false when trimmed stdout does not equal the expected string', () => {
+      mockExecSync.mockReturnValue('1.2.2\n' as unknown as Buffer);
+      const result = evaluateCommand({
+        type: 'command',
+        command: 'npm view my-pkg@1.2.3 version',
+        stdout_equals: '1.2.3',
+      });
+      expect(result.met).toBe(false);
+      expect(result.detail).toContain('does not equal');
+      expect(result.detail).toContain('"1.2.3"');
+      expect(result.data?.exitCode).toBe(0);
+    });
+
+    it('trims whitespace before comparison', () => {
+      mockExecSync.mockReturnValue('  hello world  \n' as unknown as Buffer);
+      const result = evaluateCommand({
+        type: 'command',
+        command: 'true',
+        stdout_equals: 'hello world',
+      });
+      expect(result.met).toBe(true);
+    });
+
+    it('returns met:false when command exits non-zero (stdout_equals not evaluated)', () => {
+      mockExecSync.mockImplementation(() => {
+        throw Object.assign(new Error('exit 1'), { status: 1 });
+      });
+      const result = evaluateCommand({
+        type: 'command',
+        command: 'false',
+        stdout_equals: '1.2.3',
+      });
+      expect(result.met).toBe(false);
+      expect(result.detail).toContain('exited 1');
+    });
+
+    it('checks stdout_contains before stdout_equals when both are set', () => {
+      // stdout_contains is checked first; if it fails, stdout_equals is not reached
+      mockExecSync.mockReturnValue('something else\n' as unknown as Buffer);
+      const result = evaluateCommand({
+        type: 'command',
+        command: 'true',
+        stdout_contains: 'expected',
+        stdout_equals: 'something else',
+      });
+      expect(result.met).toBe(false);
+      expect(result.detail).toContain('does not contain');
+    });
+  });
 });

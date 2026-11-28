@@ -523,3 +523,106 @@ describe('waitForHandler — relative path resolution for file type', () => {
     expect((capturedCond as { path: string })?.path).toBe(absPath);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #4828: stdout_contains / stdout_equals wiring through parseInput
+// These tests exercise the full parseInput → evaluateCommand path, verifying
+// that the new fields survive the input-parsing layer and arrive on the
+// CommandCondition passed to evaluateCommand. The evaluateCommand unit tests
+// in wait-for-conditions.test.ts confirm the evaluator honours the fields;
+// these tests close the gap by confirming parseInput wires them through.
+// ---------------------------------------------------------------------------
+
+describe('waitForHandler — #4828 stdout_contains / stdout_equals wired through parseInput', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCheckEgress.mockResolvedValue({ allowed: true });
+  });
+
+  it('passes stdout_contains through parseInput to evaluateCommand', async () => {
+    const { evaluateCommand } = await import('./wait-for-conditions.js');
+    const mockEvalCmd = vi.mocked(evaluateCommand);
+    let capturedCond: unknown;
+    mockEvalCmd.mockImplementationOnce((cond) => {
+      capturedCond = cond;
+      return { met: true, detail: 'command exited 0' };
+    });
+
+    await waitForHandler(
+      { type: 'command', command: 'gh run list --limit 1 --json status', stdout_contains: 'completed' },
+      neverSignal,
+    );
+
+    expect((capturedCond as { stdout_contains?: string })?.stdout_contains).toBe('completed');
+  });
+
+  it('passes stdout_equals through parseInput to evaluateCommand', async () => {
+    const { evaluateCommand } = await import('./wait-for-conditions.js');
+    const mockEvalCmd = vi.mocked(evaluateCommand);
+    let capturedCond: unknown;
+    mockEvalCmd.mockImplementationOnce((cond) => {
+      capturedCond = cond;
+      return { met: true, detail: 'command exited 0' };
+    });
+
+    await waitForHandler(
+      { type: 'command', command: 'npm view my-pkg@1.2.3 version', stdout_equals: '1.2.3' },
+      neverSignal,
+    );
+
+    expect((capturedCond as { stdout_equals?: string })?.stdout_equals).toBe('1.2.3');
+  });
+
+  it('passes both stdout_contains and stdout_equals through parseInput', async () => {
+    const { evaluateCommand } = await import('./wait-for-conditions.js');
+    const mockEvalCmd = vi.mocked(evaluateCommand);
+    let capturedCond: unknown;
+    mockEvalCmd.mockImplementationOnce((cond) => {
+      capturedCond = cond;
+      return { met: true, detail: 'command exited 0' };
+    });
+
+    await waitForHandler(
+      { type: 'command', command: 'true', stdout_contains: 'foo', stdout_equals: 'foo' },
+      neverSignal,
+    );
+
+    const c = capturedCond as { stdout_contains?: string; stdout_equals?: string };
+    expect(c.stdout_contains).toBe('foo');
+    expect(c.stdout_equals).toBe('foo');
+  });
+
+  it('omits stdout_contains from condition when not supplied', async () => {
+    const { evaluateCommand } = await import('./wait-for-conditions.js');
+    const mockEvalCmd = vi.mocked(evaluateCommand);
+    let capturedCond: unknown;
+    mockEvalCmd.mockImplementationOnce((cond) => {
+      capturedCond = cond;
+      return { met: true, detail: 'command exited 0' };
+    });
+
+    await waitForHandler({ type: 'command', command: 'true' }, neverSignal);
+
+    const c = capturedCond as { stdout_contains?: string; stdout_equals?: string };
+    expect(c.stdout_contains).toBeUndefined();
+    expect(c.stdout_equals).toBeUndefined();
+  });
+
+  it('returns error when stdout_contains is not a string', async () => {
+    const result = await waitForHandler(
+      { type: 'command', command: 'true', stdout_contains: 42 },
+      neverSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/stdout_contains/);
+  });
+
+  it('returns error when stdout_equals is not a string', async () => {
+    const result = await waitForHandler(
+      { type: 'command', command: 'true', stdout_equals: false },
+      neverSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/stdout_equals/);
+  });
+});
