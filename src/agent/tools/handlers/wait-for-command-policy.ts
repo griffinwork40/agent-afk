@@ -53,7 +53,13 @@ export function isReadOnlyPoll(command: string, cwd: string): boolean {
     // #4828: Commands in ARGV_ALLOWLIST_FAMILIES are gated by per-family argv
     // rules in wait-for-poll-allowlist.ts (e.g. `npm view/info/show` only).
     // segmentArgvReason returning undefined means the segment is read-only.
-    if (ARGV_ALLOWLIST_FAMILIES.has(name.split('/').pop() ?? name)) {
+    //
+    // Basename bypass fix: only match unqualified names (no '/' in the token).
+    // A path-prefixed binary like /usr/local/bin/npm or /evil/npm shares the
+    // basename 'npm' but is not the allowlisted binary — it may be an adversarial
+    // replacement. Requiring name.includes('/') === false closes this gap without
+    // any filesystem or shell resolution at poll time.
+    if (!name.includes('/') && ARGV_ALLOWLIST_FAMILIES.has(name)) {
       return segmentArgvReason(tokens) === undefined;
     }
     // One classifyRisk call per pipeline segment, not per command string. Each
