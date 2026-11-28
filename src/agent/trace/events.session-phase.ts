@@ -167,6 +167,16 @@ export const SessionPhaseNameSchema = z.enum([
   // 401/403 trigger; metadata carries outcome, status, authMode. See
   // SessionPhaseName JSDoc in types.session-phase.ts for the full contract.
   'auth_retry_outcome',
+  // Abandoned-turn drain timeout (R1.7, Refs #5174). Emitted from
+  // ProviderTurns.drain() when SETTLE_DRAIN_TIMEOUT_MS fires before the
+  // settling turn ends. `durationMs` is the timeout that fired.
+  // Must mirror SessionPhaseName union in types.session-phase.ts.
+  'drain_timeout',
+  // Abandoned-turn settlement error (R1.7, Refs #5174). Emitted from
+  // settleAbandonedTurn() when the settlement catch block fires.
+  // `metadata.error` carries the error message (truncated).
+  // Must mirror SessionPhaseName union in types.session-phase.ts.
+  'settle_error',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

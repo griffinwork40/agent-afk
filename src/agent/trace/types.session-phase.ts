@@ -376,7 +376,20 @@ export type SessionPhaseName =
   // `metadata.outcome`: 'refresh-null' | 'replay-failed' | 'replayed'.
   // `metadata.status`: HTTP status (401 or 403).
   // `metadata.authMode`: 'oauth' | 'api-key'. PURE OBSERVABILITY.
-  | 'auth_retry_outcome';
+  | 'auth_retry_outcome'
+  // Abandoned-turn drain timed out waiting for a settling turn to end (R1.7,
+  // Refs #5174). Emitted from `ProviderTurns.drain()` when the
+  // `SETTLE_DRAIN_TIMEOUT_MS` race fires before `turn.ended` resolves, i.e.
+  // the provider never yielded a terminal after interrupt. The stuck turn is
+  // force-ended so the waiting send can proceed. `durationMs` is the timeout
+  // value that fired. PURE OBSERVABILITY.
+  | 'drain_timeout'
+  // Abandoned-turn settlement ended on a provider-level error (R1.7,
+  // Refs #5174). Emitted from `settleAbandonedTurn()` when the settlement
+  // catch block fires, carrying the error message in `metadata.error`.
+  // The send waiting behind this turn is not affected — settlement always
+  // resolves, never rejects. PURE OBSERVABILITY.
+  | 'settle_error';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

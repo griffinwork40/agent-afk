@@ -41,6 +41,8 @@ import { SETTLE_DRAIN_TIMEOUT_MS, raceWithDrainTimeout } from '../timeout.js';
 import type { ProviderEvent } from '../provider.js';
 import type { OutputEvent } from '../types.js';
 import type { TransformDeps } from './stream-consumer.js';
+import { emitSessionPhase } from '../trace/emit.js';
+import type { TraceSink } from '../trace/writer.js';
 
 /**
  * True for the provider event that ends a turn. Decided on the PROVIDER event,
@@ -81,7 +83,10 @@ export interface AbandonedTurnSettlement {
  * and a settlement failure must not turn into a failed send. A provider that
  * errors or closes mid-settlement ends the turn just as well.
  */
-export async function settleAbandonedTurn(settlement: AbandonedTurnSettlement): Promise<void> {
+export async function settleAbandonedTurn(
+  settlement: AbandonedTurnSettlement,
+  traceWriter?: TraceSink,
+): Promise<void> {
   let sawDone = false;
   try {
     if (settlement.interrupt) await settlement.interrupt();
@@ -94,11 +99,15 @@ export async function settleAbandonedTurn(settlement: AbandonedTurnSettlement): 
       if (terminal) break;
     }
   } catch (err) {
-    debugLog(
-      `AgentSession: abandoned-turn settlement ended on an error: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
+    const message = err instanceof Error ? err.message : String(err);
+    debugLog(`AgentSession: abandoned-turn settlement ended on an error: ${message}`);
+    // R1.7 (#5174): emit a trace event so a settlement failure is visible in
+    // the witness layer. The send waiting behind this turn is unaffected —
+    // settleAbandonedTurn never rejects.
+    void emitSessionPhase(traceWriter, {
+      phase: 'settle_error',
+      metadata: { error: message.slice(0, 200) },
+    });
   } finally {
     if (!sawDone) settlement.recordMissingDone();
   }
@@ -154,6 +163,13 @@ export interface ProviderTurnHooks {
   interruptProvider: () => Promise<void>;
   /** Write a ledger `done` for a turn that will not record a real one. */
   recordSyntheticDone: (turn: OpenTurn) => void;
+  /**
+   * Optional trace sink for `session_phase` observability events (R1.7).
+   * When present, `drain_timeout` is emitted on force-end and `settle_error`
+   * is emitted when settlement catches a provider error. Absent in tests that
+   * do not wire a trace writer.
+   */
+  traceWriter?: TraceSink;
 }
 
 /** Tracks the provider turn in flight and the send waiting behind it. */
@@ -351,6 +367,12 @@ export class ProviderTurns {
         debugLog(
           `AgentSession: drain timed out after ${SETTLE_DRAIN_TIMEOUT_MS}ms waiting for an abandoned turn to end; force-ending it`,
         );
+        // R1.7 (#5174): emit a trace event so a send stuck behind a provider
+        // is visible in the witness layer rather than going silent.
+        void emitSessionPhase(this.hooks.traceWriter, {
+          phase: 'drain_timeout',
+          durationMs: SETTLE_DRAIN_TIMEOUT_MS,
+        });
         this.recordDone(turn);
         this.endTurn(turn);
       }
@@ -371,19 +393,22 @@ export class ProviderTurns {
     // second request (see the parking hazard in the module header).
     const interruptFirst = !turn.interrupted;
     turn.interrupted = true;
-    return settleAbandonedTurn({
-      iterator: turn.iterator,
-      consume: async (event) => {
-        if (turn.sealed) return null;
-        // Track whether the provider reported an error so the synthetic done
-        // can distinguish a provider error from a clean interrupt (#5173 R1.3).
-        if (event.type === 'error') turn.hadProviderError = true;
-        const output = await this.hooks.consume(event, turn.deps);
-        if (output?.type === 'done') turn.doneRecorded = true;
-        return output;
+    return settleAbandonedTurn(
+      {
+        iterator: turn.iterator,
+        consume: async (event) => {
+          if (turn.sealed) return null;
+          // Track whether the provider reported an error so the synthetic done
+          // can distinguish a provider error from a clean interrupt (#5173 R1.3).
+          if (event.type === 'error') turn.hadProviderError = true;
+          const output = await this.hooks.consume(event, turn.deps);
+          if (output?.type === 'done') turn.doneRecorded = true;
+          return output;
+        },
+        ...(interruptFirst ? { interrupt: () => this.hooks.interruptProvider() } : {}),
+        recordMissingDone: () => this.recordDone(turn),
       },
-      ...(interruptFirst ? { interrupt: () => this.hooks.interruptProvider() } : {}),
-      recordMissingDone: () => this.recordDone(turn),
-    }).finally(() => this.endTurn(turn));
+      this.hooks.traceWriter,
+    ).finally(() => this.endTurn(turn));
   }
 }
