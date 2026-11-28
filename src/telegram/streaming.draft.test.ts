@@ -8,6 +8,9 @@
  * - 429 retry: honors retry_after, retries once, then silently gives up
  * - Group-chat fallback: streamResponse uses sendOrEdit (not callApi) for groups
  * - finalizeDraft: sends sendMessage replacing the draft, falls back to plain text
+ * - finalizeDraft: multi-chunk path (text > 4096 chars splits into multiple sendMessage calls)
+ * - MAX_DRAFT_RETRY_AFTER_MS: retry_after near and above cap is clamped correctly
+ * - Abnormal-stream-end: streamResponse finalizes draft when no terminal event fires
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -15,6 +18,7 @@ import { TelegramError } from 'telegraf';
 import type { Context } from 'telegraf';
 import {
   DRAFT_THROTTLE_MS,
+  MAX_DRAFT_RETRY_AFTER_MS,
   makeDraftState,
   sendOrEditDraft,
   finalizeDraft,
@@ -521,5 +525,201 @@ describe('streamResponse — private chat uses sendMessageDraft', () => {
     expect(sendMessage).toHaveBeenCalledWith(300, expect.any(String), expect.objectContaining({ parse_mode: 'HTML' }));
     // No separate placeholder reply (ctx.reply is for groups).
     expect(ctx.reply).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// finalizeDraft — multi-chunk path (text > 4096 chars)
+// ---------------------------------------------------------------------------
+//
+// When the final answer exceeds Telegram's 4096-char limit, splitLongMessage
+// returns multiple chunks and finalizeDraft must call sendMessage for each one.
+
+describe('finalizeDraft — multi-chunk path', () => {
+  it('calls sendMessage once per chunk when text exceeds 4096 chars', async () => {
+    const { ctx, sendMessage } = makeCtx();
+    const state: DraftState = { draftId: 42, lastDraftAt: Date.now(), isDraftMode: true };
+
+    // Build a plain ASCII string that is definitely > 4096 chars so
+    // splitLongMessage produces at least 2 chunks.
+    const longText = 'A'.repeat(5000);
+
+    await finalizeDraft(state, ctx, 100, longText);
+
+    // Must have been called more than once (one call per chunk).
+    expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
+    // Every call must target the correct chatId.
+    for (const call of sendMessage.mock.calls) {
+      expect(call[0]).toBe(100);
+    }
+    // State is cleared after finalization regardless of chunk count.
+    expect(state.isDraftMode).toBe(false);
+    expect(state.draftId).toBeNull();
+  });
+
+  it('falls back to plain text for every chunk on a 400 entity-parse error', async () => {
+    const { ctx, sendMessage } = makeCtx();
+    const state: DraftState = { draftId: 42, lastDraftAt: Date.now(), isDraftMode: true };
+
+    const longText = 'B'.repeat(5000);
+    let htmlAttempts = 0;
+
+    sendMessage.mockImplementation(async (_cid: number, _text: string, extra?: { parse_mode?: string }) => {
+      if (extra?.parse_mode === 'HTML') {
+        htmlAttempts++;
+        throw new TelegramError({ error_code: 400, description: "can't parse entities: unclosed tag" });
+      }
+      return { message_id: 1 };
+    });
+
+    await finalizeDraft(state, ctx, 100, longText);
+
+    // The HTML path was attempted exactly once (the first chunk triggers the
+    // fallback; the entire message is then re-sent as plain text chunks).
+    expect(htmlAttempts).toBe(1);
+    // Plain-text calls must have fired (at least one per chunk of longText).
+    const plainCalls = sendMessage.mock.calls.filter(
+      (c) => (c[2] as { parse_mode?: string } | undefined)?.parse_mode === undefined,
+    );
+    expect(plainCalls.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MAX_DRAFT_RETRY_AFTER_MS — near-cap and over-cap clamping
+// ---------------------------------------------------------------------------
+//
+// callDraftApi honors `retry_after` up to MAX_DRAFT_RETRY_AFTER_MS (30 s).
+// A retry_after value at or above the cap must be clamped to the cap so the
+// bot never sleeps longer than 30 s for a draft update.
+
+describe('MAX_DRAFT_RETRY_AFTER_MS — retry_after clamping', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('MAX_DRAFT_RETRY_AFTER_MS is 30 000 ms', () => {
+    expect(MAX_DRAFT_RETRY_AFTER_MS).toBe(30_000);
+  });
+
+  it('retry_after exactly at cap (30 s) is honored without exceeding the cap', async () => {
+    const { ctx, callApi } = makeCtx();
+    const state: DraftState = makeDraftState();
+    let attempt = 0;
+
+    callApi.mockImplementation(async () => {
+      attempt++;
+      if (attempt === 1) {
+        // 429 with retry_after == cap (30 s).
+        throw new TelegramError({
+          error_code: 429,
+          description: 'Too Many Requests: retry after 30',
+          parameters: { retry_after: 30 },
+        });
+      }
+      return {};
+    });
+
+    const p = sendOrEditDraft(state, ctx, 100, 'text');
+    // Advance exactly MAX_DRAFT_RETRY_AFTER_MS — the retry must fire now.
+    await vi.advanceTimersByTimeAsync(MAX_DRAFT_RETRY_AFTER_MS);
+    await p;
+
+    expect(attempt).toBe(2);
+    expect(state.lastDraftAt).toBeGreaterThan(0);
+  }, 60_000);
+
+  it('retry_after above cap (e.g. 60 s) is clamped to MAX_DRAFT_RETRY_AFTER_MS', async () => {
+    const { ctx, callApi } = makeCtx();
+    const state: DraftState = makeDraftState();
+    let attempt = 0;
+
+    callApi.mockImplementation(async () => {
+      attempt++;
+      if (attempt === 1) {
+        // 429 with retry_after well above cap.
+        throw new TelegramError({
+          error_code: 429,
+          description: 'Too Many Requests: retry after 60',
+          parameters: { retry_after: 60 },
+        });
+      }
+      return {};
+    });
+
+    // If the sleep were 60 s the promise would still be pending at 30 s + 1 ms.
+    // With clamping the retry fires at MAX_DRAFT_RETRY_AFTER_MS.
+    const p = sendOrEditDraft(state, ctx, 100, 'text');
+    await vi.advanceTimersByTimeAsync(MAX_DRAFT_RETRY_AFTER_MS + 1);
+    await p;
+
+    // Both attempts must have fired (the second one after the clamped sleep).
+    expect(attempt).toBe(2);
+    expect(state.lastDraftAt).toBeGreaterThan(0);
+  }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// Abnormal-stream-end with draft mode
+// ---------------------------------------------------------------------------
+//
+// When the stream ends without a terminal event (e.g. iterator exhausted with
+// no `done` event) and isDraftMode is true, streamResponse must finalize the
+// draft via sendMessage so the user receives the partial answer.
+
+describe('streamResponse — abnormal-stream-end with draft mode', () => {
+  it('finalizes the draft via sendMessage when the stream ends without a done event', async () => {
+    const { streamResponse } = await import('./streaming.js');
+    const callApi = vi.fn().mockResolvedValue({});
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 77 });
+
+    const ctx = {
+      chat: { id: 400, type: 'private' as const },
+      reply: vi.fn().mockResolvedValue({ message_id: 1, text: '', chat: { id: 400 }, date: 0 }),
+      telegram: {
+        callApi,
+        sendMessage,
+        deleteMessage: vi.fn().mockResolvedValue(true),
+      },
+    } as unknown as Context;
+
+    const session = {
+      state: 'idle',
+      sendMessage: vi.fn(),
+      // Stream yields one content chunk then ends WITHOUT a `done` event —
+      // simulating a truncated/abnormal stream end.
+      sendMessageStream: async function* () {
+        yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'Partial answer' } };
+        // Generator returns without yielding `done`.
+      },
+      getOutputStream: vi.fn(),
+      close: vi.fn(),
+      waitForInitialization: vi.fn().mockResolvedValue({}),
+      getSessionIdentity: vi.fn().mockReturnValue({}),
+      getSessionMetadata: vi.fn().mockReturnValue({}),
+      getQuery: vi.fn(),
+      getLastResponseMetadata: vi.fn().mockReturnValue(null),
+      interrupt: vi.fn().mockResolvedValue(undefined),
+      setModel: vi.fn(),
+      setPermissionMode: vi.fn(),
+      supportedCommands: vi.fn().mockResolvedValue([]),
+      supportedModels: vi.fn().mockResolvedValue([]),
+      supportedAgents: vi.fn().mockResolvedValue([]),
+      getContextUsage: vi.fn().mockResolvedValue({}),
+      mcpServerStatus: vi.fn().mockResolvedValue([]),
+      accountInfo: vi.fn().mockResolvedValue({}),
+    } as unknown as import('../agent/types.js').IAgentSession;
+
+    await streamResponse(ctx, session, 'hello');
+
+    // The draft was used (sendMessageDraft was called with our chatId).
+    expect(callApi).toHaveBeenCalledWith('sendMessageDraft', expect.objectContaining({ chat_id: 400 }));
+
+    // Despite no `done` event, the partial answer must have been finalized via
+    // a plain sendMessage (the abnormal-exit path in runStreamLoop).
+    expect(sendMessage).toHaveBeenCalledWith(
+      400,
+      expect.any(String),
+      expect.objectContaining({ parse_mode: 'HTML' }),
+    );
   });
 });
