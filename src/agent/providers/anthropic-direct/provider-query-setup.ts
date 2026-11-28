@@ -28,7 +28,7 @@ import { grantsWorkspacePrompt, grantsToolStrict, skillManifestGranted } from '.
 import { isSkillManifestAlways } from '../../../config/env.js';
 import { deriveCredentialFromStore } from './provider-query-setup.credential.js';
 import { loadClaudeCodeOauthToken } from '../../auth/keychain.js';
-import { describeClaudeLoginStatus, lastClaudeLoginStatus, type ClaudeLoginRefreshResult } from '../../auth/claude-login-status.js';
+import { describeClaudeLoginStatus, lastClaudeLoginStatus, type ClaudeLoginStatus } from '../../auth/claude-login-status.js';
 import { getSessionPrimeLoginResult } from '../../session/credential-prime.js';
 
 /**
@@ -43,12 +43,12 @@ import { getSessionPrimeLoginResult } from '../../session/credential-prime.js';
  */
 export function missingCredentialError(
   providerName: string,
-  primeResult?: ClaudeLoginRefreshResult,
+  primeStatus?: ClaudeLoginStatus,
 ): Error {
   const base =
     `${providerName} provider requires config.apiKey (resolved from ANTHROPIC_API_KEY, ` +
     'CLAUDE_CODE_OAUTH_TOKEN, or the stored Claude Code login)';
-  const status = primeResult?.status ?? lastClaudeLoginStatus();
+  const status = primeStatus ?? lastClaudeLoginStatus();
   const detail = describeClaudeLoginStatus(status);
   return new Error(detail !== undefined ? `${base}. ${detail}` : base);
 }
@@ -122,7 +122,7 @@ export function setUpQuerySession(
 ): QuerySetupResult {
   const config = args.config;
   const { localMode, token } = resolveQueryToken(config);
-  if (!token || token.length === 0) throw missingCredentialError(providerName, getSessionPrimeLoginResult(config));
+  if (!token || token.length === 0) throw missingCredentialError(providerName, getSessionPrimeLoginResult(config)?.status);
   const authMode = detectAuthMode(token);
 
   // Client + observability wiring (throttle mailbox, quota capture, tracing

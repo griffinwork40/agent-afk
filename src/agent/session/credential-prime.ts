@@ -28,21 +28,28 @@ import { applySlotCredentials, type SlotCredentialTarget } from './slot-credenti
 import type { AgentConfig } from '../types/config-types.js';
 import type { ClaudeLoginRefreshResult } from '../auth/claude-login-status.js';
 
-// Session-scoped store for the last prime result, keyed by the AgentConfig
-// object (unique per session). Avoids reading the process-global
-// `lastClaudeLoginStatus()` — which is overwritten by every refresh attempt in
-// a multi-session process — when building the "no credential" error.
-const _primeResults = new WeakMap<AgentConfig, ClaudeLoginRefreshResult>();
+// Symbol property for the session-scoped prime result. Stored directly on the
+// AgentConfig so it survives the `{ ...baseConfig }` shallow copy that
+// ProviderRouter.resolveInner() creates — a WeakMap keyed by object identity
+// would miss on the copy and fall back to the process-global.
+const PRIME_RESULT: unique symbol = Symbol('primeLoginResult');
+
+/** Augment AgentConfig with the symbol property (module-private). */
+type ConfigWithPrime = AgentConfig & { [PRIME_RESULT]?: ClaudeLoginRefreshResult };
 
 /**
  * The result of the most recent {@link primeSessionCredential} call for
  * `config`, or `undefined` if the prime was skipped or not yet run. Never
  * touches the credential store; purely a session-local memo.
+ *
+ * Works on both the original config AND shallow copies (e.g. the innerConfig
+ * created by `ProviderRouter.resolveInner`) because the result is stored as a
+ * Symbol own-property that spread copies along with the rest.
  */
 export function getSessionPrimeLoginResult(
   config: AgentConfig,
 ): ClaudeLoginRefreshResult | undefined {
-  return _primeResults.get(config);
+  return (config as ConfigWithPrime)[PRIME_RESULT];
 }
 
 /** Whether a session inner built for `model` would read the stored login. */
@@ -80,7 +87,7 @@ export async function primeSessionCredential(config: AgentConfig, model: string 
   if (!sessionNeedsStoredLogin(config, model)) return;
   try {
     const result = await preloadClaudeKeychainOAuth('anthropic-direct');
-    if (result !== undefined) _primeResults.set(config, result);
+    if (result !== undefined) (config as ConfigWithPrime)[PRIME_RESULT] = result;
   } catch {
     /* preload never throws; defensive so priming can never break a session */
   }
