@@ -26,6 +26,7 @@ import { debugLog } from '../../utils/debug.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import { checkToolPermission, type ToolPermissionConfig } from './permissions.js';
 import { repeatCallFingerprint } from './repeat-circuit-breaker.js';
+import type { ToolCallLedgerReader } from './dispatcher.ledger.js';
 import {
   DENIAL_CIRCUIT_BREAKER_THRESHOLD,
   DENIAL_BREAKER_FAILURE_CLASS,
@@ -149,6 +150,14 @@ export interface PreDispatchGateDeps {
   capturePreToolContext?: (call: ToolCall, context: string) => void;
   /** Generates the model-visible message for an allowlist denial. */
   denialReason: (toolName: string, permissionReason: string | undefined) => string;
+  /**
+   * Session-scoped tool-call ledger reader (#4476). Used by
+   * {@link checkCrossTurnRepeatFailure} to detect inter-turn failure spirals
+   * that the per-turn `RepeatFailureGuard` cannot see (it resets each turn).
+   * Optional: when absent the cross-turn check is skipped (backward-compat,
+   * tests that don't need ledger awareness).
+   */
+  toolCallLedger?: ToolCallLedgerReader;
 }
 
 // ---------------------------------------------------------------------------
@@ -431,6 +440,104 @@ export function replayObserveSuspectedLoopPostGate(
   observeSuspectedLoop(call, deps);
 }
 
+// ---------------------------------------------------------------------------
+// Cross-turn repeat-failure suppression (#4476 item 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimum number of cross-turn error observations of the SAME normalized call
+ * required before the cross-turn suppressor fires.
+ *
+ * The per-turn {@link RepeatFailureGuard} already fires at 3 consecutive
+ * within-turn failures. This threshold is set higher (5) so the cross-turn
+ * suppressor catches inter-turn spirals (the same call failing across multiple
+ * rounds, with a fresh per-turn guard each time) without blocking a tool that
+ * occasionally recovers between turns. Five cross-turn failures at the same
+ * fingerprint is a strong signal that the environment problem is persistent,
+ * not transient.
+ */
+export const CROSS_TURN_REPEAT_FAILURE_THRESHOLD = 5;
+
+/**
+ * Cross-turn repeat-failure suppression consumer (#4476 item 3).
+ *
+ * Consults the session-scoped {@link ToolCallLedger} for prior observations of
+ * this exact call. If the call has accumulated at least
+ * {@link CROSS_TURN_REPEAT_FAILURE_THRESHOLD} error results across the last N
+ * turns (the ledger's configured turn window), the call is refused with a hint
+ * that quotes the most recent failure — without executing it again.
+ *
+ * This complements the per-turn {@link RepeatFailureGuard}: that guard resets
+ * between turns and catches within-turn streaks; this one spans turns and
+ * catches cross-turn spirals where the model retries the same failing call in
+ * successive rounds.
+ *
+ * Returns the blocking `ToolResult` when the threshold is reached, or `null`
+ * to proceed. Never throws — a ledger lookup failure degrades gracefully to
+ * `null` (allow the call through).
+ *
+ * Invariant: observe-only gate. It reads the ledger but never writes it;
+ * writes happen only via `noteSettledOutcome` after the call settles.
+ *
+ * @internal Called only from {@link runPreDispatchGates}.
+ */
+function checkCrossTurnRepeatFailure(
+  call: ToolCall,
+  ledger: ToolCallLedgerReader,
+  exempt: ReadonlySet<string>,
+): ToolResult | null {
+  if (exempt.has(call.name)) return null;
+  let history;
+  try {
+    history = ledger.lookup(call);
+  } catch {
+    // Failure-isolated: a throwing ledger must never block execution.
+    return null;
+  }
+  if (history.length < CROSS_TURN_REPEAT_FAILURE_THRESHOLD) return null;
+  // Count only errors AFTER the last success, mirroring RepeatFailureGuard's
+  // "success clears the streak" contract. Without this, 5 alternating
+  // fail/success pairs would trigger the gate even though the most recent call
+  // succeeded — a false positive the per-turn guard explicitly avoids.
+  const lastSuccessIdx = history.reduce(
+    (best, e, i) => (e.result.isError !== true ? i : best),
+    -1,
+  );
+  const tail = lastSuccessIdx === -1 ? history : history.slice(lastSuccessIdx + 1);
+  const errorCount = tail.filter((e) => e.result.isError === true).length;
+  if (errorCount < CROSS_TURN_REPEAT_FAILURE_THRESHOLD) return null;
+  // Quote the most recent error for actionability (same pattern as per-turn guard).
+  // Sanitize before reflecting: strip ANSI escape sequences and C0/C1 control
+  // bytes so adversarial tool output cannot inject terminal sequences through
+  // the gate-issued ToolResult (prompt-injection amplification vector).
+  const lastError = [...tail].reverse().find((e) => e.result.isError === true);
+  const rawSummary = lastError
+    ? lastError.result.content.split('\n').find((l) => l.trim() !== '')?.trim() ?? ''
+    : '';
+  // Strip ESC-prefixed sequences then bare C0/C1/DEL bytes, then collapse spaces.
+  const sanitized = rawSummary
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1F\x7F-\x9F]/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+  const truncated = sanitized.length > 240 ? `${sanitized.slice(0, 240)}…` : sanitized;
+  debugLog(
+    `[cross-turn-repeat-failure #4476] refused ${call.name} after ${errorCount} cross-turn errors`,
+  );
+  return {
+    content:
+      `Cross-turn repeat-failure: "${call.name}" has failed ${errorCount} times across recent turns ` +
+      `with the same arguments, so this call was NOT executed again. The last failure was: ` +
+      `${truncated}\n\n` +
+      `Retrying it verbatim will fail the same way. Fix the underlying cause, change the ` +
+      `arguments, use a different tool, or stop and report the blocker.`,
+    isError: true,
+    failureClass: 'repeat-failure',
+  };
+}
+
 /**
  * Options for {@link runPreDispatchGates}.
  */
@@ -617,6 +724,28 @@ export async function runPreDispatchGates(
       deps.repeatFailureGuard,
     );
     if (failureRefusal) return failureRefusal;
+  }
+
+  // 2c-ter. Cross-turn repeat-failure suppression (#4476 item 3). Consults
+  // the session-scoped ToolCallLedger for prior error observations spanning
+  // multiple turns. The per-turn guard (2c-bis) only sees within-turn
+  // consecutive failures and resets each round; this gate catches inter-turn
+  // spirals where the same call fails across successive rounds. Read-only
+  // from the ledger; writes happen in noteSettledOutcome after the call
+  // settles.
+  // Skipped on the parallel-gate path (parallelSafe) to match the asymmetric
+  // enforcement of sibling gates 2c and 2c-bis, which also skip on
+  // parallelSafe. Although lookup() is a pure read and cannot race, applying
+  // an enforcing gate only on the sequential path keeps the enforcement model
+  // consistent: the gate fires when the sequential path catches it, and the
+  // parallel-safe path runs the full set of calls without interference.
+  if (!opts?.parallelSafe && deps.toolCallLedger !== undefined) {
+    const crossTurnRefusal = checkCrossTurnRepeatFailure(
+      call,
+      deps.toolCallLedger,
+      repeatBreakerExemptTools,
+    );
+    if (crossTurnRefusal) return crossTurnRefusal;
   }
 
   // 2d. OBSERVE-ONLY suspected-loop telemetry (forked children only). Records
