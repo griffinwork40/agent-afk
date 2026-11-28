@@ -302,6 +302,7 @@ function collectRows(state: TerminalState): Row[] {
         push('deferred', state.deferred);
       }
       push('worth doing', state.worthDoing, 'secondary');
+      push('assumptions', state.assumptions, 'secondary');
       // Skip notChecked / undoSteps rows that merely echo whatWasDone —
       // same guard as deferred above, preventing a confusing duplicate row
       // when a model emits identical text for two fields.
