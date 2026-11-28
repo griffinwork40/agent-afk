@@ -323,7 +323,7 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
   if (resolvedCwd !== undefined) patch.cwd = resolvedCwd;
   if (patchRunAt !== undefined) patch.runAt = patchRunAt;
   if (patchExpiresAt !== undefined) patch.expiresAt = patchExpiresAt;
-  if (updateModelResult.value !== undefined) patch.model = updateModelResult.value;
+  if (updateModelResult.value !== undefined) patch.model = updateModelResult.value as string | null;
   if (updateBudgetResult.value !== undefined) patch.maxBudgetUsd = updateBudgetResult.value;
   Object.assign(patch, retry.value, streak.value);
 

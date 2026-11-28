@@ -111,6 +111,19 @@ export const createScheduleTool: AnthropicToolDef = {
           'AFK_DAEMON_CWD. Precedence: task cwd → AFK_DAEMON_CWD → process.cwd(). ' +
           'Must be an existing directory. Tilde (~) is expanded at save time.',
       },
+      model: {
+        type: 'string',
+        description:
+          'Model for the agent task (slot name, alias, or full model id). ' +
+          'When set, overrides the daemon default and global default for this task. ' +
+          'Applies to executor "agent" tasks only; shell tasks ignore it.',
+      },
+      maxBudgetUsd: {
+        type: 'number',
+        description:
+          'Optional per-run cost ceiling in USD. When set, the agent session aborts when ' +
+          'cumulative cost reaches this limit. Applies to executor "agent" tasks only.',
+      },
     },
     required: ['name', 'command'],
   },
@@ -206,6 +219,20 @@ export const updateScheduleTool: AnthropicToolDef = {
           'Must be an existing directory. Tilde (~) is expanded at save time. ' +
           'Omit to leave unchanged. Pass null or "" to clear a previously-set ' +
           'cwd and fall back to the daemon-wide AFK_DAEMON_CWD default.',
+      },
+      model: {
+        type: ['string', 'null'],
+        description:
+          'Model for the agent task (slot name, alias, or full model id). ' +
+          'Omit to leave unchanged. Pass null to clear a previously-set model ' +
+          'and fall back to the daemon/global default.',
+      },
+      maxBudgetUsd: {
+        type: ['number', 'null'],
+        description:
+          'Optional per-run cost ceiling in USD. When set, the agent session aborts when ' +
+          'cumulative cost reaches this limit. Pass null to clear a previously-set ceiling ' +
+          'and fall back to the daemon/env default.',
       },
     },
     required: ['taskId'],

@@ -1270,6 +1270,20 @@ describe('schedule handlers — model and maxBudgetUsd fields (#4832)', () => {
     expect(list[0]).toMatchObject({ model: 'claude-haiku-4-5', maxBudgetUsd: 1.0 });
   });
 
+  it('update_schedule clears model when passed null', async () => {
+    await createScheduleHandler(
+      { name: 'Clear Model', command: '/u', cron: '0 4 * * *', model: 'claude-haiku-4-5' },
+      fakeSignal,
+    );
+    expect(loadSchedules()[0]?.model).toBe('claude-haiku-4-5');
+    const result = await updateScheduleHandler(
+      { taskId: 'clear-model', model: null },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    expect(loadSchedules()[0]?.model).toBeUndefined();
+  });
+
   it('update_schedule clears maxBudgetUsd when passed null', async () => {
     await createScheduleHandler(
       { name: 'Clear Budget', command: '/u', cron: '0 4 * * *', maxBudgetUsd: 5 },

@@ -495,7 +495,9 @@ export function getSchedule(id: string, path?: string): ScheduledTaskConfig | un
 }
 
 /** Patchable fields for `updateSchedule`. Excludes `id` and `createdAt`. */
-export type SchedulePatch = Partial<Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt' | 'cwd' | 'runAt' | 'expiresAt' | 'failureStreakThreshold' | 'maxBudgetUsd'>> & {
+export type SchedulePatch = Partial<Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt' | 'cwd' | 'runAt' | 'expiresAt' | 'failureStreakThreshold' | 'maxBudgetUsd' | 'model'>> & {
+  /** Set or clear the per-task model override. Pass `null` to clear (fall back to daemon/global default). */
+  model?: string | null;
   /** Set or clear the per-task budget ceiling. Pass `null` to clear. */
   maxBudgetUsd?: number | null;
   /** Set or clear the per-task streak threshold. Pass null to clear (fall back to default 3). */
@@ -551,7 +553,7 @@ export function updateSchedule(
       ...(patch.maxAttempts !== undefined ? { maxAttempts: patch.maxAttempts } : {}),
       ...(patch.retryDelayMs !== undefined ? { retryDelayMs: patch.retryDelayMs } : {}),
       ...(patch.failureStreakThreshold !== undefined && patch.failureStreakThreshold !== null ? { failureStreakThreshold: patch.failureStreakThreshold } : {}),
-      ...(patch.model !== undefined ? { model: patch.model } : {}),
+      ...(patch.model !== undefined && patch.model !== null ? { model: patch.model } : {}),
       ...(patch.maxBudgetUsd !== undefined && patch.maxBudgetUsd !== null ? { maxBudgetUsd: patch.maxBudgetUsd } : {}),
       ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
       ...(patch.cwd !== undefined && patch.cwd !== null ? { cwd: patch.cwd } : {}),
@@ -567,6 +569,8 @@ export function updateSchedule(
     if (patch.expiresAt === null) delete updated.expiresAt;
     // failureStreakThreshold: null means "clear" — fall back to default.
     if (patch.failureStreakThreshold === null) delete updated.failureStreakThreshold;
+    // model: null means "clear" — fall back to daemon/global default.
+    if (patch.model === null) delete updated.model;
     // maxBudgetUsd: null means "clear" — fall back to daemon/global default.
     if (patch.maxBudgetUsd === null) delete updated.maxBudgetUsd;
     schedules[idx] = updated;

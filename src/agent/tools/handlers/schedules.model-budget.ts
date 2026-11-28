@@ -45,13 +45,13 @@ export function parseCreateMaxBudgetUsd(
 
 /**
  * Parse and validate the optional `model` field for `update_schedule`.
- * `null` is allowed (treated as "no change"); only non-string non-null non-undefined
- * values are rejected.
+ * `null` means "clear the per-task model" and is returned as `null`.
  */
 export function parseUpdateModel(
   raw: unknown,
-): ParseResult<string | undefined> {
-  if (raw === undefined || raw === null) return { ok: true, value: undefined };
+): ParseResult<string | null | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (raw === null) return { ok: true, value: null };
   if (typeof raw !== 'string') {
     return { ok: false, content: 'Invalid input: model must be a string' };
   }
