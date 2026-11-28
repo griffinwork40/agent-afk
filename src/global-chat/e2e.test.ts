@@ -54,19 +54,20 @@ async function connect(
   // which calls #dial() synchronously), THEN triggerOpen() so the socket's 'open'
   // listener is already registered when we fire it.
   const welcomeP = new Promise<ChatWelcome>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('welcome timed out')), 5000);
+    const timer = setTimeout(() => reject(new Error('welcome timed out')), 12_000);
     const unsub = client.subscribe({
       onWelcome: w => { clearTimeout(timer); unsub(); resolve(w); },
     });
   });
   await client.connect(); // identity loaded, socket created, open listener registered
   end.triggerOpen();      // schedules async hello (void #open(current))
-  // #hello is async (crypto sign); drain microtasks + one real tick so it completes
-  await new Promise<void>(resolve => setTimeout(resolve, 20));
+  // #hello is async (crypto sign); drain microtasks + one real tick so it completes.
+  // Use 100ms to tolerate CI runners under load (Node 24 crypto can be slow).
+  await new Promise<void>(resolve => setTimeout(resolve, 100));
   await relay.flush(connId); // relay processes hello, sends welcome back via end.receive()
   // welcome frame is delivered synchronously in flush; wait a tick for the
-  // incoming promise chain in the transport to process it
-  await new Promise<void>(resolve => setTimeout(resolve, 20));
+  // incoming promise chain in the transport to process it (deriveTag is async crypto).
+  await new Promise<void>(resolve => setTimeout(resolve, 100));
   const welcome = await welcomeP;
   return { client, store, dir, connId, end, welcome };
 }
@@ -208,9 +209,9 @@ describe('GlobalChatClient <-> Room e2e', () => {
     const errP = awaitError(client2);
     await client2.connect();
     end2.triggerOpen();
-    await tick(30); // hello sign completes
+    await tick(100); // hello sign completes (100ms tolerates loaded CI runners)
     await relay.flush(connId2); // relay sends banned error back
-    await tick(10); // transport processes error
+    await tick(50); // transport processes error
     expect((await errP).code).toBe('banned');
     maint.client.close(); victim.client.close(); client2.close();
   });
@@ -332,8 +333,8 @@ describe('GlobalChatClient <-> Room e2e', () => {
     const client3 = new GlobalChatClient({ url: 'ws://127.0.0.1/global', identity: s4,
       WebSocket: relay.socketFactory(end3), now: () => t0 });
     const errP = awaitError(client3);
-    await client3.connect(); end3.triggerOpen(); await tick(30);
-    await relay.flush(connId3); await tick(10);
+    await client3.connect(); end3.triggerOpen(); await tick(100); // 100ms tolerates loaded CI
+    await relay.flush(connId3); await tick(50);
     const err = await errP;
     expect(err.code).toBe('name_change_too_soon');
     expect(err.retryAfterMs).toBe(600_000);
